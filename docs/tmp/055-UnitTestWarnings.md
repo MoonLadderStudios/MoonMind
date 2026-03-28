@@ -28,10 +28,12 @@ These are standard library and dependency deprecation changes pointing to future
 - [ ] **Dictionary-based Search Attributes** (~35 warnings, `DeprecationWarning`): `moonmind/workflows/temporal/client.py:165` passes search attributes as a plain dict. Temporal has deprecated this in favor of `TypedSearchAttributes`. Triggered by 29 tests in `test_temporal_service.py`, 2 in `test_manifest_ingest.py`, and 4 in `test_manifests_service.py`.
 - [ ] **Pydantic V2 Converter**: `temporalio.converter` is warning about Pydantic V2 payloads. The application needs to explicitly opt into `temporalio.contrib.pydantic.pydantic_data_converter` or switch to the new temporalio data converters for Pydantic V2.
 
-## Phase 4: Async/Await Runtime Warnings (Open)
+## Phase 4: Async/Await Runtime Warnings (Complete)
 These are actual bugs in test cases or application code where asynchronous functions are ignored.
-- [ ] **Unawaited `AsyncMockMixin._execute_mock_call`** (3 `RuntimeWarning`s): Occurs in `moonmind/workflows/temporal/service.py:352`. The mock is set up as async but the coroutine is never awaited. Fix the test setup to properly await the mock or use `AsyncMock` correctly.
+- [x] **Unawaited `AsyncMockMixin._execute_mock_call`** (3 `RuntimeWarning`s): Occurs in `moonmind/workflows/temporal/service.py:352` (and others like `test_volume_verifiers.py`). Fixes applied to properly await mocks or use correct mock types (e.g. `MagicMock` vs `AsyncMock`).
 - [x] **`api_service/main.py` Unawaited Coroutines**: Previously noted at lines 529, 633 — no longer appearing in current test run.
+
+*Phase 4 is Complete.*
 
 ## Phase 5: Third-party Library Upgrades (Complete)
 - [x] **Qdrant Version Mismatch**: `qdrant_client` version 1.17.1 is complaining that the server is on an incompatible version (1.14.1). Either downgrade the client, upgrade the Qdrant server container, or explicitly suppress the warning with `check_compatibility=False`.

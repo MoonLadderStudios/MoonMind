@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27
+Last Updated: 2026-03-24
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlStyleGuide.md`](../tmp/remaining-work/UI-MissionControlStyleGuide.md)
 
@@ -601,9 +601,7 @@ For `.queue-live-output`:
 
 - Mobile: 360-430px, single-column first.
 - Tablet: 768px, selective two-column layouts.
-- Desktop shell uses two width modes:
-  - constrained surfaces (masthead, forms, compact filter groups): roughly `1100-1280px`
-  - dense data surfaces (task list results, evidence-heavy detail regions): roughly `1500-1800px` or fluid width with `24-40px` side gutters
+- Desktop: 1024-1440px with max-width container.
 
 ### 10.2 Navigation on Small Screens
 
@@ -623,15 +621,6 @@ Switch nav pills from wrapping to horizontal scroll below `640px`.
 Optional: make nav sticky with a glass strip.
 
 ### 10.3 Tables
-
-For operational task data, keep the desktop presentation as a table and spend horizontal space deliberately.
-
-Rules:
-
-- Let the data region be wider than the masthead/filter shell when the table carries many columns.
-- Keep one obvious primary column and compress low-value metadata.
-- Preserve cards only for narrow/mobile layouts; do not replace the desktop task list with stacked cards.
-- Use row hover, sortable headers, and sticky headers to aid scanning before adding more decorative chrome.
 
 Wrap tables in a scroll container:
 
@@ -656,32 +645,26 @@ Wrap tables in a scroll container:
 - Keep `:focus-visible` styles obvious.
 - Avoid very low-contrast placeholders in dark mode.
 
-### 10.5 Task List Responsive Layout
+### 10.5 Queue List Responsive Layout (shipped 2026-02-23)
 
-The current semantic class names still use `queue-*`, but the desired product behavior is a Temporal-native task list console.
-
-- HTML contract: wrap task listings in `<div class="queue-layouts">` with a `.queue-table-wrapper` div and `.queue-card-list` sibling. The cards list must use `<ul role="list">` and `<li class="queue-card">`.
-- Desktop behavior: keep `.queue-table-wrapper` as the default operator surface on `@media (min-width: 768px)`, and allow the results surface to use a wider shell than the rest of the page.
-- Mobile behavior: `.queue-card-list` is visible for `@media (max-width: 767px)` and hides on larger breakpoints. Each card uses `.queue-card-header`, `.queue-card-meta`, `.queue-card-fields`, and `.queue-card-actions` to keep typography consistent.
-- Primary filters should stay compact and high-signal: `Workflow`, `Status`, `Runtime`, and Search.
-- Advanced filters such as repository, integration, and owner scoping belong in a secondary drawer/popover, not in the default filter cluster.
-- Page size belongs with pagination controls or a compact display menu, not in the primary filter row.
-- Column-local filtering, when added, should use header popovers/funnel affordances for selected columns while preserving click-to-sort behavior on the header.
+- HTML contract: wrap queue listings in `<div class="queue-layouts">` with a `.queue-table-wrapper` div and `.queue-card-list` sibling. The cards list must use `<ul role="list">` and `<li class="queue-card">`.
+- Table behavior: `.queue-table-wrapper` stays visible on `@media (min-width: 768px)` and still renders system/manifests rows. When non-queue sources exist, set `data-sticky-table="true"` so tablets/phones keep the table available.
+- Card behavior: `.queue-card-list` is visible for `@media (max-width: 767px)` and hides on larger breakpoints. Each card uses `.queue-card-header`, `.queue-card-meta`, `.queue-card-fields`, and `.queue-card-actions` to keep typography consistent.
+- Definition list contract: iterate `queueFieldDefinitions` so `<dt>/<dd>` stacks match desktop columns. `.queue-card-fields` defaults to two columns and collapses to one column below 768px.
+- Buttons: reuse `.button.secondary` plus flexbox `.queue-card-actions` so "View details" spans the full card width on mobile.
 - Styling source of truth: selectors live in `dashboard.tailwind.css` and compiled into `dashboard.css`. Use MoonMind tokens (`--mm-border`, `--mm-panel`, `--mm-muted`) for color/alpha tweaks to stay dark-mode compatible.
 
 #### 10.5.1 Shared Row Definition
 
-The table and mobile cards should share one normalized row definition, but the desktop table should prioritize comparison over exhaustiveness.
+The components parse execution records into normalized properties: Source, Queue, Runtime, Status, Created, Started, Finished.
+The Table maps these into standard UI grids, while the Mobile Card iterates these definitions to format `<dt>/<dd>` lists inside vertical blocks.
 
-- Primary desktop column: Title.
-- Strong supporting columns: Status, Workflow, Runtime, Started, Duration or Updated.
-- Compact secondary column: ID.
-- Move Source/Type, entry, namespace, run ID, repository, integration, owner, and exact finished timestamps into task detail or row expansion surfaces when they are not critical for first-pass scanning.
-- Mobile cards should iterate the same normalized row data, but only surface the top comparison fields rather than every possible execution attribute.
+- The backend exposes these rows consistently over `GET /api/queue/jobs`.
+- UI CSS governs the CSS media queries hiding the Table at `max-width: 767px` and showing Cards instead.
 
 ## 11. Production baseline vs upcoming polish
 
-The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, **light visual direction**, and **dark mode** (`.dark` scope, theme toggle, no-flash boot) are the current production baseline. Outstanding design work now includes the **wide console layout for `/tasks/list`**, clearer filter hierarchy, stronger table column economics, and the remaining **mobile refinement / glass-motion polish** called out in the tracker linked above.
+The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, **light visual direction**, and **dark mode** (`.dark` scope, theme toggle, no-flash boot) are the current production baseline. **Mobile refinement** (e.g. horizontal nav on narrow widths, table min-width wrappers, touch-target audit) and **glass/motion polish** (expanded `mm-glass` usage, glow/elevation tuning, subtle motion) are outstanding design work; status and checklists live in the tracker linked above.
 
 ## 12. Troubleshooting
 

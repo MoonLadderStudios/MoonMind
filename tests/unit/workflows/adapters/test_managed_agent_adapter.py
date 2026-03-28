@@ -44,7 +44,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 
-pytestmark = [pytest.mark.asyncio]
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +151,7 @@ def test_shape_environment_for_api_key_without_ref():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_resolve_profile_by_id():
     profiles = [
         {"profile_id": "prof-A", "auth_mode": "api_key"},
@@ -188,6 +188,7 @@ async def test_resolve_profile_by_id():
     assert ("slot_request", "wf-123", "gemini_cli") not in calls
 
 
+@pytest.mark.asyncio
 async def test_resolve_profile_auto_picks_first():
     profiles = [
         {"profile_id": "first", "auth_mode": "api_key"},
@@ -215,6 +216,7 @@ async def test_resolve_profile_auto_picks_first():
     assert handle.metadata["profile_id"] == "first"
 
 
+@pytest.mark.asyncio
 async def test_start_uses_passthrough_keys_for_github_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -285,6 +287,7 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     assert "OPENAI_API_KEY" not in env_overrides
 
 
+@pytest.mark.asyncio
 async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     profiles = [
         {
@@ -339,6 +342,7 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
 
 
+@pytest.mark.asyncio
 async def test_resolve_profile_raises_when_not_found():
     profiles = [{"profile_id": "exists", "auth_mode": "api_key"}]
 
@@ -363,6 +367,7 @@ async def test_resolve_profile_raises_when_not_found():
         await adapter.start(request)
 
 
+@pytest.mark.asyncio
 async def test_resolve_profile_raises_when_no_profiles():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([]),
@@ -385,6 +390,7 @@ async def test_resolve_profile_raises_when_no_profiles():
         await adapter.start(request)
 
 
+@pytest.mark.asyncio
 async def test_start_rejects_non_managed_agent_kind():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([{"profile_id": "p", "auth_mode": "api_key"}]),
@@ -412,6 +418,7 @@ async def test_start_rejects_non_managed_agent_kind():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_release_slot_signals_manager():
     released: list[dict] = []
 
@@ -449,6 +456,7 @@ async def test_release_slot_signals_manager():
     assert released[0]["wf"] == "wf-release"
 
 
+@pytest.mark.asyncio
 async def test_report_429_cooldown_uses_active_profile():
     reported: list[dict] = []
 
@@ -481,6 +489,7 @@ async def test_report_429_cooldown_uses_active_profile():
     assert reported[0]["secs"] == 600
 
 
+@pytest.mark.asyncio
 async def test_report_429_cooldown_raises_without_active_profile():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([]),
@@ -510,6 +519,7 @@ async def _patched_session_context(session_factory):
         yield session
 
 
+@pytest.mark.asyncio
 async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
@@ -566,6 +576,7 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["max_parallel_runs"] == 2
 
 
+@pytest.mark.asyncio
 async def test_auth_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         service = TemporalArtifactService(
@@ -586,6 +597,7 @@ async def test_auth_profile_list_returns_empty_for_unknown_runtime(tmp_path: Pat
         assert result == {"profiles": []}
 
 
+@pytest.mark.asyncio
 async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
@@ -629,6 +641,7 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_status_reads_from_store(tmp_path: Path):
     from datetime import UTC, datetime
 
@@ -660,6 +673,7 @@ async def test_status_reads_from_store(tmp_path: Path):
     assert status.agent_id == "gemini_cli"
 
 
+@pytest.mark.asyncio
 async def test_status_falls_back_to_stub_without_store():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([]),
@@ -673,6 +687,7 @@ async def test_status_falls_back_to_stub_without_store():
     assert status.status == "running"  # stub default
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_reads_from_store(tmp_path: Path):
     from datetime import UTC, datetime
 
@@ -707,6 +722,7 @@ async def test_fetch_result_reads_from_store(tmp_path: Path):
     assert "artifact://diag/123" in result.output_refs
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     tmp_path: Path,
 ):
@@ -759,6 +775,7 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     assert "manual_review" in result.summary
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
     tmp_path: Path,
 ):
@@ -811,6 +828,7 @@ async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
     assert "run_fix_comments_skill" in result.summary
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     tmp_path: Path,
 ):
@@ -865,6 +883,7 @@ async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     assert "run_fix_comments_skill" in result.summary
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     from datetime import UTC, datetime
 
@@ -906,6 +925,7 @@ async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     assert result.failure_class is None
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     from datetime import UTC, datetime
 
@@ -938,6 +958,7 @@ async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     assert result.output_refs == []
 
 
+@pytest.mark.asyncio
 async def test_fetch_result_ignores_pr_resolver_artifact_when_not_expected(
     tmp_path: Path,
 ):
@@ -998,6 +1019,7 @@ async def test_fetch_result_ignores_pr_resolver_artifact_when_not_expected(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

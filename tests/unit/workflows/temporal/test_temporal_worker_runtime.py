@@ -376,7 +376,9 @@ def test_enforce_codex_config_runs_for_managed_fleets(fleet: str) -> None:
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
 async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_describe, mock_healthcheck):
     # Setup mocks
-    mock_healthcheck.return_value = AsyncMock()
+    mock_healthcheck_obj = MagicMock()
+    mock_healthcheck_obj.wait_closed = AsyncMock(return_value=None)
+    mock_healthcheck.return_value = mock_healthcheck_obj
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
     mock_topology.task_queues = ["mm.workflow"]
@@ -428,7 +430,9 @@ async def test_main_async_activity_fleet(
     mock_worker_cls, mock_connect, mock_describe, mock_runtime_activities, mock_healthcheck
 ):
     # Setup mocks
-    mock_healthcheck.return_value = AsyncMock()
+    mock_healthcheck_obj = MagicMock()
+    mock_healthcheck_obj.wait_closed = AsyncMock(return_value=None)
+    mock_healthcheck.return_value = mock_healthcheck_obj
     mock_topology = MagicMock()
     mock_topology.fleet = "artifacts"
     mock_topology.task_queues = ["mm.activity.artifacts"]

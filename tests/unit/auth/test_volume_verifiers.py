@@ -95,7 +95,7 @@ class TestVerifyVolumeCredentials:
     async def test_successful_verification(self) -> None:
         """Simulate Docker run finding credentials."""
         mock_process = AsyncMock()
-        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.communicate = MagicMock(return_value=asyncio.Future())
         mock_process.returncode = 0
 
         with patch(
@@ -121,7 +121,7 @@ class TestVerifyVolumeCredentials:
     async def test_no_credentials_found(self) -> None:
         """Simulate Docker run finding no credentials."""
         mock_process = AsyncMock()
-        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.communicate = MagicMock(return_value=asyncio.Future())
         mock_process.returncode = 0
 
         with patch(
