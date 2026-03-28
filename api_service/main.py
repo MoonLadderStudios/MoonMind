@@ -483,14 +483,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
             "secret_refs": {
-                "anthropic_api_key": "MINIMAX_API_KEY"
+                "ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"
             },
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
                 "OPENAI_API_KEY",
             ],
             "env_template": {
-                "ANTHROPIC_AUTH_TOKEN": "${anthropic_api_key}",
                 "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
                 "ANTHROPIC_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",

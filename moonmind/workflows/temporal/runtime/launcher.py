@@ -463,8 +463,13 @@ class ManagedRuntimeLauncher:
             from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
             for ref_key, secret_name in secret_refs.items():
                 secret_value = await resolve_managed_api_key_reference(secret_name)
+                # Direct injection: set ref_key as an env var with the resolved value.
+                # This is the primary mechanism for env_bundle profiles where ref_key
+                # is the target env var name (e.g. ANTHROPIC_AUTH_TOKEN).
+                env_overrides[ref_key] = secret_value
+                # Also substitute ${ref_key} placeholders in any existing env values.
                 placeholder = f"${{{ref_key}}}"
-                for k, v in env_overrides.items():
+                for k, v in list(env_overrides.items()):
                     if isinstance(v, str) and placeholder in v:
                         env_overrides[k] = v.replace(placeholder, secret_value)
         api_key_ref = str(env_overrides.get("MANAGED_API_KEY_REF") or "").strip()
