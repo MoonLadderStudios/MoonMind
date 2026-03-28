@@ -53,6 +53,7 @@ _STATIC_PATHS = {
     "manifests/new",
     "schedules",
     "settings",
+    "secrets",
     "skills",
     "workers",
 }
@@ -206,6 +207,9 @@ async def _get_temporal_service(
 
 def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     config = build_runtime_config(current_path)
+    boot_payload = generate_boot_payload("dashboard-alerts")
+    assets_html = ui_assets("dashboard-alerts")
+    
     return templates.TemplateResponse(
         request,
         "task_dashboard.html",
@@ -213,6 +217,8 @@ def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
             "request": request,
             "dashboard_config": config,
             "current_path": current_path,
+            "boot_payload": boot_payload,
+            "assets_html": assets_html,
         },
     )
 
@@ -231,6 +237,14 @@ def _render_react_page(request: Request, entrypoint: str, current_path: str, ini
         },
     )
 
+
+@router.get("/tasks/secrets", response_class=HTMLResponse)
+async def task_secrets_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered secrets page."""
+    return _render_react_page(request, "secrets", "/tasks/secrets")
 
 @router.get("/tasks", name="task_dashboard_root")
 async def task_dashboard_root(

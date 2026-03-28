@@ -339,6 +339,60 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
 
 
+async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
+    profiles = [
+        {
+            "profile_id": "proxy-prof",
+            "auth_mode": "api_key",
+            "api_key_ref": "db://123", # Not evaluated in proxy
+            "command_template": ["claude"],
+            "tags": ["proxy-first"],
+            "provider_id": "anthropic",
+            "secret_refs": {"anthropic_api_key": "db://123"},
+        }
+    ]
+    captured_payload: dict[str, Any] = {}
+
+    async def _run_launcher(**kwargs: Any):
+        payload = kwargs.get("payload")
+        if isinstance(payload, dict):
+            captured_payload.update(payload)
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-proxy",
+        runtime_id="claude_code",
+        run_launcher=_run_launcher,
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="proxy-prof",
+        correlationId="corr-proxy",
+        idempotencyKey="idem-proxy",
+    )
+    await adapter.start(request)
+
+    profile_payload = captured_payload.get("profile") or {}
+    env_overrides = profile_payload.get("env_overrides") or profile_payload.get("envOverrides")
+    
+    assert isinstance(env_overrides, dict)
+    # The proxy token must be generated but db_encrypted should not leak
+    assert "db://123" not in env_overrides.values()
+    assert "MANAGED_API_KEY_REF" not in env_overrides
+    assert "MOONMIND_PROXY_TOKEN" in env_overrides
+    assert "ANTHROPIC_BASE_URL" in env_overrides
+    assert "proxy/anthropic" in env_overrides["ANTHROPIC_BASE_URL"]
+
+
 async def test_resolve_profile_raises_when_not_found():
     profiles = [{"profile_id": "exists", "auth_mode": "api_key"}]
 

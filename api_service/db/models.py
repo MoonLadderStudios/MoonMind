@@ -391,7 +391,58 @@ __all__ = [
     "TaskStepTemplateVersion",
     "TaskStepTemplateFavorite",
     "TaskStepTemplateRecent",
+    "SecretStatus",
+    "ManagedSecret",
 ]
+
+
+class SecretStatus(str, enum.Enum):
+    """Lifecycle state for a MoonMind managed secret."""
+
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    ROTATED = "rotated"
+    DELETED = "deleted"
+    INVALID = "invalid"
+
+
+class ManagedSecret(Base):
+    """Encrypted durable storage for SecretRefs."""
+
+    __tablename__ = "managed_secrets"
+    __table_args__ = (
+        Index("ix_managed_secrets_slug", "slug", unique=True),
+        Index("ix_managed_secrets_status", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(StringEncryptedType(Text, get_encryption_key), nullable=False)
+    status: Mapped[SecretStatus] = mapped_column(
+        Enum(
+            SecretStatus,
+            name="secretstatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=SecretStatus.ACTIVE,
+    )
+    details: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 class ApproverRoleListType(TypeDecorator):

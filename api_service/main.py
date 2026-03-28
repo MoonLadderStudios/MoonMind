@@ -59,6 +59,8 @@ from api_service.api.routers.temporal_artifacts import (
     router as temporal_artifacts_router,
 )
 from api_service.api.routers.workflows import router as workflows_router
+from api_service.api.routers.secrets import router as secrets_router
+from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
 from api_service.services.task_templates.catalog import TaskTemplateCatalogService
@@ -328,6 +330,8 @@ app.include_router(
 app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
 app.include_router(oauth_sessions_router, prefix="/api/v1")
+app.include_router(secrets_router, prefix="/api/v1/secrets")
+app.include_router(proxy_router, prefix="/api/v1")
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
