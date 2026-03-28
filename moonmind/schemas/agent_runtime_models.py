@@ -149,9 +149,12 @@ class AgentExecutionRequest(BaseModel):
     def _validate_contract(self) -> "AgentExecutionRequest":
         self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
         if self.execution_profile_ref is not None:
-            self.execution_profile_ref = _require_non_blank(
-                self.execution_profile_ref, field_name="executionProfileRef"
-            )
+            if self.execution_profile_ref.strip().lower() == "auto":
+                self.execution_profile_ref = None
+            else:
+                self.execution_profile_ref = _require_non_blank(
+                    self.execution_profile_ref, field_name="executionProfileRef"
+                )
         self.correlation_id = _require_non_blank(
             self.correlation_id, field_name="correlationId"
         )
