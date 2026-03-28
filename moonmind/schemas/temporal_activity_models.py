@@ -18,6 +18,8 @@ import base64
 import binascii
 from typing import Annotated
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PlainValidator
 
 from .temporal_artifact_models import ArtifactRefModel
@@ -104,4 +106,43 @@ class ArtifactWriteCompleteInput(BaseModel):
     content_type: str | None = Field(
         default=None,
         description="The optional MIME type of the content.",
+    )
+
+
+class PlanGenerateInput(BaseModel):
+    """Input parameters for the plan.generate activity."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    principal: str = Field(..., description="The principal requesting the plan generation.")
+    inputs_ref: str | ArtifactRefModel | None = Field(
+        default=None,
+        description="The artifact ID or an artifact reference dict/model for inputs.",
+    )
+    parameters: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional parameters for plan generation.",
+    )
+    registry_snapshot_ref: str | ArtifactRefModel | None = Field(
+        default=None,
+        description="The artifact ID or reference for the skill registry snapshot.",
+    )
+    execution_ref: dict[str, Any] | None = Field(
+        default=None,
+        description="Execution linkage used by Temporal artifacts.",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        description="Optional idempotency key.",
+    )
+
+
+class PlanGenerateOutput(BaseModel):
+    """Output payload from the plan.generate activity."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    plan_ref: ArtifactRefModel = Field(
+        ...,
+        description="The artifact reference to the generated plan.",
     )

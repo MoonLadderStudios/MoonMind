@@ -14,12 +14,14 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
     from moonmind.workflows.temporal.jules_bundle import (
         build_bundle_spec,
         eligible_for_bundle,
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
+    from moonmind.workflows.temporal.typed_execution import execute_typed_activity
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
@@ -530,21 +532,20 @@ class MoonMindRunWorkflow:
             return plan_ref
 
         plan_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.generate")
-        plan_payload_args = {
-            "principal": self._principal(),
-            "inputs_ref": input_ref,
-            "parameters": parameters,
-            "execution_ref": {
+        plan_payload_args = PlanGenerateInput(
+            principal=self._principal(),
+            inputs_ref=input_ref,
+            parameters=parameters,
+            execution_ref={
                 "namespace": workflow.info().namespace,
                 "workflow_id": workflow.info().workflow_id,
                 "run_id": workflow.info().run_id,
                 "link_type": "plan",
             },
-        }
-        if workflow.patched("idempotency_key_phase3"):
-            plan_payload_args["idempotency_key"] = f"{workflow.info().workflow_id}_plan_generate"
+            idempotency_key=f"{workflow.info().workflow_id}_plan_generate" if workflow.patched("idempotency_key_phase3") else None,
+        )
 
-        plan_result = await workflow.execute_activity(
+        plan_result = await execute_typed_activity(
             "plan.generate",
             plan_payload_args,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
