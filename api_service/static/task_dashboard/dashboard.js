@@ -10030,6 +10030,11 @@
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
     const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
 
+    if (normalizedRoute === "/tasks" || normalizedRoute === "") {
+      window.location.href = "/tasks/list";
+      return;
+    }
+
     if (normalizedRoute === "/tasks/manifests/new") {
       renderManifestSubmitPage();
       return;

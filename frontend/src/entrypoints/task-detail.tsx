@@ -17,7 +17,7 @@ const TaskRunDetailSchema = z.object({
 type TaskRunDetail = z.infer<typeof TaskRunDetailSchema>;
 
 export function TaskDetailPage(_props: { payload: BootPayload }) {
-  const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/);
+  const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:proposals\/|schedules\/|manifests\/)?([^/]+)$/);
   const taskId = taskIdMatch ? taskIdMatch[1] : null;
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
 
