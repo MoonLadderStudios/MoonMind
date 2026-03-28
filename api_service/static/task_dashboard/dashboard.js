@@ -128,6 +128,8 @@
   }
 
   const config = JSON.parse(configNode.textContent || "{}");
+  const dashboardShell =
+    typeof root.closest === "function" ? root.closest(".dashboard-root") : null;
   const pollIntervals = config.pollIntervalsMs || {
     list: 5000,
     detail: 2000,
@@ -1970,9 +1972,17 @@
     return "other";
   }
 
+  function setDashboardLayout(layout = "contained") {
+    if (!dashboardShell || !dashboardShell.classList) {
+      return;
+    }
+    dashboardShell.classList.toggle("dashboard-root-wide", layout === "wide");
+  }
+
   function setView(title, subtitle, body, options = {}) {
-    const { showAutoRefreshControls = false } = options;
+    const { showAutoRefreshControls = false, layout = "contained" } = options;
     const normalizedSubtitle = String(subtitle || "").trim();
+    setDashboardLayout(layout);
     root.innerHTML = `
       <div class="toolbar">
         <div>
@@ -7498,7 +7508,7 @@
       "Temporal Task Detail",
       `Task ${workflowId}`,
       "<p class='loading'>Loading Temporal task...</p>",
-      { showAutoRefreshControls: true },
+      { showAutoRefreshControls: true, layout: "wide" },
     );
 
     let detailNotice = "";
@@ -8264,7 +8274,7 @@
             debugFields,
             liveLogsAvailable: logState.liveLogsAvailable,
           }),
-          { showAutoRefreshControls: true },
+          { showAutoRefreshControls: true, layout: "wide" },
         );
         attachTemporalActionHandlers(execution, load);
         attachLogHandlers();
@@ -8298,7 +8308,7 @@
             "Temporal Task Detail",
             `Task ${workflowId}`,
             `<div class='notice error'>${escapeHtml(detailNotice)}</div>`,
-            { showAutoRefreshControls: true },
+            { showAutoRefreshControls: true, layout: "wide" },
           );
           return;
         }
@@ -8306,7 +8316,7 @@
           "Temporal Task Detail",
           `Task ${workflowId}`,
           "<div class='notice error'>Failed to load task detail.</div>",
-          { showAutoRefreshControls: true },
+          { showAutoRefreshControls: true, layout: "wide" },
         );
       }
     };
@@ -8524,7 +8534,7 @@
         `${noticeHtml}${renderFilters()}${renderTable()}${renderProposalActionFeedback(
           state.actionFeedback,
         )}`,
-        { showAutoRefreshControls: true },
+        { showAutoRefreshControls: true, layout: "wide" },
       );
       attachHandlers();
     };
@@ -8575,7 +8585,7 @@
       "Task Proposals",
       "Worker follow-up queue (promote to Task jobs).",
       "<p class='loading'>Loading proposals...</p>",
-      { showAutoRefreshControls: true },
+      { showAutoRefreshControls: true, layout: "wide" },
     );
     await load();
     startPolling(load, pollIntervals.list);
@@ -8618,6 +8628,7 @@
       "Proposal Detail",
       `Proposal ${proposalId}`,
       "<p class='loading'>Loading proposal...</p>",
+      { layout: "wide" },
     );
 
     let detailNotice = "";
@@ -8767,6 +8778,7 @@
             ${similarMarkup}
           </section>
         `,
+        { layout: "wide" },
       );
       const promoteButton = document.getElementById("proposal-promote-button");
       if (promoteButton) {
@@ -8786,6 +8798,7 @@
               "Proposal Detail",
               `Proposal ${proposalId}`,
               "<div class='notice error'>Promotion failed.</div>",
+              { layout: "wide" },
             );
           } finally {
             promoteButton.disabled = false;
@@ -8805,6 +8818,7 @@
               "Proposal Detail",
               `Proposal ${proposalId}`,
               "<div class='notice error'>Dismissal failed.</div>",
+              { layout: "wide" },
             );
           } finally {
             dismissButton.disabled = false;
@@ -8830,6 +8844,7 @@
               "Proposal Detail",
               `Proposal ${proposalId}`,
               "<div class='notice error'>Edit & Promote failed.</div>",
+              { layout: "wide" },
             );
           } finally {
             editButton.disabled = false;

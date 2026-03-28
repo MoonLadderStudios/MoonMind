@@ -71,6 +71,10 @@ body {
   padding: 1.25rem 1rem 2.75rem;
 }
 
+.dashboard-root.dashboard-root-wide {
+  max-width: 1600px;
+}
+
 .masthead {
   display: flex;
   align-items: flex-start;
