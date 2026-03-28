@@ -35,6 +35,6 @@ bash .specify/scripts/bash/validate-implementation-scope.sh --check diff --mode 
 
 ## 6. Worker failure-mode smoke flow
 
-1. Run worker without `tmate` binary in `PATH` (or simulate startup failure).
+1. Run worker with live-session provisioning disabled or simulated failure.
 2. Submit a task with live session enabled.
 3. Confirm task run continues and live session reports `error` state in API/dashboard.

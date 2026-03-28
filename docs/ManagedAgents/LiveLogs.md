@@ -514,7 +514,7 @@ class ManagedRunRecord:
 
 ## 11.2 Live-session model
 
-The current `TaskRunLiveSession` schema is tmate-specific, with fields such as `provider=tmate`, `tmateSessionName`, `tmateSocketPath`, `attachRo`, and `webRo` .
+The persisted `TaskRunLiveSession` row uses `provider` (e.g. `none`), `liveSessionName`, `liveSessionSocketPath`, `attachRo`, and `webRo` where workers report relay metadata.
 
 That should be replaced or deprecated for managed-run observability.
 

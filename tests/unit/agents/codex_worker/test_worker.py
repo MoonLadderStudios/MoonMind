@@ -5665,11 +5665,10 @@ async def test_ensure_live_session_started_skips_opt_in_without_request(
     assert worker._active_live_session is None
 
 
-async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmate_config(
+async def test_ensure_live_session_started_is_no_op_with_none_provider(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Opt-in mode should bootstrap when explicitly requested and keep RW endpoints out of stage commands."""
+    """Explicit live-session request cannot provision when provider is ``none``."""
 
     queue = FakeQueueClient(jobs=[])
     queue.live_session_state = {"session": {"status": "starting"}}
@@ -5684,66 +5683,18 @@ async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmat
         lease_seconds=120,
         workdir=tmp_path,
         live_session_enabled_default=False,
-        tmate_server_host="tmate.internal",
+        live_session_provider="none",
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
-    stage_commands: list[tuple[str, ...]] = []
-    quiet_commands: list[tuple[str, ...]] = []
 
-    monkeypatch.setattr(
-        "moonmind.agents.codex_worker.worker.shutil.which", lambda _: "tmate"
-    )
-
-    async def _capture_stage_command(
-        command,
-        *,
-        cwd,
-        log_path,
-        check=True,
-        env=None,
-        redaction_values=(),
-        cancel_event=None,
-        timeout_seconds=None,
-    ):
-        _ = (cwd, log_path, check, env, redaction_values, cancel_event, timeout_seconds)
-        stage_commands.append(tuple(command))
-        return CommandResult(tuple(command), 0, "", "")
-
-    async def _capture_quiet_command(command, *, cwd):
-        _ = cwd
-        normalized = tuple(command)
-        quiet_commands.append(normalized)
-        if "#{tmate_ssh_ro}" in normalized:
-            return CommandResult(normalized, 0, "ssh ro\n", "")
-        if "#{tmate_ssh}" in normalized:
-            return CommandResult(normalized, 0, "ssh rw\n", "")
-        if "#{tmate_web_ro}" in normalized:
-            return CommandResult(normalized, 0, "https://ro.example\n", "")
-        if "#{tmate_web}" in normalized:
-            return CommandResult(normalized, 0, "https://rw.example\n", "")
-        return CommandResult(normalized, 0, "", "")
-
-    worker._run_stage_command = _capture_stage_command  # type: ignore[method-assign]
-    worker._run_command_without_logging = _capture_quiet_command  # type: ignore[method-assign]
-
-    job_id = uuid4()
     await worker._ensure_live_session_started(
-        job_id=job_id,
+        job_id=uuid4(),
         log_path=tmp_path / "prepare.log",
         cwd=tmp_path / "job",
     )
 
-    assert worker._active_live_session is not None
-    config_path = worker._active_live_session.config_path
-    assert config_path is not None
-    assert config_path.exists()
-    assert all("display" not in command for command in stage_commands)
-    assert any("#{tmate_ssh}" in command for command in quiet_commands)
-    assert any("-f" in command for command in stage_commands)
-    assert any(report.get("status") == "ready" for report in queue.live_session_reports)
-
-    await worker._teardown_live_session(job_id=job_id)
-    assert not config_path.exists()
+    assert worker._active_live_session is None
+    assert queue.live_session_reports == []
 
 
 async def test_run_once_acks_cancellation_requested_via_heartbeat(
@@ -6097,21 +6048,19 @@ async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
-    monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "tmate")
+    monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "none")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "120")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES", "30")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", "true")
-    monkeypatch.setenv("MOONMIND_TMATE_SERVER_HOST", "tmate.internal")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER", "5")
 
     config = CodexWorkerConfig.from_env()
 
     assert config.live_session_enabled_default is False
-    assert config.live_session_provider == "tmate"
+    assert config.live_session_provider == "none"
     assert config.live_session_ttl_minutes == 120
     assert config.live_session_rw_grant_ttl_minutes == 30
     assert config.live_session_allow_web is True
-    assert config.tmate_server_host == "tmate.internal"
     assert config.live_session_max_concurrent_per_worker == 5
 
 

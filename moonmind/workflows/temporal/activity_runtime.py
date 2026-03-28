@@ -2768,7 +2768,7 @@ class TemporalAgentRuntimeActivities:
         self._supervision_tasks: set[asyncio.Task] = set()
 
     async def _report_live_session(self, run_id: str, endpoints: dict[str, str]) -> None:
-        """Write tmate endpoints directly to the database so the UI can connect."""
+        """Persist live-session attach URLs when the launcher supplies them."""
         import uuid
 
         try:
@@ -2778,7 +2778,11 @@ class TemporalAgentRuntimeActivities:
             return
 
         from api_service.db.base import get_async_session_context
-        from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession
+        from api_service.db.models import (
+            AgentJobLiveSessionProvider,
+            AgentJobLiveSessionStatus,
+            TaskRunLiveSession,
+        )
         from sqlalchemy import select
 
         try:
@@ -2790,7 +2794,7 @@ class TemporalAgentRuntimeActivities:
                 if not session:
                     session = TaskRunLiveSession(
                         task_run_id=task_run_id,
-                        provider="tmate",
+                        provider=AgentJobLiveSessionProvider.NONE,
                         status=AgentJobLiveSessionStatus.READY,
                         worker_id="temporal-worker",
                     )
@@ -2900,7 +2904,7 @@ class TemporalAgentRuntimeActivities:
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 
         # Idempotency check handled in launcher
-        record, process, endpoints, tmate_manager = await self._run_launcher.launch(
+        record, process, endpoints = await self._run_launcher.launch(
             run_id=run_id,
             request=request,
             profile=profile,
@@ -2912,7 +2916,7 @@ class TemporalAgentRuntimeActivities:
             return record.model_dump(mode="json")
 
         if endpoints:
-            # Report the live session so that the dashboard UI can connect
+            # Optional live-session metadata from callers that still supply endpoint dicts.
             await self._report_live_session(run_id, endpoints)
 
         # Start background supervision — hold a strong reference so the task
@@ -2923,19 +2927,6 @@ class TemporalAgentRuntimeActivities:
             if isinstance(timeout_policy, dict)
             else getattr(timeout_policy, "timeout_seconds", 3600)
         )
-        exit_code_path = None
-        cleanup_paths: list[str] | None = None
-        if endpoints:
-            exit_code_path = endpoints.get("exit_code_path")
-            cleanup_paths = [
-                path
-                for path in (
-                    endpoints.get("tmate_socket_path"),
-                    endpoints.get("tmate_config_path"),
-                    exit_code_path,
-                )
-                if path
-            ]
 
         async def _supervise_and_publish():
             try:
@@ -2943,9 +2934,6 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     process=process,
                     timeout_seconds=timeout_seconds,
-                    exit_code_path=exit_code_path,
-                    cleanup_paths=cleanup_paths,
-                    tmate_manager=tmate_manager,
                 )
             except asyncio.CancelledError:
                 raise
@@ -3172,9 +3160,7 @@ class TemporalAgentRuntimeActivities:
             meta.update(push_info)
 
         # Enrich result with pull_request_url detected from workspace git
-        # state.  Managed agents run inside tmate so their stdout doesn't
-        # capture CLI output; we check for PRs from the workspace branch
-        # after the run completes instead.
+        # state (CLI stdout may not always surface PR URLs reliably).
         if result.failure_class is None:
             pr_url = self._detect_pr_url_from_workspace(run_id)
             if pr_url:

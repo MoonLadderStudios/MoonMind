@@ -657,6 +657,151 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List metadata for all managed secrets */
+        get: operations["list_secrets_api_v1_secrets_get"];
+        put?: never;
+        /** Create a new managed secret */
+        post: operations["create_secret_api_v1_secrets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update an existing secret */
+        put: operations["update_secret_api_v1_secrets__slug__put"];
+        post?: never;
+        /** Delete a secret entirely */
+        delete: operations["delete_secret_api_v1_secrets__slug__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets/{slug}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rotate an existing secret */
+        post: operations["rotate_secret_api_v1_secrets__slug__rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets/{slug}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update the status of a secret */
+        put: operations["update_secret_status_api_v1_secrets__slug__status_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secrets/{slug}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Validate that a secret reference is resolvable */
+        get: operations["validate_secret_api_v1_secrets__slug__validate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/proxy/{provider_id}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        get: operations["proxy_pass_through_get"];
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        put: operations["proxy_pass_through_put"];
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        post: operations["proxy_pass_through_post"];
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        delete: operations["proxy_pass_through_delete"];
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        options: operations["proxy_pass_through_options"];
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        head: operations["proxy_pass_through_head"];
+        /**
+         * Proxy Pass Through
+         * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
+         *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
+         *     resolves the real secret via the database, and proxies to the upstream URL.
+         */
+        patch: operations["proxy_pass_through_patch"];
+        trace?: never;
+    };
     "/api/executions": {
         parameters: {
             query?: never;
@@ -1146,6 +1291,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Secrets Route
+         * @description Serve the React-powered secrets page.
+         */
+        get: operations["task_secrets_route_tasks_secrets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks": {
         parameters: {
             query?: never;
@@ -1158,6 +1323,126 @@ export interface paths {
          * @description Serve the dashboard root page.
          */
         get: operations["task_dashboard_root_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Proposals Route
+         * @description Serve the React-powered proposals page.
+         */
+        get: operations["task_proposals_route_tasks_proposals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Schedules Route
+         * @description Serve the React-powered schedules page.
+         */
+        get: operations["task_schedules_route_tasks_schedules_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/manifests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Manifests Route
+         * @description Serve the React-powered manifests page.
+         */
+        get: operations["task_manifests_route_tasks_manifests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/tasks-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Tasks List Route
+         * @description Serve the React-powered tasks-list page.
+         */
+        get: operations["task_tasks_list_route_tasks_tasks_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task List Route
+         * @description Serve the React-powered tasks list page.
+         */
+        get: operations["task_list_route_tasks_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Workers Route
+         * @description Serve the React-powered workers page.
+         */
+        get: operations["task_workers_route_tasks_workers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1672,7 +1957,7 @@ export interface components {
          * AgentJobLiveSessionProvider
          * @enum {string}
          */
-        AgentJobLiveSessionProvider: "tmate";
+        AgentJobLiveSessionProvider: "none";
         /**
          * AgentJobLiveSessionStatus
          * @enum {string}
@@ -3268,10 +3553,10 @@ export interface components {
             /** Profile Id */
             profile_id: string;
             status: components["schemas"]["OAuthSessionStatus"];
-            /** Tmate Web Url */
-            tmate_web_url?: string | null;
-            /** Tmate Ssh Url */
-            tmate_ssh_url?: string | null;
+            /** Oauth Web Url */
+            oauth_web_url?: string | null;
+            /** Oauth Ssh Url */
+            oauth_ssh_url?: string | null;
             /** Expires At */
             expires_at?: string | null;
             /** Failure Reason */
@@ -3282,7 +3567,7 @@ export interface components {
          * @description Lifecycle status for a managed agent OAuth session.
          * @enum {string}
          */
-        OAuthSessionStatus: "pending" | "starting" | "tmate_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
+        OAuthSessionStatus: "pending" | "starting" | "oauth_runner_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
         /**
          * PinArtifactRequest
          * @description Request body for explicit artifact pinning.
@@ -3786,6 +4071,81 @@ export interface components {
             redirectPath: string;
         };
         /**
+         * SecretCreateRequest
+         * @description Request body to create a new secret.
+         */
+        SecretCreateRequest: {
+            /**
+             * Slug
+             * @description Unique shorthand string for the secret (e.g., ANTHROPIC_API_KEY)
+             */
+            slug: string;
+            /**
+             * Plaintext
+             * @description The raw secret value to be encrypted
+             */
+            plaintext: string;
+            /**
+             * Details
+             * @description Optional metadata
+             */
+            details?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * SecretListResponse
+         * @description Envelope for list of secret metadata.
+         */
+        SecretListResponse: {
+            /** Items */
+            items?: components["schemas"]["SecretMetadataResponse"][];
+        };
+        /**
+         * SecretMetadataResponse
+         * @description Safe metadata representation of a secret, explicitly excluding ciphertext.
+         */
+        SecretMetadataResponse: {
+            /** Slug */
+            slug: string;
+            /** Status */
+            status: string;
+            /** Details */
+            details: {
+                [key: string]: unknown;
+            };
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Updatedat */
+            updatedAt?: string | null;
+        };
+        /**
+         * SecretStatusUpdateRequest
+         * @description Request body to change secret status.
+         */
+        SecretStatusUpdateRequest: {
+            /**
+             * Status
+             * @description New status for the secret
+             * @enum {string}
+             */
+            status: "active" | "disabled";
+        };
+        /**
+         * SecretUpdateRequest
+         * @description Request body to update an existing secret.
+         */
+        SecretUpdateRequest: {
+            /**
+             * Plaintext
+             * @description The new raw secret value to be encrypted
+             */
+            plaintext: string;
+        };
+        /**
          * SignalExecutionRequest
          * @description Request payload for asynchronous workflow signals.
          */
@@ -4061,10 +4421,10 @@ export interface components {
             provider?: components["schemas"]["AgentJobLiveSessionProvider"] | null;
             /** Workerhostname */
             workerHostname?: string | null;
-            /** Tmatesessionname */
-            tmateSessionName?: string | null;
-            /** Tmatesocketpath */
-            tmateSocketPath?: string | null;
+            /** Livesessionname */
+            liveSessionName?: string | null;
+            /** Livesessionsocketpath */
+            liveSessionSocketPath?: string | null;
             /** Attachro */
             attachRo?: string | null;
             /** Attachrw */
@@ -6078,6 +6438,450 @@ export interface operations {
             };
         };
     };
+    list_secrets_api_v1_secrets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretListResponse"];
+                };
+            };
+        };
+    };
+    create_secret_api_v1_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_secret_api_v1_secrets__slug__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_secret_api_v1_secrets__slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_secret_api_v1_secrets__slug__rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_secret_status_api_v1_secrets__slug__status_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretStatusUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_secret_api_v1_secrets__slug__validate_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_pass_through_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_executions_api_executions_get: {
         parameters: {
             query?: {
@@ -7157,7 +7961,147 @@ export interface operations {
             };
         };
     };
+    task_secrets_route_tasks_secrets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
     task_dashboard_root_tasks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    task_proposals_route_tasks_proposals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_schedules_route_tasks_schedules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_manifests_route_tasks_manifests_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_tasks_list_route_tasks_tasks_list_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_list_route_tasks_list_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_workers_route_tasks_workers_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -5,11 +5,11 @@
 ### Fields
 - `id` (UUID): primary key.
 - `task_run_id` (UUID FK -> `agent_jobs.id`, unique): owning task run.
-- `provider` (enum): live provider (`tmate`).
+- `provider` (enum): live provider (`none`, or future relay identifiers).
 - `status` (enum): `disabled`, `starting`, `ready`, `revoked`, `ended`, `error`.
 - `ready_at`, `ended_at`, `expires_at` (timestamps): lifecycle timing.
 - `worker_id`, `worker_hostname`: provenance metadata.
-- `tmate_session_name`, `tmate_socket_path`: worker-side session identity.
+- `live_session_name`, `live_session_socket_path`: worker-side session identity when applicable.
 - `attach_ro` (text): RO attach command/string.
 - `attach_rw_encrypted` (encrypted text): RW attach command/string.
 - `web_ro` (text): optional RO web URL.

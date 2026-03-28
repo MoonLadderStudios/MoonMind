@@ -25,9 +25,9 @@
 - Alternatives considered:
   - Expose RW endpoints directly in GET response: rejected by least-privilege requirements.
 
-## Decision 5: Implement worker bootstrap as best-effort tmate manager
+## Decision 5: Implement worker bootstrap as best-effort live-session reporter
 - Decision: Add worker-side `_ensure_live_session_started` and `_teardown_live_session` paths that report `starting`/`ready`/`error`/`ended` and never block baseline task execution.
-- Rationale: Live handoff is additive; task execution must proceed even if tmate cannot start.
+- Rationale: Live handoff is additive; task execution must proceed even if live-session provisioning fails.
 - Alternatives considered:
   - Fail task run if live session fails: rejected by documented failure-mode expectations.
 

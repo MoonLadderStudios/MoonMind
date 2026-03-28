@@ -21,7 +21,7 @@ class OAuthSessionResponse(BaseModel):
     runtime_id: str
     profile_id: str
     status: OAuthSessionStatus
-    tmate_web_url: Optional[str] = None
-    tmate_ssh_url: Optional[str] = None
+    oauth_web_url: Optional[str] = None
+    oauth_ssh_url: Optional[str] = None
     expires_at: Optional[datetime] = None
     failure_reason: Optional[str] = None

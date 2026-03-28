@@ -3,7 +3,7 @@
 These tests specifically demonstrate:
   1. Streaming runs concurrently with the process (not after exit).
   2. Large output doesn't deadlock due to OS pipe buffer exhaustion.
-  3. None stdout/stderr (tmate-like case) is handled gracefully.
+  3. None stdout/stderr (no PIPE) is handled gracefully.
   4. The _heartbeat_and_wait_with_timeout helper returns correct tuples.
   5. Exit-code-file override still works in the concurrent path.
 """
@@ -13,8 +13,6 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
@@ -202,13 +200,13 @@ async def test_supervise_captures_stdout_normal_process(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Test 5 — supervise() with None stdout/stderr (tmate-like scenario)
+# Test 5 — supervise() with None stdout/stderr
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_supervise_with_none_stdout_does_not_crash(tmp_path: Path):
-    """supervise() gracefully handles None stdout/stderr (tmate wrapping case)."""
+    """supervise() gracefully handles None stdout/stderr when streams are not piped."""
     supervisor, store, storage = _make_supervisor(tmp_path)
     run_id = "run-none-streams"
     _save_record(store, run_id)
@@ -340,39 +338,7 @@ async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Test 8 — supervise() invokes tmate_manager.teardown on completion
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_supervise_calls_tmate_teardown(tmp_path: Path):
-    """tmate_manager.teardown() is always called after supervision ends."""
-    supervisor, store, storage = _make_supervisor(tmp_path)
-    run_id = "run-tmate-td"
-    _save_record(store, run_id)
-
-    process = await asyncio.create_subprocess_exec(
-        "echo", "done",
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    tmate_manager = MagicMock()
-    tmate_manager.teardown = AsyncMock()
-
-    await supervisor.supervise(
-        run_id=run_id,
-        process=process,
-        timeout_seconds=10,
-        tmate_manager=tmate_manager,
-    )
-
-    tmate_manager.teardown.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# Test 9 — streaming starts during process execution, not after
+# Test 8 — streaming starts during process execution, not after
 #
 # This test proves the correctness guarantee: a process that produces output
 # and THEN sleeps is fully captured.  If streaming started only after exit the

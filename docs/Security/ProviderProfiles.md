@@ -9,7 +9,7 @@ Owners: MoonMind Engineering
 > This document replaces the older **Auth Profiles** framing with **Provider Profiles**.
 > A provider profile is broader than authentication alone: it defines which provider a runtime targets, how credentials are sourced, how provider-specific configuration is materialized into the runtime environment, and how concurrency / cooldown policy is enforced.
 >
-> For tmate session architecture, OAuth session UX, and provider bootstrap behavior, see [TmateArchitecture.md](../ManagedAgents/TmateArchitecture.md). For the shared `TmateSessionManager` abstraction and session lifecycle, see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md).
+> For OAuth session UX, provider bootstrap behavior, and planned browser-terminal work, see [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md) and [TmateArchitecture.md](../ManagedAgents/TmateArchitecture.md). For artifact-based live logs for managed runs, see [LiveLogs.md](../ManagedAgents/LiveLogs.md).
 
 ---
 
@@ -145,6 +145,20 @@ A profile may materialize provider access into the runtime in one or more ways:
 - `composite`
 
 These modes describe **how** MoonMind prepares the runtime environment, not where the credentials ultimately come from.
+
+### 4.4 Proxy-First Execution vs Escape-Hatch Runtimes
+
+Runtimes are broadly classified into two execution models regarding credential handling:
+
+- **Proxy-First Runtimes**: Agent environments that communicate with LLM providers exclusively through MoonMind's internal API proxy (`/api/v1/proxy/`).
+  - These runtimes never receive raw database-encrypted provider credentials. Instead, MoonMind injects a symmetric synthetic proxy token (`MOONMIND_PROXY_TOKEN`) and heavily shapes the environment variables to route provider traffic (e.g. `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`) inward. 
+  - The proxy service securely correlates the incoming proxy token, unwraps the true underlying secret reference, decodes it remotely using the `RootSecretResolver`, and performs a pass-through request upstream.
+  - Proxy-first provides the strictest security, defending against credential exfiltration in the case of unauthorized prompt injection or malicious dependencies.
+  
+- **Escape-Hatch Runtimes**: Agent environments that require direct access to provider APIs and cannot be reliably intercepted (often due to limitations in the underlying runtime like hardcoded endpoints or complex web request structures).
+  - These runtimes receive direct, plain-text provider credentials (resolved on-the-fly at runtime boundary via `RootSecretResolver`).
+  - While MoonMind attempts to isolate the environment and strictly scopes the lifetime of the credentials to the run's duration, these runtimes carry higher inherent risk of credential leakage.
+  - Transitioning an escape-hatch runtime to proxy-first is highly desirable and generally mediated by tagging a profile with `proxy-first`.
 
 Examples:
 
