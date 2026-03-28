@@ -22,6 +22,13 @@ The Secrets System must therefore support both:
 - simple operator-managed local deployments with no required external cloud dependency, and
 - stronger optional integrations with external secret managers when an operator chooses them.
 
+The baseline personal-use path must be simple:
+
+- a user can launch `docker compose` successfully without creating or editing `.env`,
+- open Mission Control after startup,
+- enter a small number of secrets such as a provider API key and GitHub PAT through the UI or API, and
+- run useful agent workloads without first setting up Vault, cloud KMS, or other heavyweight infrastructure.
+
 The central design decision is:
 
 > MoonMind stores and transports **secret references**, not raw secrets, across durable contracts.
@@ -103,12 +110,14 @@ Persistent system contracts must use a reference form such as `SecretRef` rather
 
 The default MoonMind deployment path must remain compatible with operator-managed local infrastructure.
 
-The baseline implementation may use:
+The baseline implementation must support a zero-`.env` startup path with smart defaults for local development and personal use.
 
-- a Docker secret,
-- a protected local key file outside the repo,
-- an OS keychain-backed master key, or
-- a similar operator-managed local root of trust.
+For the default local-first managed-secret path, MoonMind should:
+
+- generate or initialize an application master key on first start,
+- store that root key in a protected local file outside the repo and outside the main application database,
+- let operators override that default with a Docker secret if they already use Compose secrets, and
+- allow stronger optional integrations such as OS keychains or external KMS products later.
 
 External secret systems are optional integrations, not baseline prerequisites.
 
@@ -191,6 +200,8 @@ Intended use:
 
 This is convenient but not a managed encrypted-at-rest store by itself.
 
+It should remain supported for bootstrap and break-glass cases, but it is not the preferred steady-state path for personal or production deployments once UI-managed secrets are available.
+
 ### 6.2 `db_encrypted`
 
 Stores MoonMind-managed secrets as encrypted application data in the MoonMind database.
@@ -219,6 +230,8 @@ Examples:
 
 This backend is the main escape hatch for integrating external secret managers without coupling the core system to one provider.
 
+Because this backend executes local commands, it should be disabled by default and only enabled through explicit operator configuration with command allowlisting and redaction-safe diagnostics.
+
 ### 6.4 `oauth_volume`
 
 Represents credentials or session state that live in a dedicated mounted runtime volume rather than in the managed secret store.
@@ -242,12 +255,15 @@ Additional backend types may be added behind the same resolver boundary as long 
 
 For `db_encrypted`, MoonMind must encrypt secret values before persistence using authenticated encryption such as AES-GCM.
 
-The encryption root must come from an operator-managed source outside the main application database, such as:
+The default local-first root-key source is a protected local key file created and managed by MoonMind outside the repo and outside the main application database.
+
+Operators may override that default with another operator-managed source outside the main application database, such as:
 
 - Docker secret,
-- protected local file,
 - OS keychain,
 - optional external KMS or Vault integration.
+
+The goal is that a fresh local install can store UI-entered secrets securely without requiring the user to provision external secret infrastructure first.
 
 ### 7.2 Key Separation
 
@@ -409,6 +425,15 @@ Provider Profiles and runtime launches should fail explicitly when a referenced 
 
 The system should make it possible to rotate secrets without rewriting durable provider-profile contracts when the reference identity remains the same.
 
+### 12.1 Launch and Retry Semantics
+
+For operator clarity, MoonMind should treat secret usage as follows:
+
+- new launches resolve the latest currently active secret value,
+- retries and restarts re-resolve rather than reusing a stale durable plaintext value,
+- already-running third-party runtimes keep whatever credential material was injected at launch until they exit or are explicitly restarted, and
+- revocation blocks future launches immediately but does not imply retroactive termination of already-running processes unless the runtime supports an explicit teardown path.
+
 ---
 
 ## 13. Observability and Audit
@@ -451,6 +476,14 @@ MoonMind should give operators a simple mental model:
 - provider profiles bind references, not values,
 - MoonMind proxies secrets away from runtimes when it owns the call path,
 - only runtimes that truly require credentials receive them directly.
+
+The expected first-run onboarding flow is:
+
+1. start MoonMind with `docker compose up -d` and no required `.env` editing,
+2. open Mission Control,
+3. add a small number of secrets such as a model-provider API key and GitHub PAT,
+4. bind those secrets to provider profiles or task settings through normal UI flows, and
+5. launch workloads successfully without external secret-manager setup.
 
 The UI should show:
 

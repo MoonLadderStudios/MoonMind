@@ -18,6 +18,8 @@ Implement the Secrets System described in [`docs/Security/SecretsSystem.md`](../
 - use `SecretRef` as the durable contract across provider profiles and execution paths,
 - store MoonMind-managed secrets encrypted at rest,
 - support a local-first baseline with no required external cloud dependency,
+- start successfully from `docker compose up -d` without requiring `.env` edits for the baseline personal-use path,
+- allow an operator to add a small number of secrets such as a provider API key and GitHub PAT through the UI after startup,
 - prefer proxy-owned call paths over raw credential distribution where MoonMind owns the outbound request,
 - limit runtime secret materialization to cases that truly require it.
 
@@ -30,7 +32,7 @@ Based on the current repo state:
 - MoonMind primarily relies on `.env` and runtime-specific credential volumes.
 - `docs/Security/ProviderProfiles.md` already assumes `secret_ref` as a credential source and launch-time resolution boundary.
 - The concrete Secrets System contracts, persistence model, UI flows, and implementation boundaries are not yet established.
-- `docs/Security/SecretsAnalysis.md` contains comparative analysis but not the final desired-state contract.
+- `docs/Security/SecretsSystem.md` is now the canonical desired-state doc for this area.
 
 ---
 
@@ -39,6 +41,7 @@ Based on the current repo state:
 Implementation should preserve the following:
 
 - no mandatory AWS, GCP, Azure, or SaaS dependency for baseline deployment,
+- no mandatory manual `.env` setup before the stack can boot locally,
 - no raw secrets in workflow payloads, provider profile rows, or durable artifacts,
 - fail-fast resolution with clear diagnostics,
 - minimal operator friction for local-first deployments,
@@ -53,22 +56,21 @@ Implementation should preserve the following:
 Outcome:
 
 - Shared agreement on the `SecretRef` contract, backend set, and baseline encryption/key-source approach.
+- Shared agreement on the zero-`.env` startup and post-start UI onboarding path.
 
 Tasks:
 
 - Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
-- Decide the baseline `db_encrypted` root key source for local deployments:
-  - Docker secret,
-  - protected local file,
-  - OS keychain,
-  - or a clearly ordered fallback strategy.
+- Lock the baseline `db_encrypted` root key source for local deployments to a protected local key file created outside the repo, with Docker secret as an override path.
 - Decide whether `oauth_volume` remains modeled inside the secrets resolver layer or as an adjacent credential-source adapter with shared observability.
 - Define the initial `SecretRef` schema and validation rules.
+- Define the first-run onboarding UX from compose startup to secret entry in Mission Control.
 
 Exit criteria:
 
 - Canonical docs agree on terms and boundaries.
 - One baseline local-first key-source approach is selected.
+- The no-`.env` startup expectation is explicit.
 - Initial resolver/backends list is frozen for v1.
 
 ### Phase 1. Persistence and Crypto Foundation
@@ -81,7 +83,7 @@ Tasks:
 
 - Add a secrets persistence model for managed secrets and metadata.
 - Implement application-layer authenticated encryption for `db_encrypted`.
-- Implement root-key loading from the selected baseline source.
+- Implement root-key creation/loading from the selected baseline source.
 - Ensure the database never contains everything needed to decrypt by itself.
 - Add create, update, rotate, delete, and metadata-list operations at the service layer.
 - Define secret state transitions such as active, disabled, rotated, deleted, or invalid.
@@ -154,6 +156,7 @@ Tasks:
   - delete,
   - validate bindings or usage references.
 - Add UI screens or forms showing metadata and usage status without ever re-displaying secret values.
+- Make the first-run path obvious: after compose startup, the user can add a provider API key and GitHub PAT through the UI and reach a runnable state without manual secret-manager setup.
 - Add authorization boundaries for secret management versus secret usage.
 - Add operator-safe status surfaces showing whether a reference is healthy, missing, or broken.
 
@@ -162,6 +165,7 @@ Validation:
 - API tests for authz and redaction.
 - UI tests or deterministic manual verification for create, rotate, and delete flows.
 - Tests ensuring responses never echo secret plaintext after submission.
+- Deterministic manual validation for the first-run onboarding path from clean compose startup to successful task execution.
 
 ### Phase 5. Proxy-First Execution Paths
 
