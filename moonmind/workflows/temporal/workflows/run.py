@@ -14,7 +14,6 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
-    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
     from moonmind.workflows.temporal.jules_bundle import (
         build_bundle_spec,
         eligible_for_bundle,
