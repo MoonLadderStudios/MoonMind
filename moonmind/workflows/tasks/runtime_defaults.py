@@ -13,10 +13,8 @@ DEFAULT_TASK_RUNTIME = "codex"
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
-    "codex": "gpt-5.4",
-    "gemini_cli": "gemini-3.1-pro-preview",
-    "claude": "Sonnet-4.6",
-    "claude_code": "Sonnet-4.6",
+    "codex": "gpt-5.3-codex",
+    "gemini_cli": "gemini-3.1-pro",
 }
 _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
     "codex": "high",

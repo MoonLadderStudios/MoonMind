@@ -17,6 +17,7 @@ from moonmind.workflows.adapters.base_external_agent_adapter import (
     BaseExternalAgentAdapter,
 )
 
+pytestmark = [pytest.mark.asyncio]
 
 _STUB_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="stub",
@@ -125,7 +126,6 @@ def _request(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_start_rejects_wrong_agent_kind():
     adapter = _StubAdapter()
     req = AgentExecutionRequest(
@@ -139,7 +139,6 @@ async def test_start_rejects_wrong_agent_kind():
         await adapter.start(req)
 
 
-@pytest.mark.asyncio
 async def test_start_rejects_wrong_agent_id():
     adapter = _StubAdapter()
     req = _request(agent_id="other")
@@ -152,7 +151,6 @@ async def test_start_rejects_wrong_agent_id():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_start_idempotency_cache_prevents_duplicate_calls():
     adapter = _StubAdapter()
     first = await adapter.start(_request(idempotency_key="same"))
@@ -162,7 +160,6 @@ async def test_start_idempotency_cache_prevents_duplicate_calls():
     assert len(adapter.do_start_calls) == 1
 
 
-@pytest.mark.asyncio
 async def test_start_different_keys_create_separate_runs():
     adapter = _StubAdapter(start_run_id="run-X")
     await adapter.start(_request(idempotency_key="key-a"))
@@ -176,7 +173,6 @@ async def test_start_different_keys_create_separate_runs():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_start_injects_correlation_metadata():
     adapter = _StubAdapter()
     await adapter.start(_request())
@@ -192,7 +188,6 @@ async def test_start_injects_correlation_metadata():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_status_delegates_to_do_status():
     adapter = _StubAdapter()
     result = await adapter.status("run-42")
@@ -201,7 +196,6 @@ async def test_status_delegates_to_do_status():
     assert adapter.do_status_calls == ["run-42"]
 
 
-@pytest.mark.asyncio
 async def test_fetch_result_delegates_to_do_fetch_result():
     adapter = _StubAdapter()
     result = await adapter.fetch_result("run-42")
@@ -211,7 +205,6 @@ async def test_fetch_result_delegates_to_do_fetch_result():
     assert adapter.do_fetch_result_calls == ["run-42"]
 
 
-@pytest.mark.asyncio
 async def test_cancel_delegates_to_do_cancel():
     adapter = _StubAdapter()
     result = await adapter.cancel("run-42")
@@ -277,7 +270,6 @@ def test_build_result_no_failure_for_succeeded():
 
 
 
-@pytest.mark.asyncio
 async def test_provider_capability_returns_descriptor():
     adapter = _StubAdapter()
     cap = adapter.provider_capability
@@ -291,7 +283,6 @@ async def test_provider_capability_returns_descriptor():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_start_populates_poll_hint_from_capability():
     """start() should set poll_hint_seconds from defaultPollHintSeconds when
     the provider hook returns a handle without it."""
@@ -300,7 +291,6 @@ async def test_start_populates_poll_hint_from_capability():
     assert handle.poll_hint_seconds == _STUB_CAPABILITY.default_poll_hint_seconds
 
 
-@pytest.mark.asyncio
 async def test_start_preserves_explicit_poll_hint():
     """If do_start returns a handle with poll_hint_seconds already set,
     start() should NOT overwrite it."""
@@ -342,7 +332,6 @@ class _NoCancelStubAdapter(_StubAdapter):
         return _NO_CANCEL_CAPABILITY
 
 
-@pytest.mark.asyncio
 async def test_cancel_returns_fallback_when_unsupported():
     """cancel() should return a fallback status without calling do_cancel
     when the provider does not support cancellation."""
@@ -355,7 +344,6 @@ async def test_cancel_returns_fallback_when_unsupported():
     assert adapter.do_cancel_calls == [], "do_cancel must NOT be called"
 
 
-@pytest.mark.asyncio
 async def test_cancel_delegates_when_supported():
     """cancel() should still delegate to do_cancel when the provider
     supports cancellation (default behaviour)."""
@@ -374,7 +362,6 @@ class _ExplodingCancelAdapter(_StubAdapter):
         raise RuntimeError("transient provider error")
 
 
-@pytest.mark.asyncio
 async def test_cancel_returns_fallback_on_do_cancel_exception():
     """cancel() should return a safe fallback status when do_cancel()
     raises an unexpected exception (spec edge case, line 91)."""
