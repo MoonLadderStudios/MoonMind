@@ -1,237 +1,239 @@
 # Task Dependencies System
 
-Status: Proposed  
+Status: Draft  
+Implementation State: Partially implemented  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-22
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskCancellation.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/Temporal/TemporalArchitecture.md`
+Last Updated: 2026-03-27  
+Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskCancellation.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`  
+Implementation Tracking: `docs/tmp/011-TaskDependenciesPlan.md`
 
 ---
 
 ## 1. Purpose
 
-This document outlines the design for a **Task Dependencies** system within MoonMind. This system allows a Task to specify prerequisite Tasks that must complete successfully before the dependent Task begins execution.
+This document defines the desired-state contract for **Task Dependencies** in MoonMind.
 
-This enables complex, multi-stage workflows across disparate agents or execution environments by explicitly modeling temporal dependencies between separate `MoonMind.Run` executions.
-
----
-
-## 2. Requirements
-
-- A Task can define a list of one or more prerequisite Task IDs (Temporal workflow IDs — see §3.1 for identity rules).
-- The dependent Task will remain in a `WAITING_ON_DEPENDENCIES` state until all prerequisites have reached a successful terminal state.
-- If any prerequisite Task fails, is cancelled, or terminates unsuccessfully, the dependent Task should fail automatically with a `DependencyFailedError`.
-- The Mission Control UI must visually indicate when a Task is blocked by dependencies, and allow users to configure these dependencies during task creation/editing.
-- Dependencies are **non-transitive** at the contract level: if Task C depends on Task B and Task B depends on Task A, Task C waits only for Task B — not for Task A. Transitive guarantees are implicit (B cannot complete until A completes).
-
-### 2.1 Limits
-
-- A single task may declare at most **10** prerequisite IDs in `dependsOn`.
-- Cross-workflow-type dependencies (e.g., depending on a `MoonMind.ManifestIngest` workflow) are **not supported** in the initial version. Only `MoonMind.Run` workflow IDs are valid dependency targets.
+Task dependencies allow one `MoonMind.Run` execution to wait on one or more other `MoonMind.Run` executions before entering its own active work. This supports multi-stage orchestration across separate runs while keeping each execution independently durable, observable, and cancelable.
 
 ---
 
-## 3. Backend Component
+## 2. Contract Summary
 
-The backend implementation involves updating the canonical payload, modifying the API to accept and validate dependencies, and updating the Temporal Workflow logic to wait for preconditions.
+- A task-shaped create request may declare prerequisite execution IDs in `payload.task.dependsOn`.
+- `dependsOn` values are `workflowId` values for existing `MoonMind.Run` executions.
+- For Temporal-backed task surfaces, `taskId == workflowId`.
+- `runId` is diagnostic only and is never a valid dependency target.
+- A dependent run remains in `waiting_on_dependencies` until all listed prerequisites complete successfully.
+- If any prerequisite fails, is canceled, is terminated, or cannot be resolved at runtime, the dependent run fails with a dependency-specific failure.
+- Dependencies are **non-transitive** at the contract level: if C depends on B and B depends on A, C waits on B only.
 
-### 3.1 Canonical Payload Updates
+### 2.1 v1 scope
 
-The canonical task payload defined in `moonmind.workflows.agent_queue.task_contract` and exposed via `/api/queue/jobs` will be extended with an optional `dependsOn` field under the `task` block:
+Version 1 of this feature is intentionally narrow:
+
+- create-time dependency declaration only,
+- `MoonMind.Run` to `MoonMind.Run` dependencies only,
+- maximum of **10** dependency IDs,
+- no dependency editing after create,
+- no cross-workflow-type dependencies,
+- no template-instantiated dependency graphs.
+
+---
+
+## 3. Current Implementation Snapshot
+
+### 3.1 Already implemented
+
+- The lifecycle vocabulary already includes `waiting_on_dependencies`.
+- Execution API and UI status mapping already recognize `waiting_on_dependencies`.
+- Current action gating already treats `waiting_on_dependencies` as a first-class pre-execution state.
+
+### 3.2 Still missing
+
+- Task-shaped submit does not yet fully normalize and persist `payload.task.dependsOn`.
+- Create-time dependency validation is not yet complete.
+- `MoonMind.Run` does not yet enforce a real dependency gate before `planning`.
+- Dependency outcome details are not yet captured in the finish summary.
+- Mission Control does not yet expose full dependency authoring and inspection UX.
+
+The canonical contract in this document describes the target behavior. Open implementation sequencing lives in `docs/tmp/011-TaskDependenciesPlan.md`.
+
+---
+
+## 4. API Contract
+
+Task dependencies belong on the Temporal-backed create flow through `/api/executions`.
+
+The user-facing request remains task-shaped:
 
 ```json
 {
-  "task": {
-    "instructions": "Run integration tests",
-    "dependsOn": [
-      "task-run-id-1",
-      "task-run-id-2"
-    ],
-    "proposeTasks": true,
-    "steps": []
+  "type": "task",
+  "payload": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "task": {
+      "instructions": "Run integration tests",
+      "dependsOn": [
+        "mm:01ABC...",
+        "mm:01DEF..."
+      ]
+    }
   }
 }
 ```
 
-#### Identity rules
+The router normalizes this into `initialParameters.task.dependsOn` for `MoonMind.Run`.
 
-`dependsOn` entries are **Temporal workflow IDs**. For Temporal-backed tasks, `taskId == workflowId` (consistent with `TaskProposalSystem.md` §5). The API must validate that each ID matches an existing `MoonMind.Run` workflow execution before accepting the task creation request.
+### 4.1 Validation rules
 
-### 3.2 Temporal Workflow Execution (`MoonMind.Run`)
+At create time, the API must validate:
 
-The `MoonMind.Run` Temporal Workflow will enforce these dependencies before beginning actual work (i.e., before the `planning` stage).
+1. `dependsOn` is an array of strings.
+2. Blank entries are removed and repeated IDs are deduplicated.
+3. At most 10 IDs remain after normalization.
+4. Each ID resolves to an existing execution.
+5. Each target execution is `MoonMind.Run`.
+6. The new execution does not depend on itself.
+7. Adding the dependency edges does not create a cycle.
 
-#### Updated lifecycle stages
+### 4.2 Cycle detection
 
-The `MoonMind.Run` lifecycle for dependency-aware tasks becomes:
+Cycle detection walks the transitive `dependsOn` graph of existing executions:
+
+1. Start from each requested dependency ID.
+2. Read that execution's stored dependency list.
+3. Continue recursively until the graph is exhausted or a guardrail is hit.
+4. Reject the request if the new execution's `workflowId` appears in the reachable set.
+
+To keep validation bounded, the traversal should enforce depth and visited-node limits and fail with a clear validation error when those bounds are exceeded.
+
+---
+
+## 5. Workflow Execution Behavior
+
+`MoonMind.Run` enforces dependencies before `planning`.
+
+### 5.1 Lifecycle
+
+For dependency-aware runs, the relevant lifecycle is:
 
 1. `initializing`
-2. `waiting_on_dependencies` ← **new stage**
+2. `waiting_on_dependencies`
 3. `planning`
-4. `executing`
-5. `proposals`
-6. `finalizing`
-7. terminal state
+4. `awaiting_slot`
+5. `executing`
+6. `awaiting_external`
+7. `proposals`
+8. `finalizing`
+9. terminal state
 
-If `task.dependsOn` is empty or absent, the workflow skips stage 2.
+If `initialParameters.task.dependsOn` is absent or empty, the workflow proceeds directly from `initializing` to `planning`.
 
-#### Waiting mechanism (external workflow handles)
+### 5.2 Waiting mechanism
 
-The workflow uses **Temporal external workflow handles** to wait for prerequisites. This is the idiomatic Temporal approach — no polling, no signals, no cross-workflow coupling:
+The workflow should wait on prerequisites using Temporal external workflow handles.
 
 ```python
 handles = [
     workflow.get_external_workflow_handle_for(MoonMindRunWorkflow.run, dep_id)
     for dep_id in depends_on
 ]
-try:
-    await asyncio.gather(*(h.result() for h in handles))
-except exceptions.WorkflowFailureError as exc:
-    raise ApplicationError(
-        f"Dependency failed: {exc}", non_retryable=True,
-    ) from exc
+await asyncio.gather(*(handle.result() for handle in handles))
 ```
 
-Advantages over polling or signal-based approaches:
-- **Built into the SDK** — highly optimized, no custom activity or loop.
-- **No history bloat** — a single `await` per dependency, not repeated poll events.
-- **Automatic failure propagation** — if a dependency fails, cancels, or terminates, `.result()` raises `WorkflowFailureError` immediately.
-- **No changes to existing workflows** — prerequisite workflows are unmodified.
+This is the canonical v1 mechanism because it is Temporal-native, avoids polling loops, and lets prerequisite failures surface directly through workflow result waiting.
 
-> **Fallback note**: If the prerequisite workflow type is unknown at compile time (e.g., cross-type dependencies in a future version), a polling-based local activity with exponential backoff (5s → 60s cap) can be used instead. This is the degraded path, not the default.
+### 5.3 State and control behavior
 
-1. **Initialization:** Upon starting, the workflow checks if `task.dependsOn` is populated. If so, it transitions `mm_state` to `waiting_on_dependencies`.
+When dependencies are present, the workflow should:
 
-2. **Waiting:**
-   - The workflow creates external workflow handles for each dependency and awaits their results concurrently via `asyncio.gather`.
-   - The gather is wrapped in a compound condition that also checks `self._cancel_requested`, allowing clean cancellation during the wait.
+1. read `initialParameters.task.dependsOn` after initialization,
+2. set `mm_state` to `waiting_on_dependencies`,
+3. expose dependency IDs in metadata needed by API and UI surfaces,
+4. wait for all prerequisites to succeed before entering `planning`.
 
-3. **Resolution:**
-   - If all prerequisites complete successfully, the workflow proceeds to `planning`.
-   - If any prerequisite fails, cancels, or terminates, `WorkflowFailureError` is raised and caught → the workflow fails with a `DependencyFailedError` that names the failed prerequisite.
+Cancellation and pause semantics from `docs/Tasks/TaskCancellation.md` still apply during the dependency wait:
 
-4. **State tracking:**
-   - While waiting, `mm_state` search attribute is set to `waiting_on_dependencies`.
-   - The workflow memo is updated with `dependsOn` IDs so the API can surface dependency information without additional queries.
+- canceling the dependent run cancels only that run,
+- pausing the dependent run pauses its own progress,
+- dependency waiting must not cancel or mutate prerequisite runs.
 
-#### `waiting_on_dependencies` state — implementation requirements
+### 5.4 Failure behavior
 
-`waiting_on_dependencies` is a new value in the `MoonMindWorkflowState` enum. Adding it requires coordinated changes:
+If any prerequisite fails, is canceled, is terminated, or cannot be resolved at runtime after successful create-time validation, the dependent run fails with a dependency-specific reason.
 
-1. **Enum**: Add `WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"` to `MoonMindWorkflowState` in `api_service/db/models.py`.
-2. **DB migration**: An Alembic migration to add the new enum value to the PostgreSQL `moonmindworkflowstate` type.
-3. **Projection sync**: Ensure `api_service/core/sync.py` recognizes the new state during projection sync (it currently warns and ignores unknown values).
-4. **Workflow constants**: Add `STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"` to `run.py` alongside the existing state constants.
-5. **UI badges/filters**: Mission Control must render a badge for this state and include it in state filter dropdowns.
+If all prerequisites have already completed successfully when the dependent run starts, the wait resolves immediately and the workflow continues without delay.
 
-The value uses lowercase naming to match the existing convention (`initializing`, `planning`, `executing`, etc.).
+### 5.5 Finish summary
 
-#### Finish summary integration
+The finish summary should record dependency outcomes in both typed run results and `reports/run_summary.json`.
 
-The finish summary records:
-- Whether a dependency wait occurred.
-- Duration of the dependency wait (wall-clock time from entering `waiting_on_dependencies` to exiting it).
-- Resolution: all dependencies completed vs. a dependency failed (with the failed ID).
+At minimum it records:
 
-### 3.3 Cancellation and Pause Interaction
-
-The dependency-wait phase must respect the existing cancellation and pause contracts defined in `TaskCancellation.md`.
-
-**Cancellation of the waiting workflow:**
-- The `asyncio.gather` wait is wrapped in a `workflow.wait_condition` or shielded check that also evaluates `self._cancel_requested`. When cancel is requested, in-progress external handle waits are abandoned and the workflow returns `{"status": "canceled"}`.
-- Cancelling a dependent workflow does **not** propagate cancellation to its prerequisites. Prerequisites may have other dependents or standalone value.
-
-**Pause during dependency wait:**
-- If a pause signal arrives while waiting on dependencies, the workflow should honor it by checking `self._paused` before entering the gather wait. After the pause is lifted, the gather wait resumes.
-
-**Cancellation of a prerequisite:**
-- Handled by the standard resolution logic — a prerequisite reaching `CANCELLED` terminal state triggers `DependencyFailedError` in the dependent workflow.
-
-### 3.4 Continue-As-New Considerations
-
-External workflow handles produce minimal history events (one marker per handle, not per poll cycle), so history bloat is not a concern for the dependency-wait phase.
-
-If a workflow hits `continue-as-new` during the dependency wait phase, the new execution must resume the dependency wait with the same `dependsOn` list. The `initialParameters` already carry `dependsOn`, so re-initialization will re-enter the wait phase naturally.
+1. declared dependency IDs,
+2. whether a dependency wait occurred,
+3. dependency wait duration,
+4. whether resolution was success or dependency failure,
+5. the failed dependency ID when available.
 
 ---
 
-## 4. API Validation
+## 6. Mission Control Expectations
 
-### 4.1 Creation-Time Validation
+### 6.1 Create flow
 
-When the API receives a task creation request with `dependsOn`, it must validate:
+Mission Control should expose dependency configuration on `/tasks/new`.
 
-1. **Existence:** Each ID in `dependsOn` must resolve to an existing `MoonMind.Run` workflow execution via the Temporal client.
-2. **Workflow type:** Only `MoonMind.Run` workflow IDs are accepted (not `MoonMind.ManifestIngest` or other types).
-3. **Limit:** At most 10 entries in `dependsOn`.
-4. **No self-dependency:** The new task's workflow ID must not appear in its own `dependsOn`.
-5. **Cycle detection:** Adding the new dependency edges must not create a cycle in the global dependency graph.
+The initial UX should provide:
 
-### 4.2 Cycle Detection
+- a dependency picker for existing `MoonMind.Run` executions,
+- client-side enforcement of the 10-item limit,
+- clear validation messaging when selected dependencies are invalid.
 
-Cycle detection requires traversing the transitive dependency graph. The algorithm:
+### 6.2 List and detail surfaces
 
-1. Build the set of all IDs reachable from the new task's `dependsOn` entries by walking their stored `dependsOn` fields recursively.
-2. If the new task's workflow ID appears in the reachable set, reject with a `409 Conflict` response naming the cycle.
-3. Cap traversal depth at **20 hops** to bound query cost. If traversal exceeds this depth, reject the request with an error recommending the user simplify the dependency chain.
-
-**Storage:** `dependsOn` is stored in the Temporal workflow's `initialParameters` (already durable). The cycle-check query reads `dependsOn` from workflow metadata/memo for each hop via the Temporal client. No additional Postgres tables are required for the initial implementation.
+- `waiting_on_dependencies` should continue to map to dashboard status `waiting`.
+- Task detail should show a Dependencies panel with prerequisite links and current statuses.
+- A downstream dependents view is useful, but it is follow-on scope rather than a v1 requirement.
 
 ---
 
-## 5. Frontend Component
+## 7. Boundary With Plan DAG Semantics
 
-The Mission Control UI must be updated to support viewing and configuring task dependencies.
+Task dependencies are **inter-workflow** dependencies between separate `MoonMind.Run` executions.
 
-### 5.1 Task Creation & Editing
-
-- **Task Creation Form:** Add a "Dependencies" section below the existing fields.
-- **UI Element:** A multi-select combobox or typeahead search field that queries the `/api/queue/jobs` endpoint to find existing Task Runs.
-- Users can select existing Tasks to block the new Task.
-- The UI must enforce the 10-dependency limit client-side and display a validation error if exceeded.
-
-> **Template dependencies (future scope):** Defining dependencies between Presets/Templates — where instantiating a template creates a linked graph of executions — is a separate, larger feature. It requires atomic multi-workflow creation and is architecturally closer to `MoonMind.ManifestIngest` fan-out. This should be designed in a dedicated follow-up document.
-
-### 5.2 Task List & Detail Views
-
-- **Task List (Table):**
-  - Introduce a new visual state/badge for `WAITING_ON_DEPENDENCIES`.
-  - Provide a tooltip or quick-view showing the titles of the blocking tasks.
-- **Task Detail Page:**
-  - Add a "Dependencies" panel showing the list of prerequisite tasks.
-  - Show the real-time status of each prerequisite (e.g., Running, Completed, Failed).
-  - Include clickable links to navigate directly to the prerequisite task's detail page.
-  - Similarly, show a "Dependent Tasks" (downstream) list if a task blocks others. This requires a reverse lookup — querying workflows whose `dependsOn` includes the current task's workflow ID.
+They are distinct from plan-node or skill-node edges inside a single run. Intra-run plan DAG edges control execution order within one workflow. Task dependencies block one workflow on the terminal outcome of another workflow.
 
 ---
 
-## 6. Failure Modes & Edge Cases
+## 8. Failure Modes and Edge Cases
 
-- **Circular Dependencies:** The API validates at creation time that adding a dependency does not create a cycle (see §4.2). Cycles are rejected with a `409 Conflict` response.
-- **Deleted/Purged Tasks:** If a dependency refers to a workflow ID that cannot be found (workflow purged from Temporal), the polling activity treats it as a failed dependency and the dependent task fails immediately with `DependencyFailedError` to avoid waiting forever.
-- **Workflow Timeout:** The standard workflow execution timeout still applies. If dependencies take longer than the workflow's configured timeout, the dependent workflow times out normally.
-- **Dependency-Wait Timeout (optional):** An optional `dependencyTimeoutSeconds` field under `task` may be added to allow operators to fail fast on stuck dependencies without waiting for the full workflow timeout. If omitted, the workflow-level timeout applies.
-- **Already-Terminal Prerequisites:** If all prerequisite workflows are already in a successful terminal state at the time the dependent workflow starts, the first poll resolves immediately and the workflow proceeds without delay.
+- **Circular dependencies:** rejected at create time.
+- **Missing runtime target after validation:** treated as a dependency failure rather than an infinite wait.
+- **Workflow timeout:** the workflow's standard execution timeout still applies while waiting.
+- **Long dependency chains:** validation may reject overly deep or expensive graphs rather than allow unbounded traversal.
 
 ---
 
-## 7. Constitution Check
+## 9. Constitution Check
 
 | Principle | Status | Notes |
 |-----------|--------|-------|
-| I. Orchestrate, Don't Recreate | PASS | Dependencies are an orchestration primitive, not agent-level logic. |
-| II. One-Click Agent Deployment | PASS | No new infrastructure dependencies. |
-| III. Avoid Vendor Lock-In | PASS | Uses Temporal-native primitives only. |
-| IV. Own Your Data | PASS | Dependency metadata stored in operator-controlled Temporal. |
-| V. Skills Are First-Class | N/A | Not a skill change. |
-| VI. Bittersweet Lesson | PASS | Polling scaffold is explicitly designed for replacement. |
-| VII. Runtime Configurability | PASS | `dependsOn` is a runtime payload field, not a code constant. |
-| VIII. Modular Architecture | PASS | Additive payload extension; no changes to core orchestration interfaces. |
-| IX. Resilient by Default | PASS | Cancellation, pause, timeout, and missing-dependency failure modes are all specified. |
+| I. Orchestrate, Don't Recreate | PASS | Dependencies are an orchestration primitive across runs. |
+| II. One-Click Agent Deployment | PASS | No new infrastructure is required. |
+| III. Avoid Vendor Lock-In | PASS | The design uses Temporal-native orchestration concepts already central to MoonMind. |
+| IV. Own Your Data | PASS | Dependency metadata remains in operator-controlled execution records and artifacts. |
+| V. Skills Are First-Class | N/A | Not a skill contract change. |
+| VI. Bittersweet Lesson | PASS | The contract stays thin and focused on durable orchestration boundaries. |
+| VII. Runtime Configurability | PASS | `dependsOn` is request data, not a hardcoded workflow rule. |
+| VIII. Modular Architecture | PASS | The feature extends execution contracts without introducing cross-cutting aliases. |
+| IX. Resilient by Default | PASS | Validation, durable waiting, and explicit failure propagation support unattended execution. |
 | X. Continuous Improvement | N/A | Not directly applicable. |
-| XI. Spec-Driven | PENDING | Full `specs/` artifacts required before implementation. |
+| XI. Spec-Driven | PENDING | Full implementation work remains tracked separately. |
+| XII. Canonical Documentation Separates Desired State from Migration Backlog | PASS | Desired-state behavior stays here; phase sequencing lives in `docs/tmp/011-TaskDependenciesPlan.md`. |
 
 ---
 
-## 8. Implementation tracking
+## 10. Implementation Tracking
 
-Open migration and implementation work for this feature is recorded in [`docs/tmp/remaining-work/Tasks-TaskDependencies.md`](../tmp/remaining-work/Tasks-TaskDependencies.md) and [`docs/tmp/remaining-work/plans-TaskDependenciesPlan.md`](../tmp/remaining-work/plans-TaskDependenciesPlan.md). A short entry stub with the same links lives in [`TaskDependenciesPlan.md`](TaskDependenciesPlan.md) (optional bookmark target).
+Open implementation sequencing for this feature is tracked in [`docs/tmp/011-TaskDependenciesPlan.md`](../tmp/011-TaskDependenciesPlan.md) and related remaining-work docs under `docs/tmp/remaining-work/`.
