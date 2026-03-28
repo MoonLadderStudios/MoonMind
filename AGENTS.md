@@ -73,11 +73,14 @@ When asked to check on a workflow, follow this procedure in order:
      --namespace default --query "mm_state = 'executing'"
    ```
 
+5. **If it is not an obvious Temporal scheduling failure**, keep going: diagnose the **agent runtime and environment**. Clear Temporal-side issues include pending activities that never start (worker down or queue starved), repeated `WorkflowTaskFailed` / stuck workflow tasks, or wrong namespace. When the parent or child **completed** but returned a failed business outcome (for example `execution_error`, “process exited with code …”), or `ActivityTaskFailed` with an application error from the activity, treat that as **agent/tooling/environment** until proven otherwise. Follow the evidence using whatever is available: **artifact content** (workflow `diagnosticsRef` / `outputRefs`, `artifact.read`, UI artifact downloads, `var/artifacts/...`, `/work/agent_jobs/<job_id>/...`), **container and worker logs**, and **database rows** (e.g. `agent_jobs` and related projection tables) until the root cause is identified.
+
 Key diagnostics:
 - **Pending Activities > 0 with no progress**: worker may be down — check `docker ps` and worker logs.
 - **TimerStarted as last event**: workflow is sleeping between poll cycles — normal, wait for it to fire.
 - **ActivityTaskFailed / WorkflowTaskFailed**: read the failure details in the event history JSON output (`--output json`).
 - **"workflow not found"**: always retry with `--namespace default` — most workflows run in the `default` namespace.
+- **Child workflow `COMPLETED` but result carries `failureClass` / non-zero exit summary**: Temporal executed successfully; inspect agent stdout/diagnostics artifacts and worker logs, not only workflow history.
 
 ## Tool Execution Guardrails
 - **Strict Verification of Tool Results**: Never hallucinate success or fabricate data when a tool execution fails. If a tool (e.g., `read_file`, `run_shell_command`) returns an error such as 'File not found', you must correctly identify the failure and take appropriate remediating action instead of silently bypassing it.

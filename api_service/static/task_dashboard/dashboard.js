@@ -9817,12 +9817,12 @@
                   const strong = document.createElement("strong");
                   strong.textContent = pollData.status;
                   statusDiv.appendChild(strong);
-                  if (pollData.tmate_web_url) {
+                  if (pollData.oauth_web_url) {
                     statusDiv.appendChild(document.createElement("br"));
                     const a = document.createElement("a");
-                    a.href = pollData.tmate_web_url;
+                    a.href = pollData.oauth_web_url;
                     a.target = "_blank";
-                    a.textContent = "Open Tmate Web Terminal";
+                    a.textContent = "Open OAuth web session";
                     statusDiv.appendChild(a);
                   }
                   if (["completed", "succeeded", "failed", "canceled", "cancelled", "expired"].includes(pollData.status)) {

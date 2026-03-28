@@ -1930,7 +1930,7 @@ class OAuthSessionStatus(str, enum.Enum):
 
     PENDING = "pending"
     STARTING = "starting"
-    TMATE_READY = "tmate_ready"
+    OAUTH_RUNNER_READY = "oauth_runner_ready"
     AWAITING_USER = "awaiting_user"
     VERIFYING = "verifying"
     REGISTERING_PROFILE = "registering_profile"
@@ -1941,7 +1941,7 @@ class OAuthSessionStatus(str, enum.Enum):
 
 
 class ManagedAgentOAuthSession(Base):
-    """OAuth Session for managed agents using tmate transport."""
+    """OAuth session for managed agents (browser runner transport removed)."""
 
     __tablename__ = "managed_agent_oauth_sessions"
     __table_args__ = (
@@ -1965,7 +1965,7 @@ class ManagedAgentOAuthSession(Base):
         server_default=ProviderCredentialSource.OAUTH_VOLUME.value,
     )
     session_transport: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="tmate", server_default=text("'tmate'")
+        String(64), nullable=False, default="none", server_default=text("'none'")
     )
     volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     volume_mount_path: Mapped[Optional[str]] = mapped_column(
@@ -1985,8 +1985,8 @@ class ManagedAgentOAuthSession(Base):
     )
     requested_by_user_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    tmate_web_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    tmate_ssh_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    oauth_web_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    oauth_ssh_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     worker_service: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -2007,7 +2007,7 @@ class ManagedAgentOAuthSession(Base):
 
 
 class AgentJobLiveSessionProvider(str, enum.Enum):
-    TMATE = "tmate"
+    NONE = "none"
 
 
 class AgentJobLiveSessionStatus(str, enum.Enum):
@@ -2054,8 +2054,10 @@ class TaskRunLiveSession(Base):
     )
     worker_id: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     worker_hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    tmate_session_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    tmate_socket_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    live_session_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    live_session_socket_path: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
     attach_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attach_rw_encrypted: Mapped[Optional[str]] = mapped_column(
         StringEncryptedType(key=get_encryption_key), nullable=True

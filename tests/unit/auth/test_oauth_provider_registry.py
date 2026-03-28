@@ -17,7 +17,7 @@ class TestOAuthProviderRegistry:
         assert spec is not None
         assert spec["runtime_id"] == "gemini_cli"
         assert spec["auth_mode"] == "oauth"
-        assert spec["session_transport"] == "tmate"
+        assert spec["session_transport"] == "none"
         assert spec["default_volume_name"] == "gemini_auth_volume"
         assert spec["default_mount_path"] == "/var/lib/gemini-auth"
 
@@ -68,10 +68,10 @@ class TestOAuthProviderRegistry:
             for key in required_keys:
                 assert key in spec, f"Missing key '{key}' in provider '{runtime_id}'"
 
-    def test_all_providers_use_tmate_transport(self) -> None:
+    def test_all_providers_use_none_transport(self) -> None:
         for runtime_id, spec in OAUTH_PROVIDERS.items():
-            assert spec["session_transport"] == "tmate", (
-                f"Provider '{runtime_id}' should use tmate transport"
+            assert spec["session_transport"] == "none", (
+                f"Provider '{runtime_id}' should use none transport until a replacement exists"
             )
 
     def test_all_providers_use_oauth_mode(self) -> None:

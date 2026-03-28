@@ -327,8 +327,6 @@ RUN apt-get update && \
         curl \
         ca-certificates \
         openssh-client \
-        tmux \
-        tmate \
         procps \
         gnupg \
         nodejs && \

@@ -1,4 +1,3 @@
-import shutil
 import asyncio
 import subprocess
 from pathlib import Path
@@ -9,10 +8,6 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.workflows.temporal.runtime.launcher import (
     ManagedRuntimeLauncher,
-)
-from moonmind.workflows.temporal.runtime.tmate_session import (
-    TmateEndpoints,
-    TmateSessionManager,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -150,14 +145,12 @@ def test_build_command_per_runtime():
 
 @pytest.mark.asyncio
 async def test_launch_spawns_process(tmp_path, monkeypatch):
-    # Avoid tmate wrapper when tmate is installed in CI/Docker (would hang on wait-ready).
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process, endpoints, _tmate_manager = await launcher.launch(
+    record, process, endpoints = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
@@ -174,7 +167,6 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
 
@@ -211,7 +203,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints, _tmate_manager = await launcher.launch(
+    _record, process, endpoints = await launcher.launch(
         run_id="run-passthrough-1", request=request, profile=profile
     )
     await process.wait()
@@ -309,31 +301,28 @@ def test_persist_gh_config_skips_git_cred_without_git_dir(tmp_path):
 
 @pytest.mark.asyncio
 async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
     # First launch
-    record, process, _, _ = await launcher.launch(
+    record, process, _ = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
 
     # Second launch with same run_id returns existing record (idempotent)
-    existing, exc_process, exc_endpoints, exc_tmate = await launcher.launch(
+    existing, exc_process, exc_endpoints = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     assert existing.run_id == "run-1"
     assert exc_process is None
     assert exc_endpoints is None
-    assert exc_tmate is None
 
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
     existing_repo = tmp_path / "workspaces" / "existing-run" / "repo"
@@ -357,7 +346,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _endpoints, _tmate_manager = await launcher.launch(
+    record, process, _endpoints = await launcher.launch(
         run_id="run-2",
         request=request,
         profile=profile,
@@ -368,75 +357,10 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
     assert record.workspace_path == str(expected_workspace)
     assert expected_workspace.exists()
     assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")
-@pytest.mark.asyncio
-async def test_tmate_launch_writes_config_and_exit_file_contract(
-    tmp_path, monkeypatch
-):
-    """Verify that the launcher delegates to TmateSessionManager correctly.
-
-    Since the launcher now delegates to TmateSessionManager.start(), we mock
-    the manager's start() method to verify delegation and endpoint mapping.
-    """
-    store = ManagedRunStore(tmp_path)
-    launcher = ManagedRuntimeLauncher(store)
-    profile = _make_profile(command_template=["gemini", "run"])
-    request = _make_request()
-
-    class _FakeProcess:
-        def __init__(self, *, pid: int = 9999) -> None:
-            self.pid = pid
-            self.returncode = None
-
-        async def wait(self) -> int:
-            self.returncode = 0
-            return 0
-
-        async def communicate(self) -> tuple[bytes, bytes]:
-            return b"", b""
-
-    fake_process = _FakeProcess()
-    fake_endpoints = TmateEndpoints(
-        session_name="mm-tmaterun1xxxx",
-        socket_path="/tmp/moonmind/tmate/mm-tmaterun1xxxx.sock",
-        attach_ro="ssh ro",
-        attach_rw="ssh rw",
-        web_ro="web ro",
-        web_rw="web rw",
-    )
-
-    monkeypatch.setattr(
-        TmateSessionManager,
-        "is_available",
-        staticmethod(lambda: True),
-    )
-
-    async def _fake_start(self, command=None, *, env=None, cwd=None, exit_code_capture=True, timeout_seconds=30.0):
-        self._process = fake_process
-        self._endpoints = fake_endpoints
-        self._exit_code_path_value = Path("/tmp/moonmind/tmate/mm-tmaterun1xxxx.exit")
-        return fake_endpoints
-
-    monkeypatch.setattr(TmateSessionManager, "start", _fake_start)
-
-    record, process, endpoints, _tmate_manager = await launcher.launch(
-        run_id="tmate-run-1",
-        request=request,
-        profile=profile,
-    )
-
-    assert record.pid == 9999
-    assert process.pid == 9999
-    assert endpoints is not None
-    assert endpoints["tmate_session_name"] == "mm-tmaterun1xxxx"
-    assert endpoints["attach_rw"] == "ssh rw"
-    assert endpoints["web_rw"] == "web rw"
-    assert endpoints["exit_code_path"].endswith(".exit")
-
 
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -505,7 +429,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    record, process, endpoints, _tmate_manager = await launcher.launch(
+    record, process, endpoints = await launcher.launch(
         run_id="workspace-run-1",
         request=request,
         profile=profile,
@@ -539,7 +463,6 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
 
 @pytest.mark.asyncio
 async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -595,7 +518,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _endpoints, _tmate_manager = await launcher.launch(
+    _record, process, _endpoints = await launcher.launch(
         run_id="workspace-run-existing-branch",
         request=request,
         profile=profile,
@@ -613,7 +536,6 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
 
 @pytest.mark.asyncio
 async def test_launch_raises_when_workspace_clone_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -720,7 +642,6 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     HOME, etc.) from the parent environment, with the profile-specific values
     taking precedence for any keys that appear in both.
     """
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     # Ensure PATH is visible in os.environ so we can assert it propagates.
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
@@ -764,7 +685,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints, _tmate_manager = await launcher.launch(
+    _record, process, endpoints = await launcher.launch(
         run_id="run-env-layer-1", request=request, profile=profile
     )
     await process.wait()
@@ -785,8 +706,6 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
-
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(
@@ -835,7 +754,7 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         _fake_resolve,
     )
 
-    _record, process, _endpoints, _tmate_manager = await launcher.launch(
+    _record, process, _endpoints = await launcher.launch(
         run_id="run-managed-api-key-1", request=request, profile=profile
     )
     await process.wait()

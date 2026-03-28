@@ -50,7 +50,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T011 [US1] Implement managed queue worker live-session (tmate) bootstrap/report/heartbeat/teardown flow in `moonmind/agents/codex_worker/worker.py` (DOC-REQ-001, DOC-REQ-007, DOC-REQ-008)
+- [X] T011 [US1] Implement managed queue worker live-session bootstrap/report/heartbeat/teardown flow in `moonmind/agents/codex_worker/worker.py` (DOC-REQ-001, DOC-REQ-007, DOC-REQ-008)
 - [X] T012 [US1] Ensure RO/RW attach handling semantics (RO visible, RW protected) in `moonmind/workflows/agent_queue/models.py` and `moonmind/workflows/agent_queue/service.py` (DOC-REQ-007, DOC-REQ-011)
 - [X] T013 [US1] Ensure runtime image includes required terminal transport dependencies in `api_service/Dockerfile` (DOC-REQ-015)
 
@@ -95,7 +95,7 @@
 
 - [X] T022 [US3] Implement queue detail Live Session card and action handlers in `api_service/static/task_dashboard/dashboard.js` (DOC-REQ-014)
 - [X] T023 [US3] Wire dashboard queue source config to task-run live endpoints in `api_service/api/routers/task_dashboard_view_model.py` (DOC-REQ-014)
-- [X] T024 [US3] Implement managed queue worker failure-mode reporting for missing/unavailable tmate while preserving task execution in `moonmind/agents/codex_worker/worker.py` (DOC-REQ-013)
+- [X] T024 [US3] Implement managed queue worker failure-mode reporting for missing/unavailable live-session transport while preserving task execution in `moonmind/agents/codex_worker/worker.py` (DOC-REQ-013)
 - [X] T025 [US3] Enforce allow-web + RW-reveal policy in service/worker response behavior via `moonmind/workflows/agent_queue/service.py` and `moonmind/agents/codex_worker/worker.py` (DOC-REQ-011, DOC-REQ-012)
 
 **Checkpoint**: P3 security/reliability/dashboard behavior is operational and independently testable.

@@ -9,7 +9,7 @@ Owners: MoonMind Engineering
 > This document replaces the older **Auth Profiles** framing with **Provider Profiles**.
 > A provider profile is broader than authentication alone: it defines which provider a runtime targets, how credentials are sourced, how provider-specific configuration is materialized into the runtime environment, and how concurrency / cooldown policy is enforced.
 >
-> For tmate session architecture, OAuth session UX, and provider bootstrap behavior, see [TmateArchitecture.md](../ManagedAgents/TmateArchitecture.md). For the shared `TmateSessionManager` abstraction and session lifecycle, see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md).
+> For OAuth session UX, provider bootstrap behavior, and planned browser-terminal work, see [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md) and [TmateArchitecture.md](../ManagedAgents/TmateArchitecture.md). For artifact-based live logs for managed runs, see [LiveLogs.md](../ManagedAgents/LiveLogs.md).
 
 ---
 

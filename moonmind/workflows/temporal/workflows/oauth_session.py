@@ -1,14 +1,14 @@
 """OAuth session orchestrator workflow.
 
 Manages the lifecycle of a single OAuth auth session — from volume
-provisioning through tmate readiness to verification and profile
+provisioning through runner readiness to verification and profile
 registration.
 
 Workflow ID convention: ``oauth-session:<session_id>``
   e.g. ``oauth-session:oas_abc123def456``
 
 Design reference:
-  - docs/ManagedAgents/UniversalTmateOAuth.md (Section 12)
+  - docs/ManagedAgents/OAuthTerminal.md
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class MoonMindOAuthSessionWorkflow:
       1. Validate input and resolve provider spec
       2. Transition to ``starting``
       3. Ensure Docker volume exists
-      4. Transition to ``tmate_ready`` / ``awaiting_user``
+      4. Transition to ``oauth_runner_ready`` / ``awaiting_user``
       5. Wait for finalize signal or session expiry
       6. On finalize: verify volume, register profile, mark ``succeeded``
       7. On expiry/cancel: mark ``expired`` / ``cancelled``
@@ -144,7 +144,7 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=f"Volume provisioning failed: {exc}",
             )
 
-        # Step 3: Launch auth runner container with tmate
+        # Step 3: Launch auth runner (legacy browser OAuth — activity may fail)
         try:
             runner_result = await workflow.execute_activity(
                 "oauth_session.start_auth_runner",
@@ -163,16 +163,16 @@ class MoonMindOAuthSessionWorkflow:
                 ),
             )
             self._container_name = runner_result.get("container_name", "")
-            tmate_web_url = runner_result.get("tmate_web_url", "")
-            tmate_ssh_url = runner_result.get("tmate_ssh_url", "")
+            oauth_web_url = runner_result.get("oauth_web_url", "")
+            oauth_ssh_url = runner_result.get("oauth_ssh_url", "")
 
             # Store extracted URLs in DB
             await workflow.execute_activity(
                 "oauth_session.update_session_urls",
                 {
                     "session_id": self._session_id,
-                    "tmate_web_url": tmate_web_url,
-                    "tmate_ssh_url": tmate_ssh_url,
+                    "oauth_web_url": oauth_web_url,
+                    "oauth_ssh_url": oauth_ssh_url,
                 },
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=15),
@@ -189,8 +189,8 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=f"Auth runner launch failed: {exc}",
             )
 
-        # Step 4: Transition to tmate_ready then awaiting_user
-        await self._update_status("tmate_ready")
+        # Step 4: Transition to oauth_runner_ready then awaiting_user
+        await self._update_status("oauth_runner_ready")
         await self._update_status("awaiting_user")
 
         # Step 5: Wait for finalize, cancel, or session timeout

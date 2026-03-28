@@ -16,7 +16,7 @@
 | DOC-REQ-004 | Implementation Phases / Phase 1 | System MUST wire `ManagedRuntimeLauncher.build_command()` to delegate to the strategy when a registered strategy exists, falling through to existing `if/elif` for unregistered runtimes. |
 | DOC-REQ-005 | Implementation Phases / Phase 1 | System MUST wire `ManagedAgentAdapter.start()` to read `default_command_template` and `default_auth_mode` from the strategy when available. |
 | DOC-REQ-006 | All Runtime-Specific Branching Sites / _runtime_env_keys | `GeminiCliStrategy.shape_environment()` MUST extract and pass through `GEMINI_HOME` and `GEMINI_CLI_HOME` environment variables. |
-| DOC-REQ-007 | Supervisor vs Strategy Boundary | Supervisor MUST retain cross-cutting process lifecycle concerns (heartbeats, timeouts, tmate, reconciliation). Strategy MUST NOT absorb supervisor responsibilities. |
+| DOC-REQ-007 | Supervisor vs Strategy Boundary | Supervisor MUST retain cross-cutting process lifecycle concerns (heartbeats, timeouts, log streaming, reconciliation). Strategy MUST NOT absorb supervisor responsibilities. |
 
 ## User Scenarios & Testing
 
@@ -84,7 +84,7 @@ The `GeminiCliStrategy.shape_environment()` method handles Gemini-specific env p
 - **FR-007**: `ManagedRuntimeLauncher.build_command()` MUST delegate to `RUNTIME_STRATEGIES[runtime_id]` when a registered strategy exists, falling through to existing branching otherwise. (DOC-REQ-004)
 - **FR-008**: `ManagedAgentAdapter.start()` MUST read `default_command_template` and `default_auth_mode` from the strategy when a registered strategy exists. (DOC-REQ-005)
 - **FR-009**: All existing unit and integration tests MUST continue to pass without modification. (DOC-REQ-007)
-- **FR-010**: Phase 1 MUST NOT modify supervisor logic (heartbeats, timeouts, tmate, reconciliation). (DOC-REQ-007)
+- **FR-010**: Phase 1 MUST NOT modify supervisor logic (heartbeats, timeouts, log streaming, reconciliation). (DOC-REQ-007)
 
 ### Key Entities
 

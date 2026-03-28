@@ -10,12 +10,12 @@ Last Updated: 2026-03-26
 
 ## 1. Purpose
 
-Operators need real-time visibility into running tasks. This document defines two complementary capabilities that share the same underlying session infrastructure:
+Operators need real-time visibility into running tasks. This document defines two complementary capabilities:
 
-1. **Live Log Tailing** — An on-demand, read-only view of the most recent terminal output from a running task, rendered directly in the Mission Control task detail page.
-2. **Live Terminal Handoff** — Full interactive terminal access to a running task's environment, allowing operators to observe, communicate with, or take over agent execution.
+1. **Live Log Tailing** — An on-demand, read-only view of the most recent terminal output from a running task, rendered in the Mission Control task detail page (artifact-backed; see [LiveLogs.md](../ManagedAgents/LiveLogs.md)).
+2. **Live Terminal Handoff** — Interactive operator controls (pause/resume, grants, messages) layered on the same run, without requiring a third-party terminal relay in the managed runtime image.
 
-Both capabilities are backed by a per-workflow `tmate` session (tmux-compatible). Log tailing requires only the read-only (RO) endpoint; terminal handoff extends to read-write (RW) access with explicit grants.
+Implementation detail: the managed launcher runs agents as a plain subprocess with piped streams; live output is not produced by wrapping the agent in an external terminal multiplexer.
 
 ---
 
@@ -25,7 +25,7 @@ Both capabilities are backed by a per-workflow `tmate` session (tmux-compatible)
 2. Provide a rolling window of recent terminal output (last ~200 lines) in the Mission Control UI.
 3. Allow operators to escalate from passive observation to active intervention when needed.
 4. Default to secure behavior: read-only first, time-bound write grants, revocation, and audit trails.
-5. Minimize new surface area: rely on tmux-compatible semantics, not a full IDE.
+5. Minimize new surface area: prefer first-party artifact and API contracts over embedding external terminal viewers.
 
 ---
 
@@ -37,77 +37,37 @@ Both capabilities are backed by a per-workflow `tmate` session (tmux-compatible)
 
 ---
 
-## 4. Shared Infrastructure: tmate Sessions
+## 4. Shared infrastructure (current)
 
-Both capabilities depend on a single `tmate` session per workflow execution.
+Real-time visibility is delivered without an external terminal relay in the default managed path:
 
-> [!NOTE]
-> The tmate session lifecycle, shared `TmateSessionManager` abstraction, self-hosted server configuration, and endpoint persistence model are defined in [TmateSessionArchitecture.md](TmateSessionArchitecture.md). This section describes the conceptual integration points; see that document for implementation details.
+1. **Managed runtime** — `ManagedRuntimeLauncher` spawns a direct subprocess; `ManagedRunSupervisor` streams stdout/stderr into run-scoped artifacts. Contracts and UI integration are described in [LiveLogs.md](../ManagedAgents/LiveLogs.md).
+2. **Task-run live sessions** — Optional metadata for operator tooling lives in **`task_run_live_sessions`**. Workers report via **`POST /api/task-runs/{id}/live-session/report`** and heartbeats; operators read **`GET /api/task-runs/{id}/live-session`**. Provider **`none`** applies when no external relay is in use.
+3. **Queue worker** — The standalone worker may report live-session state over HTTP when enabled; it does not provision a relay when the configured provider is `none`.
 
-### 4.1 Session Lifecycle
-
-Every Temporal Managed Agent run executes inside a dedicated `tmate` session. The `agent_runtime` activity worker owns the session, exposes the RO endpoint immediately, and keeps the RW endpoint encrypted until an operator explicitly requests access.
+### 4.1 Session lifecycle (conceptual)
 
 ```
 DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 ```
 
-- **DISABLED**: No live session has been provisioned.
-- **STARTING**: Worker created the socket and is waiting for tmate endpoints.
-- **READY**: RO endpoint is advertised; RW endpoint stored encrypted.
-- **REVOKED**: system explicitly shut down the session.
-- **ENDED**: Workflow completed; worker tore down the session normally.
-- **ERROR**: tmate setup failed; the agent keeps running headless.
+- **DISABLED**: No live session or provider `none`.
+- **STARTING**: Worker registered intent to report session metadata.
+- **READY**: Worker-advertised RO/RW fields (if any) are available to authorized clients.
+- **REVOKED / ENDED / ERROR**: Session closed; agent execution may continue without a relay.
 
-### 4.2 Session bootstrap (managed runtime and workers)
+### 4.2 Workspace artifacts
 
-> [!NOTE]
-> **`ManagedRuntimeLauncher.launch()`** delegates tmate wrapping to **`TmateSessionManager`** (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) section 4). The **managed agent queue worker** (`moonmind/agents/codex_worker`, historical package name) also runs an inline tmate bootstrap in `_ensure_live_session_started` for HTTP live-session reporting for **every runtime** that worker executes; consolidating with the manager is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
+Under `/work/agent_jobs/<workflow_id>/artifacts/`:
 
-1. **Launcher wrapping (agent-runtime worker):** When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. On tmate failure it falls back to a plain subprocess so the agent still runs.
-2. **Endpoint persistence:** Rows live in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report via **`POST /api/task-runs/{id}/live-session/report`** and **`POST /api/task-runs/{id}/live-session/heartbeat`** (HTTP). Operators read **`GET /api/task-runs/{id}/live-session`** for the Live Output panel.
-3. **UI embedding:** Mission Control embeds the `web_ro` URL from the task-run live-session payload.
-4. **Teardown:** The supervisor calls `TmateSessionManager.teardown()` when the managed-runtime path completes; the managed agent queue worker reports session end (or error) through the same HTTP report API.
+- `stdout.log` / `stderr.log` — Streamed process output (primary source for Live Output when using artifact APIs).
+- `operator_inbox.jsonl` — Append-only JSON lines for operator messages.
+- `diagnostics.json` — Supervision metadata.
+- `transcript.log` — Optional captured transcript when enabled.
 
-```bash
-# Conceptual wrapper executed by ManagedRuntimeLauncher
-WORKFLOW_ID="mm-run-${RUN_ID}"
-SOCK_DIR="/tmp/moonmind/tmate"
-SOCK="$SOCK_DIR/${WORKFLOW_ID}.sock"
+### 4.3 Image requirements
 
-mkdir -p "$SOCK_DIR"
-
-# Start the agent runtime wrapped in tmate
-tmate -S "$SOCK" new-session -d -s "$WORKFLOW_ID" "gemini --yolo --prompt ..."
-tmate -S "$SOCK" set -g remain-on-exit on
-tmate -S "$SOCK" set -g history-limit 200000
-
-tmate -S "$SOCK" wait tmate-ready
-
-# Launcher extracts endpoints to save to DB
-SSH_RO=$(tmate -S "$SOCK" display -p '#{tmate_ssh_ro}')
-SSH_RW=$(tmate -S "$SOCK" display -p '#{tmate_ssh}')
-WEB_RO=$(tmate -S "$SOCK" display -p '#{tmate_web_ro}')
-WEB_RW=$(tmate -S "$SOCK" display -p '#{tmate_web}')
-```
-
-### 4.3 Recommended Pane Layout
-
-- **Pane 0**: Agent runtime (managed agent core loop).
-- **Pane 1**: `tail -F` of structured task log.
-- **Pane 2**: `tail -F` of operator message inbox.
-- **Pane 3**: Operator shell (reserved for RW takeovers).
-
-### 4.4 Image Requirements
-
-Install `tmate`, `tmux` (optional — tmate embeds tmux), `openssh-client` (tmate depends on outbound SSH), and `ca-certificates`.
-
-### 4.5 Directory Layout
-
-Each run keeps live-session artifacts under the workflow workspace (`/work/agent_jobs/<workflow_id>/artifacts/`):
-
-- `operator_inbox.jsonl` — Append-only JSON lines for dashboard messages.
-- `transcript.log` — Optional tmux transcript capture.
+Runtime images should include `openssh-client` and `ca-certificates` for Git and CLI networking. No relay-specific terminal packages are required for default log visibility.
 
 ---
 
@@ -125,13 +85,13 @@ When the panel is collapsed or the tab is backgrounded, polling stops.
 
 ### 5.2 Data Source
 
-The tmate session's **web RO endpoint** provides a browser-accessible read-only terminal view. The UI embeds the `web_ro` URL directly in the detail page — the browser connects to tmate's web viewer with zero additional backend work. The tmate web viewer handles terminal rendering, scrollback, and the rolling buffer natively.
+The UI reads recent terminal output from **artifact-backed log APIs** (or equivalent streaming endpoints) rather than embedding a third-party terminal web viewer. Scrollback and rendering use Mission Control components; see [LiveLogs.md](../ManagedAgents/LiveLogs.md).
 
 ### 5.3 UI Behavior
 
 - **Default state**: Panel collapsed, no connection established.
-- **On toggle open**: Load the web RO terminal view. Show a loading indicator while the session connects.
-- **While open**: Terminal output streams continuously. The tmate web viewer handles rendering, scrollback, and the rolling buffer natively.
+- **On toggle open**: Load the live log stream. Show a loading indicator while data is fetched.
+- **While open**: New log lines append; older lines fall out of the rolling window per product limits.
 - **On toggle close**: Disconnect from the stream. No background resource usage.
 - **Background tab**: Disconnect or pause the stream when the tab loses visibility (via `visibilitychange` event).
 - **Terminal workflows**: Show "Session ended" with no stream. If a `transcript.log` artifact exists, offer a download link.
@@ -150,12 +110,12 @@ Response (when `status = READY`):
 ```json
 {
   "status": "READY",
-  "web_ro": "https://tmate.io/t/ro-xxxxxxxxxxxx",
-  "attach_ro": "ssh ro-xxxxxxxxxxxx@nyc1.tmate.io"
+  "webRo": "https://example.invalid/readonly-view",
+  "attachRo": "ssh -o … user@worker"
 }
 ```
 
-The UI uses `web_ro` for the embedded terminal viewer. No new endpoint is needed for v1.
+When `webRo` is present, the dashboard may offer a link; artifact APIs remain the default source of truth for tailing managed-runtime output.
 
 ---
 
@@ -194,12 +154,12 @@ Pane 2 tails `operator_inbox.jsonl`, so RO observers and the agent itself can se
 | --- | --- |
 | `id` (uuid) | Primary key. |
 | `workflow_id` (string) | Links to the owning Temporal Workflow ID. |
-| `provider` | Enum, initially `tmate`. |
+| `provider` | Enum (`none`, …) — external relay identifiers when configured. |
 | `status` | Enum per state machine. |
 | `created_at`, `ready_at`, `ended_at` | Lifecycle timestamps. |
 | `expires_at` | TTL for automatic revocation. |
 | `worker_identity` | Provenance for audit/support (Temporal worker ID). |
-| `tmate_session_name`, `tmate_socket_path` | Socket path is worker-local only. |
+| `live_session_name`, `live_session_socket_path` | Worker-local identity when a relay is in use (DB column names may differ historically). |
 | `attach_ro` | Plain RO attach string (safe to display). |
 | `attach_rw_encrypted` | RW attach string encrypted at rest. |
 | `web_ro`, `web_rw_encrypted` | Optional web-view URLs (RW encrypted). |
@@ -248,7 +208,7 @@ Pauses and takeovers use standard **Temporal Signals**:
 - RW grants are time-bound (default: 15 minutes) and logged in `system_control_events` with actor identity and TTL metadata.
 - Revocation options:
   - **Revoke write**: Stop revealing RW; optionally restart session to rotate credentials.
-  - **Revoke session**: Kill the tmate server and delete the socket.
+  - **Revoke session**: Tear down the live session record and revoke worker-advertised endpoints.
 
 ---
 
@@ -258,7 +218,7 @@ Pauses and takeovers use standard **Temporal Signals**:
 
 The task detail page (`/tasks/:taskId`) should include two live-session UI elements:
 
-1. **Live Output Panel** (section 5): Collapsible panel with embedded web RO terminal view. Toggle on/off. Available whenever the live session is `READY`.
+1. **Live Output Panel** (section 5): Collapsible panel with live log tailing. Toggle on/off. Available when log data exists for the run.
 2. **Live Session Card** (section 6): Shows session status, RO attach instructions, optional web view link, pause/resume signal buttons, RW grant UI, and operator message composer. Available for full handoff workflows.
 
 ### 10.2 Feature Flags
@@ -275,12 +235,12 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 }
 ```
 
-**Desired experience:** managed runs expose a **`web_ro` read-only URL** where available; operators get log tailing in the task detail UI, optional live handoff (RO/RW, pause/resume, operator messages), and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in [`docs/tmp/remaining-work/Temporal-LiveTaskManagement.md`](../tmp/remaining-work/Temporal-LiveTaskManagement.md).
+**Desired experience:** operators get artifact-backed log tailing in the task detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in [`docs/tmp/remaining-work/Temporal-LiveTaskManagement.md`](../tmp/remaining-work/Temporal-LiveTaskManagement.md).
 
 ---
 
 ## 11. Open Questions
 
-1. Should `web_ro` embedding use a raw iframe or a terminal widget library (e.g., xterm.js) that connects to the tmate web RO stream?
+1. Should optional `web_ro` links (when present) open in a new tab, or should all terminal rendering stay inside first-party log components?
 2. Should log tailing be enabled by default for all running tasks, or only when a live session has been explicitly provisioned?
 3. Should completed workflow detail pages show the last captured terminal snapshot as a static artifact?

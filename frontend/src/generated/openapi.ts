@@ -1957,7 +1957,7 @@ export interface components {
          * AgentJobLiveSessionProvider
          * @enum {string}
          */
-        AgentJobLiveSessionProvider: "tmate";
+        AgentJobLiveSessionProvider: "none";
         /**
          * AgentJobLiveSessionStatus
          * @enum {string}
@@ -3553,10 +3553,10 @@ export interface components {
             /** Profile Id */
             profile_id: string;
             status: components["schemas"]["OAuthSessionStatus"];
-            /** Tmate Web Url */
-            tmate_web_url?: string | null;
-            /** Tmate Ssh Url */
-            tmate_ssh_url?: string | null;
+            /** Oauth Web Url */
+            oauth_web_url?: string | null;
+            /** Oauth Ssh Url */
+            oauth_ssh_url?: string | null;
             /** Expires At */
             expires_at?: string | null;
             /** Failure Reason */
@@ -3567,7 +3567,7 @@ export interface components {
          * @description Lifecycle status for a managed agent OAuth session.
          * @enum {string}
          */
-        OAuthSessionStatus: "pending" | "starting" | "tmate_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
+        OAuthSessionStatus: "pending" | "starting" | "oauth_runner_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
         /**
          * PinArtifactRequest
          * @description Request body for explicit artifact pinning.
@@ -4421,10 +4421,10 @@ export interface components {
             provider?: components["schemas"]["AgentJobLiveSessionProvider"] | null;
             /** Workerhostname */
             workerHostname?: string | null;
-            /** Tmatesessionname */
-            tmateSessionName?: string | null;
-            /** Tmatesocketpath */
-            tmateSocketPath?: string | null;
+            /** Livesessionname */
+            liveSessionName?: string | null;
+            /** Livesessionsocketpath */
+            liveSessionSocketPath?: string | null;
             /** Attachro */
             attachRo?: string | null;
             /** Attachrw */

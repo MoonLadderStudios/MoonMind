@@ -769,9 +769,9 @@ class WorkflowSettings(BaseSettings):
         description="Enable live task sessions by default for queue task runs.",
     )
     live_session_provider: str = Field(
-        "tmate",
+        "none",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_PROVIDER"),
-        description="Live session provider implementation.",
+        description="Live session provider implementation (none = disabled).",
     )
     live_session_ttl_minutes: int = Field(
         60,
@@ -790,12 +790,7 @@ class WorkflowSettings(BaseSettings):
     live_session_allow_web: bool = Field(
         False,
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ALLOW_WEB"),
-        description="Whether tmate web attach URLs are exposed via API responses.",
-    )
-    tmate_server_host: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("MOONMIND_TMATE_SERVER_HOST"),
-        description="Optional self-hosted tmate relay hostname.",
+        description="Whether live-session web attach URLs are exposed via API responses.",
     )
     live_session_max_concurrent_per_worker: int = Field(
         4,
@@ -957,7 +952,6 @@ class WorkflowSettings(BaseSettings):
         "publish_skill",
         "skills_registry_source",
         "live_session_provider",
-        "tmate_server_host",
         mode="before",
     )
     @classmethod
@@ -1096,9 +1090,9 @@ class WorkflowSettings(BaseSettings):
     def _normalize_live_session_provider(cls, value: object) -> str:
         """Normalize live session provider and reject unknown values."""
 
-        normalized = str(value or "").strip().lower() or "tmate"
-        if normalized not in {"tmate"}:
-            raise ValueError("live_session_provider must be one of: tmate")
+        normalized = str(value or "").strip().lower() or "none"
+        if normalized not in {"none"}:
+            raise ValueError("live_session_provider must be one of: none")
         return normalized
 
     @field_validator("github_repository", mode="before")

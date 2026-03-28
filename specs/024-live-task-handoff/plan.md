@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement live task handoff for queue task runs using tmate-backed worker sessions, task-run live-session/control persistence, API endpoints for session/control/message operations, and dashboard controls for enable/view/grant/revoke/pause/resume/takeover flows. The implementation must preserve queue task completion semantics when live-session setup fails.
+Implement live task handoff for queue task runs using worker-reported live sessions, task-run live-session/control persistence, API endpoints for session/control/message operations, and dashboard controls for enable/view/grant/revoke/pause/resume/takeover flows. The implementation must preserve queue task completion semantics when live-session setup fails.
 
 ## Technical Context
 

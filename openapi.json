@@ -6547,7 +6547,7 @@
       "AgentJobLiveSessionProvider": {
         "type": "string",
         "enum": [
-          "tmate"
+          "none"
         ],
         "title": "AgentJobLiveSessionProvider"
       },
@@ -10957,7 +10957,7 @@
           "status": {
             "$ref": "#/components/schemas/OAuthSessionStatus"
           },
-          "tmate_web_url": {
+          "oauth_web_url": {
             "anyOf": [
               {
                 "type": "string"
@@ -10966,9 +10966,9 @@
                 "type": "null"
               }
             ],
-            "title": "Tmate Web Url"
+            "title": "Oauth Web Url"
           },
-          "tmate_ssh_url": {
+          "oauth_ssh_url": {
             "anyOf": [
               {
                 "type": "string"
@@ -10977,7 +10977,7 @@
                 "type": "null"
               }
             ],
-            "title": "Tmate Ssh Url"
+            "title": "Oauth Ssh Url"
           },
           "expires_at": {
             "anyOf": [
@@ -11017,7 +11017,7 @@
         "enum": [
           "pending",
           "starting",
-          "tmate_ready",
+          "oauth_runner_ready",
           "awaiting_user",
           "verifying",
           "registering_profile",
@@ -13244,7 +13244,7 @@
             ],
             "title": "Workerhostname"
           },
-          "tmateSessionName": {
+          "liveSessionName": {
             "anyOf": [
               {
                 "type": "string"
@@ -13253,9 +13253,9 @@
                 "type": "null"
               }
             ],
-            "title": "Tmatesessionname"
+            "title": "Livesessionname"
           },
-          "tmateSocketPath": {
+          "liveSessionSocketPath": {
             "anyOf": [
               {
                 "type": "string"
@@ -13264,7 +13264,7 @@
                 "type": "null"
               }
             ],
-            "title": "Tmatesocketpath"
+            "title": "Livesessionsocketpath"
           },
           "attachRo": {
             "anyOf": [

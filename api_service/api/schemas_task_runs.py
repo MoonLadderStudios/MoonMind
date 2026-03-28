@@ -12,8 +12,11 @@ class TaskRunLiveSessionBase(BaseModel):
     status: AgentJobLiveSessionStatus
     worker_id: Optional[str] = Field(None, alias="workerId")
     worker_hostname: Optional[str] = Field(None, alias="workerHostname")
-    tmate_session_name: Optional[str] = Field(None, alias="tmateSessionName")
-    tmate_socket_path: Optional[str] = Field(None, alias="tmateSocketPath")
+    live_session_name: Optional[str] = Field(None, alias="liveSessionName")
+    live_session_socket_path: Optional[str] = Field(
+        None,
+        alias="liveSessionSocketPath",
+    )
     attach_ro: Optional[str] = Field(None, alias="attachRo")
     web_ro: Optional[str] = Field(None, alias="webRo")
     ready_at: Optional[datetime] = Field(None, alias="readyAt")
@@ -45,8 +48,11 @@ class TaskRunLiveSessionReportRequest(BaseModel):
     status: AgentJobLiveSessionStatus
     provider: Optional[AgentJobLiveSessionProvider] = None
     worker_hostname: Optional[str] = Field(None, alias="workerHostname")
-    tmate_session_name: Optional[str] = Field(None, alias="tmateSessionName")
-    tmate_socket_path: Optional[str] = Field(None, alias="tmateSocketPath")
+    live_session_name: Optional[str] = Field(None, alias="liveSessionName")
+    live_session_socket_path: Optional[str] = Field(
+        None,
+        alias="liveSessionSocketPath",
+    )
     attach_ro: Optional[str] = Field(None, alias="attachRo")
     attach_rw: Optional[str] = Field(None, alias="attachRw")
     web_ro: Optional[str] = Field(None, alias="webRo")
