@@ -13,7 +13,7 @@ interface TaskRunDetail {
   executionEnvironment?: string;
 }
 
-function TaskDetailPage({ payload }: { payload: BootPayload }) {
+function TaskDetailPage(_props: { payload: BootPayload }) {
   const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/);
   const taskId = taskIdMatch ? taskIdMatch[1] : null;
 
