@@ -4,7 +4,7 @@ import { useMutation, QueryClient } from '@tanstack/react-query';
 interface SecretMetadata {
   slug: string;
   status: string;
-  details: Record<string, any>;
+  details: Record<string, unknown>;
   createdAt: string;
   updatedAt?: string;
 }
@@ -40,7 +40,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
       setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (err: any) => onNotice({ level: 'error', text: err.message })
+    onError: (err: Error) => onNotice({ level: 'error', text: err.message })
   });
 
   const updateOp = useMutation({
@@ -63,7 +63,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
       setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (err: any) => onNotice({ level: 'error', text: err.message })
+    onError: (err: Error) => onNotice({ level: 'error', text: err.message })
   });
   
   const rotateOp = useMutation({
@@ -86,7 +86,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
       setIsEditing(false);
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (err: any) => onNotice({ level: 'error', text: err.message })
+    onError: (err: Error) => onNotice({ level: 'error', text: err.message })
   });
 
   const deleteOp = useMutation({
@@ -101,7 +101,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
       onNotice({ level: 'ok', text: 'Secret deleted successfully.' });
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (err: any) => onNotice({ level: 'error', text: err.message })
+    onError: (err: Error) => onNotice({ level: 'error', text: err.message })
   });
 
   const handleSubmit = (e: FormEvent) => {

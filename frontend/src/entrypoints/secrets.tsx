@@ -6,7 +6,7 @@ import { SecretManager } from '../components/secrets/SecretManager';
 interface SecretMetadata {
   slug: string;
   status: string;
-  details: Record<string, any>;
+  details: Record<string, unknown>;
   createdAt: string;
   updatedAt?: string;
 }
