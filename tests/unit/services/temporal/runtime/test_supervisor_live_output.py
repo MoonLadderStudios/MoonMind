@@ -331,6 +331,8 @@ async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
 
     assert result.status == "failed"
     assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.error_message == "Gemini API rate limit exceeded"
     diagnostics = json.loads(
         storage.resolve_storage_path(result.diagnostics_ref).read_text(encoding="utf-8")
     )

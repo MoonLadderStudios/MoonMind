@@ -6,6 +6,7 @@ from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
+from temporalio.service import RPCError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -453,6 +454,109 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                     and "900s cooldown" in change["reason"].lower()
                     for change in parent_state["state_changes"]
                 )
+
+                await parent_handle.cancel()
+                with pytest.raises(WorkflowFailureError):
+                    await parent_handle.result()
+
+
+@pytest.mark.asyncio
+async def test_agent_run_managed_429_can_continue_as_new_after_retry_threshold():
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="mm.workflow",
+            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+        ):
+            async with Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[MoonMindAgentRun, MockAuthProfileManager, TestAgentRunParent],
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                request = AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="gemini_cli",
+                    execution_profile_ref="default-managed",
+                    correlation_id="corr-429-continue-as-new",
+                    idempotency_key="idem-429-continue-as-new",
+                    parameters={
+                        "__moonmind_temporal_internal": {
+                            "managed_429_retry_count": 24,
+                        }
+                    },
+                )
+
+                manager_id = "auth-profile-manager:gemini_cli"
+                await env.client.start_workflow(
+                    MockAuthProfileManager.run,
+                    {"runtime_id": "gemini_cli"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+
+                parent_handle = await env.client.start_workflow(
+                    TestAgentRunParent.run,
+                    request,
+                    id="test-parent-managed-429-continue-as-new",
+                    task_queue="agent-run-task-queue",
+                )
+                child_handle = env.client.get_workflow_handle(
+                    "test-parent-managed-429-continue-as-new:child"
+                )
+                manager_handle = env.client.get_workflow_handle(manager_id)
+
+                original_run_id = ""
+                for _ in range(30):
+                    try:
+                        description = await child_handle.describe()
+                    except RPCError:
+                        await asyncio.sleep(0.1)
+                        continue
+                    original_run_id = description.run_id
+                    parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+                    if parent_state.get("profile_assignments"):
+                        break
+                    await asyncio.sleep(0.1)
+
+                assert original_run_id
+
+                await child_handle.signal(
+                    MoonMindAgentRun.completion_signal,
+                    {
+                        "summary": "Gemini API rate limit exceeded",
+                        "failureClass": "integration_error",
+                        "providerErrorCode": "429",
+                    },
+                )
+
+                new_run_id = original_run_id
+                parent_state = {}
+                manager_state = {}
+                for _ in range(40):
+                    try:
+                        description = await child_handle.describe()
+                    except RPCError:
+                        await asyncio.sleep(0.1)
+                        continue
+                    new_run_id = description.run_id
+                    parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+                    manager_state = await manager_handle.query(MockAuthProfileManager.get_state)
+                    if (
+                        new_run_id != original_run_id
+                        and manager_state.get("cooldown_reports")
+                        and any(
+                            "retry scheduled" in change["reason"].lower()
+                            for change in parent_state.get("state_changes", [])
+                        )
+                    ):
+                        break
+                    await asyncio.sleep(0.1)
+
+                assert new_run_id != original_run_id
+                assert manager_state["cooldown_reports"]
+                assert manager_state["cooldown_reports"][-1]["cooldown_seconds"] == 900
 
                 await parent_handle.cancel()
                 with pytest.raises(WorkflowFailureError):

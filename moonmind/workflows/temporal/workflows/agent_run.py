@@ -94,12 +94,19 @@ INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
+MANAGED_429_CONTINUE_AS_NEW_PATCH_ID = "agent-run-managed-429-continue-as-new-v1"
 
 # How long to wait for a slot_assigned signal before assuming the manager is
 # stuck (e.g. nondeterminism error) and resetting it.
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MAX_AGENT_RUN_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
+_MAX_MANAGED_429_RETRIES_BEFORE_CONTINUE_AS_NEW = 25
+_INTERNAL_REQUEST_STATE_KEY = "__moonmind_temporal_internal"
+_INTERNAL_MANAGED_429_RETRY_COUNT_KEY = "managed_429_retry_count"
+_INTERNAL_MANAGED_429_WAITING_REASON_KEY = "managed_429_waiting_reason"
+_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY = "managed_429_slot_wait_timeout_seconds"
 
 
 @activity.defn(name="integration.get_activity_route")
@@ -188,6 +195,7 @@ class MoonMindAgentRun:
         self._profile_snapshots: dict[str, dict[str, Any]] = {}
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
+        self._managed_429_retry_count = 0
 
     async def _get_route_info(self, activity_name: str, fallback_queue: str, fallback_timeout: timedelta) -> tuple[str, timedelta, timedelta, RetryPolicy | None, timedelta | None]:
         if activity_name in self._route_cache:
@@ -303,6 +311,79 @@ class MoonMindAgentRun:
         return (
             f"Gemini capacity exhausted for {runtime_id}{profile_fragment}; retry scheduled for "
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
+        )
+
+    @staticmethod
+    def _request_internal_state(request: AgentExecutionRequest) -> dict[str, Any]:
+        params = request.parameters or {}
+        raw_state = params.get(_INTERNAL_REQUEST_STATE_KEY)
+        if isinstance(raw_state, dict):
+            return dict(raw_state)
+        return {}
+
+    def _restore_internal_request_state(self, request: AgentExecutionRequest) -> None:
+        internal_state = self._request_internal_state(request)
+        raw_retry_count = internal_state.get(_INTERNAL_MANAGED_429_RETRY_COUNT_KEY, 0)
+        try:
+            retry_count = int(raw_retry_count)
+        except (TypeError, ValueError):
+            retry_count = 0
+        self._managed_429_retry_count = max(retry_count, 0)
+
+        waiting_reason = internal_state.get(_INTERNAL_MANAGED_429_WAITING_REASON_KEY)
+        if isinstance(waiting_reason, str) and waiting_reason.strip():
+            self._awaiting_slot_reason_override = waiting_reason.strip()
+
+        raw_wait_timeout = internal_state.get(_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY)
+        try:
+            wait_timeout = int(raw_wait_timeout)
+        except (TypeError, ValueError):
+            wait_timeout = 0
+        if wait_timeout > 0:
+            self._slot_wait_timeout_override_seconds = wait_timeout
+
+    @staticmethod
+    def _request_with_internal_state(
+        request: AgentExecutionRequest,
+        *,
+        retry_count: int,
+        waiting_reason: str | None,
+        slot_wait_timeout_seconds: int | None,
+    ) -> AgentExecutionRequest:
+        params = dict(request.parameters or {})
+        raw_internal_state = params.get(_INTERNAL_REQUEST_STATE_KEY)
+        internal_state = (
+            dict(raw_internal_state)
+            if isinstance(raw_internal_state, dict)
+            else {}
+        )
+        internal_state[_INTERNAL_MANAGED_429_RETRY_COUNT_KEY] = max(retry_count, 0)
+        if waiting_reason:
+            internal_state[_INTERNAL_MANAGED_429_WAITING_REASON_KEY] = waiting_reason
+        else:
+            internal_state.pop(_INTERNAL_MANAGED_429_WAITING_REASON_KEY, None)
+        if slot_wait_timeout_seconds and slot_wait_timeout_seconds > 0:
+            internal_state[_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY] = (
+                slot_wait_timeout_seconds
+            )
+        else:
+            internal_state.pop(_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY, None)
+        params[_INTERNAL_REQUEST_STATE_KEY] = internal_state
+        return request.model_copy(update={"parameters": params})
+
+    def _should_continue_as_new_after_managed_429(self) -> bool:
+        if not workflow.patched(MANAGED_429_CONTINUE_AS_NEW_PATCH_ID):
+            return False
+        if workflow.info().is_continue_as_new_suggested():
+            return True
+        if (
+            workflow.info().get_current_history_length()
+            >= _MAX_AGENT_RUN_EVENTS_BEFORE_CONTINUE_AS_NEW
+        ):
+            return True
+        return (
+            self._managed_429_retry_count
+            >= _MAX_MANAGED_429_RETRIES_BEFORE_CONTINUE_AS_NEW
         )
 
 
@@ -672,6 +753,7 @@ class MoonMindAgentRun:
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
+        self._restore_internal_request_state(request)
 
         timeout_seconds = (
             DEFAULT_EXTERNAL_TIMEOUT_SECONDS
@@ -1403,6 +1485,16 @@ class MoonMindAgentRun:
                             cooldown_seconds + 60,
                             _SLOT_WAIT_TIMEOUT_SECONDS,
                         )
+                        self._managed_429_retry_count += 1
+                        if self._should_continue_as_new_after_managed_429():
+                            workflow.continue_as_new(
+                                self._request_with_internal_state(
+                                    request,
+                                    retry_count=self._managed_429_retry_count,
+                                    waiting_reason=waiting_reason,
+                                    slot_wait_timeout_seconds=self._slot_wait_timeout_override_seconds,
+                                )
+                            )
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None

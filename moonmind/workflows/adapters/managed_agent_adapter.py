@@ -433,6 +433,7 @@ class ManagedAgentAdapter:
                     summary=summary,
                     output_refs=output_refs,
                     failure_class=failure_class,
+                    provider_error_code=record.provider_error_code,
                 )
         return AgentRunResult()
 
