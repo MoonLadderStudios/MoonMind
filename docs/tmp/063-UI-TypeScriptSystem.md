@@ -117,45 +117,45 @@ For **each** feature below, repeat a standard work unit:
 
 **Per-feature template**
 
-1. [ ] **Audit:** List routes, legacy JS functions, and API calls touched by this feature.
-2. [ ] **Entrypoints:** Add `entrypoints/<feature>-….tsx` as needed (list vs detail may be separate entries).
-3. [ ] **Implement:** `features/<feature>/` components + hooks; prefer shared `components/` for cross-feature UI.
-4. [ ] **Styling:** Prefer Tailwind via frontend build for new code; avoid growing inline string HTML in TS (canonical §13.3).
-5. [ ] **Queries/mutations:** Standardize on TanStack Query; remove ad hoc `setInterval` polling where this feature used it.
-6. [ ] **Tests:** Hooks and high-value components; regression tests for parsing/formatting edge cases.
-7. [ ] **Cutover + tracker:** Switch templates to Vite assets; update migration table; legacy JS only for still-unmigrated pages.
+1. [x] **Audit:** List routes, legacy JS functions, and API calls touched by this feature.
+2. [x] **Entrypoints:** Add `entrypoints/<feature>-….tsx` as needed (list vs detail may be separate entries).
+3. [x] **Implement:** `features/<feature>/` components + hooks; prefer shared `components/` for cross-feature UI.
+4. [x] **Styling:** Prefer Tailwind via frontend build for new code; avoid growing inline string HTML in TS (canonical §13.3).
+5. [x] **Queries/mutations:** Standardize on TanStack Query; remove ad hoc `setInterval` polling where this feature used it.
+6. [x] **Tests:** Hooks and high-value components; regression tests for parsing/formatting edge cases.
+7. [x] **Cutover + tracker:** Switch templates to Vite assets; update migration table; legacy JS only for still-unmigrated pages.
 
 ### Feature buckets
 
 #### 2.A Settings (if not fully done in Phase 1)
 
-- [ ] Any remaining settings sub-pages or OAuth/profile flows.
-- [ ] Worker pause / operational toggles if they live under settings in the UI.
+- [x] Any remaining settings sub-pages or OAuth/profile flows.
+- [x] Worker pause / operational toggles if they live under settings in the UI.
 
 #### 2.B Proposals
 
-- [ ] Proposals list entrypoint and shared table/filter components.
-- [ ] Proposal detail entrypoint: comments, actions, status timeline if present in legacy UI.
+- [x] Proposals list entrypoint and shared table/filter components.
+- [x] Proposal detail entrypoint: comments, actions, status timeline if present in legacy UI.
 
 #### 2.C Schedules
 
-- [ ] Schedule list and create/edit flows.
-- [ ] Schedule detail if distinct from list row expansion.
+- [x] Schedule list and create/edit flows.
+- [x] Schedule detail if distinct from list row expansion.
 
 #### 2.D Manifests
 
-- [ ] Manifest list and manifest run / status views tied to `tasks/manifests` routes.
-- [ ] Align with manifest API shapes; use generated types where stable.
+- [x] Manifest list and manifest run / status views tied to `tasks/manifests` routes.
+- [x] Align with manifest API shapes; use generated types where stable.
 
 #### 2.E Task detail
 
-- [ ] Replace core task detail interactions (polling, actions, attachments if any) with TS modules.
-- [ ] Preserve deep links and server gating; no client router (canonical §11.4).
+- [x] Replace core task detail interactions (polling, actions, attachments if any) with TS modules.
+- [x] Preserve deep links and server gating; no client router (canonical §11.4).
 
 #### 2.F Task lists
 
-- [ ] Task list and hub pages: last mile of legacy dashboard usage typically lives here—plan for largest DOM/query surface.
-- [ ] Shared list primitives (`components/tables/`, filters) to avoid duplication across tasks/proposals/schedules.
+- [x] Task list and hub pages: last mile of legacy dashboard usage typically lives here—plan for largest DOM/query surface.
+- [x] Shared list primitives (`components/tables/`, filters) to avoid duplication across tasks/proposals/schedules.
 
 **Exit criteria for Phase 2:** All Mission Control pages in scope use TS entrypoints; legacy dashboard script is only loaded where explicitly still required (should shrink to zero before Phase 3 ends).
 

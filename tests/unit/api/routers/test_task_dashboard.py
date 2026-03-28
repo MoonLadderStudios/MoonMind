@@ -93,22 +93,26 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
-        "/tasks/list",
         "/tasks/new",
         "/tasks/create",
-        "/tasks/manifests",
         "/tasks/manifests/new",
-        "/tasks/schedules",
-        "/tasks/workers",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "task-dashboard-config" in response.text
 
-    # /tasks/settings has its own template now
-    response = client.get("/tasks/settings")
-    assert response.status_code == 200
-    assert "moonmind-ui-boot" in response.text
+    for path in (
+        "/tasks/list",
+        "/tasks/manifests",
+        "/tasks/schedules",
+        "/tasks/workers",
+        "/tasks/settings",
+        "/tasks/proposals",
+        "/tasks/tasks-list",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "moonmind-ui-boot" in response.text
 
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
@@ -122,7 +126,7 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     ):
         response = client.get(path)
         assert response.status_code == 200
-        assert "task-dashboard-config" in response.text
+        assert "moonmind-ui-boot" in response.text
 
 
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
