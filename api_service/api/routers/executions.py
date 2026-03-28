@@ -755,19 +755,22 @@ async def _create_execution_from_task_request(
         field_name="payload.requiredCapabilities",
     )
 
+    if "dependsOn" in task_payload:
+        depends_on_source = task_payload.get("dependsOn")
+        field_name = "payload.task.dependsOn"
+    else:
+        depends_on_source = payload.get("dependsOn")
+        field_name = "payload.dependsOn"
+
     raw_depends_on = _coerce_string_list(
-        task_payload.get("dependsOn") or payload.get("dependsOn"),
-        field_name="payload.task.dependsOn"
+        depends_on_source,
+        field_name=field_name
     )
 
-    depends_on = []
-    for dep in raw_depends_on:
-        dep = str(dep).strip()
-        if dep and dep not in depends_on:
-            depends_on.append(dep)
+    depends_on = list(dict.fromkeys(d.strip() for d in raw_depends_on if d.strip()))
 
     if len(depends_on) > 10:
-        raise _invalid_task_request("payload.task.dependsOn can have a maximum of 10 items.")
+        raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
     step_count = _coerce_step_count(task_payload.get("steps"))
 
     repository = str(payload.get("repository") or "").strip() or None

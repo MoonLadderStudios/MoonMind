@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -222,35 +223,24 @@ class TemporalExecutionService:
         if new_workflow_id in depends_on:
             raise TemporalExecutionValidationError(f"Workflow cannot depend on itself: {new_workflow_id}")
 
-        # Map node to the maximum depth it was reached at.
-        visited_max_depth: dict[str, int] = {}
-        queue: list[tuple[str, int]] = [(dep_id, 1) for dep_id in depends_on]
+        visited: set[str] = set()
+        queue: deque[tuple[str, int]] = deque([(dep_id, 1) for dep_id in depends_on])
         total_nodes_checked = 0
 
         while queue:
-            current_id, depth = queue.pop(0)
+            current_id, depth = queue.popleft()
 
-            # If we've seen this node before at a depth >= the current depth, skip it.
-            if current_id in visited_max_depth and visited_max_depth[current_id] >= depth:
+            if current_id in visited:
                 continue
 
-            # This prevents infinite loops in cycle detection, but lets us
-            # find longer paths to the same node up to our max depth.
-            if current_id in visited_max_depth:
-                # We already described it; just update the depth and enqueue children.
-                visited_max_depth[current_id] = depth
-            else:
-                visited_max_depth[current_id] = depth
-                total_nodes_checked += 1
+            visited.add(current_id)
+            total_nodes_checked += 1
 
             if total_nodes_checked > 50:
                 raise TemporalExecutionValidationError("Dependency graph too large (exceeded 50 nodes).")
 
             if depth > 10:
                 raise TemporalExecutionValidationError("Dependency graph too deep (exceeded depth 10).")
-
-            if current_id == new_workflow_id:
-                raise TemporalExecutionValidationError("Circular dependency detected.")
 
             try:
                 record = await self.describe_execution(current_id)

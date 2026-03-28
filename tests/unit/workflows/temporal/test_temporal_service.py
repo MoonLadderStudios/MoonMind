@@ -232,6 +232,81 @@ async def test_create_execution_rejects_empty_failure_policy(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="dependsOn can have a maximum of 10 items",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": [f"dep-{i}" for i in range(11)]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_missing_dependency(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Dependency not found: non-existent",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": ["non-existent"]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_non_run_dependency(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    from api_service.db.models import TemporalWorkflowType
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+        
+        # Mock describe_execution to return a non-run record
+        mock_record = MagicMock()
+        mock_record.workflow_type = TemporalWorkflowType.MANIFEST_INGEST
+        service.describe_execution = AsyncMock(return_value=mock_record)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match=f"Dependency fake-id is a MoonMind.ManifestIngest workflow, not a MoonMind.Run workflow",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": ["fake-id"]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_returns_existing_record_after_idempotency_race(
     tmp_path, monkeypatch
 ):
