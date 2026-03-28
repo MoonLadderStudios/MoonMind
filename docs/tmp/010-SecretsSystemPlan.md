@@ -56,7 +56,6 @@ Outcome:
 
 Tasks:
 
-- Align `docs/Security/SecretsAnalysis.md` with the new desired-state direction or replace it with a short summary that points to the canonical doc.
 - Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
 - Decide the baseline `db_encrypted` root key source for local deployments:
   - Docker secret,
