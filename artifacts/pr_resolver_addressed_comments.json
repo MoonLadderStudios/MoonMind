@@ -1,5 +1,65 @@
 [
   {
+    "id": 4147576145,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 4147576250,
+    "disposition": "not-applicable",
+    "rationale": "Informational usage warning from bot."
+  },
+  {
+    "id": 3004476246,
+    "disposition": "addressed",
+    "rationale": "Refactored dict merge using dictionary comprehension to filter reserved keys before merging."
+  },
+  {
+    "id": 3004476253,
+    "disposition": "addressed",
+    "rationale": "Removed unused json import from plan_script.py."
+  },
+  {
+    "id": 4025224334,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from gemini-code-assist."
+  },
+  {
+    "id": 3004476542,
+    "disposition": "addressed",
+    "rationale": "Addressed by removing unused json import in plan_script.py."
+  },
+  {
+    "id": 3004478895,
+    "disposition": "addressed",
+    "rationale": "Addressed by removing unused json import in plan_script.py."
+  },
+  {
+    "id": 3004478902,
+    "disposition": "addressed",
+    "rationale": "Changed step IDs to step-1 and step-2 in plan_script.py."
+  },
+  {
+    "id": 3004478905,
+    "disposition": "addressed",
+    "rationale": "Filtered reserved keys in worker_runtime.py."
+  },
+  {
+    "id": 3004478910,
+    "disposition": "addressed",
+    "rationale": "Added unit test test_runtime_planner_multi_step_preserves_custom_keys."
+  },
+  {
+    "id": 4025226978,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from copilot."
+  },
+  {
+    "id": 4147586544,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot greeting."
+  },
+  {
     "id": 4147688756,
     "disposition": "not-applicable",
     "rationale": "Informational greeting from jules bot."

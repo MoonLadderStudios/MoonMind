@@ -340,6 +340,7 @@ def _build_runtime_planner():
                 step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
                 step_node_inputs: dict[str, Any] = {
                     **node_inputs,
+                    **{k: v for k, v in step_entry.items() if k not in {"id", "tool", "skill", "instructions"}},
                     "instructions": step_instructions,
                 }
 
