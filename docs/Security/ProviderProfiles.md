@@ -152,11 +152,11 @@ Runtimes are broadly classified into two execution models regarding credential h
 
 - **Proxy-First Runtimes**: Agent environments that communicate with LLM providers exclusively through MoonMind's internal API proxy (`/api/v1/proxy/`).
   - These runtimes never receive raw database-encrypted provider credentials. Instead, MoonMind injects a symmetric synthetic proxy token (`MOONMIND_PROXY_TOKEN`) and heavily shapes the environment variables to route provider traffic (e.g. `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`) inward. 
-  - The proxy service securely correlates the incoming proxy token, unwraps the true underlying secret reference, decodes it remotely using the `MasterSecretResolver`, and performs a pass-through request upstream.
+  - The proxy service securely correlates the incoming proxy token, unwraps the true underlying secret reference, decodes it remotely using the `RootSecretResolver`, and performs a pass-through request upstream.
   - Proxy-first provides the strictest security, defending against credential exfiltration in the case of unauthorized prompt injection or malicious dependencies.
   
 - **Escape-Hatch Runtimes**: Agent environments that require direct access to provider APIs and cannot be reliably intercepted (often due to limitations in the underlying runtime like hardcoded endpoints or complex web request structures).
-  - These runtimes receive direct, plain-text provider credentials (resolved on-the-fly at runtime boundary via `MasterSecretResolver`).
+  - These runtimes receive direct, plain-text provider credentials (resolved on-the-fly at runtime boundary via `RootSecretResolver`).
   - While MoonMind attempts to isolate the environment and strictly scopes the lifetime of the credentials to the run's duration, these runtimes carry higher inherent risk of credential leakage.
   - Transitioning an escape-hatch runtime to proxy-first is highly desirable and generally mediated by tagging a profile with `proxy-first`.
 

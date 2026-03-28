@@ -6,7 +6,7 @@ from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
 
 from api_service.core.encryption import get_encryption_key
-from moonmind.auth.secrets import MasterSecretResolver
+from moonmind.auth.resolvers import RootSecretResolver
 from api_service.db.base import get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +43,7 @@ async def _resolve_provider_key(provider: str, secret_refs: dict, session: Async
     if not ref:
         raise HTTPException(status_code=400, detail=f"No secret reference found for proxy provider {provider}")
 
-    resolver = MasterSecretResolver()
+    resolver = RootSecretResolver()
     return await resolver.resolve_secret(session, ref)
 
 

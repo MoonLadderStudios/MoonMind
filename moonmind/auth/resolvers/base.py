@@ -28,7 +28,7 @@ class SecretBackendResolver:
         raise NotImplementedError
 
 
-class MasterSecretResolver:
+class RootSecretResolver:
     """Aggregates multiple backend resolvers and delegates resolution."""
 
     def __init__(self, resolvers: Mapping[SecretBackend, SecretBackendResolver]) -> None:

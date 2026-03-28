@@ -16,7 +16,7 @@ from moonmind.auth.resolvers import (
     DbEncryptedSecretResolver,
     ExecSecretResolver,
     AdapterVaultSecretResolver,
-    MasterSecretResolver,
+    RootSecretResolver,
 )
 
 
@@ -143,7 +143,7 @@ async def test_exec_resolver_failure(mock_create_subprocess_exec):
 
 
 @pytest.mark.asyncio
-async def test_master_resolver_routing():
+async def test_root_resolver_routing():
     mock_env_resolver = AsyncMock()
     mock_env_resolver.resolve.return_value = "env-val"
     
@@ -155,17 +155,17 @@ async def test_master_resolver_routing():
         parse_secret_ref("db://y-slug").backend: mock_db_resolver,
     }
     
-    master = MasterSecretResolver(resolvers)
+    root_resolver = RootSecretResolver(resolvers)
     
     env_ref = parse_secret_ref("env://MY_VAR")
-    assert await master.resolve(env_ref) == "env-val"
+    assert await root_resolver.resolve(env_ref) == "env-val"
     mock_env_resolver.resolve.assert_called_once_with(env_ref)
     
     db_ref = parse_secret_ref("db://my-slug")
-    assert await master.resolve(db_ref) == "db-val"
+    assert await root_resolver.resolve(db_ref) == "db-val"
     mock_db_resolver.resolve.assert_called_once_with(db_ref)
     
     # Unconfigured backend
     exec_ref = parse_secret_ref("exec://op")
     with pytest.raises(SecretUnsupportedBackendError):
-        await master.resolve(exec_ref)
+        await root_resolver.resolve(exec_ref)

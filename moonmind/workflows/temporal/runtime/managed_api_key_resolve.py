@@ -11,12 +11,12 @@ from moonmind.auth.resolvers import (
     DbEncryptedSecretResolver,
     ExecSecretResolver,
     AdapterVaultSecretResolver,
-    MasterSecretResolver,
+    RootSecretResolver,
 )
 
 
 async def resolve_managed_api_key_reference(ref: str) -> str:
-    """Resolve a profile api_key_ref or secret_ref into the credential string using MasterSecretResolver."""
+    """Resolve a profile api_key_ref or secret_ref into the credential string using RootSecretResolver."""
 
     stripped = ref.strip()
     if not stripped:
@@ -81,10 +81,10 @@ async def resolve_managed_api_key_reference(ref: str) -> str:
         )
         resolvers[SecretBackend.VAULT] = AdapterVaultSecretResolver(vault_resolver_instance)
 
-    master = MasterSecretResolver(resolvers)
+    root_resolver = RootSecretResolver(resolvers)
 
     try:
-        return await master.resolve(parsed)
+        return await root_resolver.resolve(parsed)
     except Exception as e:
         raise ValueError(f"Unable to resolve MANAGED_API_KEY_REF={ref!r}: {e}")
     finally:
