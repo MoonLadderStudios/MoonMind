@@ -1947,6 +1947,13 @@ class TemporalArtifactActivities:
             validated = request
         else:
             payload = request if isinstance(request, dict) else dict(kwargs)
+            # Normalize complex artifact_ref handles (e.g. legacy objects or mappings)
+            # into a flat string ID *before* Pydantic validation, which also enforces
+            # proper TemporalArtifactValidationError on missing/blank inputs.
+            if "artifact_ref" in payload:
+                payload["artifact_ref"] = self._normalize_activity_artifact_id(
+                    payload["artifact_ref"]
+                )
             validated = ArtifactReadInput.model_validate(payload)
 
         # Extract the artifact_id from the reference
@@ -1957,7 +1964,7 @@ class TemporalArtifactActivities:
         )
 
         _artifact, payload_bytes = await self._service.read(
-            artifact_id=self._normalize_activity_artifact_id(artifact_id),
+            artifact_id=artifact_id,
             principal=validated.principal,
         )
         return payload_bytes
