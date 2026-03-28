@@ -27,7 +27,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
   });
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
+    <div className="w-full max-w-none mx-auto p-6 space-y-6">
       <header className="border-b border-gray-200 pb-4 mb-6">
         <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Proposals</h2>
         <p className="text-sm text-gray-500 mt-1">Review and manage task proposals.</p>

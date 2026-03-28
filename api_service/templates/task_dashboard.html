@@ -43,16 +43,20 @@
       </p>
     </section>
 
-    <header class="masthead">
-      <div class="masthead-copy">
-        <p class="eyebrow">MoonMind Operations</p>
-        <h1>Mission Control</h1>
-      </div>
-    </header>
+    <div class="dashboard-shell-constrained">
+      <header class="masthead">
+        <div class="masthead-copy">
+          <p class="eyebrow">MoonMind Operations</p>
+          <h1>Mission Control</h1>
+        </div>
+      </header>
 
-    {% include "_navigation.html" %}
+      {% include "_navigation.html" %}
+    </div>
 
-    <div id="dashboard-alerts-root"></div>
+    <div class="dashboard-shell-constrained">
+      <div id="dashboard-alerts-root"></div>
+    </div>
 
     <section class="panel" id="dashboard-content" aria-live="polite">
       <p class="loading">Loading dashboard...</p>

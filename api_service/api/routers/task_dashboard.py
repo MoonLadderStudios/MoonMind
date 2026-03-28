@@ -252,7 +252,14 @@ def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     )
 
 
-def _render_react_page(request: Request, entrypoint: str, current_path: str, initial_data: dict | None = None) -> HTMLResponse:
+def _render_react_page(
+    request: Request,
+    entrypoint: str,
+    current_path: str,
+    initial_data: dict | None = None,
+    *,
+    data_wide_panel: bool = False,
+) -> HTMLResponse:
     boot_payload = generate_boot_payload(entrypoint, initial_data=initial_data)
     assets_html = _vite_assets_or_error(entrypoint)
     if isinstance(assets_html, HTMLResponse):
@@ -266,6 +273,7 @@ def _render_react_page(request: Request, entrypoint: str, current_path: str, ini
             "boot_payload": boot_payload,
             "assets_html": assets_html,
             "current_path": current_path,
+            "data_wide_panel": data_wide_panel,
         },
     )
 
@@ -294,7 +302,7 @@ async def task_proposals_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered proposals page."""
-    return _render_react_page(request, "proposals", "/tasks/proposals")
+    return _render_react_page(request, "proposals", "/tasks/proposals", data_wide_panel=True)
 
 
 @router.get("/tasks/schedules", response_class=HTMLResponse)
@@ -327,6 +335,7 @@ async def task_tasks_list_route(
         "tasks-list",
         list_path,
         initial_data={"dashboardConfig": build_runtime_config(list_path)},
+        data_wide_panel=True,
     )
 
 
@@ -342,6 +351,7 @@ async def task_list_route(
         "tasks-list",
         list_path,
         initial_data={"dashboardConfig": build_runtime_config(list_path)},
+        data_wide_panel=True,
     )
 
 

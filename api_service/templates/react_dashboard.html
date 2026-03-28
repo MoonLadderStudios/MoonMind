@@ -43,16 +43,18 @@
       </p>
     </section>
 
-    <header class="masthead">
-      <div class="masthead-copy">
-        <p class="eyebrow">MoonMind Operations</p>
-        <h1>Mission Control</h1>
-      </div>
-    </header>
+    <div class="dashboard-shell-constrained">
+      <header class="masthead">
+        <div class="masthead-copy">
+          <p class="eyebrow">MoonMind Operations</p>
+          <h1>Mission Control</h1>
+        </div>
+      </header>
 
-    {% include "_navigation.html" %}
+      {% include "_navigation.html" %}
+    </div>
 
-    <section class="panel" aria-live="polite">
+    <section class="panel{% if data_wide_panel %} panel--data-wide{% endif %}" aria-live="polite">
       <div id="mission-control-root"></div>
     </section>
   </main>
