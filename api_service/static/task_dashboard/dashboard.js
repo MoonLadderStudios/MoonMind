@@ -4626,7 +4626,7 @@
       : "";
 
     setView(
-      isEditMode ? "Edit Queue Task" : "Submit Queue Task",
+      isEditMode ? "Edit Queue Task" : "Create Task",
       isEditMode ? `Editing queued task ${editJobId}.` : "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
