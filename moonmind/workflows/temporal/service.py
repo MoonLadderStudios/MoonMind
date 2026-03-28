@@ -89,7 +89,7 @@ TERMINAL_STATE_TO_CLOSE_STATUS: dict[
 WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.RUN: "run",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
-    TemporalWorkflowType.AUTH_PROFILE_MANAGER: "auth_profile",
+    TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
 
 ALLOWED_OWNER_TYPES: set[str] = {item.value for item in TemporalExecutionOwnerType}

@@ -1,8 +1,8 @@
-"""Tests for AuthProfileManager auto-start in MoonMind.AgentRun.
+"""Tests for ProviderProfileManager auto-start in MoonMind.AgentRun.
 
 The ``_ensure_manager_and_signal`` call in the managed-agent slot
 acquisition path must use ``request_slot=True`` so that the auto-start
-fallback fires when the AuthProfileManager workflow doesn't exist.
+fallback fires when the ProviderProfileManager workflow doesn't exist.
 A bare ``manager_handle.signal("request_slot", ...)`` bypasses this
 fallback and causes ExternalWorkflowExecutionNotFound crashes.
 """
@@ -20,7 +20,7 @@ class TestEnsureManagerAutoStart:
     def test_ensure_manager_called_with_request_slot_true(self):
         """``_ensure_manager_and_signal`` must be called with
         ``request_slot=True`` so the auto-start fallback is triggered
-        when the AuthProfileManager is missing."""
+        when the ProviderProfileManager is missing."""
         source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
         tree = ast.parse(source)
 
@@ -48,7 +48,7 @@ class TestEnsureManagerAutoStart:
             # Must be True (ast.Constant with value True)
             assert isinstance(kw_value, ast.Constant) and kw_value.value is True, (
                 "_ensure_manager_and_signal must be called with request_slot=True "
-                "so the auto-start fallback fires when the AuthProfileManager "
+                "so the auto-start fallback fires when the ProviderProfileManager "
                 "doesn't exist. Using request_slot=False bypasses auto-start "
                 "and causes ExternalWorkflowExecutionNotFound crashes."
             )

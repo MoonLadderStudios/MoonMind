@@ -398,7 +398,7 @@ class MoonMindAgentRun:
         """Signal the auth-profile-manager; auto-start it on first failure.
 
         Tries the signal. If the manager workflow doesn't exist, starts it
-        via the ``auth_profile.ensure_manager`` activity and retries once.
+        via the ``provider_profile.ensure_manager`` activity and retries once.
         
         Note: The Temporal Python SDK does not provide a `signal_with_start`
         method on `workflow.ExternalWorkflowHandle` objects for use inside a
@@ -422,17 +422,17 @@ class MoonMindAgentRun:
             ):
                 raise
             self._get_logger().warning(
-                "AuthProfileManager %s not found, auto-starting via activity",
+                "ProviderProfileManager %s not found, auto-starting via activity",
                 manager_id,
             )
-            q, stc, schedtc, rp, hb = await self._get_route_info("auth_profile.ensure_manager", "mm.activity.artifacts", timedelta(seconds=30))
+            q, stc, schedtc, rp, hb = await self._get_route_info("provider_profile.ensure_manager", "mm.activity.artifacts", timedelta(seconds=30))
             kwargs = {}
             if rp:
                 kwargs["retry_policy"] = rp
             if hb:
                 kwargs["heartbeat_timeout"] = hb
             await workflow.execute_activity(
-                "auth_profile.ensure_manager",
+                "provider_profile.ensure_manager",
                 {"runtime_id": runtime_id},
                 task_queue=q,
                 start_to_close_timeout=stc,
@@ -462,7 +462,7 @@ class MoonMindAgentRun:
             manager_id,
         )
         q, stc, schedtc, rp, hb = await self._get_route_info(
-            "auth_profile.reset_manager", "mm.activity.artifacts", timedelta(seconds=30)
+            "provider_profile.reset_manager", "mm.activity.artifacts", timedelta(seconds=30)
         )
         kwargs = {}
         if rp:
@@ -470,7 +470,7 @@ class MoonMindAgentRun:
         if hb:
             kwargs["heartbeat_timeout"] = hb
         await workflow.execute_activity(
-            "auth_profile.reset_manager",
+            "provider_profile.reset_manager",
             {"runtime_id": runtime_id},
             task_queue=q,
             start_to_close_timeout=stc,
@@ -495,16 +495,16 @@ class MoonMindAgentRun:
         manager_handle: workflow.ExternalWorkflowHandle,
         runtime_id: str,
     ) -> int:
-        """Best-effort manager refresh from DB-backed auth_profile.list snapshot."""
+        """Best-effort manager refresh from DB-backed provider_profile.list snapshot."""
         try:
-            q, stc, schedtc, rp, hb = await self._get_route_info("auth_profile.list", "mm.activity.artifacts", timedelta(seconds=30))
+            q, stc, schedtc, rp, hb = await self._get_route_info("provider_profile.list", "mm.activity.artifacts", timedelta(seconds=30))
             kwargs = {}
             if rp:
                 kwargs["retry_policy"] = rp
             if hb:
                 kwargs["heartbeat_timeout"] = hb
             profile_snapshot = await workflow.execute_activity(
-                "auth_profile.list",
+                "provider_profile.list",
                 {"runtime_id": runtime_id},
                 task_queue=q,
                 start_to_close_timeout=stc,
@@ -902,20 +902,20 @@ class MoonMindAgentRun:
 
                     # Wire ManagedAgentAdapter with real DI callables.
                     # The slot_requester / slot_releaser / cooldown_reporter
-                    # are thin wrappers around AuthProfileManager signals.
-                    # The profile_fetcher dispatches to the auth_profile.list
+                    # are thin wrappers around ProviderProfileManager signals.
+                    # The profile_fetcher dispatches to the provider_profile.list
                     # activity on the artifacts fleet.
                     wf_id = workflow.info().workflow_id
 
                     async def _profile_fetcher(**kw):
-                        q, stc, schedtc, rp, hb = await self._get_route_info("auth_profile.list", "mm.activity.artifacts", timedelta(seconds=30))
+                        q, stc, schedtc, rp, hb = await self._get_route_info("provider_profile.list", "mm.activity.artifacts", timedelta(seconds=30))
                         kwargs = {}
                         if rp:
                             kwargs["retry_policy"] = rp
                         if hb:
                             kwargs["heartbeat_timeout"] = hb
                         return await workflow.execute_activity(
-                            "auth_profile.list",
+                            "provider_profile.list",
                             {"runtime_id": kw.get("runtime_id", runtime_id)},
                             task_queue=q,
                             start_to_close_timeout=stc,

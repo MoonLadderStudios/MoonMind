@@ -3,7 +3,7 @@ from .agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
-    ManagedAgentAuthProfile,
+    ManagedAgentProviderProfile,
     is_terminal_agent_run_state,
 )
 from .manifest_models import (
@@ -98,7 +98,7 @@ __all__ = [
     "AgentRunHandle",
     "AgentRunStatus",
     "AgentRunResult",
-    "ManagedAgentAuthProfile",
+    "ManagedAgentProviderProfile",
     "is_terminal_agent_run_state",
     "WorkflowRunModel",
     "WorkflowTaskStateModel",

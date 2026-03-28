@@ -430,8 +430,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
         ManagedAgentRateLimitPolicy,
     )
 
-    if os.environ.get("MOONMIND_SKIP_AUTH_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
-        logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_AUTH_PROFILE_SEED.")
+    if os.environ.get("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
+        logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
         return []
 
     # Well-known runtime defaults matching docker-compose.yaml conventions.
@@ -483,7 +483,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
             "secret_refs": {
-                "ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"
+                "ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"
             },
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
@@ -561,13 +561,13 @@ async def ensure_provider_profile_managers_started():
     from sqlalchemy import select
     from api_service.db.models import ManagedAgentProviderProfile
     from moonmind.workflows.temporal.client import TemporalClientAdapter
-    from moonmind.workflows.temporal.workflows.auth_profile_manager import WORKFLOW_NAME, AuthProfileManagerInput
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import WORKFLOW_NAME, ProviderProfileManagerInput
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     # Auto-seed default profiles if table is empty.
     await _auto_seed_provider_profiles()
 
-    logger.info("Ensuring AuthProfileManager workflows are started...")
+    logger.info("Ensuring ProviderProfileManager workflows are started...")
     try:
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile.runtime_id).distinct()
@@ -575,36 +575,36 @@ async def ensure_provider_profile_managers_started():
             runtime_ids = result.scalars().all()
             
         if not runtime_ids:
-            logger.info("No managed agent provider profiles found. Skipping AuthProfileManager startup.")
+            logger.info("No managed agent provider profiles found. Skipping ProviderProfileManager startup.")
             return
 
         temporal_adapter = TemporalClientAdapter()
         temporal_client = await temporal_adapter.get_client()
         
         for runtime_id in runtime_ids:
-            workflow_id = f"auth-profile-manager:{runtime_id}"
+            workflow_id = f"provider-profile-manager:{runtime_id}"
             try:
                 await temporal_client.start_workflow(
                     WORKFLOW_NAME,
-                    AuthProfileManagerInput(runtime_id=runtime_id),
+                    ProviderProfileManagerInput(runtime_id=runtime_id),
                     id=workflow_id,
                     task_queue="mm.workflow",
                 )
-                logger.info(f"Started AuthProfileManager for runtime: {runtime_id}")
+                logger.info(f"Started ProviderProfileManager for runtime: {runtime_id}")
             except WorkflowAlreadyStartedError:
-                logger.debug(f"AuthProfileManager already running for runtime: {runtime_id}")
+                logger.debug(f"ProviderProfileManager already running for runtime: {runtime_id}")
             except Exception as e:
-                logger.error(f"Failed to start AuthProfileManager for {runtime_id}: {e}", exc_info=True)
+                logger.error(f"Failed to start ProviderProfileManager for {runtime_id}: {e}", exc_info=True)
 
             try:
-                from api_service.services.auth_profile_service import sync_provider_profile_manager
+                from api_service.services.provider_profile_service import sync_provider_profile_manager
                 async with get_async_session_context() as session:
                     await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
-                logger.debug(f"Synced AuthProfileManager for runtime: {runtime_id}")
+                logger.debug(f"Synced ProviderProfileManager for runtime: {runtime_id}")
             except Exception as e:
-                logger.error(f"Failed to sync AuthProfileManager for {runtime_id}: {e}", exc_info=True)
+                logger.error(f"Failed to sync ProviderProfileManager for {runtime_id}: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Error ensuring AuthProfileManager workflows: {e}", exc_info=True)
+        logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
 
 
 async def startup_event():
