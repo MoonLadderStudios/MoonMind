@@ -72,27 +72,27 @@ Make managed runs always capture raw `stdout` and `stderr` durably, independent 
 
 ### Tasks
 
-- [ ] Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`.
-- [ ] Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility.
-- [ ] Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously.
-- [ ] Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence.
-- [ ] Implement or finalize spool/buffer handling for long-running streams.
-- [ ] Write durable stdout artifacts for every managed run.
-- [ ] Write durable stderr artifacts for every managed run.
-- [ ] Write diagnostics artifacts for every managed run.
-- [ ] Optionally generate a merged log artifact if that materially simplifies retrieval or support workflows.
-- [ ] Record artifact refs and summary metadata when the run ends.
-- [ ] Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI.
-- [ ] Ensure artifact generation succeeds even when the frontend never connects.
-- [ ] Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture.
-- [ ] Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination.
-- [ ] Add tests for high-volume log output and interleaved stdout/stderr.
+- [x] Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`.
+- [x] Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility.
+- [x] Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously.
+- [x] Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence.
+- [x] Implement or finalize spool/buffer handling for long-running streams.
+- [x] Write durable stdout artifacts for every managed run.
+- [x] Write durable stderr artifacts for every managed run.
+- [x] Write diagnostics artifacts for every managed run.
+- [x] Optionally generate a merged log artifact if that materially simplifies retrieval or support workflows.
+- [x] Record artifact refs and summary metadata when the run ends.
+- [x] Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI.
+- [x] Ensure artifact generation succeeds even when the frontend never connects.
+- [x] Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture.
+- [x] Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination.
+- [x] Add tests for high-volume log output and interleaved stdout/stderr.
 
 ### Exit criteria
 
-- [ ] Every managed run produces durable stdout, stderr, and diagnostics outputs.
-- [ ] Log capture no longer depends on interactive terminal infrastructure.
-- [ ] Raw stdout/stderr fidelity is preserved well enough for replay, download, and troubleshooting.
+- [x] Every managed run produces durable stdout, stderr, and diagnostics outputs.
+- [x] Log capture no longer depends on interactive terminal infrastructure.
+- [x] Raw stdout/stderr fidelity is preserved well enough for replay, download, and troubleshooting.
 
 ---
 
