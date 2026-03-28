@@ -1,0 +1,57 @@
+[
+  {
+    "id": 4147586544,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot greeting."
+  },
+  {
+    "id": 4147586750,
+    "disposition": "not-applicable",
+    "rationale": "Informational usage limit warning."
+  },
+  {
+    "id": 4025232733,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary."
+  },
+  {
+    "id": 3004484766,
+    "disposition": "addressed",
+    "rationale": "Removed unnecessary pass statement from SyncProfilesSignal."
+  },
+  {
+    "id": 3004484768,
+    "disposition": "addressed",
+    "rationale": "Removed unnecessary pass statement from FinalizeSessionSignal."
+  },
+  {
+    "id": 3004484771,
+    "disposition": "addressed",
+    "rationale": "Removed unnecessary pass statement from CancelSessionSignal."
+  },
+  {
+    "id": 3004484777,
+    "disposition": "addressed",
+    "rationale": "Removed unused Literal import."
+  },
+  {
+    "id": 3004485458,
+    "disposition": "addressed",
+    "rationale": "Removed unused Literal import."
+  },
+  {
+    "id": 3004485460,
+    "disposition": "addressed",
+    "rationale": "Wrapped provider_summary Field across lines to fix formatting."
+  },
+  {
+    "id": 3004485464,
+    "disposition": "addressed",
+    "rationale": "Moved tests to tests/unit/schemas/."
+  },
+  {
+    "id": 4025233682,
+    "disposition": "not-applicable",
+    "rationale": "Informational PR overview."
+  }
+]
