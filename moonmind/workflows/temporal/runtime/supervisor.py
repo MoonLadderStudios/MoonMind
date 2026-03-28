@@ -175,7 +175,9 @@ class ManagedRunSupervisor:
                 exit_code=exit_code,
                 finished_at=datetime.now(tz=UTC),
                 diagnostics_ref=diagnostics_ref,
-                log_artifact_ref=log_refs.get("stdout"),
+                stdout_artifact_ref=log_refs.get("stdout"),
+                stderr_artifact_ref=log_refs.get("stderr"),
+                last_log_at=datetime.now(tz=UTC),
                 failure_class=failure_class,
                 provider_error_code=exit_result.provider_error_code,
                 error_message=error_message,
@@ -416,8 +418,10 @@ class ManagedRunSupervisor:
     ) -> dict[str, Any]:
         """Build an AgentRunResult-compatible dict from a completed ManagedRunRecord."""
         output_refs: list[str] = []
-        if record.log_artifact_ref:
-            output_refs.append(record.log_artifact_ref)
+        if record.stdout_artifact_ref:
+            output_refs.append(record.stdout_artifact_ref)
+        if record.stderr_artifact_ref:
+            output_refs.append(record.stderr_artifact_ref)
         if record.diagnostics_ref:
             output_refs.append(record.diagnostics_ref)
         for ref in log_refs.values():

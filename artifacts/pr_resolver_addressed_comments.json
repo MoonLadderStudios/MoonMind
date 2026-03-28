@@ -1,92 +1,97 @@
 [
   {
-    "id": 4148890356,
+    "id": 4148891383,
     "disposition": "not-applicable",
-    "rationale": "Informational bot limit message. No action required."
+    "rationale": "Usage limit warning from bots."
   },
   {
-    "id": 4026079777,
+    "id": 4026080599,
     "disposition": "not-applicable",
-    "rationale": "High-level code review summary from bot."
+    "rationale": "High-level comment from Gemini bot."
   },
   {
-    "id": 3005380779,
+    "id": 3005382088,
     "disposition": "addressed",
-    "rationale": "Removed unrelated task template foreign key migration."
+    "rationale": "Validates resolve path with is_relative_to"
   },
   {
-    "id": 3005380781,
+    "id": 3005382090,
     "disposition": "addressed",
-    "rationale": "Implemented compound tuple sorting by priority then available slots."
+    "rationale": "Validates diagnostics resolve path with is_relative_to"
   },
   {
-    "id": 3005380783,
+    "id": 3005382093,
     "disposition": "addressed",
-    "rationale": "Removed the accidental finalize artifact json file from git."
+    "rationale": "Added explicit check for merged_log_artifact_ref"
   },
   {
-    "id": 3005381524,
+    "id": 3005382096,
     "disposition": "addressed",
-    "rationale": "Exported revision and down_revision via __all__ to suppress linter."
+    "rationale": "Moved imports to top of task_runs.py"
   },
   {
-    "id": 3005381525,
+    "id": 3005382173,
     "disposition": "addressed",
-    "rationale": "Exported revision and down_revision via __all__ to suppress linter."
+    "rationale": "Cleaned up unused test variables and mapped to HTTP response checking"
   },
   {
-    "id": 3005381526,
+    "id": 3005384368,
     "disposition": "addressed",
-    "rationale": "Removed unused branch_labels migration variable."
+    "rationale": "Added is_superuser dependency validation"
   },
   {
-    "id": 3005381527,
+    "id": 3005384375,
     "disposition": "addressed",
-    "rationale": "Removed unused depends_on migration variable."
+    "rationale": "Wrapped file operations in asyncio.to_thread"
   },
   {
-    "id": 3005384695,
+    "id": 3005384377,
     "disposition": "addressed",
-    "rationale": "Removed unrelated task template foreign key migration."
+    "rationale": "Updated FileResponse mock to return correct object wrapper"
   },
   {
-    "id": 3005384708,
+    "id": 3005384379,
     "disposition": "addressed",
-    "rationale": "Renamed user-facing exception trace strings from 'auth' to 'provider' profile."
+    "rationale": "Added tests for diagnostics endpoint variants"
   },
   {
-    "id": 3005384713,
+    "id": 3005384383,
     "disposition": "addressed",
-    "rationale": "Renamed user-facing exception trace strings from 'auth' to 'provider' profile."
+    "rationale": "Unchecked range semantics in docs phase 2 task plan"
   },
   {
-    "id": 3005384717,
+    "id": 3005384387,
     "disposition": "addressed",
-    "rationale": "Implemented compound tuple sorting by priority then available slots."
+    "rationale": "Fixed Capability typo"
   },
   {
-    "id": 3005384719,
+    "id": 3005384390,
     "disposition": "addressed",
-    "rationale": "Added comprehensive suite of 5 selector tie-breaker and constraint branching unit tests."
+    "rationale": "Fixed merged fallback logic"
   },
   {
-    "id": 3005384725,
+    "id": 3005384394,
     "disposition": "addressed",
-    "rationale": "Updated model_overrides to required dict with default_factory instead of Optional."
+    "rationale": "Unchecked range semantics in docs phase 2 task plan"
   },
   {
-    "id": 3005384727,
+    "id": 3005384397,
     "disposition": "addressed",
-    "rationale": "Removed the accidental finalize artifact json file from git."
+    "rationale": "Fixed backtick syntax in tasks checklist"
   },
   {
-    "id": 4026082229,
+    "id": 3005384402,
+    "disposition": "addressed",
+    "rationale": "Added is_relative_to checks to artifact resolve"
+  },
+  {
+    "id": 4026082010,
     "disposition": "not-applicable",
-    "rationale": "Pull request overview summary comment from Copilot."
+    "rationale": "Top level PR summary from Copilot bot"
   },
   {
-    "id": 3005398532,
+    "id": 3005403381,
     "disposition": "addressed",
-    "rationale": "Removed unused Sequence import."
+    "rationale": "Removed unused AgentJobLiveSessionProvider import"
   }
 ]
