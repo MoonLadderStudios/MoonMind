@@ -149,9 +149,12 @@ class AgentExecutionRequest(BaseModel):
     def _validate_contract(self) -> "AgentExecutionRequest":
         self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
         if self.execution_profile_ref is not None:
-            self.execution_profile_ref = _require_non_blank(
-                self.execution_profile_ref, field_name="executionProfileRef"
-            )
+            if self.execution_profile_ref.strip().lower() == "auto":
+                self.execution_profile_ref = None
+            else:
+                self.execution_profile_ref = _require_non_blank(
+                    self.execution_profile_ref, field_name="executionProfileRef"
+                )
         self.correlation_id = _require_non_blank(
             self.correlation_id, field_name="correlationId"
         )
@@ -260,6 +263,10 @@ class ManagedAgentProviderProfile(BaseModel):
 
     profile_id: str = Field(..., alias="profileId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    provider_id: str | None = Field(None, alias="providerId")
+    provider_label: str | None = Field(None, alias="providerLabel")
+    default_model: str | None = Field(None, alias="defaultModel")
+    model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
     auth_mode: str = Field(..., alias="authMode", min_length=1)
     volume_ref: str | None = Field(None, alias="volumeRef")
     account_label: str | None = Field(None, alias="accountLabel")
