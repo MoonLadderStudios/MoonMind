@@ -11,7 +11,7 @@
     "name": "mountPage"
   },
   "entrypoints/dashboard-alerts.tsx": {
-    "file": "assets/dashboard-alerts--gkjPw95.js",
+    "file": "assets/dashboard-alerts-BSeWTk3C.js",
     "name": "dashboard-alerts",
     "src": "entrypoints/dashboard-alerts.tsx",
     "isEntry": true,
