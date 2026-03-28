@@ -3659,6 +3659,12 @@ export interface components {
             provider_id: string;
             /** Provider Label */
             provider_label?: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            /** Model Overrides */
+            model_overrides?: {
+                [key: string]: string;
+            } | null;
             /** Credential Source */
             credential_source: string;
             /** Runtime Materialization Mode */
@@ -3734,6 +3740,12 @@ export interface components {
             provider_id: string;
             /** Provider Label */
             provider_label: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            /** Model Overrides */
+            model_overrides?: {
+                [key: string]: string;
+            };
             /** Credential Source */
             credential_source: string;
             /** Runtime Materialization Mode */
@@ -3794,6 +3806,12 @@ export interface components {
             provider_id?: string | null;
             /** Provider Label */
             provider_label?: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            /** Model Overrides */
+            model_overrides?: {
+                [key: string]: string;
+            } | null;
             /** Credential Source */
             credential_source?: string | null;
             /** Runtime Materialization Mode */
