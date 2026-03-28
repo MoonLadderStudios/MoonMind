@@ -2066,9 +2066,14 @@ class TemporalArtifactActivities:
 
 
     def _resolve_provider_default_model(self, row: Any) -> str | None:
-        custom_model = (row.command_behavior or {}).get("default_model") or (row.env_template or {}).get("default_model")
-        if custom_model:
-            return custom_model
+        cmd_behavior = row.command_behavior or {}
+        env_tmpl = row.env_template or {}
+        raw_model = cmd_behavior.get("default_model") or env_tmpl.get("default_model")
+        
+        if raw_model is not None:
+            custom_model = str(raw_model).strip()
+            if custom_model:
+                return custom_model
 
         r = row.runtime_id
         p = row.provider_id
