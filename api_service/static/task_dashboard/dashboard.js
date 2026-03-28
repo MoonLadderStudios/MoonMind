@@ -303,8 +303,11 @@
 
   const TASK_RUNTIME_LABELS = {
     codex: "Codex CLI",
+    codex_cli: "Codex CLI",
     gemini: "Gemini CLI",
+    gemini_cli: "Gemini CLI",
     claude: "Claude Code",
+    claude_code: "Claude Code",
     cursor_cli: "Cursor CLI",
     [JULES_RUNTIME]: "Jules",
   };
@@ -1271,7 +1274,12 @@
   }
 
   function renderRuntime(runtime) {
-    return runtime ? escapeHtml(runtime) : "-";
+    const raw = String(runtime || "").trim();
+    if (!raw) {
+      return "-";
+    }
+    const label = formatRuntimeLabel(raw);
+    return escapeHtml(label || raw);
   }
 
   function deriveStageFromEvent(event) {
@@ -3892,12 +3900,9 @@
       const telemetryHtml =
         filterState.source === "temporal" ? "" : renderTelemetrySummary(telemetryPayload);
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
-      const subtitle = temporalListEnabled
-        ? `Tasks ordered by recency.`
-        : `Tasks ordered by creation time.`;
       setView(
         "Tasks List",
-        subtitle,
+        "",
         `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderTaskLayouts(
           sortedFilteredRows,
           columnSort.field ? columnSort : null,
