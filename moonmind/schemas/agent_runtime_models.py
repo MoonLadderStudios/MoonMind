@@ -260,6 +260,10 @@ class ManagedAgentProviderProfile(BaseModel):
 
     profile_id: str = Field(..., alias="profileId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    provider_id: str | None = Field(None, alias="providerId")
+    provider_label: str | None = Field(None, alias="providerLabel")
+    default_model: str | None = Field(None, alias="defaultModel")
+    model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
     auth_mode: str = Field(..., alias="authMode", min_length=1)
     volume_ref: str | None = Field(None, alias="volumeRef")
     account_label: str | None = Field(None, alias="accountLabel")
