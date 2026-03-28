@@ -227,8 +227,47 @@ class ManagedAgentAdapter:
             k: v for k, v in os.environ.items()
             if not _should_filter_base_env_var(k)
         }
+        # Determine if we should use proxy-first token injection instead of 
+        # distributing the raw secret_ref downstream.
+        tags = profile.get("tags") or []
+        is_proxy_first = "proxy-first" in tags
+        
         # delta_env_overrides: only the safe profile-specific additions.
         delta_env_overrides: dict[str, str] = {}
+        
+        if is_proxy_first:
+            import json
+            from cryptography.fernet import Fernet
+            from api_service.core.encryption import get_encryption_key
+            
+            provider = profile.get("provider_id", "anthropic").strip().lower()
+            
+            # Mint a synthetic proxy token to authorize internal routes without leaking the true DB secret
+            payload_bytes = json.dumps({
+                "provider": provider,
+                "workflow_id": self._workflow_id,
+                "secret_refs": profile.get("secret_refs", {})
+            }).encode("utf-8")
+            
+            fernet = Fernet(get_encryption_key().encode("utf-8"))
+            proxy_token = "mm-proxy-token:" + fernet.encrypt(payload_bytes).decode("utf-8")
+            
+            api_url = os.environ.get("MOONMIND_PROXY_URL", "http://moonmind-api:8000/api/v1/proxy")
+            
+            # Inject standard proxy variables into the delta block directly for the worker
+            delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
+            
+            if provider == "anthropic":
+                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/anthropic"
+                delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
+                delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
+            elif provider == "openai":
+                delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
+                delta_env_overrides["OPENAI_API_KEY"] = proxy_token
+            elif provider == "minimax":
+                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/minimax"
+                delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
+
         if auth_mode == "oauth":
             shaped_env = shape_environment_for_oauth(
                 base_env,
@@ -244,9 +283,12 @@ class ManagedAgentAdapter:
                 account_label=profile.get("account_label"),
             )
             api_key_ref = profile.get("api_key_ref")
-            if api_key_ref:
+            
+            # SUPPRESS raw key distribution downstream if proxy mode is enabled.
+            if api_key_ref and not is_proxy_first:
                 # Pass only the reference name, not any raw credential value.
                 delta_env_overrides["MANAGED_API_KEY_REF"] = api_key_ref
+                
             account_label = profile.get("account_label")
             if account_label:
                 delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
@@ -260,16 +302,18 @@ class ManagedAgentAdapter:
                     # Only propagate non-sensitive runtime_env_overrides keys
                     # into delta_env_overrides so they reach the launcher.
                     # Sensitive-keyed entries must be handled through secret_refs.
-                    if not _should_filter_base_env_var(ks):
+                    # Exception: explicitly injected proxy variables
+                    if not _should_filter_base_env_var(ks) or is_proxy_first:
                         delta_env_overrides[ks] = str(value) if value is not None else ""
             api_key_env_var = profile.get("api_key_env_var")
             if api_key_env_var and str(api_key_env_var).strip():
                 shaped_env["MANAGED_API_KEY_TARGET_ENV"] = (
                     str(api_key_env_var).strip().upper()
                 )
-                delta_env_overrides["MANAGED_API_KEY_TARGET_ENV"] = (
-                    str(api_key_env_var).strip().upper()
-                )
+                if not is_proxy_first:
+                    delta_env_overrides["MANAGED_API_KEY_TARGET_ENV"] = (
+                        str(api_key_env_var).strip().upper()
+                    )
         passthrough_env_keys = [
             key
             for key in _SECRET_ENV_PASSTHROUGH_KEYS
