@@ -53,5 +53,10 @@
     "id": 4025366822,
     "disposition": "not-applicable",
     "rationale": "Suppressed low confidence comment by reviewer about legacy list payloads."
+  },
+  {
+    "id": 3004791140,
+    "disposition": "addressed",
+    "rationale": "Removed unused import TemporalArtifactValidationError."
   }
 ]

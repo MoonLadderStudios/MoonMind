@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from moonmind.schemas.temporal_activity_models import ArtifactReadInput, ArtifactWriteCompleteInput
-from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities, TemporalArtifactValidationError
+from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
 @pytest.fixture
 def mock_service():
