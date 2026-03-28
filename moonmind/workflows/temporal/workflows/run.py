@@ -773,14 +773,9 @@ class MoonMindRunWorkflow:
                         continue
 
                     if failure_mode == "FAIL_FAST":
-                        detail = (
-                            f" with error '{failure_message}'"
-                            if failure_message
-                            else ""
-                        )
-                        raise ValueError(
-                            f"plan node execution returned status {result_status}{detail}"
-                        )
+                        if failure_message:
+                            raise ValueError(f"plan node execution failed: {failure_message}")
+                        raise ValueError(f"plan node execution returned status {result_status}")
                     break
 
                 break
