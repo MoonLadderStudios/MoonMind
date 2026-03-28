@@ -72,7 +72,7 @@ class RuntimeLogStreamer:
                     if parsed_events and event_callback is not None:
                         callback_result = event_callback(parsed_events)
                         if inspect.isawaitable(callback_result):
-                            await callback_result
+                            _ = await callback_result
 
         # Flush any remaining partial line to the parser (no trailing newline).
         if parser is not None and _line_buf:
@@ -81,7 +81,7 @@ class RuntimeLogStreamer:
             if parsed_events and event_callback is not None:
                 callback_result = event_callback(parsed_events)
                 if inspect.isawaitable(callback_result):
-                    await callback_result
+                    _ = await callback_result
 
         data = b"".join(chunks)
         artifact_name = f"{stream_name}.log"

@@ -123,7 +123,7 @@ class ManagedRunSupervisor:
             if terminate_on_rate_limit_task is not None:
                 terminate_on_rate_limit_task.cancel()
                 with suppress(asyncio.CancelledError):
-                    await terminate_on_rate_limit_task
+                    _ = await terminate_on_rate_limit_task
 
             if timed_out:
                 exit_code = None
