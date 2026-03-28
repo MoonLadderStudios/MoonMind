@@ -116,9 +116,7 @@ async def verify_volume_credentials(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        # process.communicate() might return a coroutine that we must await
-        # inside wait_for depending on the mock, but the actual asyncio
-        # subprocess.communicate() is an async function. Wait_for takes an awaitable.
+        # Enforce a timeout around the subprocess communicate() awaitable.
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=30
         )
