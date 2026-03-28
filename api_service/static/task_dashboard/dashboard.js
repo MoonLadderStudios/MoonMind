@@ -128,6 +128,8 @@
   }
 
   const config = JSON.parse(configNode.textContent || "{}");
+  const dashboardShell =
+    typeof root.closest === "function" ? root.closest(".dashboard-root") : null;
   const pollIntervals = config.pollIntervalsMs || {
     list: 5000,
     detail: 2000,
@@ -303,8 +305,11 @@
 
   const TASK_RUNTIME_LABELS = {
     codex: "Codex CLI",
+    codex_cli: "Codex CLI",
     gemini: "Gemini CLI",
+    gemini_cli: "Gemini CLI",
     claude: "Claude Code",
+    claude_code: "Claude Code",
     cursor_cli: "Cursor CLI",
     [JULES_RUNTIME]: "Jules",
   };
@@ -1271,7 +1276,12 @@
   }
 
   function renderRuntime(runtime) {
-    return runtime ? escapeHtml(runtime) : "-";
+    const raw = String(runtime || "").trim();
+    if (!raw) {
+      return "-";
+    }
+    const label = formatRuntimeLabel(raw);
+    return escapeHtml(label || raw);
   }
 
   function deriveStageFromEvent(event) {
@@ -1962,9 +1972,17 @@
     return "other";
   }
 
+  function setDashboardLayout(layout = "contained") {
+    if (!dashboardShell || !dashboardShell.classList) {
+      return;
+    }
+    dashboardShell.classList.toggle("dashboard-root-wide", layout === "wide");
+  }
+
   function setView(title, subtitle, body, options = {}) {
-    const { showAutoRefreshControls = false } = options;
+    const { showAutoRefreshControls = false, layout = "contained" } = options;
     const normalizedSubtitle = String(subtitle || "").trim();
+    setDashboardLayout(layout);
     root.innerHTML = `
       <div class="toolbar">
         <div>
@@ -3559,7 +3577,7 @@
       pageEnd: 0,
     };
     let stableListOrderIndex = new Map();
-    let columnSort = { field: "scheduledFor", direction: "desc" };
+    let columnSort = { field: "scheduledFor", direction: "asc" };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -3829,7 +3847,7 @@
       const showingRange = paginationState.pageEnd > 0
         ? `${paginationState.pageStart}-${paginationState.pageEnd}`
         : "0";
-      
+
       let totalCountInfo = "";
       if (filterState.source === "temporal" && typeof currentTemporalCount === "number") {
         const modeLabel = currentTemporalCountMode && currentTemporalCountMode !== "exact" 
@@ -3892,12 +3910,9 @@
       const telemetryHtml =
         filterState.source === "temporal" ? "" : renderTelemetrySummary(telemetryPayload);
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
-      const subtitle = temporalListEnabled
-        ? `Tasks ordered by recency.`
-        : `Tasks ordered by creation time.`;
       setView(
         "Tasks List",
-        subtitle,
+        "",
         `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderTaskLayouts(
           sortedFilteredRows,
           columnSort.field ? columnSort : null,
@@ -4623,7 +4638,7 @@
       : "";
 
     setView(
-      isEditMode ? "Edit Queue Task" : "Create Task",
+      isEditMode ? "Edit Queue Task" : "Submit Queue Task",
       isEditMode ? `Editing queued task ${editJobId}.` : "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
@@ -4636,9 +4651,9 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div id="queue-provider-profile-wrap" class="hidden">
-          <label>Provider profile
-            <select name="providerProfile">
+        <div id="queue-auth-profile-wrap" class="hidden">
+          <label>Auth profile
+            <select name="authProfile">
               <option value="">Default (system chooses)</option>
             </select>
           </label>
@@ -7272,6 +7287,7 @@
           artifactId ||
           "artifact";
         const size = pick(artifact, "size_bytes", "sizeBytes");
+        const contentType = pick(artifact, "content_type", "contentType") || "-";
         const rawAccessAllowed = Boolean(pick(artifact, "raw_access_allowed", "rawAccessAllowed"));
         const readableArtifactId = previewArtifactId || defaultReadArtifactId || artifactId;
         const actionLabel = previewArtifactId ? "Preview" : "Download";
@@ -7288,6 +7304,7 @@
           <tr>
             <td><code>${escapeHtml(label)}</code></td>
             <td>${escapeHtml(String(size ?? "-"))}</td>
+            <td>${escapeHtml(String(contentType))}</td>
             <td>${escapeHtml(String(pick(artifact, "status") || "-"))}</td>
             <td>${action}</td>
           </tr>
@@ -7447,9 +7464,9 @@
       <section>
         <h3>Artifacts</h3>
         <table>
-          <thead><tr><th>Artifact</th><th>Size</th><th>Status</th><th>Action</th></tr></thead>
+          <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
           <tbody>${renderTemporalArtifactRows(artifacts?.artifacts || []) ||
-      "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
+      "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
       }</tbody>
         </table>
       </section>
@@ -7491,7 +7508,7 @@
       "Temporal Task Detail",
       `Task ${workflowId}`,
       "<p class='loading'>Loading Temporal task...</p>",
-      { showAutoRefreshControls: true },
+      { showAutoRefreshControls: true, layout: "wide" },
     );
 
     let detailNotice = "";
@@ -8257,7 +8274,7 @@
             debugFields,
             liveLogsAvailable: logState.liveLogsAvailable,
           }),
-          { showAutoRefreshControls: true },
+          { showAutoRefreshControls: true, layout: "wide" },
         );
         attachTemporalActionHandlers(execution, load);
         attachLogHandlers();
@@ -8291,7 +8308,7 @@
             "Temporal Task Detail",
             `Task ${workflowId}`,
             `<div class='notice error'>${escapeHtml(detailNotice)}</div>`,
-            { showAutoRefreshControls: true },
+            { showAutoRefreshControls: true, layout: "wide" },
           );
           return;
         }
@@ -8299,7 +8316,7 @@
           "Temporal Task Detail",
           `Task ${workflowId}`,
           "<div class='notice error'>Failed to load task detail.</div>",
-          { showAutoRefreshControls: true },
+          { showAutoRefreshControls: true, layout: "wide" },
         );
       }
     };
@@ -8517,7 +8534,7 @@
         `${noticeHtml}${renderFilters()}${renderTable()}${renderProposalActionFeedback(
           state.actionFeedback,
         )}`,
-        { showAutoRefreshControls: true },
+        { showAutoRefreshControls: true, layout: "wide" },
       );
       attachHandlers();
     };
@@ -8568,7 +8585,7 @@
       "Task Proposals",
       "Worker follow-up queue (promote to Task jobs).",
       "<p class='loading'>Loading proposals...</p>",
-      { showAutoRefreshControls: true },
+      { showAutoRefreshControls: true, layout: "wide" },
     );
     await load();
     startPolling(load, pollIntervals.list);
@@ -8611,6 +8628,7 @@
       "Proposal Detail",
       `Proposal ${proposalId}`,
       "<p class='loading'>Loading proposal...</p>",
+      { layout: "wide" },
     );
 
     let detailNotice = "";
@@ -8760,6 +8778,7 @@
             ${similarMarkup}
           </section>
         `,
+        { layout: "wide" },
       );
       const promoteButton = document.getElementById("proposal-promote-button");
       if (promoteButton) {
@@ -8779,6 +8798,7 @@
               "Proposal Detail",
               `Proposal ${proposalId}`,
               "<div class='notice error'>Promotion failed.</div>",
+              { layout: "wide" },
             );
           } finally {
             promoteButton.disabled = false;
@@ -8798,6 +8818,7 @@
               "Proposal Detail",
               `Proposal ${proposalId}`,
               "<div class='notice error'>Dismissal failed.</div>",
+              { layout: "wide" },
             );
           } finally {
             dismissButton.disabled = false;
@@ -8823,6 +8844,7 @@
               "Proposal Detail",
               `Proposal ${proposalId}`,
               "<div class='notice error'>Edit & Promote failed.</div>",
+              { layout: "wide" },
             );
           } finally {
             editButton.disabled = false;

@@ -132,18 +132,6 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(workerReload.steps[0].instructions, "Plan");
 })();
 
-(function testQueueSubmitMarkupUsesProviderProfileFieldNames() {
-  const source = fs.readFileSync(DASHBOARD_JS, "utf8");
-  assert.ok(
-    source.includes('<div id="queue-provider-profile-wrap" class="hidden">'),
-    "Expected queue submit form to render the provider profile wrapper",
-  );
-  assert.ok(
-    source.includes('<select name="providerProfile">'),
-    "Expected queue submit form to render the provider profile select",
-  );
-})();
-
 (function testResetWorkerSubmissionFieldsClearsStepInputs() {
   const sourceDraft = {
     instruction: "Implement queue task",

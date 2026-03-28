@@ -318,6 +318,8 @@ class ManagedAgentAdapter:
                 command_template=cmd_template,
                 secret_refs=profile.get("secret_refs") or {},
                 clear_env_keys=profile.get("clear_env_keys") or [],
+                default_model=profile.get("default_model"),
+                default_effort=profile.get("default_effort"),
             )
             
             # The workspace path is usually managed by the worker, but we can pass it if known

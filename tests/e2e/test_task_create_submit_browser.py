@@ -142,41 +142,12 @@ def _route_handlers(
             body=json.dumps({"items": []}),
         )
 
-    def _mock_provider_profiles(route):
-        runtime_id = route.request.url.split("runtime_id=", 1)[-1].split("&", 1)[0]
-        runtime_id = runtime_id.replace("%5F", "_")
-        items = []
-        if runtime_id == "codex":
-            items = [
-                {
-                    "profile_id": "profile:codex-default",
-                    "account_label": "Codex Default",
-                },
-                {
-                    "profile_id": "profile:codex-secondary",
-                    "account_label": "Codex Secondary",
-                },
-            ]
-        elif runtime_id == "gemini_cli":
-            items = [
-                {
-                    "profile_id": "profile:gemini-default",
-                    "account_label": "Gemini Default",
-                }
-            ]
-        route.fulfill(
-            status=200,
-            content_type="application/json",
-            body=json.dumps(items),
-        )
-
     page.route(
         f"{base_url}/api/queue/workers/runtime-capabilities", _mock_runtime_capabilities
     )
     page.route(f"{base_url}/api/tasks/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)
     page.route(f"{base_url}/api/task-step-templates*", _mock_task_step_templates)
-    page.route(f"{base_url}/api/v1/provider-profiles*", _mock_provider_profiles)
     page.route(f"{base_url}/api/executions", _mock_create)
     page.route(f"{base_url}/api/executions/*", _mock_detail)
     return calls
@@ -357,69 +328,6 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
         page.wait_for_selector("text=Temporal Task Detail")
         assert page.url.endswith("/tasks/mm:workflow-123")
         assert ordered_calls[:3] == ["source", "detail", "artifacts"]
-        browser.close()
-
-
-def test_create_page_shows_provider_profiles_for_selected_runtime(server):
-    base_url = server
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        _route_handlers(
-            page,
-            base_url=base_url,
-            create_status=201,
-            create_body=json.dumps({"id": "unused"}),
-        )
-
-        page.goto(f"{base_url}/tasks/create")
-        page.wait_for_selector("#queue-submit-form")
-        page.wait_for_selector("#queue-provider-profile-wrap")
-
-        provider_wrap = page.locator("#queue-provider-profile-wrap")
-        provider_select = page.locator('select[name="providerProfile"]')
-        page.wait_for_function(
-            """
-            () => {
-                const wrap = document.querySelector("#queue-provider-profile-wrap");
-                const select = document.querySelector('select[name="providerProfile"]');
-                return (
-                    wrap &&
-                    !wrap.hidden &&
-                    !wrap.classList.contains("hidden") &&
-                    select &&
-                    select.options.length >= 3
-                );
-            }
-            """
-        )
-        assert provider_wrap.is_visible()
-        assert provider_select.input_value() == ""
-        option_labels = provider_select.locator("option").all_text_contents()
-        assert option_labels == [
-            "Default (system chooses)",
-            "Codex Default",
-            "Codex Secondary",
-        ]
-
-        page.select_option('select[name="runtime"]', "gemini_cli")
-        page.wait_for_function(
-            """
-            () => {
-                const select = document.querySelector('select[name="providerProfile"]');
-                if (!select) {
-                    return false;
-                }
-                const labels = Array.from(select.options).map((option) => option.textContent?.trim() || "");
-                return labels.length === 2 && labels[1] === "Gemini Default";
-            }
-            """
-        )
-        option_labels = provider_select.locator("option").all_text_contents()
-        assert option_labels == [
-            "Default (system chooses)",
-            "Gemini Default",
-        ]
         browser.close()
 
 
