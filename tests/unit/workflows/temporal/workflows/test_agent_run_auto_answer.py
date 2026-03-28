@@ -10,7 +10,6 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     _EXTERNAL_STATUS_TO_RUN_STATUS,
 )
 
-pytestmark = [pytest.mark.asyncio]
 
 
 # --- T021: RunStatus has awaiting_feedback ---
