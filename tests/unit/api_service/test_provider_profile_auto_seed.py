@@ -81,10 +81,10 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
-    """Seeding should be skipped when MOONMIND_SKIP_AUTH_PROFILE_SEED is set."""
+    """Seeding should be skipped when MOONMIND_SKIP_PROVIDER_PROFILE_SEED is set."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.setenv("MOONMIND_SKIP_AUTH_PROFILE_SEED", "true")
+    monkeypatch.setenv("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "true")
     seeded = await _auto_seed_provider_profiles()
     assert seeded == []
 

@@ -1,7 +1,7 @@
 """Singleton per-runtime-family auth profile manager workflow.
 
 Each managed agent runtime family (gemini_cli, claude_code, codex_cli) gets its
-own long-lived AuthProfileManager workflow instance. The manager owns the truth
+own long-lived ProviderProfileManager workflow instance. The manager owns the truth
 about slot leases — which profiles have available capacity and which are in
 cooldown — and assigns slots to AgentRun workflows via Temporal Signals.
 
@@ -25,7 +25,7 @@ from temporalio import exceptions, workflow
 with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
 
-WORKFLOW_NAME = "MoonMind.AuthProfileManager"
+WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class AuthProfileManagerInput(TypedDict, total=False):
+class ProviderProfileManagerInput(TypedDict, total=False):
     """Input payload for starting or continuing the manager."""
 
     runtime_id: str
@@ -54,7 +54,7 @@ class AuthProfileManagerInput(TypedDict, total=False):
     pending_requests: list[dict[str, str]]
 
 
-class AuthProfileManagerOutput(TypedDict):
+class ProviderProfileManagerOutput(TypedDict):
     status: str
     runtime_id: Optional[str]
 
@@ -201,7 +201,7 @@ class PendingRequest:
 
 
 @workflow.defn(name=WORKFLOW_NAME)
-class MoonMindAuthProfileManagerWorkflow:
+class MoonMindProviderProfileManagerWorkflow:
     """Per-runtime-family singleton that manages auth profile slot leases.
 
     The manager:
@@ -333,7 +333,7 @@ class MoonMindAuthProfileManagerWorkflow:
     @workflow.run
     async def run(
         self, input_payload: dict[str, Any]
-    ) -> AuthProfileManagerOutput:
+    ) -> ProviderProfileManagerOutput:
         self._runtime_id = input_payload.get("runtime_id")
         if not self._runtime_id:
             raise exceptions.ApplicationError(
@@ -396,7 +396,7 @@ class MoonMindAuthProfileManagerWorkflow:
                 # Expected: Periodic wake-up to clear expired cooldowns.
                 pass
 
-        return AuthProfileManagerOutput(
+        return ProviderProfileManagerOutput(
             status="shutdown",
             runtime_id=self._runtime_id,
         )
@@ -614,7 +614,7 @@ class MoonMindAuthProfileManagerWorkflow:
 
         try:
             result = await workflow.execute_activity(
-                "auth_profile.verify_lease_holders",
+                "provider_profile.verify_lease_holders",
                 {"workflow_ids": all_wf_ids},
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=30),
@@ -714,7 +714,7 @@ class MoonMindAuthProfileManagerWorkflow:
         """Load auth profiles for this runtime from the database via activity."""
         try:
             result = await workflow.execute_activity(
-                "auth_profile.list",
+                "provider_profile.list",
                 {"runtime_id": self._runtime_id},
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=30),
@@ -743,7 +743,7 @@ class MoonMindAuthProfileManagerWorkflow:
                         "granted_at": profile.lease_granted_at.get(wf_id),
                     })
             await workflow.execute_activity(
-                "auth_profile.sync_slot_leases",
+                "provider_profile.sync_slot_leases",
                 {"runtime_id": self._runtime_id, "leases": leases, "action": "save"},
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=10),
@@ -765,7 +765,7 @@ class MoonMindAuthProfileManagerWorkflow:
         """Remove a single lease from the database."""
         try:
             await workflow.execute_activity(
-                "auth_profile.sync_slot_leases",
+                "provider_profile.sync_slot_leases",
                 {
                     "runtime_id": self._runtime_id,
                     "leases": [{"workflow_id": workflow_id}],
@@ -796,7 +796,7 @@ class MoonMindAuthProfileManagerWorkflow:
         """
         try:
             result = await workflow.execute_activity(
-                "auth_profile.sync_slot_leases",
+                "provider_profile.sync_slot_leases",
                 {"runtime_id": self._runtime_id, "action": "load"},
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=30),

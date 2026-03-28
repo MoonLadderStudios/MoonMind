@@ -6,12 +6,12 @@ This adapter fulfils the core requirements of Phase 5
 
 Key responsibilities:
  - Resolve the ``execution_profile_ref`` on an ``AgentExecutionRequest`` to a
-   concrete ``ManagedAgentAuthProfile`` dict returned by the
-   ``auth_profile.list`` activity.
+   concrete ``ManagedAgentProviderProfile`` dict returned by the
+   ``provider_profile.list`` activity.
  - Shape the environment for OAuth (volume-mount) and API-key modes.
    Credentials are never stored in workflow payloads; only ``profile_id`` is
    persisted in ``AgentRunHandle.metadata``.
- - Signal ``AuthProfileManager`` to request / release slot leases and to send
+ - Signal ``ProviderProfileManager`` to request / release slot leases and to send
    cooldown reports on 429 responses.
  - Maintain the ``slot_assigned`` wait loop internally (DOC-REQ-004).
 
@@ -143,16 +143,16 @@ class ManagedAgentAdapter:
     ----------
     profile_fetcher:
         Async callable: ``profile_fetcher(runtime_id=...) -> list[dict]``.
-        Typically backed by the ``auth_profile.list`` Temporal activity.
+        Typically backed by the ``provider_profile.list`` Temporal activity.
     slot_requester:
-        Async callable that signals the AuthProfileManager to request a slot.
+        Async callable that signals the ProviderProfileManager to request a slot.
     slot_releaser:
-        Async callable that signals the AuthProfileManager to release a slot.
+        Async callable that signals the ProviderProfileManager to release a slot.
     cooldown_reporter:
-        Async callable that signals the AuthProfileManager about a 429 event.
+        Async callable that signals the ProviderProfileManager about a 429 event.
     workflow_id:
         Temporal workflow ID of the *current* AgentRun workflow.  Used in
-        slot-request/release signals so the AuthProfileManager can correlate
+        slot-request/release signals so the ProviderProfileManager can correlate
         requests to callers.
     run_launcher:
         Optional async callable that launches the managed agent process via an activity.
@@ -497,7 +497,7 @@ class ManagedAgentAdapter:
     # ------------------------------------------------------------------
 
     async def release_slot(self) -> None:
-        """Signal AuthProfileManager to release the active slot lease."""
+        """Signal ProviderProfileManager to release the active slot lease."""
         if self._active_profile_id is None:
             logger.warning(
                 "release_slot called but no active profile_id on %s",
@@ -521,7 +521,7 @@ class ManagedAgentAdapter:
         profile_id: str | None = None,
         cooldown_seconds: int = 300,
     ) -> None:
-        """Report a 429 rate-limit hit to the AuthProfileManager (DOC-REQ-009).
+        """Report a 429 rate-limit hit to the ProviderProfileManager (DOC-REQ-009).
 
         Parameters
         ----------

@@ -1,13 +1,13 @@
-"""Unit tests for MoonMind.AuthProfileManager workflow."""
+"""Unit tests for MoonMind.ProviderProfileManager workflow."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     WORKFLOW_NAME,
-    MoonMindAuthProfileManagerWorkflow,
+    MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
 )
 
@@ -145,9 +145,9 @@ class TestProfileSlotState:
 # ---------------------------------------------------------------------------
 
 
-class TestAuthProfileManagerHelpers:
-    def _make_workflow(self) -> MoonMindAuthProfileManagerWorkflow:
-        wf = MoonMindAuthProfileManagerWorkflow()
+class TestProviderProfileManagerHelpers:
+    def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
+        wf = MoonMindProviderProfileManagerWorkflow()
         wf._runtime_id = "gemini_cli"
         return wf
 
@@ -368,7 +368,7 @@ class TestAuthProfileManagerHelpers:
 
         # Mock workflow.now() to return current time.
         with patch(
-            "moonmind.workflows.temporal.workflows.auth_profile_manager.workflow"
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.now.return_value = datetime.now(timezone.utc)
             wf._clear_expired_cooldowns()
@@ -387,7 +387,7 @@ class TestAuthProfileManagerHelpers:
             cooldown_until="not-a-date",
         )
         with patch(
-            "moonmind.workflows.temporal.workflows.auth_profile_manager.workflow"
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.now.return_value = datetime.now(timezone.utc)
             wf._clear_expired_cooldowns()
@@ -400,13 +400,13 @@ class TestAuthProfileManagerHelpers:
 
 
 def test_workflow_name():
-    assert WORKFLOW_NAME == "MoonMind.AuthProfileManager"
+    assert WORKFLOW_NAME == "MoonMind.ProviderProfileManager"
 
 
 def test_registered_workflow_types():
     from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
-    assert "MoonMind.AuthProfileManager" in REGISTERED_TEMPORAL_WORKFLOW_TYPES
+    assert "MoonMind.ProviderProfileManager" in REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +417,7 @@ def test_registered_workflow_types():
 def test_temporal_workflow_type_enum():
     from api_service.db.models import TemporalWorkflowType
 
-    assert TemporalWorkflowType.AUTH_PROFILE_MANAGER.value == "MoonMind.AuthProfileManager"
+    assert TemporalWorkflowType.PROVIDER_PROFILE_MANAGER.value == "MoonMind.ProviderProfileManager"
 
 
 def test_provider_profile_credential_source_enum():
@@ -440,24 +440,24 @@ def test_managed_agent_rate_limit_policy_enum():
 # ---------------------------------------------------------------------------
 
 
-def test_auth_profile_list_activity_in_catalog():
+def test_provider_profile_list_activity_in_catalog():
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
     )
 
     catalog = build_default_activity_catalog()
-    route = catalog.resolve_activity("auth_profile.list")
+    route = catalog.resolve_activity("provider_profile.list")
     assert route.task_queue == "mm.activity.artifacts"
     assert route.fleet == "artifacts"
 
 
-def test_auth_profile_sync_slot_leases_in_catalog():
+def test_provider_profile_sync_slot_leases_in_catalog():
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
     )
 
     catalog = build_default_activity_catalog()
-    route = catalog.resolve_activity("auth_profile.sync_slot_leases")
+    route = catalog.resolve_activity("provider_profile.sync_slot_leases")
     assert route.task_queue == "mm.activity.artifacts"
     assert route.fleet == "artifacts"
 
@@ -468,10 +468,10 @@ def test_auth_profile_sync_slot_leases_in_catalog():
 
 
 class TestDBLeaseSync:
-    """Tests for DB lease sync logic in the AuthProfileManager workflow."""
+    """Tests for DB lease sync logic in the ProviderProfileManager workflow."""
 
-    def _make_workflow(self) -> MoonMindAuthProfileManagerWorkflow:
-        wf = MoonMindAuthProfileManagerWorkflow()
+    def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
+        wf = MoonMindProviderProfileManagerWorkflow()
         wf._runtime_id = "gemini_cli"
         return wf
 
@@ -491,7 +491,7 @@ class TestDBLeaseSync:
 
     def test_sync_leases_includes_granted_at(self):
         """_sync_leases_to_db should include granted_at in payloads."""
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             DB_LEASE_PERSISTENCE_PATCH,
         )
 
@@ -529,7 +529,7 @@ class TestDBLeaseSync:
         wf._profiles["p1"].max_lease_duration_seconds = 3600  # 1 hour
 
         with patch(
-            "moonmind.workflows.temporal.workflows.auth_profile_manager.workflow"
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.now.return_value = datetime.now(timezone.utc)
             count = wf._evict_expired_leases()
@@ -547,7 +547,7 @@ class TestDBLeaseSync:
         )
 
         with patch(
-            "moonmind.workflows.temporal.workflows.auth_profile_manager.workflow"
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
         ) as mock_wf:
             mock_wf.now.return_value = datetime.now(timezone.utc)
             count = wf._evict_expired_leases()
@@ -599,18 +599,18 @@ class TestDBLeaseSync:
 
     def test_patch_constant_exists(self):
         """Verify DB_LEASE_PERSISTENCE_PATCH is properly defined."""
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             DB_LEASE_PERSISTENCE_PATCH,
         )
         assert DB_LEASE_PERSISTENCE_PATCH == "auth-profile-manager-db-lease-persistence-v1"
 
 
 # ---------------------------------------------------------------------------
-# Activity-side: auth_profile_sync_slot_leases
+# Activity-side: provider_profile_sync_slot_leases
 # ---------------------------------------------------------------------------
 
 
-class TestAuthProfileSyncSlotLeasesActivity:
+class TestProviderProfileSyncSlotLeasesActivity:
     """Tests for the sync_slot_leases activity logic (without real DB)."""
 
     def test_save_snapshot_instructs_full_replacement(self):
@@ -629,7 +629,7 @@ class TestAuthProfileSyncSlotLeasesActivity:
         from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
         source = inspect.getsource(
-            TemporalArtifactActivities.auth_profile_sync_slot_leases
+            TemporalArtifactActivities.provider_profile_sync_slot_leases
         )
         # Verify the snapshot pattern: runtime-wide delete before insert
         assert "ProviderProfileSlotLease.runtime_id == runtime_id" in source
@@ -648,7 +648,7 @@ class TestAuthProfileSyncSlotLeasesActivity:
         from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
         source = inspect.getsource(
-            TemporalArtifactActivities.auth_profile_sync_slot_leases
+            TemporalArtifactActivities.provider_profile_sync_slot_leases
         )
         # In the save branch, granted_at_str should be read from lease
         assert 'lease.get("granted_at")' in source
@@ -661,7 +661,7 @@ class TestAuthProfileSyncSlotLeasesActivity:
         from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
         source = inspect.getsource(
-            TemporalArtifactActivities.auth_profile_sync_slot_leases
+            TemporalArtifactActivities.provider_profile_sync_slot_leases
         )
         # Load should return granted_at from the DB row
         assert '"granted_at"' in source
@@ -670,6 +670,6 @@ class TestAuthProfileSyncSlotLeasesActivity:
 
 def test_verify_lease_holders_exists():
     """Ensure the workflow exposes the expected API."""
-    assert hasattr(MoonMindAuthProfileManagerWorkflow, "_verify_lease_holders")
-    verify_lease_holders = getattr(MoonMindAuthProfileManagerWorkflow, "_verify_lease_holders")
+    assert hasattr(MoonMindProviderProfileManagerWorkflow, "_verify_lease_holders")
+    verify_lease_holders = getattr(MoonMindProviderProfileManagerWorkflow, "_verify_lease_holders")
     assert callable(verify_lease_holders)

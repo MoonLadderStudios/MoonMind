@@ -2160,7 +2160,7 @@ class TemporalArtifactActivities:
             principal=principal,
         )
 
-    async def auth_profile_list(
+    async def provider_profile_list(
         self,
         *,
         runtime_id: str,
@@ -2168,11 +2168,11 @@ class TemporalArtifactActivities:
         """List enabled auth profiles for a runtime family.
 
         Returns a dict with a ``profiles`` key containing a list of profile
-        dicts suitable for the AuthProfileManager workflow.
+        dicts suitable for the ProviderProfileManager workflow.
 
         Uses the existing DB session from the repository.  The caller
-        (AuthProfileManager workflow) expects the keys defined in
-        ``ManagedAgentAuthProfile`` schema (DOC-REQ-010).
+        (ProviderProfileManager workflow) expects the keys defined in
+        ``ManagedAgentProviderProfile`` schema (DOC-REQ-010).
         """
         from sqlalchemy import select
 
@@ -2219,12 +2219,12 @@ class TemporalArtifactActivities:
 
         return {"profiles": profiles}
 
-    async def auth_profile_ensure_manager(
+    async def provider_profile_ensure_manager(
         self,
         *,
         runtime_id: str,
     ) -> dict[str, Any]:
-        """Ensure the AuthProfileManager workflow is running for *runtime_id*.
+        """Ensure the ProviderProfileManager workflow is running for *runtime_id*.
 
         Starts the singleton ``auth-profile-manager:<runtime_id>`` workflow if
         it is not already running.  Handles ``WorkflowAlreadyStartedError``
@@ -2233,9 +2233,9 @@ class TemporalArtifactActivities:
         from temporalio.exceptions import WorkflowAlreadyStartedError
 
         from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
-            WORKFLOW_NAME as AUTH_PROFILE_MANAGER_WF,
-            WORKFLOW_TASK_QUEUE as AUTH_PROFILE_MANAGER_QUEUE,
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
+            WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
         )
 
         workflow_id = f"auth-profile-manager:{runtime_id}"
@@ -2244,29 +2244,29 @@ class TemporalArtifactActivities:
 
         try:
             await client.start_workflow(
-                AUTH_PROFILE_MANAGER_WF,
+                PROVIDER_PROFILE_MANAGER_WF,
                 {"runtime_id": runtime_id},
                 id=workflow_id,
-                task_queue=AUTH_PROFILE_MANAGER_QUEUE,
+                task_queue=PROVIDER_PROFILE_MANAGER_QUEUE,
             )
             logger.info(
-                "auth_profile.ensure_manager started manager for runtime=%s",
+                "provider_profile.ensure_manager started manager for runtime=%s",
                 runtime_id,
             )
             return {"started": True, "workflow_id": workflow_id}
         except WorkflowAlreadyStartedError:
             logger.debug(
-                "auth_profile.ensure_manager manager already running for runtime=%s",
+                "provider_profile.ensure_manager manager already running for runtime=%s",
                 runtime_id,
             )
             return {"started": False, "workflow_id": workflow_id}
 
-    async def auth_profile_reset_manager(
+    async def provider_profile_reset_manager(
         self,
         *,
         runtime_id: str,
     ) -> dict[str, Any]:
-        """Terminate and restart the AuthProfileManager for *runtime_id*.
+        """Terminate and restart the ProviderProfileManager for *runtime_id*.
 
         Used by AgentRun when the manager appears stuck (e.g. nondeterminism
         error causing workflow task failures). Terminates the existing manager
@@ -2276,9 +2276,9 @@ class TemporalArtifactActivities:
         from temporalio.service import RPCError
 
         from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
-            WORKFLOW_NAME as AUTH_PROFILE_MANAGER_WF,
-            WORKFLOW_TASK_QUEUE as AUTH_PROFILE_MANAGER_QUEUE,
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
+            WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
         )
 
         workflow_id = f"auth-profile-manager:{runtime_id}"
@@ -2290,29 +2290,29 @@ class TemporalArtifactActivities:
             handle = client.get_workflow_handle(workflow_id)
             await handle.terminate(reason="Reset by AgentRun: manager appeared stuck")
             logger.info(
-                "auth_profile.reset_manager terminated stale manager for runtime=%s",
+                "provider_profile.reset_manager terminated stale manager for runtime=%s",
                 runtime_id,
             )
         except RPCError:
             logger.debug(
-                "auth_profile.reset_manager no running manager to terminate for runtime=%s",
+                "provider_profile.reset_manager no running manager to terminate for runtime=%s",
                 runtime_id,
             )
 
         # Start a fresh manager.
         await client.start_workflow(
-            AUTH_PROFILE_MANAGER_WF,
+            PROVIDER_PROFILE_MANAGER_WF,
             {"runtime_id": runtime_id},
             id=workflow_id,
-            task_queue=AUTH_PROFILE_MANAGER_QUEUE,
+            task_queue=PROVIDER_PROFILE_MANAGER_QUEUE,
         )
         logger.info(
-            "auth_profile.reset_manager started fresh manager for runtime=%s",
+            "provider_profile.reset_manager started fresh manager for runtime=%s",
             runtime_id,
         )
         return {"reset": True, "workflow_id": workflow_id}
 
-    async def auth_profile_verify_lease_holders(
+    async def provider_profile_verify_lease_holders(
         self,
         *,
         workflow_ids: list[str],
@@ -2320,7 +2320,7 @@ class TemporalArtifactActivities:
         """Check whether each lease-holding workflow is still running.
 
         Uses the Temporal client to describe each workflow and determine if it
-        is in a terminal state. This allows the AuthProfileManager to reclaim
+        is in a terminal state. This allows the ProviderProfileManager to reclaim
         slots from cancelled/terminated workflows without waiting for the
         2-hour lease timeout.
 
@@ -2360,7 +2360,7 @@ class TemporalArtifactActivities:
                 # the workflow is still running to prevent incorrect
                 # slot reassignment.
                 logger.warning(
-                    "auth_profile.verify_lease_holders failed to describe %s: %s",
+                    "provider_profile.verify_lease_holders failed to describe %s: %s",
                     wf_id,
                     exc,
                 )
@@ -2368,7 +2368,7 @@ class TemporalArtifactActivities:
 
         return results
 
-    async def auth_profile_sync_slot_leases(
+    async def provider_profile_sync_slot_leases(
         self,
         *,
         runtime_id: str,
@@ -2386,7 +2386,7 @@ class TemporalArtifactActivities:
         **remove action**: Removes a specific lease by workflow_id.
             Returns {"removed": True}
 
-        This enables the AuthProfileManager to recover lease state after a crash,
+        This enables the ProviderProfileManager to recover lease state after a crash,
         rather than starting with empty state and orphaning all running workflows.
         """
         from datetime import datetime, timezone

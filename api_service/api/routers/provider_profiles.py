@@ -348,4 +348,4 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     }
 
 
-from api_service.services.auth_profile_service import sync_provider_profile_manager
+from api_service.services.provider_profile_service import sync_provider_profile_manager

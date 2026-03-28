@@ -813,7 +813,7 @@ class TemporalWorkflowType(str, enum.Enum):
 
     RUN = "MoonMind.Run"
     MANIFEST_INGEST = "MoonMind.ManifestIngest"
-    AUTH_PROFILE_MANAGER = "MoonMind.AuthProfileManager"
+    PROVIDER_PROFILE_MANAGER = "MoonMind.ProviderProfileManager"
 
 
 class MoonMindWorkflowState(str, enum.Enum):

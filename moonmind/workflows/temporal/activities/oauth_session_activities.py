@@ -263,8 +263,8 @@ async def oauth_session_register_profile(
 
     async with get_async_session_context() as db:
         from sqlalchemy.future import select
-        from api_service.db.models import ManagedAgentAuthProfile, ManagedAgentRateLimitPolicy, ManagedAgentAuthMode
-        from api_service.services.auth_profile_service import sync_auth_profile_manager
+        from api_service.db.models import ManagedAgentProviderProfile, ManagedAgentRateLimitPolicy, ManagedAgentAuthMode
+        from api_service.services.provider_profile_service import sync_provider_profile_manager
 
         result = await db.execute(
             select(ManagedAgentOAuthSession).where(
@@ -276,8 +276,8 @@ async def oauth_session_register_profile(
             raise ValueError(f"Session {session_id} not found")
 
         profile_result = await db.execute(
-            select(ManagedAgentAuthProfile).where(
-                ManagedAgentAuthProfile.profile_id == session_obj.profile_id
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.profile_id == session_obj.profile_id
             )
         )
         existing_profile = profile_result.scalars().first()
@@ -309,7 +309,7 @@ async def oauth_session_register_profile(
                 owner_id = UUID(session_obj.requested_by_user_id) if session_obj.requested_by_user_id else None
             except ValueError:
                 owner_id = None
-            new_profile = ManagedAgentAuthProfile(
+            new_profile = ManagedAgentProviderProfile(
                 profile_id=session_obj.profile_id,
                 owner_user_id=owner_id,
                 **profile_data
@@ -317,7 +317,7 @@ async def oauth_session_register_profile(
             db.add(new_profile)
 
         await db.commit()
-        await sync_auth_profile_manager(session=db, runtime_id=session_obj.runtime_id)
+        await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
 
     logger.info("Registered profile %s for session %s", session_obj.profile_id, session_id)
     return {"session_id": session_id, "profile_id": session_obj.profile_id, "status": "registered"}

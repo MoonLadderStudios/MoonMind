@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 WORKFLOW_ENTRY_BY_TYPE = {
     TemporalWorkflowType.RUN: "run",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
-    TemporalWorkflowType.AUTH_PROFILE_MANAGER: "auth_profile",
+    TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
 
 
