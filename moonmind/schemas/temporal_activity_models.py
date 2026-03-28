@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Annotated
-
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PlainValidator
 
@@ -114,7 +112,9 @@ class PlanGenerateInput(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    principal: str = Field(..., description="The principal requesting the plan generation.")
+    principal: str = Field(
+        ..., description="The principal requesting the plan generation."
+    )
     inputs_ref: str | ArtifactRefModel | None = Field(
         default=None,
         description="The artifact ID or an artifact reference dict/model for inputs.",

@@ -532,17 +532,22 @@ class MoonMindRunWorkflow:
             return plan_ref
 
         plan_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.generate")
-        plan_payload_args = PlanGenerateInput(
-            principal=self._principal(),
-            inputs_ref=input_ref,
-            parameters=parameters,
-            execution_ref={
+        plan_kwargs: dict[str, Any] = {
+            "principal": self._principal(),
+            "inputs_ref": input_ref,
+            "parameters": parameters,
+            "execution_ref": {
                 "namespace": workflow.info().namespace,
                 "workflow_id": workflow.info().workflow_id,
                 "run_id": workflow.info().run_id,
                 "link_type": "plan",
             },
-            idempotency_key=f"{workflow.info().workflow_id}_plan_generate" if workflow.patched("idempotency_key_phase3") else None,
+        }
+        if workflow.patched("idempotency_key_phase3"):
+            plan_kwargs["idempotency_key"] = f"{workflow.info().workflow_id}_plan_generate"
+
+        plan_payload_args = PlanGenerateInput.model_validate(plan_kwargs).model_dump(
+            exclude_unset=True, by_alias=True
         )
 
         plan_result = await execute_typed_activity(
