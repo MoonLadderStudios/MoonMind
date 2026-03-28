@@ -1516,8 +1516,12 @@ class TemporalArtifactService:
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self._presign_ttl_seconds)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
-            is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
-            download_filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
+            is_json = (artifact.content_type or "").split(";", 1)[
+                0
+            ].strip().lower() == "application/json"
+            download_filename = (
+                f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
+            )
             url = self._store.presign_download(
                 storage_key=artifact.storage_key,
                 expires_in_seconds=self._presign_ttl_seconds,
@@ -1938,10 +1942,48 @@ class TemporalArtifactActivities:
 
     async def artifact_read(
         self,
+        request: Mapping[str, Any] | Any | None = None,
+        /,
         *,
-        artifact_ref: ArtifactRef | Mapping[str, Any] | str,
-        principal: str,
+        artifact_ref: ArtifactRef | Mapping[str, Any] | str | None = None,
+        principal: str | None = None,
     ) -> bytes:
+        from moonmind.schemas.temporal_activity_models import ArtifactReadInput
+
+        if request is not None and isinstance(request, ArtifactReadInput):
+            # Model fast path
+            if principal is None:
+                principal = request.principal
+            if artifact_ref is None:
+                artifact_ref = getattr(
+                    request.artifact_ref, "artifact_id", request.artifact_ref
+                )
+
+        if isinstance(request, Mapping):
+            try:
+                # Validate legacy dictionary through the new model
+                model = ArtifactReadInput.model_validate(request)
+                if principal is None:
+                    principal = model.principal
+                if artifact_ref is None:
+                    artifact_ref = getattr(
+                        model.artifact_ref, "artifact_id", model.artifact_ref
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to parse artifact.read legacy payload as ArtifactReadInput: %s",
+                    e,
+                )
+                if principal is None:
+                    principal = request.get("principal")
+                if artifact_ref is None:
+                    artifact_ref = request.get("artifact_ref")
+
+        if artifact_ref is None:
+            raise TemporalArtifactValidationError("artifact_ref is required")
+        if not principal:
+            raise TemporalArtifactValidationError("principal is required")
+
         _artifact, payload = await self._service.read(
             artifact_id=self._normalize_activity_artifact_id(artifact_ref),
             principal=principal,
@@ -1950,12 +1992,60 @@ class TemporalArtifactActivities:
 
     async def artifact_write_complete(
         self,
+        request: Mapping[str, Any] | Any | None = None,
+        /,
         *,
-        artifact_id: str,
-        payload: bytes | str | list[int],
-        principal: str,
+        artifact_id: str | None = None,
+        payload: bytes | str | list[int] | None = None,
+        principal: str | None = None,
         content_type: str | None = None,
     ) -> ArtifactRef:
+        from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
+
+        if request is not None and isinstance(request, ArtifactWriteCompleteInput):
+            # Model fast path
+            if principal is None:
+                principal = request.principal
+            if artifact_id is None:
+                artifact_id = request.artifact_id
+            if payload is None:
+                payload = request.payload
+            if content_type is None:
+                content_type = request.content_type
+
+        if isinstance(request, Mapping):
+            try:
+                # Validate legacy dictionary through the new model
+                model = ArtifactWriteCompleteInput.model_validate(request)
+                if principal is None:
+                    principal = model.principal
+                if artifact_id is None:
+                    artifact_id = model.artifact_id
+                if payload is None:
+                    payload = model.payload
+                if content_type is None:
+                    content_type = model.content_type
+            except Exception as e:
+                logger.warning(
+                    "Failed to parse artifact.write_complete legacy payload as ArtifactWriteCompleteInput: %s",
+                    e,
+                )
+                if principal is None:
+                    principal = request.get("principal")
+                if artifact_id is None:
+                    artifact_id = request.get("artifact_id")
+                if payload is None:
+                    payload = request.get("payload")
+                if content_type is None and "content_type" in request:
+                    content_type = request.get("content_type")
+
+        if not artifact_id:
+            raise TemporalArtifactValidationError("artifact_id is required")
+        if payload is None:
+            raise TemporalArtifactValidationError("payload is required")
+        if not principal:
+            raise TemporalArtifactValidationError("principal is required")
+
         if isinstance(payload, str):
             payload = payload.encode("utf-8")
         elif isinstance(payload, list):
@@ -2100,7 +2190,9 @@ class TemporalArtifactActivities:
                     "provider_id": row.provider_id,
                     "tags": row.tags or [],
                     "priority": row.priority,
-                    "auth_mode": "oauth" if row.credential_source.value == "oauth_volume" else "api_key",
+                    "auth_mode": "oauth"
+                    if row.credential_source.value == "oauth_volume"
+                    else "api_key",
                     "credential_source": row.credential_source.value,
                     "runtime_materialization_mode": row.runtime_materialization_mode.value,
                     "volume_ref": row.volume_ref,
@@ -2253,7 +2345,10 @@ class TemporalArtifactActivities:
                 else:
                     # Transient RPC errors (UNAVAILABLE, DEADLINE_EXCEEDED, etc.)
                     # should NOT cause slot release — assume still running.
-                    results[wf_id] = {"running": True, "status": f"RPC_ERROR_{exc.status.name}"}
+                    results[wf_id] = {
+                        "running": True,
+                        "status": f"RPC_ERROR_{exc.status.name}",
+                    }
             except Exception as exc:
                 # Unknown errors should NOT cause slot release — assume
                 # the workflow is still running to prevent incorrect
@@ -2306,7 +2401,9 @@ class TemporalArtifactActivities:
                     {
                         "workflow_id": row.workflow_id,
                         "profile_id": row.profile_id,
-                        "granted_at": row.granted_at.isoformat() if row.granted_at else None,
+                        "granted_at": row.granted_at.isoformat()
+                        if row.granted_at
+                        else None,
                     }
                     for row in rows
                 ]
@@ -2323,7 +2420,7 @@ class TemporalArtifactActivities:
                     )
                 )
                 saved_count = 0
-                for lease in (leases or []):
+                for lease in leases or []:
                     workflow_id = lease.get("workflow_id")
                     profile_id = lease.get("profile_id")
                     if not workflow_id or not profile_id:

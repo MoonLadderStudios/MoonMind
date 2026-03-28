@@ -27,7 +27,7 @@ from .temporal_artifact_models import ArtifactRefModel
 
 def _decode_b64(v: str | bytes | list[int]) -> bytes:
     """Safely decode base64 strings, raw bytes, or legacy list[int] to bytes.
-    
+
     The list[int] fallback supports in-flight histories where the Temporal JSON
     serializer previously encoded raw bytes as an integer array.
     """
@@ -39,7 +39,11 @@ def _decode_b64(v: str | bytes | list[int]) -> bytes:
         validated: list[int] = []
         for idx, item in enumerate(v):
             # Reject non-ints (including bools) and out-of-range values.
-            if not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255:
+            if (
+                not isinstance(item, int)
+                or isinstance(item, bool)
+                or not 0 <= item <= 255
+            ):
                 raise ValueError(
                     "Expected list[int] with values in range 0-255; "
                     f"found invalid element at index {idx}: {item!r}"
@@ -55,9 +59,11 @@ def _decode_b64(v: str | bytes | list[int]) -> bytes:
             return v.encode("utf-8")
     raise ValueError(f"Expected base64 string, bytes, or list[int]; got {type(v)}")
 
+
 def _encode_b64(b: bytes) -> str:
     """Encode bytes to base64 string for safe JSON serialization."""
     return base64.b64encode(b).decode("ascii")
+
 
 # A specialized type for binary fields at the Temporal activity boundary.
 # It guarantees that Pydantic will serialize the bytes to a base64 string,
@@ -114,7 +120,9 @@ class PlanGenerateInput(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    principal: str = Field(..., description="The principal requesting the plan generation.")
+    principal: str = Field(
+        ..., description="The principal requesting the plan generation."
+    )
     inputs_ref: str | ArtifactRefModel | None = Field(
         default=None,
         description="The artifact ID or an artifact reference dict/model for inputs.",
