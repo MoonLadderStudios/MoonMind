@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunState,
+    FailureClass as RuntimeFailureClass,
+)
 from moonmind.workflows.temporal.runtime.output_parser import (
     ParsedOutput,
     PlainTextOutputParser,
@@ -25,8 +29,8 @@ from moonmind.workflows.temporal.runtime.self_heal import FailureClass, is_failu
 class ManagedRuntimeExitResult:
     """Structured managed-runtime exit classification."""
 
-    status: str
-    failure_class: str | None
+    status: AgentRunState
+    failure_class: RuntimeFailureClass | None
     provider_error_code: str | None = None
 
 

@@ -20,8 +20,6 @@ logger = logging.getLogger(__name__)
 CompletionCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 from moonmind.schemas.agent_runtime_models import (
-    AgentRunState,
-    FailureClass,
     ManagedRunRecord,
 )
 
@@ -29,6 +27,7 @@ from .log_streamer import RuntimeLogStreamer
 from .store import ManagedRunStore
 from .strategies import get_strategy
 from .strategies.base import ManagedRuntimeExitResult
+from .output_parser import ParsedOutput
 
 HEARTBEAT_INTERVAL = 30  # seconds
 GRACEFUL_TERMINATE_WAIT_SECONDS = (
@@ -160,7 +159,7 @@ class ManagedRunSupervisor:
 
             error_message = None
             if status == "failed":
-                if exit_result.provider_error_code == "429":
+                if runtime_id == "gemini_cli" and exit_result.provider_error_code == "429":
                     error_message = "Gemini API rate limit exceeded"
                 else:
                     error_message = f"Process exited with code {exit_code}"
@@ -352,7 +351,7 @@ class ManagedRunSupervisor:
         timed_out: bool,
         stdout: str,
         stderr: str,
-        parsed_output: Any | None = None,
+        parsed_output: ParsedOutput | None = None,
     ) -> ManagedRuntimeExitResult:
         """Classify process exit into a run state and optional failure class."""
 
