@@ -17,7 +17,8 @@ def get_encryption_key() -> str:
     1. settings.security.ENCRYPTION_MASTER_KEY
     2. Docker secret at /run/secrets/moonmind_master_key
     3. Project-local var/secrets/encryption_master_key
-       (If absent, a new key is generated and written here for zero-env startup).
+       (If absent and MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=1, a new key is
+       generated and written here; otherwise resolution fails).
     """
     global _ACTIVE_ENCRYPTION_KEY
     if _ACTIVE_ENCRYPTION_KEY is not None:
