@@ -159,15 +159,27 @@ A `SecretRef` is the durable identifier MoonMind uses to refer to sensitive mate
 
 Provider Profiles, task configuration, and runtime materialization templates may point to `SecretRef` values.
 
-### 5.2 SecretRef Shape
+### 5.2 SecretRef Shape and Validation
 
-The exact schema may evolve, but the contract must preserve these concepts:
+The `SecretRef` contract is represented as a URI string:
 
-- stable secret identifier,
-- backend type,
-- backend-specific locator or lookup key,
-- optional metadata for scoping, ownership, or versioning,
-- no embedded raw secret value.
+`Format: <backend>://<key>`
+
+**Schema:**
+
+- **backend**: The resolution mechanism (e.g., `env`, `db_encrypted`, `exec`).
+- **key**: The backend-specific locator, lookup key, or command reference.
+
+**Validation Rules:**
+
+1. **Format**: Must follow the `<backend>://<key>` URI pattern.
+2. **Backend Allowlist**: The `backend` scheme must be one of the explicitly supported types (`env`, `db_encrypted`, `exec`).
+3. **Key Presence**: The `key` portion must not be empty.
+4. **Backend-Specific Checks**:
+   - For `db_encrypted`, `key` must map to a valid stored secret ID or label (e.g., `db://providers/anthropic/default`).
+   - For `env`, `key` must be a valid environment variable name (e.g., `env://ANTHROPIC_API_KEY`).
+   - For `exec`, `key` must map to an allowlisted command or safe script reference (e.g., `exec://op/read/op://Vault/Item/Password`).
+5. **No Raw Secrets**: The string must not contain embedded raw API keys, passwords, or tokens.
 
 ### 5.3 SecretRef Use Sites
 
@@ -236,7 +248,7 @@ Because this backend executes local commands, it should be disabled by default a
 
 Represents credentials or session state that live in a dedicated mounted runtime volume rather than in the managed secret store.
 
-This is not the same as `db_encrypted`, but it is still part of the overall secrets system because provider profiles need a unified way to describe sensitive credential sources.
+This is an adjacent credential-source adapter rather than a `SecretRef` backend. It shares observability and selection semantics at the Provider Profile level, but does not pass through the string-resolving `SecretRef` pipeline.
 
 ### 6.5 Future Backend Classes
 
@@ -255,11 +267,10 @@ Additional backend types may be added behind the same resolver boundary as long 
 
 For `db_encrypted`, MoonMind must encrypt secret values before persistence using authenticated encryption such as AES-GCM.
 
-The default local-first root-key source is a protected local key file created and managed by MoonMind outside the repo and outside the main application database.
+The baseline local-first root-key source is locked to a protected local key file (e.g., `/var/lib/moonmind/master.key` or `~/.moonmind/master.key`) created and managed by MoonMind outside the repo and outside the main application database.
 
-Operators may override that default with another operator-managed source outside the main application database, such as:
+Operators may override that default using a Docker secret (e.g., `/run/secrets/moonmind_master_key`) or another operator-managed source outside the main application database, such as:
 
-- Docker secret,
 - OS keychain,
 - optional external KMS or Vault integration.
 
@@ -479,10 +490,10 @@ MoonMind should give operators a simple mental model:
 
 The expected first-run onboarding flow is:
 
-1. start MoonMind with `docker compose up -d` and no required `.env` editing,
-2. open Mission Control,
-3. add a small number of secrets such as a model-provider API key and GitHub PAT,
-4. bind those secrets to provider profiles or task settings through normal UI flows, and
+1. start MoonMind with `docker compose up -d` and no required `.env` editing. During startup, MoonMind auto-generates the local `master.key` if it does not exist.
+2. open Mission Control in the browser.
+3. The UI detects an unconfigured baseline and prompts the user to add a small number of secrets (e.g., a model-provider API key and a GitHub PAT).
+4. Upon entry, the API stores these as `db_encrypted` secrets and the UI guides the user to generate default Provider Profiles binding those secret references.
 5. launch workloads successfully without external secret-manager setup.
 
 The UI should show:

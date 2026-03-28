@@ -53,6 +53,8 @@ Implementation should preserve the following:
 
 ### Phase 0. Confirm Contracts and Scope
 
+Status: **Complete**
+
 Outcome:
 
 - Shared agreement on the `SecretRef` contract, backend set, and baseline encryption/key-source approach.
@@ -60,18 +62,18 @@ Outcome:
 
 Tasks:
 
-- Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
-- Lock the baseline `db_encrypted` root key source for local deployments to a protected local key file created outside the repo, with Docker secret as an override path.
-- Decide whether `oauth_volume` remains modeled inside the secrets resolver layer or as an adjacent credential-source adapter with shared observability.
-- Define the initial `SecretRef` schema and validation rules.
-- Define the first-run onboarding UX from compose startup to secret entry in Mission Control.
+- [x] Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
+- [x] Lock the baseline `db_encrypted` root key source for local deployments to a protected local key file created outside the repo, with Docker secret as an override path.
+- [x] Decide whether `oauth_volume` remains modeled inside the secrets resolver layer or as an adjacent credential-source adapter with shared observability.
+- [x] Define the initial `SecretRef` schema and validation rules.
+- [x] Define the first-run onboarding UX from compose startup to secret entry in Mission Control.
 
 Exit criteria:
 
-- Canonical docs agree on terms and boundaries.
-- One baseline local-first key-source approach is selected.
-- The no-`.env` startup expectation is explicit.
-- Initial resolver/backends list is frozen for v1.
+- [x] Canonical docs agree on terms and boundaries.
+- [x] One baseline local-first key-source approach is selected.
+- [x] The no-`.env` startup expectation is explicit.
+- [x] Initial resolver/backends list is frozen for v1.
 
 ### Phase 1. Persistence and Crypto Foundation
 
