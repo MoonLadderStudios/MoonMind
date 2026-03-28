@@ -459,6 +459,14 @@ class ManagedRuntimeLauncher:
                 for k, v in env_overrides.items():
                     if isinstance(v, str) and placeholder in v:
                         env_overrides[k] = v.replace(placeholder, secret_value)
+        api_key_ref = str(env_overrides.get("MANAGED_API_KEY_REF") or "").strip()
+        api_key_target_env = str(env_overrides.get("MANAGED_API_KEY_TARGET_ENV") or "").strip()
+        if api_key_ref and api_key_target_env:
+            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
+
+            env_overrides[api_key_target_env] = await resolve_managed_api_key_reference(
+                api_key_ref
+            )
 
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).

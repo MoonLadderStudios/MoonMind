@@ -782,3 +782,64 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     # Keys specified in clear_env_keys must be stripped
     assert "OPENAI_API_KEY" not in captured_env, "clear_env_keys was ignored; ambient credential leaked"
 
+
+@pytest.mark.asyncio
+async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={
+            "MANAGED_API_KEY_REF": "MINIMAX_API_KEY",
+            "MANAGED_API_KEY_TARGET_ENV": "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            "ANTHROPIC_MODEL": "MiniMax-M2.7",
+        },
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+    request = _make_request()
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1001) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    async def _fake_resolve(secret_name: str) -> str:
+        assert secret_name == "MINIMAX_API_KEY"
+        return "resolved-minimax-token"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    _record, process, _endpoints, _tmate_manager = await launcher.launch(
+        run_id="run-managed-api-key-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    assert captured_env["ANTHROPIC_AUTH_TOKEN"] == "resolved-minimax-token"
+    assert captured_env["MANAGED_API_KEY_REF"] == "MINIMAX_API_KEY"
+    assert captured_env["MANAGED_API_KEY_TARGET_ENV"] == "ANTHROPIC_AUTH_TOKEN"
