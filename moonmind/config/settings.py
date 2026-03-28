@@ -763,6 +763,11 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR"),
         description="Enable startup validation of the configured local skill mirror root.",
     )
+    log_streaming_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_LOG_STREAMING_ENABLED"),
+        description="Enable artifact-backed live log streaming (Phase 0 boundary).",
+    )
     live_session_enabled_default: bool = Field(
         True,
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
