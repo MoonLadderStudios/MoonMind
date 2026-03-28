@@ -365,6 +365,7 @@ class ManagedRunRecord(BaseModel):
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
     error_message: str | None = Field(None, alias="errorMessage")
     failure_class: FailureClass | None = Field(None, alias="failureClass")
+    provider_error_code: str | None = Field(None, alias="providerErrorCode")
 
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedRunRecord":

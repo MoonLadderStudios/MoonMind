@@ -6,9 +6,11 @@ from typing import Any
 
 from moonmind.workflows.temporal.runtime.output_parser import (
     GeminiCliOutputParser,
+    ParsedOutput,
     RuntimeOutputParser,
 )
 from moonmind.workflows.temporal.runtime.strategies.base import (
+    ManagedRuntimeExitResult,
     ManagedRuntimeStrategy,
 )
 
@@ -87,6 +89,28 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
         if exit_code == 0:
             return "completed", None
         return "failed", "execution_error"
+
+    def classify_result(
+        self,
+        *,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        parsed_output: ParsedOutput | None = None,
+    ) -> ManagedRuntimeExitResult:
+        parsed = parsed_output or self.create_output_parser().parse(stdout, stderr)
+        if parsed.rate_limited:
+            return ManagedRuntimeExitResult(
+                status="failed",
+                failure_class="integration_error",
+                provider_error_code="429",
+            )
+        if exit_code == 0:
+            return ManagedRuntimeExitResult(status="completed", failure_class=None)
+        return ManagedRuntimeExitResult(
+            status="failed",
+            failure_class="execution_error",
+        )
 
     def create_output_parser(self) -> RuntimeOutputParser:
         return GeminiCliOutputParser()

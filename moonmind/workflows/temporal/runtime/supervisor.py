@@ -28,6 +28,7 @@ from moonmind.schemas.agent_runtime_models import (
 from .log_streamer import RuntimeLogStreamer
 from .store import ManagedRunStore
 from .strategies import get_strategy
+from .strategies.base import ManagedRuntimeExitResult
 
 HEARTBEAT_INTERVAL = 30  # seconds
 GRACEFUL_TERMINATE_WAIT_SECONDS = (
@@ -146,19 +147,25 @@ class ManagedRunSupervisor:
             )
 
             # Classify exit
-            status, failure_class = self._classify_exit(
+            exit_result = self._classify_exit(
                 runtime_id=runtime_id,
                 exit_code=exit_code,
                 timed_out=timed_out,
                 stdout=stdout_content,
                 stderr=stderr_content,
+                parsed_output=parsed_output,
             )
+            status = exit_result.status
+            failure_class = exit_result.failure_class
 
             error_message = None
             if status == "failed":
-                error_message = f"Process exited with code {exit_code}"
-                if parsed_output.error_messages:
-                    error_message += f": {parsed_output.error_messages[0]}"
+                if exit_result.provider_error_code == "429":
+                    error_message = "Gemini API rate limit exceeded"
+                else:
+                    error_message = f"Process exited with code {exit_code}"
+                    if parsed_output.error_messages:
+                        error_message += f": {parsed_output.error_messages[0]}"
             elif status == "timed_out":
                 error_message = (
                     f"Process timed out after {timeout_seconds}s"
@@ -172,6 +179,7 @@ class ManagedRunSupervisor:
                 diagnostics_ref=diagnostics_ref,
                 log_artifact_ref=log_refs.get("stdout"),
                 failure_class=failure_class,
+                provider_error_code=exit_result.provider_error_code,
                 error_message=error_message,
             )
 
@@ -344,26 +352,35 @@ class ManagedRunSupervisor:
         timed_out: bool,
         stdout: str,
         stderr: str,
-    ) -> tuple[AgentRunState, FailureClass | None]:
+        parsed_output: Any | None = None,
+    ) -> ManagedRuntimeExitResult:
         """Classify process exit into a run state and optional failure class."""
+
         if timed_out:
-            return "timed_out", "execution_error"
+            return ManagedRuntimeExitResult(
+                status="timed_out",
+                failure_class="execution_error",
+            )
 
         if runtime_id:
             strategy = get_strategy(runtime_id)
             if strategy:
-                # strategy.classify_exit returns (status, failure_class)
-                status, failure_class = strategy.classify_exit(
+                return strategy.classify_result(
                     exit_code=exit_code,
                     stdout=stdout,
                     stderr=stderr,
+                    parsed_output=parsed_output,
                 )
-                # Map to AgentRunState if needed, or assume strategy returns one
-                return status, failure_class
 
         if exit_code == 0:
-            return "completed", None
-        return "failed", "execution_error"
+            return ManagedRuntimeExitResult(
+                status="completed",
+                failure_class=None,
+            )
+        return ManagedRuntimeExitResult(
+            status="failed",
+            failure_class="execution_error",
+        )
 
     @staticmethod
     def _resolve_effective_exit_code(
@@ -427,6 +444,7 @@ class ManagedRunSupervisor:
             "summary": summary,
             "output_refs": output_refs,
             "failure_class": record.failure_class,
+            "provider_error_code": record.provider_error_code,
         }
 
     @staticmethod

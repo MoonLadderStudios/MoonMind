@@ -90,6 +90,37 @@ async def test_fetch_result_maps_gemini_quota_report_to_integration_error(
     assert "exhausted your capacity" in result["summary"].lower()
 
 
+async def test_fetch_result_returns_structured_provider_error_from_record(
+    tmp_path: Path,
+) -> None:
+    run_store = ManagedRunStore(tmp_path / "run_store")
+    now = datetime.now(tz=UTC)
+    run_store.save(
+        ManagedRunRecord(
+            runId="gemini-run-structured-429",
+            agentId="gemini_cli",
+            runtimeId="gemini_cli",
+            status="failed",
+            pid=1234,
+            exitCode=1,
+            startedAt=now - timedelta(minutes=2),
+            finishedAt=now - timedelta(minutes=1),
+            errorMessage="Gemini API rate limit exceeded",
+            failureClass="integration_error",
+            providerErrorCode="429",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+    result = await activities.agent_runtime_fetch_result(
+        {"run_id": "gemini-run-structured-429"}
+    )
+
+    assert result["failureClass"] == "integration_error"
+    assert result["providerErrorCode"] == "429"
+    assert result["summary"] == "Gemini API rate limit exceeded"
+
+
 async def test_fetch_result_keeps_non_generic_failure_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

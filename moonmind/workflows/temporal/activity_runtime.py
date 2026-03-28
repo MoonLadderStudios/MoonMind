@@ -3203,6 +3203,8 @@ class TemporalAgentRuntimeActivities:
             return result
         if record.status != "failed":
             return result
+        if result.provider_error_code:
+            return result
         if result.failure_class not in {None, "execution_error", "integration_error"}:
             return result
         if not cls._is_generic_process_exit_summary(result.summary):
