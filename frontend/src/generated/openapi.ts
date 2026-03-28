@@ -757,49 +757,49 @@ export interface paths {
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        get: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        get: operations["proxy_pass_through_get"];
         /**
          * Proxy Pass Through
          * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        put: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        put: operations["proxy_pass_through_put"];
         /**
          * Proxy Pass Through
          * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        post: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        post: operations["proxy_pass_through_post"];
         /**
          * Proxy Pass Through
          * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        delete: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        delete: operations["proxy_pass_through_delete"];
         /**
          * Proxy Pass Through
          * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        options: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        options: operations["proxy_pass_through_options"];
         /**
          * Proxy Pass Through
          * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        head: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        head: operations["proxy_pass_through_head"];
         /**
          * Proxy Pass Through
          * @description Transparent proxy endpoint for agent runtimes executing in proxy-first mode.
          *     Takes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,
          *     resolves the real secret via the database, and proxies to the upstream URL.
          */
-        patch: operations["proxy_pass_through_api_v1_proxy__provider_id___path__head"];
+        patch: operations["proxy_pass_through_patch"];
         trace?: never;
     };
     "/api/executions": {
@@ -6538,7 +6538,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -6570,7 +6570,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -6602,7 +6602,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -6634,7 +6634,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -6666,7 +6666,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_options: {
         parameters: {
             query?: never;
             header?: never;
@@ -6698,7 +6698,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_head: {
         parameters: {
             query?: never;
             header?: never;
@@ -6730,7 +6730,7 @@ export interface operations {
             };
         };
     };
-    proxy_pass_through_api_v1_proxy__provider_id___path__head: {
+    proxy_pass_through_patch: {
         parameters: {
             query?: never;
             header?: never;

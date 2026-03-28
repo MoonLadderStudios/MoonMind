@@ -58,7 +58,6 @@ async def _resolve_provider_key(provider: str, secret_refs: dict, session: Async
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.api_route("/{provider_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_pass_through(
     provider_id: str,
     path: str,
@@ -129,4 +128,13 @@ async def proxy_pass_through(
         status_code=upstream_response.status_code,
         headers=response_headers,
         media_type=upstream_response.headers.get("content-type")
+    )
+
+
+for _method in ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]:
+    router.add_api_route(
+        "/{provider_id}/{path:path}",
+        proxy_pass_through,
+        methods=[_method],
+        operation_id=f"proxy_pass_through_{_method.lower()}",
     )
