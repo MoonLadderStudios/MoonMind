@@ -63,8 +63,8 @@
       {{ dashboard_config | tojson }}
     </script>
   <script id="moonmind-ui-boot" type="application/json">
-      {{ boot_payload | tojson }}
-  </script>
+      {{ boot_payload | safe }}
+    </script>
   <script defer src="/static/task_dashboard/dashboard.js"></script>
 </body>
 
