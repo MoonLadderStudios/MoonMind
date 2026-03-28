@@ -320,7 +320,7 @@ import pytest
 
 @pytest.mark.xfail(reason="Migrations land in Phase 2 (tracking: migration graph validation)", strict=False)
 class TestMigrationGraph:
-    """The migration graph must have exactly one head after our merge migration."""
+    """The migration graph must have exactly one head."""
 
     def test_exactly_one_head(self):
         revisions, down_revisions = _parse_migration_graph()
@@ -329,26 +329,3 @@ class TestMigrationGraph:
             f"Expected exactly 1 migration head, found {len(heads)}: "
             + ", ".join(f"{h} ({revisions[h]})" for h in sorted(heads))
         )
-
-    def test_merge_migration_exists(self):
-        """The merge migration for provider profiles + claude rename must be present."""
-        revisions, _ = _parse_migration_graph()
-        assert "fa1b2c3d4e5f" in revisions, (
-            "Expected merge migration fa1b2c3d4e5f to be present"
-        )
-
-    def test_provider_profiles_schema_migration_exists(self):
-        """The provider profiles schema migration must be present."""
-        revisions, _ = _parse_migration_graph()
-        assert "053758f254f3" in revisions, (
-            "Expected provider profiles schema migration 053758f254f3 to be present"
-        )
-
-    def test_merge_migration_references_both_heads(self):
-        """fa1b2c3d4e5f must reference both 053758f254f3 and e1f2a3b4c5d6 as down_revision."""
-        pattern = os.path.join(VERSIONS_DIR, "fa1b2c3d4e5f*.py")
-        files = glob.glob(pattern)
-        assert files, "Merge migration file fa1b2c3d4e5f*.py not found"
-        content = open(files[0]).read()
-        assert "053758f254f3" in content, "Merge migration must reference 053758f254f3"
-        assert "e1f2a3b4c5d6" in content, "Merge migration must reference e1f2a3b4c5d6"

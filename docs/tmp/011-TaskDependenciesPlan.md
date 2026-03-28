@@ -18,7 +18,7 @@ Related: `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, 
 - Validate `dependsOn` shape as an array of strings, trim empties, deduplicate, enforce the 10-item limit, and reject invalid types.
 - Persist normalized dependency IDs into `initial_parameters["task"]["dependsOn"]`.
 - Add create-time validation so each ID resolves to an existing `MoonMind.Run` execution and does not create self-dependency.
-- Implement cycle detection across transitive `dependsOn` chains with bounded traversal.
+- Implement cycle detection across transitive `dependsOn` chains with bounded traversal (limit 20 hops).
 - Return clear validation errors for missing targets, unsupported workflow types, cycles, and limit violations.
 
 ## Phase 2 - `MoonMind.Run` Dependency Gate
@@ -44,7 +44,8 @@ Related: `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, 
 - Enforce client-side validation for dependency count and duplicate entries.
 - Verify `waiting_on_dependencies` presentation in the task list.
 - Add a Dependencies panel to task detail with prerequisite links and current statuses.
-- Add a lightweight downstream or dependent list only if backend reverse lookup is feasible without blocking v1.
+- Quick-view in task list shows titles of blocking tasks.
+- Add a lightweight downstream dependents view only if backend reverse lookup is feasible without blocking v1.
 
 ## Phase 5 - Hardening And Rollout
 

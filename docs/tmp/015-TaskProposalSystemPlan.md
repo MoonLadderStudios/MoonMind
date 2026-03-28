@@ -1,9 +1,10 @@
 # Task Proposal System Plan
 
-Status: Active  
-Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
+Status: Active
+Owners: MoonMind Engineering
+Last Updated: 2026-03-28
 Canonical source: `docs/Tasks/TaskProposalSystem.md`
+Related spec work: `specs/029-task-proposal-phase2/`, `specs/037-task-proposal-update/`
 
 ---
 
@@ -17,7 +18,42 @@ behavior lives in the source doc above.
 
 ---
 
-## 2. Desired Outcome
+## 2. Current Implementation State (as of 2026-03-28)
+
+### Confirmed working
+
+- `MoonMind.Run` enters a real `proposals` stage after execution and before
+  finalization (run.py `_run_proposals_stage`)
+- `proposal.generate` and `proposal.submit` activities exist in the Temporal
+  activity catalog
+- Workflow records proposal counts and errors in finish summary during finalization
+- Proposal APIs exist (`POST /api/proposals`, `POST /api/proposals/{id}/promote`,
+  `POST /api/proposals/{id}/dismiss`)
+- Promotion creates a new `MoonMind.Run` via `TemporalExecutionService.create_execution()`
+- Proposal targeting policy (spec 037) is largely implemented; all code tasks complete,
+  only manual smoke test (T024) remains
+
+### Still in progress
+
+- Workflow proposal stage uses **flattened** policy fields (`proposalTargets`,
+  `proposalMaxItems`, `proposalDefaultRuntime`) rather than canonical
+  `task.proposalPolicy` object in `initialParameters`
+- Global enable switch enforced via `proposeTasks` but not via a workflow-level
+  proposal policy switch separate from task-level opt-in
+- Activity-boundary separation between LLM fleet and control-plane writes not yet
+  formally audited
+- UI status normalization (`proposals -> running`) not yet verified across all surfaces
+
+### Related specs
+
+- `specs/029-task-proposal-phase2/`: Phase 2 dedup/snooze/edit/triage features
+  (spec/status: draft; tasks tracked in `tasks.md`)
+- `specs/037-task-proposal-update/`: Targeting policy (spec/status: largely complete;
+  see `tasks.md` for remaining manual verification items T017, T022, T024)
+
+---
+
+## 3. Desired Outcome
 
 The finished system must provide:
 
@@ -30,9 +66,11 @@ The finished system must provide:
 
 ---
 
-## 3. Phase Plan
+## 4. Phase Plan
 
 ### Phase 1. Contract Alignment
+
+**Status: NOT DONE** (workflow still uses flattened policy fields)
 
 Goal: make proposal data model, API contract, and workflow inputs agree on one
 canonical proposal shape.
@@ -44,7 +82,8 @@ Tasks:
 2. Standardize proposal payloads on the Temporal submit contract used by
    `/api/executions`.
 3. Remove `agent_runtime` as the documented proposal payload tool type.
-4. Preserve raw `task.proposalPolicy` in run `initialParameters`.
+4. **[REMAINING]** Preserve raw `task.proposalPolicy` in run `initialParameters`
+   instead of flattened `proposalTargets`/`proposalMaxItems`/`proposalDefaultRuntime`.
 5. Normalize origin metadata to snake_case and `origin.source = "workflow"`.
 6. Update proposal API schemas to expose promotion linkage and returned execution
    metadata cleanly.
@@ -57,28 +96,32 @@ Exit criteria:
 
 ### Phase 2. Temporal-Native Promotion
 
+**Status: DONE** (promotion creates Temporal execution via `execution_service.create_execution()`)
+
 Goal: make proposal promotion create real new work again.
 
 Tasks:
 
 1. Reimplement `TaskProposalService.promote_proposal()` without the legacy queue
-   backend.
-2. Load the stored proposal under lock and reject non-`open` proposals.
-3. Merge `taskCreateRequestOverride` into the stored `taskCreateRequest`.
-4. Validate the merged payload against the canonical task contract.
+   backend. ✅
+2. Load the stored proposal under lock and reject non-`open` proposals. ✅
+3. Merge `taskCreateRequestOverride` into the stored `taskCreateRequest`. ✅
+4. Validate the merged payload against the canonical task contract. ✅
 5. Route promotion through the same Temporal-backed create flow used by
-   `/api/executions`.
-6. Persist the created workflow or execution identifier on the proposal record.
+   `/api/executions`. ✅
+6. Persist the created workflow or execution identifier on the proposal record. ✅
 7. Return both the updated proposal and the created execution metadata from the
-   promote API.
+   promote API. ✅
 
 Exit criteria:
 
-1. promoting a proposal creates a new `MoonMind.Run`
-2. proposal detail shows the promoted execution linkage
-3. no legacy queue create path remains in proposal promotion
+1. promoting a proposal creates a new `MoonMind.Run` ✅
+2. proposal detail shows the promoted execution linkage ✅
+3. no legacy queue create path remains in proposal promotion ✅
 
 ### Phase 3. Proposal Stage Hardening
+
+**Status: NOT DONE** (flattened fields still used, global enable switch partially done)
 
 Goal: make the workflow proposal stage carry the correct policy and obey global
 operator control.
@@ -94,7 +137,7 @@ Tasks:
 4. Stamp `defaultRuntime` onto candidate payloads only when the candidate omits a
    runtime.
 5. Ensure finish summary data records requested, generated, submitted, and error
-   outcomes consistently.
+   outcomes consistently. (partially done - counts are recorded)
 
 Exit criteria:
 
@@ -103,6 +146,8 @@ Exit criteria:
 3. proposal-stage finish summary data is complete and stable
 
 ### Phase 4. Activity-Boundary Cleanup
+
+**Status: NOT VERIFIED** (not yet audited)
 
 Goal: move proposal side effects onto the correct worker boundary.
 
@@ -120,6 +165,8 @@ Exit criteria:
 2. proposal submission no longer depends on the LLM fleet for control-plane writes
 
 ### Phase 5. UI and Observability Alignment
+
+**Status: PARTIAL** (basic surfaces exist; normalization not verified)
 
 Goal: make Mission Control and execution APIs display proposal-stage behavior
 accurately.
@@ -142,6 +189,8 @@ Exit criteria:
 
 ### Phase 6. Regression Coverage
 
+**Status: PARTIAL** (basic tests exist; full boundary coverage not complete)
+
 Goal: add workflow-boundary and API coverage for compatibility-sensitive paths.
 
 Tasks:
@@ -160,35 +209,29 @@ Exit criteria:
 
 ---
 
-## 4. Suggested Execution Order
+## 5. Suggested Execution Order
 
-1. Phase 1
-2. Phase 2
-3. Phase 3
-4. Phase 5
-5. Phase 4
-6. Phase 6
+1. Phase 1 (contract alignment is prerequisite)
+2. Phase 3 (hardening depends on Phase 1)
+3. Phase 5 (UI depends on stable contract)
+4. Phase 4 (activity audit can run in parallel after Phases 1-3)
+5. Phase 6 (regression coverage after all features stabilize)
 
-Rationale:
-
-1. contract alignment must land before code paths are hardened
-2. promotion is the biggest functional gap
-3. UI and observability should not finalize until the workflow and promotion
-   contracts are stable
+Note: Phase 2 (Temporal-native promotion) is already implemented.
 
 ---
 
-## 5. Open Risks
+## 6. Open Risks
 
-1. promotion changes touch compatibility-sensitive execution-create contracts
-2. proposal policy plumbing affects persisted workflow inputs and in-flight runs
+1. Phase 1 contract changes affect persisted workflow inputs and in-flight runs
+2. Phase 3 policy changes touch proposal submission and worker behavior
 3. UI status cleanup spans multiple adapters and docs that previously used stale
    state names
 4. proposal submission queue movement requires worker-topology coordination
 
 ---
 
-## 6. Completion Rule
+## 7. Completion Rule
 
 This plan is complete when the canonical behavior in
 `docs/Tasks/TaskProposalSystem.md` is implemented and the temporary migration tasks

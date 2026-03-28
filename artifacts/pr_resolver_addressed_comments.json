@@ -14,5 +14,100 @@
   { "id": 3005332020, "disposition": "addressed", "rationale": "Removed duplicate import." },
   { "id": 3005332022, "disposition": "not-applicable", "rationale": "Migration graph is currently a clean reset so modifying old values is acceptable." },
   { "id": 3005332024, "disposition": "addressed", "rationale": "Updated seeded raw env to env:// locator format." },
-  { "id": 4026030481, "disposition": "not-applicable", "rationale": "Bot aggregated review comment." }
+  { "id": 4026030481, "disposition": "not-applicable", "rationale": "Bot aggregated review comment." },
+  {
+    "id": 4148799672,
+    "disposition": "not-applicable",
+    "rationale": "Automated warning limits from Codex, no code changes required."
+  },
+  {
+    "id": 3005318142,
+    "disposition": "addressed",
+    "rationale": "Sorted log_streaming_enabled alphabetically in moonmind/config/settings.py."
+  },
+  {
+    "id": 3005318144,
+    "disposition": "addressed",
+    "rationale": "Updated the feature flag file path in requirements-traceability.md to reference moonmind/config/settings.py."
+  },
+  {
+    "id": 3005318150,
+    "disposition": "addressed",
+    "rationale": "Added moonmind/config/settings.py to the project structure documentation in plan.md."
+  },
+  {
+    "id": 3005318151,
+    "disposition": "addressed",
+    "rationale": "Updated the configuration path to moonmind/config/settings.py in research.md."
+  },
+  {
+    "id": 3005318155,
+    "disposition": "addressed",
+    "rationale": "Corrected the specification analysis report for issue C2 to reflect production changes."
+  },
+  {
+    "id": 3005318156,
+    "disposition": "addressed",
+    "rationale": "Fixed the configuration file path from api_service to moonmind in tasks.md."
+  },
+  {
+    "id": 4026020322,
+    "disposition": "not-applicable",
+    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
+  },
+  {
+    "id": 3005321202,
+    "disposition": "addressed",
+    "rationale": "Updated implementation surface trace to moonmind/config/settings.py."
+  },
+  {
+    "id": 3005321211,
+    "disposition": "addressed",
+    "rationale": "Fixed classification in specification analysis report since production changes are included."
+  },
+  {
+    "id": 3005321216,
+    "disposition": "addressed",
+    "rationale": "Added test_log_streaming_env_overrides coverage for log_streaming_enabled flag in tests/unit/config/test_settings.py."
+  },
+  {
+    "id": 3005321220,
+    "disposition": "addressed",
+    "rationale": "Replaced non-existent api_service config reference with moonmind config in tasks."
+  },
+  {
+    "id": 3005321223,
+    "disposition": "addressed",
+    "rationale": "Updated the unlinked data-model item in traceability to research.md."
+  },
+  {
+    "id": 3005321225,
+    "disposition": "addressed",
+    "rationale": "Removed phantom data-model.md and quickstart.md entries from project structure in plan.md."
+  },
+  {
+    "id": 3005321230,
+    "disposition": "addressed",
+    "rationale": "Unchecked non-technical checklist constraints since the spec legitimately includes implementation details."
+  },
+  {
+    "id": 3005321239,
+    "disposition": "addressed",
+    "rationale": "Unchecked the 'Update any stale docs' exit criteria since deprecation notices will be handled later."
+  },
+  {
+    "id": 3005321242,
+    "disposition": "addressed",
+    "rationale": "Updated the path for the pytest validation string to use ./tools/test_unit.sh."
+  },
+  {
+    "id": 3005321254,
+    "disposition": "addressed",
+    "rationale": "Updated the feature flag tracking path to moonmind in research.md."
+  },
+  {
+    "id": 4026022770,
+    "disposition": "not-applicable",
+    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
+  }
 ]
