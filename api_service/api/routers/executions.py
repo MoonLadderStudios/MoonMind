@@ -754,6 +754,23 @@ async def _create_execution_from_task_request(
         payload.get("requiredCapabilities"),
         field_name="payload.requiredCapabilities",
     )
+
+    if "dependsOn" in task_payload:
+        depends_on_source = task_payload.get("dependsOn")
+        field_name = "payload.task.dependsOn"
+    else:
+        depends_on_source = payload.get("dependsOn")
+        field_name = "payload.dependsOn"
+
+    raw_depends_on = _coerce_string_list(
+        depends_on_source,
+        field_name=field_name
+    )
+
+    depends_on = list(dict.fromkeys(d.strip() for d in raw_depends_on if d.strip()))
+
+    if len(depends_on) > 10:
+        raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
     step_count = _coerce_step_count(task_payload.get("steps"))
 
     repository = str(payload.get("repository") or "").strip() or None
@@ -782,6 +799,8 @@ async def _create_execution_from_task_request(
     normalized_tool = _normalize_task_tool(task_payload)
     normalized_task_for_planner: dict[str, Any] = {}
     instructions = str(task_payload.get("instructions") or "").strip()
+    if depends_on:
+        normalized_task_for_planner["dependsOn"] = depends_on
     if instructions:
         normalized_task_for_planner["instructions"] = instructions
     if normalized_tool is not None:

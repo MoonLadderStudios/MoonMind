@@ -290,6 +290,80 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
     mock_service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Ship the Temporal integration.",
+                    "dependsOn": [f"dep-{i}" for i in range(11)]
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "payload.task.dependsOn can have a maximum of 10 items" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Ship the Temporal integration.",
+                    "dependsOn": ["dep-1", " dep-2 ", "", "dep-1", "dep-3"]
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.call_args.kwargs
+    assert kwargs["initial_parameters"]["task"]["dependsOn"] == ["dep-1", "dep-2", "dep-3"]
+
+
+def test_create_task_shaped_execution_prefers_task_depends_on(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "dependsOn": ["legacy-dep"],
+                "task": {
+                    "instructions": "Ship the Temporal integration.",
+                    "dependsOn": []
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.call_args.kwargs
+    assert "dependsOn" not in kwargs["initial_parameters"]["task"]
+
+
 def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
