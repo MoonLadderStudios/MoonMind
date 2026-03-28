@@ -1,11 +1,11 @@
-"""Unit tests for ManagedAgentAdapter and auth_profile_list activity.
+"""Unit tests for ManagedAgentAdapter and provider_profile_list activity.
 
 Tests cover:
 - Profile resolution (auto, by ID, missing)
 - Environment shaping (OAuth clears sensitive vars, API-key sets ref)
 - Slot request / release signalling
 - 429 cooldown reporting
-- auth_profile_list activity method (happy path + empty DB)
+- provider_profile_list activity method (happy path + empty DB)
 
 Marked with pytest.mark.asyncio to align with the existing test suite
 convention (see test_activity_runtime.py).
@@ -548,7 +548,7 @@ async def test_report_429_cooldown_raises_without_active_profile():
 
 
 # ---------------------------------------------------------------------------
-# auth_profile_list activity tests (integration against in-memory SQLite DB)
+# provider_profile_list activity tests (integration against in-memory SQLite DB)
 # ---------------------------------------------------------------------------
 
 
@@ -557,14 +557,14 @@ async def _patched_session_context(session_factory):
     """Yield a session from *session_factory* as an async-context-manager.
 
     Used to monkeypatch ``get_async_session_context`` so that the
-    ``auth_profile_list`` activity method hits the in-memory SQLite DB
+    ``provider_profile_list`` activity method hits the in-memory SQLite DB
     instead of the real Postgres connection string.
     """
     async with session_factory() as session:
         yield session
 
 
-async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
+async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
             session.add(
@@ -607,7 +607,7 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
         orig = _db_base_mod.get_async_session_context
         _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
         try:
-            result = await activities.auth_profile_list(runtime_id="gemini_cli")
+            result = await activities.provider_profile_list(runtime_id="gemini_cli")
         finally:
             _db_base_mod.get_async_session_context = orig
 
@@ -620,7 +620,7 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["max_parallel_runs"] == 2
 
 
-async def test_auth_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
+async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         service = TemporalArtifactService(
             TemporalArtifactRepository(session_factory()),
@@ -633,14 +633,14 @@ async def test_auth_profile_list_returns_empty_for_unknown_runtime(tmp_path: Pat
         orig = _db_base_mod.get_async_session_context
         _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
         try:
-            result = await activities.auth_profile_list(runtime_id="nonexistent_runtime")
+            result = await activities.provider_profile_list(runtime_id="nonexistent_runtime")
         finally:
             _db_base_mod.get_async_session_context = orig
 
         assert result == {"profiles": []}
 
 
-async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
+async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
             for runtime, pid in [("gemini_cli", "g1"), ("claude_code", "c1")]:
@@ -669,7 +669,7 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
         orig = _db_base_mod.get_async_session_context
         _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
         try:
-            result = await activities.auth_profile_list(runtime_id="claude_code")
+            result = await activities.provider_profile_list(runtime_id="claude_code")
         finally:
             _db_base_mod.get_async_session_context = orig
 
@@ -678,7 +678,7 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
         assert profiles[0]["profile_id"] == "c1"
 
 
-async def test_auth_profile_list_preserves_secret_ref_materialization_fields(
+async def test_provider_profile_list_preserves_secret_ref_materialization_fields(
     tmp_path: Path,
 ):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -716,7 +716,7 @@ async def test_auth_profile_list_preserves_secret_ref_materialization_fields(
             session_factory
         )
         try:
-            result = await activities.auth_profile_list(runtime_id="claude_code")
+            result = await activities.provider_profile_list(runtime_id="claude_code")
         finally:
             _db_base_mod.get_async_session_context = orig
 

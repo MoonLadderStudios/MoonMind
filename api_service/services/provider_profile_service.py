@@ -51,8 +51,8 @@ async def sync_provider_profile_manager(
 
     try:
         from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
-            AuthProfileManagerInput,
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            ProviderProfileManagerInput,
             WORKFLOW_NAME,
         )
         from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -64,8 +64,9 @@ async def sync_provider_profile_manager(
         try:
             await temporal_client.start_workflow(
                 WORKFLOW_NAME,
-                AuthProfileManagerInput(
-                    runtime_id=runtime_id,),
+                ProviderProfileManagerInput(
+                    runtime_id=runtime_id
+                ),
                 id=workflow_id,
                 task_queue="mm.workflow",
             )

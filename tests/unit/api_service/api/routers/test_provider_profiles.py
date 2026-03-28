@@ -1,4 +1,4 @@
-"""Unit/Integration tests for ManagedAgentAuthProfile CRUD API."""
+"""Unit/Integration tests for ManagedAgentProviderProfile CRUD API."""
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -70,8 +70,8 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
 
 
 @pytest.mark.asyncio
-async def test_create_auth_profile(client_app: AsyncClient, _module_db):
-    """Test creating a new auth profile."""
+async def test_create_provider_profile(client_app: AsyncClient, _module_db):
+    """Test creating a new provider profile."""
     payload = {
         "profile_id": "new_profile",
         "runtime_id": "claude_v1",
@@ -169,7 +169,7 @@ async def test_delete_profile(client_app: AsyncClient, _module_db):
 
 
 @pytest.mark.asyncio
-async def test_update_profile_syncs_auth_profile_manager(
+async def test_update_profile_syncs_provider_profile_manager(
     client_app: AsyncClient,
     _module_db,
     monkeypatch: pytest.MonkeyPatch,

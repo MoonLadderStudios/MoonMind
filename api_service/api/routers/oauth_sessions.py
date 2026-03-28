@@ -7,7 +7,7 @@ from sqlalchemy.future import select
 from api_service.db.base import get_async_session
 from api_service.auth_providers import get_current_user
 from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
-from api_service.services.auth_profile_service import sync_provider_profile_manager
+from api_service.services.provider_profile_service import sync_provider_profile_manager
 from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])

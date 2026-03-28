@@ -123,7 +123,7 @@ class AgentExecutionRequest(BaseModel):
 
     agent_kind: AgentKind = Field(..., alias="agentKind")
     agent_id: str = Field(..., alias="agentId", min_length=1)
-    execution_profile_ref: str = Field(..., alias="executionProfileRef", min_length=1)
+    execution_profile_ref: str | None = Field(None, alias="executionProfileRef", min_length=1)
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
@@ -148,9 +148,10 @@ class AgentExecutionRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_contract(self) -> "AgentExecutionRequest":
         self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
-        self.execution_profile_ref = _require_non_blank(
-            self.execution_profile_ref, field_name="executionProfileRef"
-        )
+        if self.execution_profile_ref is not None:
+            self.execution_profile_ref = _require_non_blank(
+                self.execution_profile_ref, field_name="executionProfileRef"
+            )
         self.correlation_id = _require_non_blank(
             self.correlation_id, field_name="correlationId"
         )
@@ -252,7 +253,7 @@ class AgentRunResult(BaseModel):
         return self
 
 
-class ManagedAgentAuthProfile(BaseModel):
+class ManagedAgentProviderProfile(BaseModel):
     """Named managed-runtime auth and execution policy contract."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -270,7 +271,7 @@ class ManagedAgentAuthProfile(BaseModel):
     enabled: bool = Field(True, alias="enabled")
 
     @model_validator(mode="after")
-    def _validate_policy(self) -> "ManagedAgentAuthProfile":
+    def _validate_policy(self) -> "ManagedAgentProviderProfile":
         self.profile_id = _require_non_blank(self.profile_id, field_name="profileId")
         self.runtime_id = _require_non_blank(self.runtime_id, field_name="runtimeId")
         self.auth_mode = _require_non_blank(self.auth_mode, field_name="authMode")
@@ -295,34 +296,31 @@ class ManagedRuntimeProfile(BaseModel):
 
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     profile_id: str | None = Field(None, alias="profileId")
+    provider_id: str | None = Field(None, alias="providerId")
+    provider_label: str | None = Field(None, alias="providerLabel")
     auth_mode: str | None = Field(None, alias="authMode")
-    command_template: list[str] = Field(..., alias="commandTemplate")
+    credential_source: str | None = Field(None, alias="credentialSource")
+    runtime_materialization_mode: str | None = Field(None, alias="runtimeMaterializationMode")
+    command_behavior: dict[str, Any] = Field(default_factory=dict, alias="commandBehavior")
+    command_template: list[str] = Field(default_factory=list, alias="commandTemplate")
     default_model: str | None = Field(None, alias="defaultModel")
+    model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
     default_effort: str | None = Field(None, alias="defaultEffort")
-    default_timeout_seconds: int = Field(
-        3600, alias="defaultTimeoutSeconds", ge=1
-    )
+    default_timeout_seconds: int = Field(3600, alias="defaultTimeoutSeconds", ge=1)
     workspace_mode: WorkspaceMode = Field("tempdir", alias="workspaceMode")
-    env_overrides: dict[str, str] = Field(
-        default_factory=dict, alias="envOverrides"
-    )
-    passthrough_env_keys: list[str] = Field(
-        default_factory=list, alias="passthroughEnvKeys"
-    )
-    clear_env_keys: list[str] = Field(
-        default_factory=list, alias="clearEnvKeys"
-    )
-    secret_refs: dict[str, str] = Field(
-        default_factory=dict, alias="secretRefs"
-    )
+    env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")
+    env_template: dict[str, str] = Field(default_factory=dict, alias="envTemplate")
+    file_templates: dict[str, str] = Field(default_factory=dict, alias="fileTemplates")
+    home_path_overrides: dict[str, str] = Field(default_factory=dict, alias="homePathOverrides")
+    passthrough_env_keys: list[str] = Field(default_factory=list, alias="passthroughEnvKeys")
+    clear_env_keys: list[str] = Field(default_factory=list, alias="clearEnvKeys")
+    secret_refs: dict[str, str | dict[str, str]] = Field(default_factory=dict, alias="secretRefs")
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":
         self.runtime_id = _require_non_blank(
             self.runtime_id, field_name="runtimeId"
         )
-        if not self.command_template:
-            raise ValueError("commandTemplate must not be empty")
         if _contains_sensitive_key(
             self.env_overrides,
             allowed_sensitive_keys=_ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
@@ -437,7 +435,7 @@ __all__ = [
     "AgentRunState",
     "AgentRunStatus",
     "FailureClass",
-    "ManagedAgentAuthProfile",
+    "ManagedAgentProviderProfile",
     "ManagedRunRecord",
     "ManagedRuntimeProfile",
     "ProfileSelector",
