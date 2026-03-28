@@ -20,6 +20,7 @@ from sqlalchemy import Select, delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from moonmind.schemas.temporal_activity_models import ArtifactReadInput, ArtifactWriteCompleteInput
 from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -1938,36 +1939,54 @@ class TemporalArtifactActivities:
 
     async def artifact_read(
         self,
-        *,
-        artifact_ref: ArtifactRef | Mapping[str, Any] | str,
-        principal: str,
+        request: Any = None,
+        /,
+        **kwargs: Any,
     ) -> bytes:
-        _artifact, payload = await self._service.read(
-            artifact_id=self._normalize_activity_artifact_id(artifact_ref),
-            principal=principal,
+        if isinstance(request, ArtifactReadInput):
+            validated = request
+        else:
+            payload = request if isinstance(request, dict) else dict(kwargs)
+            # Normalize complex artifact_ref handles (e.g. legacy objects or mappings)
+            # into a flat string ID *before* Pydantic validation, which also enforces
+            # proper TemporalArtifactValidationError on missing/blank inputs.
+            payload["artifact_ref"] = self._normalize_activity_artifact_id(
+                payload.get("artifact_ref")
+            )
+            validated = ArtifactReadInput.model_validate(payload)
+
+        # Extract and validate the artifact_id from the reference
+        artifact_id = str(
+            validated.artifact_ref
+            if isinstance(validated.artifact_ref, str)
+            else validated.artifact_ref.artifact_id
+        ).strip()
+        if not artifact_id:
+            raise TemporalArtifactValidationError("artifact_ref is required")
+
+        _artifact, payload_bytes = await self._service.read(
+            artifact_id=artifact_id,
+            principal=validated.principal,
         )
-        return payload
+        return payload_bytes
 
     async def artifact_write_complete(
         self,
-        *,
-        artifact_id: str,
-        payload: bytes | str | list[int],
-        principal: str,
-        content_type: str | None = None,
+        request: Any = None,
+        /,
+        **kwargs: Any,
     ) -> ArtifactRef:
-        if isinstance(payload, str):
-            payload = payload.encode("utf-8")
-        elif isinstance(payload, list):
-            payload = bytes(payload)
-        elif not isinstance(payload, bytes):
-            payload = bytes(payload)
+        if isinstance(request, ArtifactWriteCompleteInput):
+            validated = request
+        else:
+            payload_data = request if isinstance(request, dict) else dict(kwargs)
+            validated = ArtifactWriteCompleteInput.model_validate(payload_data)
 
         artifact = await self._service.write_complete(
-            artifact_id=artifact_id,
-            principal=principal,
-            payload=payload,
-            content_type=content_type,
+            artifact_id=validated.artifact_id,
+            principal=validated.principal,
+            payload=validated.payload,
+            content_type=validated.content_type,
         )
         return build_artifact_ref(artifact)
 
