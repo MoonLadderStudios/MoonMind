@@ -21,7 +21,7 @@ from api_service.db.models import AgentJobLiveSessionStatus, AgentJobLiveSession
 
 @pytest.fixture
 def test_user() -> User:
-    return User(id=uuid4(), email="test@example.com")
+    return User(id=uuid4(), email="test@example.com", is_superuser=True)
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tu
     db_mock = AsyncMock()
     
     app.dependency_overrides[get_async_session] = lambda: db_mock
-    app.dependency_overrides[get_current_user] = lambda: lambda: test_user
+    app.dependency_overrides[get_current_user()] = lambda: test_user
     app.dependency_overrides[_require_worker_auth] = lambda: test_worker_auth
 
     with TestClient(app) as test_client:
@@ -336,7 +336,7 @@ def test_stream_task_run_log_returns_404_when_file_missing(
     mock_record.stdout_artifact_ref = "test/stdout.log"
     
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        with patch("api_service.api.routers.task_runs.Path.exists", return_value=False):
+        with patch("pathlib.Path.is_file", return_value=False):
             response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
             
     assert response.status_code == 404
@@ -351,18 +351,17 @@ def test_stream_task_run_log_returns_file_response(
     mock_record.stdout_artifact_ref = "test/stdout.log"
     
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        with patch("api_service.api.routers.task_runs.Path.exists", return_value=True):
-            with patch("api_service.api.routers.task_runs.Path.is_file", return_value=True):
+        with patch("pathlib.Path.is_file", return_value=True):
+            with patch("pathlib.Path.is_relative_to", return_value=True):
                 with patch("api_service.api.routers.task_runs.FileResponse") as mock_file_response:
-                    mock_file_response.return_value = {"mock": "response"}
+                    from fastapi.responses import Response
+                    mock_file_response.return_value = Response(content=b"mock_log_data", media_type="text/plain")
                     response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
                     
-    # The FastAPI test client doesn't automatically unwrap the manual patched FileResponse 
-    # if it's not a real response object. Since FileResponse inherits from Response, FastAPI 
-    # evaluates it. If we mock FileResponse itself, it returns a dict causing a generic error
-    # Let's verify the mock was called successfully instead.
     assert mock_file_response.called
     assert mock_file_response.call_args[1]["media_type"] == "text/plain"
+    assert response.status_code == 200
+    assert response.content == b"mock_log_data"
 
 
 def test_get_task_run_diagnostics_returns_404_when_missing(
@@ -377,4 +376,40 @@ def test_get_task_run_diagnostics_returns_404_when_missing(
         
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
+
+
+def test_get_task_run_diagnostics_returns_404_when_file_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.diagnostics_ref = "test/diagnostics.json"
+    
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch("pathlib.Path.is_file", return_value=False):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+            
+    assert response.status_code == 404
+    assert "does not exist" in response.json()["detail"].lower()
+
+
+def test_get_task_run_diagnostics_returns_file_response(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.diagnostics_ref = "test/diagnostics.json"
+    
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch("pathlib.Path.is_file", return_value=True):
+            with patch("pathlib.Path.is_relative_to", return_value=True):
+                with patch("api_service.api.routers.task_runs.FileResponse") as mock_file_response:
+                    from fastapi.responses import Response
+                    mock_file_response.return_value = Response(content=b'{"mock":"diag"}', media_type="application/json")
+                    response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+                    
+    assert mock_file_response.called
+    assert mock_file_response.call_args[1]["media_type"] == "application/json"
+    assert response.status_code == 200
+    assert response.content == b'{"mock":"diag"}'
 

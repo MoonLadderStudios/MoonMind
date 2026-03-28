@@ -380,7 +380,7 @@ class ManagedRunRecord(BaseModel):
     error_message: str | None = Field(None, alias="errorMessage")
     failure_class: FailureClass | None = Field(None, alias="failureClass")
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
-    # Capabilty metadata indicating if live streaming is supported for this run
+    # Capability metadata indicating if live streaming is supported for this run
     live_stream_capable: bool | None = Field(None, alias="liveStreamCapable")
 
     @model_validator(mode="after")

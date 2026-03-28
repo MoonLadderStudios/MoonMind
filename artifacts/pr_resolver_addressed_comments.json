@@ -1,97 +1,92 @@
 [
   {
-    "id": 4148799672,
+    "id": 4148891383,
     "disposition": "not-applicable",
-    "rationale": "Automated warning limits from Codex, no code changes required."
+    "rationale": "Usage limit warning from bots."
   },
   {
-    "id": 3005318142,
-    "disposition": "addressed",
-    "rationale": "Sorted log_streaming_enabled alphabetically in moonmind/config/settings.py."
-  },
-  {
-    "id": 3005318144,
-    "disposition": "addressed",
-    "rationale": "Updated the feature flag file path in requirements-traceability.md to reference moonmind/config/settings.py."
-  },
-  {
-    "id": 3005318150,
-    "disposition": "addressed",
-    "rationale": "Added moonmind/config/settings.py to the project structure documentation in plan.md."
-  },
-  {
-    "id": 3005318151,
-    "disposition": "addressed",
-    "rationale": "Updated the configuration path to moonmind/config/settings.py in research.md."
-  },
-  {
-    "id": 3005318155,
-    "disposition": "addressed",
-    "rationale": "Corrected the specification analysis report for issue C2 to reflect production changes."
-  },
-  {
-    "id": 3005318156,
-    "disposition": "addressed",
-    "rationale": "Fixed the configuration file path from api_service to moonmind in tasks.md."
-  },
-  {
-    "id": 4026020322,
+    "id": 4026080599,
     "disposition": "not-applicable",
-    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
+    "rationale": "High-level comment from Gemini bot."
   },
   {
-    "id": 3005321202,
+    "id": 3005382088,
     "disposition": "addressed",
-    "rationale": "Updated implementation surface trace to moonmind/config/settings.py."
+    "rationale": "Validates resolve path with is_relative_to"
   },
   {
-    "id": 3005321211,
+    "id": 3005382090,
     "disposition": "addressed",
-    "rationale": "Fixed classification in specification analysis report since production changes are included."
+    "rationale": "Validates diagnostics resolve path with is_relative_to"
   },
   {
-    "id": 3005321216,
+    "id": 3005382093,
     "disposition": "addressed",
-    "rationale": "Added test_log_streaming_env_overrides coverage for log_streaming_enabled flag in tests/unit/config/test_settings.py."
+    "rationale": "Added explicit check for merged_log_artifact_ref"
   },
   {
-    "id": 3005321220,
+    "id": 3005382096,
     "disposition": "addressed",
-    "rationale": "Replaced non-existent api_service config reference with moonmind config in tasks."
+    "rationale": "Moved imports to top of task_runs.py"
   },
   {
-    "id": 3005321223,
+    "id": 3005382173,
     "disposition": "addressed",
-    "rationale": "Updated the unlinked data-model item in traceability to research.md."
+    "rationale": "Cleaned up unused test variables and mapped to HTTP response checking"
   },
   {
-    "id": 3005321225,
+    "id": 3005384368,
     "disposition": "addressed",
-    "rationale": "Removed phantom data-model.md and quickstart.md entries from project structure in plan.md."
+    "rationale": "Added is_superuser dependency validation"
   },
   {
-    "id": 3005321230,
+    "id": 3005384375,
     "disposition": "addressed",
-    "rationale": "Unchecked non-technical checklist constraints since the spec legitimately includes implementation details."
+    "rationale": "Wrapped file operations in asyncio.to_thread"
   },
   {
-    "id": 3005321239,
+    "id": 3005384377,
     "disposition": "addressed",
-    "rationale": "Unchecked the 'Update any stale docs' exit criteria since deprecation notices will be handled later."
+    "rationale": "Updated FileResponse mock to return correct object wrapper"
   },
   {
-    "id": 3005321242,
+    "id": 3005384379,
     "disposition": "addressed",
-    "rationale": "Updated the path for the pytest validation string to use ./tools/test_unit.sh."
+    "rationale": "Added tests for diagnostics endpoint variants"
   },
   {
-    "id": 3005321254,
+    "id": 3005384383,
     "disposition": "addressed",
-    "rationale": "Updated the feature flag tracking path to moonmind in research.md."
+    "rationale": "Unchecked range semantics in docs phase 2 task plan"
   },
   {
-    "id": 4026022770,
+    "id": 3005384387,
+    "disposition": "addressed",
+    "rationale": "Fixed Capability typo"
+  },
+  {
+    "id": 3005384390,
+    "disposition": "addressed",
+    "rationale": "Fixed merged fallback logic"
+  },
+  {
+    "id": 3005384394,
+    "disposition": "addressed",
+    "rationale": "Unchecked range semantics in docs phase 2 task plan"
+  },
+  {
+    "id": 3005384397,
+    "disposition": "addressed",
+    "rationale": "Fixed backtick syntax in tasks checklist"
+  },
+  {
+    "id": 3005384402,
+    "disposition": "addressed",
+    "rationale": "Added is_relative_to checks to artifact resolve"
+  },
+  {
+    "id": 4026082010,
     "disposition": "not-applicable",
-    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
+    "rationale": "Top level PR summary from Copilot bot"
   }
 ]

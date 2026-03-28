@@ -118,7 +118,7 @@ Expose artifact-backed observability through MoonMind-owned backend APIs and rec
 - [x] Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.  
 - [x] Add authorization checks for observability endpoints.
 - [x] Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
-- [x] Add tests for tail semantics, pagination/range behavior, and large artifacts.
+- [ ] Add tests for tail semantics, pagination/range behavior, and large artifacts.
 
 ### Exit criteria
 
