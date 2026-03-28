@@ -1,8 +1,10 @@
 import structlog
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
+from api_service.auth_providers import get_current_user
 from api_service.api.schemas import (
     SecretCreateRequest,
     SecretListResponse,
@@ -28,16 +30,12 @@ router = APIRouter()
 async def create_secret(
     request: SecretCreateRequest,
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
     # Check if exists first? Or rely on DB constraints?
     # Usually slug is unique, let's just try to get it.
     existing = await SecretsService.get_secret(db, request.slug)
-    # The get_secret only returns ACTIVE ones, let's list to see if any exists with this slug.
-    # Actually wait get_secret is fine. If it exists, we shouldn't create it.
-    
-    # We will try to create it. Any IntegrityError from unique(slug) will bubble up, but we can prevent it.
-    metadata = await SecretsService.list_metadata(db)
-    if any(m.slug == request.slug for m in metadata):
+    if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Secret with slug '{request.slug}' already exists.",
@@ -60,6 +58,7 @@ async def create_secret(
 )
 async def list_secrets(
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> SecretListResponse:
     metadata = await SecretsService.list_metadata(db)
     items = [SecretMetadataResponse.model_validate(m) for m in metadata]
@@ -76,6 +75,7 @@ async def update_secret(
     slug: str,
     request: SecretUpdateRequest,
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
     secret = await SecretsService.update_secret(db, slug, request.plaintext)
     if not secret:
@@ -95,6 +95,7 @@ async def rotate_secret(
     slug: str,
     request: SecretUpdateRequest,
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
     secret = await SecretsService.rotate_secret(db, slug, request.plaintext)
     if not secret:
@@ -114,6 +115,7 @@ async def update_secret_status(
     slug: str,
     request: SecretStatusUpdateRequest,
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
     new_status = SecretStatus(request.status)
     secret = await SecretsService.set_status(db, slug, new_status)
@@ -149,6 +151,7 @@ async def delete_secret(
 async def validate_secret(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
+    user: Any = Depends(get_current_user()),
 ) -> dict[str, bool]:
     # Check if the secret exists and is active
     val = await SecretsService.get_secret(db, slug)

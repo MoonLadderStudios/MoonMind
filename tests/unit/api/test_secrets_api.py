@@ -1,17 +1,18 @@
 import pytest
-from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock
 
 from api_service.api.routers.secrets import router
 from api_service.db.base import get_async_session
+from api_service.auth_providers import get_current_user
 
 app = FastAPI()
 app.include_router(router, prefix="/api/v1/secrets")
 
 mock_db_session = AsyncMock()
 app.dependency_overrides[get_async_session] = lambda: mock_db_session
+app.dependency_overrides[get_current_user] = lambda: lambda: None
 
 client = TestClient(app)
 
@@ -28,7 +29,7 @@ def test_create_secret(mock_secrets_service):
     # Mock return value
     mock_secret = ManagedSecret(slug="NEW_KEY", status="active", details={}, created_at=datetime.utcnow())
     mock_secrets_service.create_secret.return_value = mock_secret
-    mock_secrets_service.list_metadata.return_value = []
+    mock_secrets_service.get_secret.return_value = None
     
     resp = client.post(
         "/api/v1/secrets",
@@ -44,7 +45,7 @@ def test_create_secret_conflict(mock_secrets_service):
     from api_service.db.models import ManagedSecret
     
     mock_secret = ManagedSecret(slug="TEST_API_KEY", status="active", details={})
-    mock_secrets_service.list_metadata.return_value = [mock_secret]
+    mock_secrets_service.get_secret.return_value = mock_secret
     
     resp = client.post(
         "/api/v1/secrets",

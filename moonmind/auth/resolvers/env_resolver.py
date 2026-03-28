@@ -19,5 +19,6 @@ class EnvSecretResolver(SecretBackendResolver):
         
         if not str(value).strip():
             logger.warning("empty_environment_variable", locator=locator)
+            raise SecretMissingError(f"Environment variable is empty: {locator}")
             
         return str(value)

@@ -23,6 +23,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 
 
+def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] | None:
+    if not value:
+        return value
+    from moonmind.auth.secret_refs import parse_secret_ref, SecretReferenceError
+    for k, v in value.items():
+        if not v:
+            continue
+        try:
+            parse_secret_ref(v)
+        except SecretReferenceError as e:
+            raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
@@ -80,17 +94,7 @@ class ProviderProfileCreate(BaseModel):
     @field_validator("secret_refs", mode="after")
     @classmethod
     def _validate_secret_refs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
-        if not value:
-            return value
-        from moonmind.auth.secret_refs import parse_secret_ref, SecretReferenceError
-        for k, v in value.items():
-            if not v:
-                continue
-            try:
-                parse_secret_ref(v)
-            except SecretReferenceError as e:
-                raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
-        return value
+        return validate_secret_refs_helper(value)
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
@@ -146,17 +150,7 @@ class ProviderProfileUpdate(BaseModel):
     @field_validator("secret_refs", mode="after")
     @classmethod
     def _validate_secret_refs_update(cls, value: dict[str, str] | None) -> dict[str, str] | None:
-        if not value:
-            return value
-        from moonmind.auth.secret_refs import parse_secret_ref, SecretReferenceError
-        for k, v in value.items():
-            if not v:
-                continue
-            try:
-                parse_secret_ref(v)
-            except SecretReferenceError as e:
-                raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
-        return value
+        return validate_secret_refs_helper(value)
 
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":

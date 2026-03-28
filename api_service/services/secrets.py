@@ -2,7 +2,7 @@ import structlog
 from typing import Any, Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ManagedSecret, SecretStatus
@@ -112,7 +112,7 @@ class SecretsService:
         return True
 
     @classmethod
-    async def list_metadata(cls, db: AsyncSession) -> Sequence[ManagedSecret]:
+    async def list_metadata(cls, db: AsyncSession) -> Sequence[Row]:
         """List all secret metadata without leaking plaintext."""
         # Using deferred column loading or just avoiding `ciphertext` access
         # Since `ciphertext` is encrypted at rest, accessing it returns the decrypt,

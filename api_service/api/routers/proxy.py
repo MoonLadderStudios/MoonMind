@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from cryptography.fernet import Fernet
@@ -9,6 +10,7 @@ from api_service.core.encryption import get_encryption_key
 from moonmind.auth.resolvers import RootSecretResolver
 from api_service.db.base import get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
+from moonmind.config.providers import PROVIDERS
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,14 @@ async def _verify_and_decode_proxy_token(token: str) -> dict:
             token = token[len("mm-proxy-token:"):]
         fernet = Fernet(get_encryption_key().encode("utf-8"))
         payload_bytes = fernet.decrypt(token.encode("utf-8"))
-        return json.loads(payload_bytes.decode("utf-8"))
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        
+        # Validate expiration
+        if "exp" in payload:
+            if time.time() > payload["exp"]:
+                raise ValueError("Token is expired")
+        
+        return payload
     except (InvalidToken, json.JSONDecodeError, ValueError) as e:
         logger.warning(f"Failed to decode proxy token: {e}")
         raise HTTPException(status_code=401, detail="Invalid or expired proxy token")
@@ -36,8 +45,8 @@ async def _resolve_provider_key(provider: str, secret_refs: dict, session: Async
     # Generic fallback
     if not ref:
         for k, v in secret_refs.items():
-            if v.startswith("db_encrypted:"):
-                ref = v
+            if str(v).find("://") != -1: # Support typed backends <backend>://<locator>
+                ref = str(v)
                 break
 
     if not ref:
@@ -76,26 +85,22 @@ async def proxy_pass_through(
     provider_secret = await _resolve_provider_key(provider_id, payload.get("secret_refs", {}), session)
 
     provider_id = provider_id.lower()
-    if provider_id == "anthropic":
-        target_url = f"https://api.anthropic.com/{path}"
-    elif provider_id == "openai":
-        # Usually path already includes /v1 if they replaced OPENAI_BASE_URL to proxy/openai/v1
-        target_url = f"https://api.openai.com/{path}"
-    elif provider_id == "minimax":
-        target_url = f"https://api.minimax.io/{path}"
-    else:
+    
+    config = PROVIDERS.get(provider_id)
+    if not config:
         raise HTTPException(status_code=400, detail=f"Unsupported proxy provider {provider_id}")
+
+    target_url = f"{config['base_url']}/{path}"
 
     # Forward headers safely
     headers = dict(request.headers)
     headers.pop("host", None)
+    headers.pop("authorization", None)
+    headers.pop("x-api-key", None)
     
-    if provider_id == "anthropic":
-        headers["x-api-key"] = provider_secret
-        headers.pop("authorization", None)
-    elif provider_id in ("openai", "minimax"):
-        headers["authorization"] = f"Bearer {provider_secret}"
-        headers.pop("x-api-key", None)
+    header_key = config["auth_header_key"]
+    header_val = config["auth_header_format"].format(token=provider_secret)
+    headers[header_key] = header_val
 
     body = await request.body()
     

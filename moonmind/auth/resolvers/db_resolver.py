@@ -1,5 +1,5 @@
 import structlog
-from cryptography.fernet import InvalidToken
+
 
 from moonmind.auth.resolvers.base import SecretBackendResolver
 from moonmind.auth.secret_refs import (

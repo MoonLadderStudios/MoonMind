@@ -237,16 +237,18 @@ class ManagedAgentAdapter:
         
         if is_proxy_first:
             import json
+            import time
             from cryptography.fernet import Fernet
             from api_service.core.encryption import get_encryption_key
             
-            provider = profile.get("provider_id", "anthropic").strip().lower()
+            provider = str(profile.get("provider_id") or "anthropic").strip().lower()
             
             # Mint a synthetic proxy token to authorize internal routes without leaking the true DB secret
             payload_bytes = json.dumps({
                 "provider": provider,
                 "workflow_id": self._workflow_id,
-                "secret_refs": profile.get("secret_refs", {})
+                "secret_refs": profile.get("secret_refs", {}),
+                "exp": time.time() + 3600  # 1 hour expiration for proxied tokens
             }).encode("utf-8")
             
             fernet = Fernet(get_encryption_key().encode("utf-8"))
@@ -257,16 +259,13 @@ class ManagedAgentAdapter:
             # Inject standard proxy variables into the delta block directly for the worker
             delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
             
-            if provider == "anthropic":
-                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/anthropic"
+            if provider == "anthropic" or provider == "minimax":
+                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/{provider}"
                 delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
                 delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
             elif provider == "openai":
                 delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
                 delta_env_overrides["OPENAI_API_KEY"] = proxy_token
-            elif provider == "minimax":
-                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/minimax"
-                delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
 
         if auth_mode == "oauth":
             shaped_env = shape_environment_for_oauth(
@@ -303,7 +302,10 @@ class ManagedAgentAdapter:
                     # into delta_env_overrides so they reach the launcher.
                     # Sensitive-keyed entries must be handled through secret_refs.
                     # Exception: explicitly injected proxy variables
-                    if not _should_filter_base_env_var(ks) or is_proxy_first:
+                    is_safe_proxy_var = is_proxy_first and (
+                        ks == "MOONMIND_PROXY_TOKEN" or ks.endswith("_BASE_URL")
+                    )
+                    if not _should_filter_base_env_var(ks) or is_safe_proxy_var:
                         delta_env_overrides[ks] = str(value) if value is not None else ""
             api_key_env_var = profile.get("api_key_env_var")
             if api_key_env_var and str(api_key_env_var).strip():

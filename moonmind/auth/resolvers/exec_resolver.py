@@ -8,6 +8,7 @@ from moonmind.auth.secret_refs import (
     SecretAccessDeniedError,
     SecretMissingError,
 )
+from moonmind.utils.logging import SecretRedactor
 
 logger = structlog.get_logger(__name__)
 
@@ -67,7 +68,8 @@ class ExecSecretResolver(SecretBackendResolver):
         if proc.returncode != 0:
             error_msg = stderr.decode("utf-8").strip()
             # Do not log stdout as it might contain partial sensitive data
-            logger.warning("exec_returned_non_zero", command=command, returncode=proc.returncode, error=error_msg)
+            redacted_error = SecretRedactor.from_environ().scrub(error_msg)
+            logger.warning("exec_returned_non_zero", command=command, returncode=proc.returncode, error=redacted_error)
             raise SecretMissingError(
                 f"Exec '{command}' failed with exit code {proc.returncode}"
             )

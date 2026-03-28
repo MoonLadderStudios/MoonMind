@@ -1,6 +1,5 @@
-import os
 import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 import pytest
 
@@ -15,7 +14,6 @@ from moonmind.auth.resolvers import (
     EnvSecretResolver,
     DbEncryptedSecretResolver,
     ExecSecretResolver,
-    AdapterVaultSecretResolver,
     RootSecretResolver,
 )
 

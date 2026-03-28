@@ -1,5 +1,5 @@
 import structlog
-from typing import Mapping, Type
+from typing import Mapping
 
 from moonmind.auth.secret_refs import (
     ParsedSecretRef,

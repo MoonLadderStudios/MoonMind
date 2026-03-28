@@ -55,16 +55,20 @@ def get_encryption_key() -> str:
             logger.error("failed_to_read_local_secret", error=str(e), path=str(local_secret_path))
             raise ValueError("Could not read local encryption master key.") from e
 
+    allow_gen = os.environ.get("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "0")
+    if allow_gen != "1":
+        raise ValueError("Could not resolve or initialize ENCRYPTION_MASTER_KEY. "
+                         "Auto-generation is disabled unless MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=1")
+
     # 4. Generate and persist new key for baseline local-first startup
     try:
         local_secret_dir.mkdir(parents=True, exist_ok=True)
         new_key = Fernet.generate_key().decode("utf-8")
         
-        # Write securely
-        if not local_secret_path.exists():
-            local_secret_path.touch(mode=0o600, exist_ok=False)
-        local_secret_path.write_text(new_key, encoding="utf-8")
-        os.chmod(local_secret_path, stat.S_IRUSR | stat.S_IWUSR)
+        # Write securely using os.open with O_EXCL to prevent TOCTOU
+        fd = os.open(str(local_secret_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(new_key)
         
         logger.info("initialized_new_local_encryption_key", path=str(local_secret_path))
         _ACTIVE_ENCRYPTION_KEY = new_key

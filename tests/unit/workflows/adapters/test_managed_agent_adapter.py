@@ -344,11 +344,11 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first() -> None:
         {
             "profile_id": "proxy-prof",
             "auth_mode": "api_key",
-            "api_key_ref": "db_encrypted:123", # Not evaluated in proxy
+            "api_key_ref": "db://123", # Not evaluated in proxy
             "command_template": ["claude"],
             "tags": ["proxy-first"],
             "provider_id": "anthropic",
-            "secret_refs": {"anthropic_api_key": "db_encrypted:123"},
+            "secret_refs": {"anthropic_api_key": "db://123"},
         }
     ]
     captured_payload: dict[str, Any] = {}
@@ -385,7 +385,7 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first() -> None:
     
     assert isinstance(env_overrides, dict)
     # The proxy token must be generated but db_encrypted should not leak
-    assert "db_encrypted:123" not in env_overrides.values()
+    assert "db://123" not in env_overrides.values()
     assert "MANAGED_API_KEY_REF" not in env_overrides
     assert "MOONMIND_PROXY_TOKEN" in env_overrides
     assert "ANTHROPIC_BASE_URL" in env_overrides

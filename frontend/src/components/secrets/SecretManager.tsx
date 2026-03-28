@@ -20,6 +20,11 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   const [plaintext, setPlaintext] = useState('');
   const [isEditing, setIsEditing] = useState(false);
 
+  // Rotation modal state
+  const [rotatePromptOpen, setRotatePromptOpen] = useState(false);
+  const [rotatePromptSlug, setRotatePromptSlug] = useState('');
+  const [rotatePromptVal, setRotatePromptVal] = useState('');
+
   const createOp = useMutation({
     mutationFn: async ({ slug, plaintext }: { slug: string, plaintext: string }) => {
       const resp = await fetch('/api/v1/secrets', {
@@ -135,12 +140,17 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   };
   
   const handleRotate = (secSlug: string) => {
-     if (window.confirm(`Are you sure you want to trigger a rotation for ${secSlug}?`)) {
-        const val = window.prompt(`Enter NEW secure value for ${secSlug} to rotate:`);
-        if (val) {
-          rotateOp.mutate({slug: secSlug, plaintext: val});
-        }
-     }
+    setRotatePromptSlug(secSlug);
+    setRotatePromptVal('');
+    setRotatePromptOpen(true);
+  };
+
+  const submitRotate = (e: FormEvent) => {
+    e.preventDefault();
+    if (rotatePromptVal) {
+      rotateOp.mutate({slug: rotatePromptSlug, plaintext: rotatePromptVal});
+      setRotatePromptOpen(false);
+    }
   };
 
   const handleDelete = (secSlug: string) => {
@@ -215,7 +225,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                    onChange={e => setSlug(e.target.value)}
                    disabled={isEditing || createOp.isPending || updateOp.isPending}
                  />
-                 <div className="field-hint">The unique key used by the 'db_encrypted:' resolver.</div>
+                 <div className="field-hint">The unique locator used by the 'db://' resolver.</div>
               </div>
               
               <div className="field">
@@ -257,6 +267,24 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
            </form>
         </div>
       </section>
+
+      {rotatePromptOpen && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000}}>
+          <div className="card" style={{ padding: '20px', maxWidth: '400px', width: '100%', background: 'var(--mm-bg-card, #fff)' }}>
+             <h3>Rotate Secret: {rotatePromptSlug}</h3>
+             <form onSubmit={submitRotate} className="stack" style={{ marginTop: '16px' }}>
+                <div className="field">
+                   <label>New Secure Value</label>
+                   <input type="password" value={rotatePromptVal} onChange={e => setRotatePromptVal(e.target.value)} autoFocus required />
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '16px', justifyContent: 'flex-end' }}>
+                   <button type="button" className="btn btn-outline" onClick={() => setRotatePromptOpen(false)}>Cancel</button>
+                   <button type="submit" className="settings-submit-btn">Rotate Now</button>
+                </div>
+             </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,13 +1,11 @@
 import os
 import stat
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 from cryptography.fernet import Fernet
 
 from api_service.core import encryption
-from moonmind.config.settings import SecuritySettings
 
 
 @pytest.fixture(autouse=True)
@@ -61,9 +59,10 @@ def test_get_encryption_key_from_docker_secret(mock_path, mock_settings):
     assert key == "dummy_docker_key"
 
 
-def test_get_encryption_key_from_local_file_generated(mock_settings, tmp_path):
+def test_get_encryption_key_from_local_file_generated(mock_settings, tmp_path, monkeypatch):
     """Test that if no key exists, one is generated securely."""
     mock_settings.workflow.repo_root = str(tmp_path)
+    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
     
     key = encryption.get_encryption_key()
     
