@@ -418,7 +418,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
 
     with pytest.raises(
         ValueError,
-        match="plan node execution failed: gemini CLI command failed",
+        match="plan node execution returned status FAILED: gemini CLI command failed",
     ):
         await workflow._run_execution_stage(
             parameters={"repo": "MoonLadderStudios/MoonMind"},

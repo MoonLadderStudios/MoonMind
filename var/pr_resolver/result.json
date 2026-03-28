@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "tool": "pr_resolve_orchestrate",
+  "status": "attempts_exhausted",
+  "merge_outcome": "attempts_exhausted",
+  "decision": "no progress after full remediation escalation",
+  "reason": "actionable_comments",
+  "final_reason": "actionable_comments",
+  "next_step": "run_fix_comments_skill",
+  "max_attempts": 3,
+  "finalize_max_retries": 2,
+  "fix_max_iterations": 3,
+  "escalations": 1,
+  "attempt_count": 2,
+  "started_at": "2026-03-28T01:35:17.259017+00:00",
+  "finished_at": "2026-03-28T01:35:48.906398+00:00",
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "stage": "finalize",
+      "status": "blocked",
+      "reason": "actionable_comments",
+      "timestamp": "2026-03-28T01:35:27.442627+00:00"
+    },
+    {
+      "attempt": 1,
+      "stage": "full_remediation",
+      "status": "needs_remediation",
+      "reason": "actionable_comments",
+      "escalation": 1,
+      "max_iterations": 3,
+      "timestamp": "2026-03-28T01:35:37.670901+00:00"
+    },
+    {
+      "attempt": 2,
+      "stage": "finalize",
+      "status": "blocked",
+      "reason": "actionable_comments",
+      "timestamp": "2026-03-28T01:35:48.906378+00:00"
+    }
+  ],
+  "decisions": [
+    "finalize:blocked:actionable_comments",
+    "full_remediation:needs_remediation:actionable_comments",
+    "finalize:blocked:actionable_comments"
+  ]
+}
