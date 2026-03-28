@@ -340,12 +340,9 @@ def _build_runtime_planner():
                 step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
                 step_node_inputs: dict[str, Any] = {
                     **node_inputs,
-                    **step_entry,
+                    **{k: v for k, v in step_entry.items() if k not in {"id", "tool", "skill", "instructions"}},
                     "instructions": step_instructions,
                 }
-                step_node_inputs.pop("id", None)
-                step_node_inputs.pop("tool", None)
-                step_node_inputs.pop("skill", None)
 
                 # Per-step tool/skill override
                 step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(

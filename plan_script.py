@@ -1,11 +1,9 @@
-import json
-
 def generate_multi_step_payload():
     return {
         "task": {
             "steps": [
                 {
-                    "id": "step1",
+                    "id": "step-1",
                     "instructions": "Do something",
                     "foo": "bar",
                     "other_key": "other_value",
@@ -14,7 +12,7 @@ def generate_multi_step_payload():
                     }
                 },
                 {
-                    "id": "step2",
+                    "id": "step-2",
                     "instructions": "Do something else",
                     "baz": "qux",
                 }
