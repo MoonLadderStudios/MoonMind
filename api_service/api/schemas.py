@@ -522,6 +522,52 @@ class TaskTemplateFavoriteRequestSchema(BaseModel):
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
 
 
+class SecretCreateRequest(BaseModel):
+    """Request body to create a new secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str = Field(..., description="Unique shorthand string for the secret (e.g., ANTHROPIC_API_KEY)")
+    plaintext: str = Field(..., min_length=1, description="The raw secret value to be encrypted")
+    details: Optional[dict[str, Any]] = Field(default_factory=dict, description="Optional metadata")
+
+
+class SecretUpdateRequest(BaseModel):
+    """Request body to update an existing secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    plaintext: str = Field(..., min_length=1, description="The new raw secret value to be encrypted")
+
+
+class SecretStatusUpdateRequest(BaseModel):
+    """Request body to change secret status."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal["active", "disabled"] = Field(..., description="New status for the secret")
+
+
+class SecretMetadataResponse(BaseModel):
+    """Safe metadata representation of a secret, explicitly excluding ciphertext."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    slug: str
+    status: str
+    details: dict[str, Any]
+    created_at: datetime = Field(..., alias="createdAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+
+class SecretListResponse(BaseModel):
+    """Envelope for list of secret metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[SecretMetadataResponse] = Field(default_factory=list)
+
+
 __all__ = [
     "UserProfileBaseSchema",
     "UserProfileRead",
@@ -543,4 +589,9 @@ __all__ = [
     "TaskTemplateStepBlueprintSchema",
     "TaskTemplateStepSkillSchema",
     "TaskTemplateSummarySchema",
+    "SecretCreateRequest",
+    "SecretUpdateRequest",
+    "SecretStatusUpdateRequest",
+    "SecretMetadataResponse",
+    "SecretListResponse",
 ]

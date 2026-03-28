@@ -169,7 +169,7 @@ Validation:
 
 ### Phase 5. Proxy-First Execution Paths
 
-Outcome:
+Outcome: (DONE)
 
 - MoonMind-owned outbound integrations prefer internal secret use over passing provider credentials into runtimes.
 
@@ -188,7 +188,7 @@ Validation:
 
 ### Phase 6. Runtime Escape-Hatch Hardening
 
-Outcome:
+Outcome: (DONE)
 
 - Third-party runtime launches that require secrets receive the minimum materialized credential scope and leave minimal residue.
 
@@ -208,7 +208,7 @@ Validation:
 
 ### Phase 7. Migration and Operator Rollout
 
-Outcome:
+Outcome: (DONE)
 
 - Existing operators can move from `.env`-only usage to the new Secrets System without ambiguous mixed-state behavior.
 

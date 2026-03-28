@@ -77,7 +77,7 @@ async def test_create_auth_profile(client_app: AsyncClient, _module_db):
         "runtime_id": "claude_v1",
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
-        "secret_refs": {"API_KEY": "secret_v1"},
+        "secret_refs": {"API_KEY": "env://secret_v1"},
         "max_parallel_runs": 5,
         "cooldown_after_429_seconds": 60,
         "rate_limit_policy": "queue",

@@ -10030,49 +10030,13 @@
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
     const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
 
-    if (normalizedRoute === "/tasks") {
-      window.history.replaceState({}, "", "/tasks/list?source=temporal");
-      await renderQueueListPage();
-      return;
-    }
-    if (normalizedRoute === "/tasks/list") {
-      const qs = new URLSearchParams(window.location.search || "");
-      if (String(qs.get("source") || "").trim().toLowerCase() !== "temporal") {
-        window.history.replaceState({}, "", "/tasks/list?source=temporal");
-      }
-      await renderQueueListPage();
-      return;
-    }
-    if (normalizedRoute === "/tasks/queue") {
-      window.history.replaceState({}, "", "/tasks/list?source=temporal");
-      await renderQueueListPage();
-      return;
-    }
-    if (normalizedRoute === "/tasks/temporal") {
-      window.history.replaceState({}, "", "/tasks/list?source=temporal");
-      await renderQueueListPage();
-      return;
-    }
-    if (normalizedRoute === "/tasks/manifests") {
-      await renderManifestListPage();
-      return;
-    }
     if (normalizedRoute === "/tasks/manifests/new") {
       renderManifestSubmitPage();
       return;
     }
-    if (normalizedRoute === "/tasks/schedules") {
-      await renderSchedulesListPage();
-      return;
-    }
-    if (normalizedRoute === "/tasks/proposals") {
-      await renderProposalsListPage();
-      return;
-    }
-    if (normalizedRoute === "/tasks/workers") {
-      await renderWorkerControlsPage();
-      return;
-    }
+
+
+
 
     if (normalizedRoute === "/tasks/skills") {
       await renderSkillsPage();
@@ -10101,60 +10065,6 @@
     if (normalizedRoute === "/tasks/queue/new") {
       window.history.replaceState({}, "", "/tasks/new");
       await renderSubmitWorkPage(undefined);
-      return;
-    }
-
-    if (temporalDetailMatch) {
-      window.location.replace(
-        `/tasks/${encodeURIComponent(temporalDetailMatch[1])}?source=temporal`,
-      );
-      return;
-    }
-    if (unifiedDetailMatch) {
-      const candidateTaskId = normalizeDashboardDetailSegment(unifiedDetailMatch[1]);
-      if (!candidateTaskId) {
-        renderNotFound();
-        return;
-      }
-      const explicitSource = String(searchParams?.get("source") || "")
-        .trim()
-        .toLowerCase();
-      
-      const { source: resolvedSource, resolvedId } = await resolveUnifiedTaskSource(candidateTaskId);
-      if (explicitSource === "temporal" && temporalDetailEnabled) {
-        await renderTemporalDetailPage(resolvedId || candidateTaskId);
-        return;
-      }
-      if (resolvedSource === "temporal" && temporalDetailEnabled) {
-        await renderTemporalDetailPage(resolvedId);
-        return;
-      }
-      if (temporalDetailEnabled) {
-        try {
-          await fetchJson(
-            withTemporalSourceFlag(
-              endpoint(
-                temporalSourceConfig.detail || "/api/executions/{workflowId}",
-                { workflowId: candidateTaskId, id: candidateTaskId, taskId: candidateTaskId },
-              ),
-            ),
-          );
-          await renderTemporalDetailPage(candidateTaskId);
-          return;
-        } catch (_error) {
-          renderNotFound();
-          return;
-        }
-      }
-      renderNotFound();
-      return;
-    }
-    if (proposalDetailMatch) {
-      await renderProposalDetailPage(proposalDetailMatch[1]);
-      return;
-    }
-    if (scheduleDetailMatch) {
-      await renderScheduleDetailPage(scheduleDetailMatch[1]);
       return;
     }
 

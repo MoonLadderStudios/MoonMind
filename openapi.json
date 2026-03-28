@@ -1753,6 +1753,639 @@
         }
       }
     },
+    "/api/v1/secrets": {
+      "get": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "List metadata for all managed secrets",
+        "operationId": "list_secrets_api_v1_secrets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "Create a new managed secret",
+        "operationId": "create_secret_api_v1_secrets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadataResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{slug}": {
+      "put": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "Update an existing secret",
+        "operationId": "update_secret_api_v1_secrets__slug__put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadataResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "Delete a secret entirely",
+        "operationId": "delete_secret_api_v1_secrets__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{slug}/rotate": {
+      "post": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "Rotate an existing secret",
+        "operationId": "rotate_secret_api_v1_secrets__slug__rotate_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadataResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{slug}/status": {
+      "put": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "Update the status of a secret",
+        "operationId": "update_secret_status_api_v1_secrets__slug__status_put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretStatusUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadataResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets/{slug}/validate": {
+      "get": {
+        "tags": [
+          "Secrets"
+        ],
+        "summary": "Validate that a secret reference is resolvable",
+        "operationId": "validate_secret_api_v1_secrets__slug__validate_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Validate Secret Api V1 Secrets  Slug  Validate Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/proxy/{provider_id}/{path}": {
+      "get": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_get",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_post",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_put",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_delete",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_patch",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "options": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_options",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Proxy Pass Through",
+        "description": "Transparent proxy endpoint for agent runtimes executing in proxy-first mode.\nTakes a symmetric-encrypted token (MOONMIND_PROXY_TOKEN), extracts the secret reference,\nresolves the real secret via the database, and proxies to the upstream URL.",
+        "operationId": "proxy_pass_through_head",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/executions": {
       "post": {
         "tags": [
@@ -3673,6 +4306,28 @@
         }
       }
     },
+    "/tasks/secrets": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task Secrets Route",
+        "description": "Serve the React-powered secrets page.",
+        "operationId": "task_secrets_route_tasks_secrets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks": {
       "get": {
         "tags": [
@@ -3681,6 +4336,136 @@
         "summary": "Task Dashboard Root",
         "description": "Serve the dashboard root page.",
         "operationId": "task_dashboard_root_tasks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/proposals": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task Proposals Route",
+        "description": "Serve the React-powered proposals page.",
+        "operationId": "task_proposals_route_tasks_proposals_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/schedules": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task Schedules Route",
+        "description": "Serve the React-powered schedules page.",
+        "operationId": "task_schedules_route_tasks_schedules_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/manifests": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task Manifests Route",
+        "description": "Serve the React-powered manifests page.",
+        "operationId": "task_manifests_route_tasks_manifests_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/tasks-list": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task Tasks List Route",
+        "description": "Serve the React-powered tasks-list page.",
+        "operationId": "task_tasks_list_route_tasks_tasks_list_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/list": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task List Route",
+        "description": "Serve the React-powered tasks list page.",
+        "operationId": "task_list_route_tasks_list_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/workers": {
+      "get": {
+        "tags": [
+          "task-dashboard"
+        ],
+        "summary": "Task Workers Route",
+        "description": "Serve the React-powered workers page.",
+        "operationId": "task_workers_route_tasks_workers_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -11610,6 +12395,133 @@
         ],
         "title": "ScheduleCreatedResponse",
         "description": "Response returned when a recurring schedule is created from the create endpoint."
+      },
+      "SecretCreateRequest": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug",
+            "description": "Unique shorthand string for the secret (e.g., ANTHROPIC_API_KEY)"
+          },
+          "plaintext": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Plaintext",
+            "description": "The raw secret value to be encrypted"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details",
+            "description": "Optional metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "plaintext"
+        ],
+        "title": "SecretCreateRequest",
+        "description": "Request body to create a new secret."
+      },
+      "SecretListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SecretMetadataResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "SecretListResponse",
+        "description": "Envelope for list of secret metadata."
+      },
+      "SecretMetadataResponse": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "status",
+          "details",
+          "createdAt"
+        ],
+        "title": "SecretMetadataResponse",
+        "description": "Safe metadata representation of a secret, explicitly excluding ciphertext."
+      },
+      "SecretStatusUpdateRequest": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "title": "Status",
+            "description": "New status for the secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "SecretStatusUpdateRequest",
+        "description": "Request body to change secret status."
+      },
+      "SecretUpdateRequest": {
+        "properties": {
+          "plaintext": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Plaintext",
+            "description": "The new raw secret value to be encrypted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plaintext"
+        ],
+        "title": "SecretUpdateRequest",
+        "description": "Request body to update an existing secret."
       },
       "SignalExecutionRequest": {
         "properties": {

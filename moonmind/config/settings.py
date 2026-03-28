@@ -1191,8 +1191,8 @@ class SecuritySettings(BaseSettings):
         "test_jwt_secret_key", alias="JWT_SECRET_KEY"
     )  # Made Optional and added default
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
-        "test_encryption_master_key", alias="ENCRYPTION_MASTER_KEY"
-    )  # Made Optional and added default
+        None, alias="ENCRYPTION_MASTER_KEY"
+    )
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 

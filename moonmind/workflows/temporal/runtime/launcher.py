@@ -17,6 +17,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
 )
+from moonmind.utils.logging import SecretRedactor
 
 from .store import ManagedRunStore
 
@@ -96,16 +97,17 @@ class ManagedRuntimeLauncher:
         if process.returncode == 0:
             return True
 
+        redactor = SecretRedactor.from_environ()
         self._logger.warning(
             "git %s failed rc=%s stdout=%s stderr=%s",
-            " ".join(args),
+            redactor.scrub(" ".join(args)),
             process.returncode,
-            stdout.decode("utf-8", errors="replace").strip()[:400],
-            stderr.decode("utf-8", errors="replace").strip()[:400],
+            redactor.scrub(stdout.decode("utf-8", errors="replace").strip()[:400]),
+            redactor.scrub(stderr.decode("utf-8", errors="replace").strip()[:400]),
         )
         if allow_failure:
             return False
-        raise RuntimeError(f"git {' '.join(args)} failed with exit code {process.returncode}")
+        raise RuntimeError(f"git {redactor.scrub(' '.join(args))} failed with exit code {process.returncode}")
 
     async def _prepare_workspace(
         self,
@@ -207,8 +209,10 @@ class ManagedRuntimeLauncher:
         )
         if returncode == 0:
             return
-        detail = stderr_text or stdout_text or "no output"
-        rendered_cmd = " ".join(shlex.quote(part) for part in cmd)
+        
+        redactor = SecretRedactor.from_environ()
+        detail = redactor.scrub(stderr_text or stdout_text or "no output")
+        rendered_cmd = redactor.scrub(" ".join(shlex.quote(part) for part in cmd))
         raise RuntimeError(
             f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
         )
@@ -274,7 +278,8 @@ class ManagedRuntimeLauncher:
                     or "pathspec" in failure_detail
                 )
                 if not branch_missing:
-                    detail = stderr_text or stdout_text or "no output"
+                    redactor = SecretRedactor.from_environ()
+                    detail = redactor.scrub(stderr_text or stdout_text or "no output")
                     rendered_cmd = " ".join(
                         shlex.quote(part)
                         for part in [
@@ -285,6 +290,7 @@ class ManagedRuntimeLauncher:
                             new_branch,
                         ]
                     )
+                    rendered_cmd = redactor.scrub(rendered_cmd)
                     raise RuntimeError(
                         f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
                     )

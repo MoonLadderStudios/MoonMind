@@ -47,7 +47,7 @@ _ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS: frozenset[str] = frozenset(
 )
 # Non-secret metadata keys allowed in envOverrides (values are refs / env names, not raw secrets).
 _ALLOWED_MANAGED_LAUNCH_METADATA_KEYS: frozenset[str] = frozenset(
-    {"MANAGED_API_KEY_REF", "MANAGED_API_KEY_TARGET_ENV"}
+    {"MANAGED_API_KEY_REF", "MANAGED_API_KEY_TARGET_ENV", "MOONMIND_PROXY_TOKEN"}
 )
 _MAX_SUMMARY_CHARS = 4096
 
@@ -76,6 +76,9 @@ def _contains_sensitive_key(
                     not normalized.endswith("_ref")
                     and str(key).strip().upper() not in normalized_allowlist
                 ):
+                    # Allow synthetic proxy tokens to inhabit sensitive keys for provider routing
+                    if isinstance(nested, str) and nested.startswith("mm-proxy-token:"):
+                        continue
                     return True
             if _contains_sensitive_key(
                 nested,
