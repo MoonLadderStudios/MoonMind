@@ -3892,12 +3892,9 @@
       const telemetryHtml =
         filterState.source === "temporal" ? "" : renderTelemetrySummary(telemetryPayload);
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
-      const subtitle =
-        filterState.source === "temporal"
-          ? "Temporal-backed tasks with exact Temporal pagination."
-          : temporalListEnabled
-            ? `Tasks ordered by recency.`
-            : `Tasks ordered by creation time.`;
+      const subtitle = temporalListEnabled
+        ? `Tasks ordered by recency.`
+        : `Tasks ordered by creation time.`;
       setView(
         "Tasks List",
         subtitle,
@@ -7275,7 +7272,6 @@
           artifactId ||
           "artifact";
         const size = pick(artifact, "size_bytes", "sizeBytes");
-        const contentType = pick(artifact, "content_type", "contentType") || "-";
         const rawAccessAllowed = Boolean(pick(artifact, "raw_access_allowed", "rawAccessAllowed"));
         const readableArtifactId = previewArtifactId || defaultReadArtifactId || artifactId;
         const actionLabel = previewArtifactId ? "Preview" : "Download";
@@ -7292,7 +7288,6 @@
           <tr>
             <td><code>${escapeHtml(label)}</code></td>
             <td>${escapeHtml(String(size ?? "-"))}</td>
-            <td>${escapeHtml(String(contentType))}</td>
             <td>${escapeHtml(String(pick(artifact, "status") || "-"))}</td>
             <td>${action}</td>
           </tr>
@@ -7452,9 +7447,9 @@
       <section>
         <h3>Artifacts</h3>
         <table>
-          <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
+          <thead><tr><th>Artifact</th><th>Size</th><th>Status</th><th>Action</th></tr></thead>
           <tbody>${renderTemporalArtifactRows(artifacts?.artifacts || []) ||
-      "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
+      "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
       }</tbody>
         </table>
       </section>

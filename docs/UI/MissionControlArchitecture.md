@@ -10,7 +10,7 @@ Last Updated: 2026-03-27
 
 Define the concrete architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, and artifact flows.
 
-The dashboard integrates over the Control Plane API and interprets execution status from configured sources (including Temporal and, where enabled, queue and system sources).
+The dashboard integrates over the Control Plane API and presents Mission Control primarily as a Temporal-native task console. Legacy source distinctions may still exist in backend/runtime config, but the operator-facing list/detail experience should center workflow executions surfaced as tasks.
 
 ## 2. Related Docs
 
@@ -96,17 +96,18 @@ tools/
 
 ### 4.1 Query Parameters
 
-Supported query parameters for Temporal integration:
+Supported query parameters for task list/detail routing:
 
 | Query parameter | Meaning |
 | --- | --- |
-| `source=temporal` | Force Temporal source resolution for list/detail |
-| `workflowType=` | Filter Temporal list by workflow type when source is Temporal |
+| `source=temporal` | Force Temporal source resolution for list/detail. Keep as an implementation/debug override, not a primary visible filter. |
+| `workflowType=` | Backend-facing workflow filter for Temporal list queries. The user-facing control should be labeled **Workflow**. |
 | `state=` | Filter Temporal list by `mm_state` |
-| `entry=` | Filter Temporal list by `mm_entry` (`run`, `manifest`) |
+| `entry=` | Compatibility/debug filter for `mm_entry`. Do not expose as a first-order control when it only repeats the workflow distinction. |
 | `ownerType=` | Operator/admin-only owner class filter |
 | `ownerId=` | Admin-only filter passthrough when allowed by API policy |
 | `nextPageToken=` | Temporal-only pagination token |
+| `limit=` | Page size / results-per-page preference. Treat as pagination UI state, not a primary filter. |
 | `repo=` | Optional repo-scoped filter when exposed by API policy |
 | `integration=` | Optional integration filter when exposed by API policy |
 
@@ -118,7 +119,7 @@ Ownership rules:
 
 ## 5. Source Model
 
-The dashboard presents work from multiple backend sources through a unified UI.
+The Mission Control navigation still spans multiple product areas, but the main task list/detail flow should behave as a Temporal-native operator surface.
 
 ### 5.1 Dashboard Sources
 
@@ -129,18 +130,19 @@ Runtime config (`build_runtime_config()`) currently exposes:
 - `proposals`
 - `manifests`
 - `schedules`
-- `temporal` *(being integrated)*
+- `temporal`
 
-### 5.2 Temporal as a Dashboard Source
+### 5.2 Temporal-Native Task Surfaces
 
-Temporal-backed work is integrated as a **first-class source** alongside queue and system, not as a separate UI or a worker runtime.
+`/tasks/list` and `/tasks/:taskId` should present Temporal-backed work as the default Mission Control task experience, not as one equal option in a user-visible source switcher.
 
 Rules:
 
-- Add a new source key: `temporal`.
 - Keep the `/tasks*` shell as the primary navigation surface.
 - Do not make the browser talk directly to Temporal Server or Temporal Web UI.
 - Go through MoonMind REST APIs only.
+- Keep any `source` routing/query state as an implementation detail, debug affordance, or temporary compatibility layer.
+- Do not spend primary UI space on a `Source` filter or a constant `Type = Temporal` column when Temporal is the only live task source.
 
 ### 5.3 Temporal Is Not a Worker Runtime
 
@@ -159,6 +161,15 @@ The dashboard presents work primarily as **tasks**.
 - Use **task** in the main dashboard UX.
 - Use **workflow execution** in advanced/debug metadata and implementation-facing text.
 - Do not expose Temporal Task Queues as a user-facing queue product.
+- Let the list page optimize for scanning and comparison; let the detail page carry secondary metadata and execution evidence.
+
+### 5.5 Detail-First Metadata Strategy
+
+The list page should not attempt to expose every execution field.
+
+- Keep the list focused on fields needed to compare rows quickly.
+- Move secondary metadata such as namespace, run ID, repository, integration, owner, and exact terminal timestamps into the task detail page or an explicit row expansion surface.
+- When choosing between a wider, clearer primary table and another low-value column, prefer the clearer table and move the overflow information into detail.
 
 ## 6. Runtime Config Contract
 
@@ -241,11 +252,11 @@ Suggested **enablement order** for `temporalDashboard` flags: list/detail read-o
 
 ## 7. Detail View Lifecycle
 
-When viewing `/tasks/:taskId`, the dashboard polls the API (which maps to Temporal's Execution history or Postgres index).
+When viewing `/tasks/:taskId`, the dashboard polls the API for the latest execution state and artifacts, then renders a task-oriented detail shell over that workflow data.
 
-- Queue-backed fetches query standard `GET /api/queue/jobs/{jobId}` which derives status from the execution index.
 - Operator actions (Approve, Resume, Pause) interact with task limits by submitting to standard API routes, which issue Signals to the `MoonMind.Run` handler.
 - Terminal outputs manifest in a UI Finish Summary block, mapping standard events into human-readable outcome strings (like `NO_CHANGES` or `PUBLISHED_PR`).
+- The detail page is the intended home for metadata that is too secondary or too wide to justify a persistent list column.
 
 ### 7.1 Temporal Detail Routing
 
@@ -266,10 +277,10 @@ Recommendation:
 
 ### 7.2 Source Resolution Order
 
-1. If `?source=temporal`, resolve against Temporal only.
-2. Otherwise resolve via canonical server-side source mapping for `taskId`.
-3. Keep source-probing heuristics, if any remain temporarily, as an implementation fallback.
-4. When a row originated from the Temporal list, generated links may include `?source=temporal` until source mapping is fully in place.
+1. Resolve `/tasks/:taskId` through canonical server-side source mapping / task index.
+2. If `?source=temporal` is present, treat it as an explicit override.
+3. Keep source-probing heuristics, if any remain temporarily, as an implementation fallback only.
+4. Links generated from `/tasks/list` may include `?source=temporal` until canonical source mapping is fully in place, but this should not become a user-facing concept.
 
 ### 7.3 Temporal Detail Fetch Sequence
 
@@ -286,22 +297,15 @@ Important rule:
 
 ### 7.4 Detail Header Model
 
-Temporal-backed detail should render:
+Temporal-backed detail should render a clearer information hierarchy than the list page:
 
-- title
-- normalized status badge
-- summary
-- workflow type label
-- runtime, model, and effort (when applicable to the execution)
-- latest run metadata
-- source label (`Temporal`)
-- started/updated/closed timestamps
+- A primary summary header: title, normalized status badge, concise summary, and allowed actions.
+- A compact execution facts row: workflow label, runtime, model/effort when applicable, started time, updated time or duration, and latest run state.
+- A metadata rail or secondary facts panel: workflow ID, latest `temporalRunId`, namespace, repository, integration, owner, and terminal timestamps.
+- A durable evidence section: artifacts, outcome summaries, and timeline state transitions.
 
 Advanced/debug fields may optionally show:
 
-- `workflowId`
-- latest `temporalRunId`
-- `namespace`
 - raw `temporalStatus`
 - raw `rawState`
 - raw `closeStatus`
@@ -310,54 +314,69 @@ Advanced/debug fields may optionally show:
 
 ### 7.5 Timeline / Event Model
 
-V1 detail behavior for Temporal-backed work:
+Desired detail behavior for Temporal-backed work:
 
 - Show a summary/timeline panel synthesized from execution fields and known state transitions.
 - Surface `waitingReason` and `attentionRequired` when the execution is blocked externally.
 - Show artifacts as the main durable evidence surface.
 - Show update/signal/cancel actions when enabled.
+- Keep low-scan-value fields off the main list when they are already available in detail.
 - Defer raw Temporal event history browsing until a dedicated backend contract exists.
 
 ## 8. List Page Integration
 
-### 8.1 Mixed-Source List Behavior
+### 8.1 Product Posture
 
-`/tasks/list` remains the main list surface.
-
-When `source` is not pinned, the client may merge rows from:
-
-- queue
-- system
-- temporal
+`/tasks/list` is the primary Temporal runs console for Mission Control.
 
 Rules:
 
-- Mixed-source list mode is a **product convenience view**, not an authoritative globally paginated dataset.
-- The dashboard may fetch bounded slices per source and merge-sort client-side.
-- Mixed-source totals are informational only and should not claim exact global counts.
-- Exact Temporal pagination and counts should only be surfaced when the user filters to `source=temporal`.
+- Treat Temporal executions as the authoritative dataset for the main task list UX.
+- Do not expose `Source` as a first-order filter in the normal desktop/mobile task list.
+- Keep `source=temporal` as an implementation/debug override only.
+- Avoid queue-era framing like a constant `Type = Temporal` column when it no longer adds information.
 
-### 8.2 Temporal-Only List Behavior
+### 8.2 Filter Model
 
-When `source=temporal`, the dashboard treats Temporal as the authoritative source.
+Primary list controls should stay narrow and high-signal:
 
-Behavior:
+- `Workflow` (user-facing label) mapped internally to `workflowType`
+- `Status` mapped to normalized/Temporal state filters
+- `Runtime`
+- Search
 
-- Call `GET /api/executions`.
-- Pass `workflowType`, `state`, `entry`, `ownerType`, `ownerId`, `pageSize`, and `nextPageToken` where applicable.
-- Use the returned `nextPageToken`, `count`, and `countMode` as-is.
-- Avoid pretending that queue/system records are part of the same exact paginated result set.
+Advanced filters may include:
 
-### 8.3 Row Model for Temporal-Backed Items
+- `repo`
+- `integration`
+- `ownerType`
+- `ownerId`
+
+Rules:
+
+- Do not expose both `Workflow Type` and `Entry` when they are describing the same product distinction.
+- Keep `entry` as an internal/debug compatibility field unless a future workflow class makes it independently meaningful.
+- Treat page size as pagination/view state. Place it with pagination controls or a compact display menu, not in the primary filter bar.
+- If column-local filtering is added, use header popovers or funnel affordances for selected columns while preserving click-to-sort on the header itself.
+
+### 8.3 Layout and Density
+
+The list page should use a two-width layout strategy:
+
+- Keep masthead, navigation, and compact filter surfaces visually constrained and polished.
+- Let the results region expand into a wide console surface on desktop, typically `1500-1800px` max width or fluid width with generous side gutters.
+- Keep the desktop view as a table. Use stacked cards only on narrow/mobile layouts.
+- Reduce unnecessary chrome around the table so density comes from hierarchy rather than empty space or nested cards.
+
+### 8.4 Row Model for Temporal-Backed Items
 
 | Dashboard field | Temporal source |
 | --- | --- |
 | `id` / `taskId` | `workflowId` |
-| `source` | `temporal` |
-| `sourceLabel` | `Temporal` |
 | `title` | `memo.title` or fallback from workflow type |
 | `summary` | `memo.summary` |
 | `workflowType` | `workflowType` |
+| `runtime` | target runtime from execution fields / search attributes / memo |
 | `entry` | `searchAttributes.mm_entry` if present |
 | `status` | `dashboardStatus` |
 | `rawState` | exact `state` |
@@ -372,10 +391,26 @@ Behavior:
 | `startedAt` | `startedAt` |
 | `updatedAt` | `updatedAt` or `searchAttributes.mm_updated_at` |
 | `closedAt` | `closedAt` |
+| `duration` | derived from `startedAt` and `closedAt` / latest update when needed |
 | `workflowId` | `workflowId` |
 | `temporalRunId` | latest Temporal run instance ID |
 
-### 8.4 Sorting
+Recommended desktop table priorities:
+
+- Primary column: `title`
+- Strong supporting columns: `status`, `workflowType` (labeled **Workflow**), `runtime`, `startedAt`, `duration` or `updatedAt`
+- Compact secondary column: `id` / `taskId`
+- Move `entry`, namespace, run ID, repository, integration, owner, and exact finished time into detail or row expansion surfaces
+- Remove `source` / `sourceLabel` / constant type columns from the normal operator-facing table
+
+Compact rendering rules:
+
+- Keep IDs shortened and monospace-friendly.
+- Use badges/pills for status, runtime, and other short categorical fields.
+- Prefer relative or compact times in the table, with exact timestamps in tooltips or detail.
+- Give `title` the widest column budget and cap it to a readable one or two lines.
+
+### 8.5 Sorting and Pagination
 
 For Temporal-backed rows:
 
@@ -384,10 +419,12 @@ For Temporal-backed rows:
 - Deterministic tie-breaker: `workflowId DESC`.
 - Fallback of last resort: `startedAt`.
 
-For mixed-source views:
+Pagination rules:
 
-- Sort on a normalized timestamp field shared across sources.
-- Do not imply Temporal queue-order semantics.
+- Call `GET /api/executions`.
+- Pass `workflowType`, `state`, `ownerType`, `ownerId`, `limit`, `nextPageToken`, and other optional advanced filters where applicable.
+- Use returned `nextPageToken`, `count`, and `countMode` as-is.
+- Present page size near pagination controls or a compact view menu rather than in the primary filter stack.
 
 ## 9. Action Mapping
 
@@ -612,7 +649,7 @@ Default to showing artifacts for the **latest run**. If prior-run artifact brows
 
 ### 12.2 Identifier Policy
 
-During migration, a Temporal-backed record may carry:
+For Temporal-backed task surfaces:
 
 - `taskId`
 - `workflowId`
@@ -620,20 +657,16 @@ During migration, a Temporal-backed record may carry:
 
 Rules:
 
-- For `source=temporal`, `taskId` should equal `workflowId`.
-- `taskId` remains the main dashboard route handle during migration.
+- `taskId` should equal `workflowId` for Temporal-backed task pages.
+- `taskId` remains the main dashboard route handle.
 - `workflowId` is the durable Temporal identity.
 - `temporalRunId` is detail/debug metadata, not the main user-facing identifier.
 - `runId` remains reserved for legacy system compatibility and should not be reused for Temporal-backed task payloads.
 
-### 12.3 Mixed-Source List Caveat
+### 12.3 Source Visibility Policy
 
-A mixed-source `/tasks/list` page is a product convenience view, not a universal durable source of truth.
-
-- Queue-backed rows remain sourced from queue APIs.
-- system-backed rows remain sourced from system APIs.
-- Temporal-backed rows remain sourced from Temporal lifecycle APIs.
-- No shared global pagination promise across all three systems.
+- Do not require operators to reason about `source` for the normal task list/detail flow.
+- Keep source-specific routing/query compatibility behind the scenes unless a second live task source becomes product-relevant again.
 
 ## 13. Open Questions
 
@@ -641,4 +674,3 @@ A mixed-source `/tasks/list` page is a product convenience view, not a universal
 2. Is the current `awaiting_action` compatibility grouping sufficient once `waitingReason` and `attentionRequired` are exposed, or do we eventually want a sharper dashboard distinction for approval versus external wait states?
 3. Should direct Temporal-backed create be hidden entirely behind backend routing, or exposed as a feature-flagged advanced submit path during rollout?
 4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common?
-5. When a queue- or system-backed flow migrates to Temporal, should the dashboard preserve the previous source label for user continuity, or show `Temporal` directly?
