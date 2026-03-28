@@ -118,5 +118,50 @@
     "id": 3004791140,
     "disposition": "addressed",
     "rationale": "Removed unused import TemporalArtifactValidationError."
+  },
+  {
+    "id": 4147632858,
+    "disposition": "not-applicable",
+    "rationale": "Informational greeting from jules bot."
+  },
+  {
+    "id": 4147632968,
+    "disposition": "not-applicable",
+    "rationale": "Informational message about Codex usage limit."
+  },
+  {
+    "id": 3004512513,
+    "disposition": "addressed",
+    "rationale": "Extracted mock_session fixture in test_temporal_service_pause_guard.py."
+  },
+  {
+    "id": 3004512516,
+    "disposition": "addressed",
+    "rationale": "Extracted mock_client_adapter fixture in test_temporal_service.py."
+  },
+  {
+    "id": 4025260170,
+    "disposition": "not-applicable",
+    "rationale": "Informational code review summary."
+  },
+  {
+    "id": 3004516642,
+    "disposition": "addressed",
+    "rationale": "Moved unittest.mock import to the top of test_temporal_service.py."
+  },
+  {
+    "id": 3004516645,
+    "disposition": "addressed",
+    "rationale": "Extracted mock_client_adapter fixture in test_temporal_service.py (duplicate suggestion)."
+  },
+  {
+    "id": 3004516651,
+    "disposition": "addressed",
+    "rationale": "Extracted mock_session fixture in test_temporal_service_pause_guard.py (duplicate suggestion)."
+  },
+  {
+    "id": 4025265860,
+    "disposition": "not-applicable",
+    "rationale": "Informational PR review overview."
   }
 ]
