@@ -1,5 +1,125 @@
 [
   {
+    "id": 4147576145,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 4147576250,
+    "disposition": "not-applicable",
+    "rationale": "Informational usage warning from bot."
+  },
+  {
+    "id": 3004476246,
+    "disposition": "addressed",
+    "rationale": "Refactored dict merge using dictionary comprehension to filter reserved keys before merging."
+  },
+  {
+    "id": 3004476253,
+    "disposition": "addressed",
+    "rationale": "Removed unused json import from plan_script.py."
+  },
+  {
+    "id": 4025224334,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from gemini-code-assist."
+  },
+  {
+    "id": 3004476542,
+    "disposition": "addressed",
+    "rationale": "Addressed by removing unused json import in plan_script.py."
+  },
+  {
+    "id": 3004478895,
+    "disposition": "addressed",
+    "rationale": "Addressed by removing unused json import in plan_script.py."
+  },
+  {
+    "id": 3004478902,
+    "disposition": "addressed",
+    "rationale": "Changed step IDs to step-1 and step-2 in plan_script.py."
+  },
+  {
+    "id": 3004478905,
+    "disposition": "addressed",
+    "rationale": "Filtered reserved keys in worker_runtime.py."
+  },
+  {
+    "id": 3004478910,
+    "disposition": "addressed",
+    "rationale": "Added unit test test_runtime_planner_multi_step_preserves_custom_keys."
+  },
+  {
+    "id": 4025226978,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from copilot."
+  },
+  {
+    "id": 4147586544,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot greeting."
+  },
+  {
+    "id": 4147688756,
+    "disposition": "not-applicable",
+    "rationale": "Informational greeting from jules bot."
+  },
+  {
+    "id": 4147689011,
+    "disposition": "not-applicable",
+    "rationale": "Informational usage limit message from codex bot."
+  },
+  {
+    "id": 4025366377,
+    "disposition": "not-applicable",
+    "rationale": "Overall code review summary from gemini-code-assist bot."
+  },
+  {
+    "id": 3004601024,
+    "disposition": "addressed",
+    "rationale": "Added tests for TemporalArtifactActivities covering the new Pydantic models, legacy dictionaries, and kwargs fallbacks."
+  },
+  {
+    "id": 3004601027,
+    "disposition": "addressed",
+    "rationale": "Refactored artifact_read validation, consolidating parameter access and narrowing the exception block."
+  },
+  {
+    "id": 3004601028,
+    "disposition": "addressed",
+    "rationale": "Refactored artifact_write_complete validation, consolidating parameter access and narrowing the exception block."
+  },
+  {
+    "id": 3004601511,
+    "disposition": "addressed",
+    "rationale": "Tightened the type hint of request for artifact_read by adding ArtifactReadInput."
+  },
+  {
+    "id": 3004601518,
+    "disposition": "addressed",
+    "rationale": "Narrowed exception scope to ValidationError instead of generic Exception in artifact_read."
+  },
+  {
+    "id": 3004601523,
+    "disposition": "addressed",
+    "rationale": "Tightened the type hint of request for artifact_write_complete by adding ArtifactWriteCompleteInput."
+  },
+  {
+    "id": 3004601525,
+    "disposition": "addressed",
+    "rationale": "Narrowed exception scope to ValidationError instead of generic Exception in artifact_write_complete."
+  },
+  {
+    "id": 4025366822,
+    "disposition": "not-applicable",
+    "rationale": "Suppressed low confidence comment by reviewer about legacy list payloads."
+  },
+  {
+    "id": 3004791140,
+    "disposition": "addressed",
+    "rationale": "Removed unused import TemporalArtifactValidationError."
+  },
+  {
     "id": 4147632858,
     "disposition": "not-applicable",
     "rationale": "Informational greeting from jules bot."

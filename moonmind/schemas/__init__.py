@@ -44,6 +44,20 @@ from .temporal_activity_models import (
     ArtifactWriteCompleteInput,
     Base64Bytes,
 )
+from .temporal_signal_contracts import (
+    CancelSessionSignal,
+    ChildStateChangedSignal,
+    CompletionSignal,
+    ExternalEventSignal,
+    FinalizeSessionSignal,
+    ProfileAssignedSignal,
+    ReleaseSlotSignal,
+    ReportCooldownSignal,
+    RequestSlotSignal,
+    RescheduleSignal,
+    SlotAssignedSignal,
+    SyncProfilesSignal,
+)
 from .workflow_models import (
     CreateWorkflowRunRequest,
     WorkflowRunModel,
@@ -96,4 +110,16 @@ __all__ = [
     "ArtifactReadOutput",
     "ArtifactWriteCompleteInput",
     "Base64Bytes",
+    "CancelSessionSignal",
+    "ChildStateChangedSignal",
+    "CompletionSignal",
+    "ExternalEventSignal",
+    "FinalizeSessionSignal",
+    "ProfileAssignedSignal",
+    "ReleaseSlotSignal",
+    "ReportCooldownSignal",
+    "RequestSlotSignal",
+    "RescheduleSignal",
+    "SlotAssignedSignal",
+    "SyncProfilesSignal",
 ]
