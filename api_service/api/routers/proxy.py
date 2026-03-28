@@ -52,8 +52,11 @@ async def _resolve_provider_key(provider: str, secret_refs: dict, session: Async
     if not ref:
         raise HTTPException(status_code=400, detail=f"No secret reference found for proxy provider {provider}")
 
-    resolver = RootSecretResolver()
-    return await resolver.resolve_secret(session, ref)
+    from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
+    try:
+        return await resolve_managed_api_key_reference(str(ref))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.api_route("/{provider_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
