@@ -20,7 +20,7 @@ With this design:
 
 * **OAuth** uses `xterm.js` plus a MoonMind PTY/WebSocket bridge because OAuth is an interactive terminal flow
 * **managed run logs** do **not** use `xterm.js` and do **not** use terminal embedding
-* Mission Control shows logs through a MoonMind-native log viewer backed by MoonMind APIs and artifacts
+* Mission Control shows logs through a MoonMind-native React log viewer backed by MoonMind APIs and artifacts, implemented with `react-virtuoso` for virtualized rendering, `anser` for ANSI parsing, TanStack Query for retrieval state, and SSE via `EventSource` for live follow mode.
 
 This keeps logging deterministic, persistent, auditable, and independent from interactive terminal transport.
 
@@ -255,6 +255,130 @@ For each chunk read from stdout or stderr:
 4. update stream metadata
 
 Durability comes first. Live streaming is secondary.
+
+MoonMind-generated system events should use `structlog`, but managed-agent `stdout` and `stderr` remain raw subprocess streams and must not be normalized into framework logs before artifact persistence.
+
+---
+
+## 9.0 Selected implementation baseline
+
+The phrase “MoonMind-native log viewer” is intentionally **not** a terminal emulator and **not** a third-party hosted logging product. It means a MoonMind-owned UI and API surface built on a small number of explicit libraries.
+
+### Backend logging and event tools
+
+MoonMind should standardize on:
+
+- **`structlog`** for MoonMind-generated structured events
+- **direct subprocess pipe capture** for managed-agent `stdout` and `stderr`
+- **OpenTelemetry** for trace and metric correlation
+- **FastAPI / Starlette SSE streaming** for live log delivery
+
+#### Rule: `stdout` and `stderr` are not `structlog`
+
+Managed-agent output must remain direct pipe capture from the launched process.
+
+MoonMind must not transform managed-agent `stdout` / `stderr` into framework-owned application logs before persistence, because doing so risks:
+
+- losing byte-order fidelity
+- losing raw stream separation
+- introducing formatting noise
+- making artifact replay differ from the original process output
+
+`structlog` is reserved for MoonMind-owned events such as:
+
+- supervisor lifecycle events
+- reconnect notices
+- truncation warnings
+- timeout classification
+- live-stream state changes
+- system annotations injected into the merged stream
+
+### Frontend viewer foundation
+
+The Mission Control Live Logs panel should be implemented as a native React component using:
+
+- **`react-virtuoso`** for virtualized rendering of long and growing log streams
+- **`anser`** for ANSI parsing into styled spans
+- **browser `EventSource`** for SSE live follow mode
+- **TanStack Query** for initial tail fetch, fallback retrieval, and cache invalidation
+
+This combination is preferred over terminal or editor widgets because the Live Logs panel is a passive observability surface, not an interactive shell and not a code editor.
+
+### Why this baseline was selected
+
+#### Why `react-virtuoso`
+
+`react-virtuoso` is the preferred rendering base because log viewers have requirements that differ from ordinary tables:
+
+- thousands of rows
+- continuously appended content
+- variable line heights when wrapping is enabled
+- jump-to-bottom and follow-tail behavior
+- smooth rendering without mounting the entire log
+
+A generic `<pre>` element is acceptable for very small logs but should not be the implementation basis for MoonMind.
+
+#### Why `anser`
+
+Managed runtimes may emit ANSI color and formatting codes. MoonMind should support a useful subset of ANSI formatting in the viewer without embedding a full terminal emulator.
+
+`anser` should be used to parse ANSI sequences into structured segments that React renders as spans. The viewer should not rely on raw terminal escape replay.
+
+#### Why not `xterm.js`
+
+`xterm.js` remains the correct choice for OAuth sessions because OAuth is interactive. It is not the correct basis for the Live Logs panel because:
+
+- logs are passive
+- logs must be artifact-first
+- logs need line identity and stream provenance
+- logs should not inherit terminal transport semantics
+
+#### Why not Monaco / CodeMirror
+
+Editor widgets are too heavy and introduce the wrong mental model. MoonMind needs:
+
+- a tailing stream surface
+- stream origin badges
+- reconnect behavior
+- artifact fallback
+- diagnostics integration
+
+It does not need editing, buffers, or editor commands.
+
+### SSE implementation guidance
+
+The first implementation should use SSE over `text/event-stream`.
+
+MoonMind should not add a WebSocket dependency for the first version of live logs unless later requirements demand bidirectional behavior.
+
+The server may use a small internal SSE encoder helper. A dedicated SSE framework dependency is optional, not required.
+
+### Rendering contract
+
+The API remains authoritative for raw text. The UI is responsible for presentation.
+
+Each live or fetched log record should contain:
+
+- `sequence`
+- `stream` (`stdout`, `stderr`, or `system`)
+- `offset`
+- `timestamp`
+- `text`
+
+Optional presentation hints may be added later, but the backend should not send pre-rendered HTML log fragments.
+
+### Viewer capability requirements
+
+The selected frontend implementation must support:
+
+- follow-tail mode
+- reconnect from last sequence
+- line wrapping toggle
+- copy selected lines
+- per-line stream provenance
+- artifact-backed initial load
+- artifact fallback when live streaming is unavailable
+- future inline annotations for intervention or supervisor events
 
 ---
 

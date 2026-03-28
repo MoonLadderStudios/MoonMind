@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -223,26 +223,9 @@ def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     )
 
 
-@router.get("/tasks", response_class=HTMLResponse, name="task_dashboard_root")
-async def task_dashboard_root(
-    request: Request,
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the dashboard root page."""
-
-    return _render_dashboard(request, "/tasks")
-
-
-@router.get("/tasks/settings", response_class=HTMLResponse)
-async def task_settings_route(
-    request: Request,
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered settings page."""
-    current_path = "/tasks/settings"
-    boot_payload = generate_boot_payload("settings")
-    assets_html = ui_assets("settings")
-
+def _render_react_page(request: Request, entrypoint: str, current_path: str, initial_data: dict | None = None) -> HTMLResponse:
+    boot_payload = generate_boot_payload(entrypoint, initial_data=initial_data)
+    assets_html = ui_assets(entrypoint)
     return templates.TemplateResponse(
         request,
         "react_dashboard.html",
@@ -261,20 +244,85 @@ async def task_secrets_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered secrets page."""
-    current_path = "/tasks/secrets"
-    boot_payload = generate_boot_payload("secrets")
-    assets_html = ui_assets("secrets")
+    return _render_react_page(request, "secrets", "/tasks/secrets")
 
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+@router.get("/tasks", name="task_dashboard_root")
+async def task_dashboard_root(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> RedirectResponse:
+    """Serve the dashboard root page."""
+
+    return RedirectResponse(url="/tasks/list")
+
+
+@router.get("/tasks/proposals", response_class=HTMLResponse)
+async def task_proposals_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered proposals page."""
+    return _render_react_page(request, "proposals", "/tasks/proposals")
+
+
+@router.get("/tasks/schedules", response_class=HTMLResponse)
+async def task_schedules_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered schedules page."""
+    return _render_react_page(request, "schedules", "/tasks/schedules")
+
+
+@router.get("/tasks/manifests", response_class=HTMLResponse)
+async def task_manifests_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered manifests page."""
+    return _render_react_page(request, "manifests", "/tasks/manifests")
+
+
+@router.get("/tasks/tasks-list", response_class=HTMLResponse)
+async def task_tasks_list_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered tasks-list page."""
+    return _render_react_page(request, "tasks-list", "/tasks/tasks-list")
+
+
+@router.get("/tasks/list", response_class=HTMLResponse)
+async def task_list_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered tasks list page."""
+    return _render_react_page(request, "tasks-list", "/tasks/list")
+
+
+@router.get("/tasks/workers", response_class=HTMLResponse)
+async def task_workers_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered workers page."""
+    initial_data = {
+        "workerPause": {
+            "get": "/api/system/worker-pause",
+            "post": "/api/system/worker-pause",
+        }
+    }
+    return _render_react_page(request, "workers", "/tasks/workers", initial_data=initial_data)
+
+
+@router.get("/tasks/settings", response_class=HTMLResponse)
+async def task_settings_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered settings page."""
+    return _render_react_page(request, "settings", "/tasks/settings")
 
 
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
@@ -299,6 +347,11 @@ async def task_dashboard_route(
                 ),
             },
         )
+
+    # Exclude known static paths from the task detail React shell, so they fall back to the legacy shell
+    if normalized not in _STATIC_PATHS:
+        if _is_safe_detail_segment(normalized) or any(_is_dynamic_detail(normalized, source) for source in ("proposals", "manifests", "schedules")):
+            return _render_react_page(request, "task-detail", f"/tasks/{normalized}")
 
     return _render_dashboard(request, f"/tasks/{normalized}")
 

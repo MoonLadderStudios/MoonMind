@@ -80,35 +80,35 @@ def test_allowed_path_helper_rejects_unknown_routes() -> None:
 
 
 def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
-    response = client.get("/tasks")
+    response = client.get("/tasks", follow_redirects=False)
 
-    assert response.status_code == 200
-    body = response.text
-    assert "Mission Control" in body
-    assert "task-dashboard-config" in body
-    assert "/static/task_dashboard/dashboard.js" in body
-    assert "viewport-fit=cover" in body
-    assert "moonmind.theme" in body
+    assert response.status_code == 307
+    assert response.headers["location"] == "/tasks/list"
 
 
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
-        "/tasks/list",
         "/tasks/new",
         "/tasks/create",
-        "/tasks/manifests",
         "/tasks/manifests/new",
-        "/tasks/schedules",
-        "/tasks/workers",
+        "/tasks/skills",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "task-dashboard-config" in response.text
 
-    # /tasks/settings has its own template now
-    response = client.get("/tasks/settings")
-    assert response.status_code == 200
-    assert "moonmind-ui-boot" in response.text
+    for path in (
+        "/tasks/list",
+        "/tasks/manifests",
+        "/tasks/schedules",
+        "/tasks/workers",
+        "/tasks/settings",
+        "/tasks/proposals",
+        "/tasks/tasks-list",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "moonmind-ui-boot" in response.text
 
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
@@ -122,7 +122,7 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     ):
         response = client.get(path)
         assert response.status_code == 200
-        assert "task-dashboard-config" in response.text
+        assert "moonmind-ui-boot" in response.text
 
 
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
