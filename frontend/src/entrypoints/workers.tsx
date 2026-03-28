@@ -17,7 +17,7 @@ interface WorkerSnapshot {
     isDrained?: boolean;
   };
   audit?: {
-    latest?: Record<string, unknown>[];
+    latest?: { action?: string; mode?: string; reason?: string; createdAt?: string; }[];
   };
 }
 
@@ -63,6 +63,7 @@ function WorkersPage() {
 
   const actionMutation = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => {
+      if (!workerPauseConfig || !workerPauseConfig.post) throw new Error('Worker pause controls are not configured for this deployment.');
       const response = await fetch(workerPauseConfig.post, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -211,7 +212,7 @@ function WorkersPage() {
               <div data-system-settings-audit>
                 {snapshot?.audit?.latest && snapshot.audit.latest.length > 0 ? (
                   <ul className="space-y-3">
-                    {snapshot.audit.latest.map((event: Record<string, unknown>, i: number) => (
+                    {snapshot.audit.latest.map((event: { action?: string; mode?: string; reason?: string; createdAt?: string; }, i: number) => (
                       <li key={i} className="text-sm">
                         <strong className="block">{(event?.action || '-').toUpperCase()}{event?.mode ? ` | ${event.mode.toUpperCase()}` : ''}</strong>
                         <span className="block text-gray-600">{event?.reason || '(no reason)'}</span>
