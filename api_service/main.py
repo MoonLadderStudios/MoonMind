@@ -7,7 +7,6 @@ from moonmind.config.logging import configure_logging
 configure_logging()
 logger = logging.getLogger(__name__)  # Get logger after configuration
 
-import json  # noqa: F401 - used in _auto_seed_provider_profiles
 import os  # For path operations
 import time
 from contextlib import asynccontextmanager
@@ -407,15 +406,16 @@ async def add_request_id(request: Request, call_next):
 
 
 async def _auto_seed_provider_profiles() -> list[str]:
-    """Seed well-known provider profiles into the DB.
+    """Seed well-known provider profiles that are missing from the DB.
 
-    - New profiles are INSERTed and their runtime_ids are returned.
-    - Existing profiles have their NULL fields filled in from defaults,
-      but non-NULL user-customized values are preserved.
-    - The second call returns an empty list (idempotent for existing profiles).
+    Each profile is checked individually by ``profile_id`` so that:
+    - On a fresh install all defaults are created.
+    - When ``MINIMAX_API_KEY`` is added to the environment after the initial
+      seed, the ``claude_minimax`` profile is inserted without touching any
+      existing profiles.
 
-    Returns the list of ``runtime_id`` values for profiles that were newly
-    inserted, or an empty list when all profiles already exist.
+    Returns the list of ``runtime_id`` values for profiles that were actually
+    inserted, or an empty list when nothing was seeded.
     """
     from api_service.db.base import get_async_session_context
     from sqlalchemy import select
@@ -510,101 +510,43 @@ async def _auto_seed_provider_profiles() -> list[str]:
             )
             existing_ids: set[str] = {row[0] for row in existing_result.all()}
 
-            new_profiles = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
-            existing_profiles = [p for p in _DEFAULT_PROFILES if p["profile_id"] in existing_ids]
+            to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
+            if not to_insert:
+                return []
 
-            if new_profiles:
-                logger.info(
-                    "Auto-seeding %d new provider profile(s): %s",
-                    len(new_profiles),
-                    [p["profile_id"] for p in new_profiles],
+            logger.info(
+                "Auto-seeding %d missing provider profile(s): %s",
+                len(to_insert),
+                [p["profile_id"] for p in to_insert],
+            )
+
+            for profile_def in to_insert:
+                profile = ManagedAgentProviderProfile(
+                    profile_id=profile_def["profile_id"],
+                    runtime_id=profile_def["runtime_id"],
+                    provider_id=profile_def["provider_id"],
+                    provider_label=profile_def.get("provider_label"),
+                    credential_source=profile_def["credential_source"],
+                    runtime_materialization_mode=profile_def["runtime_materialization_mode"],
+                    volume_ref=profile_def.get("volume_ref"),
+                    volume_mount_path=profile_def.get("volume_mount_path"),
+                    account_label=profile_def.get("account_label"),
+                    secret_refs=profile_def.get("secret_refs"),
+                    clear_env_keys=profile_def.get("clear_env_keys"),
+                    env_template=profile_def.get("env_template"),
+                    max_parallel_runs=1,
+                    cooldown_after_429_seconds=300,
+                    rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                    enabled=True,
                 )
-                for profile_def in new_profiles:
-                    profile = ManagedAgentProviderProfile(
-                        profile_id=profile_def["profile_id"],
-                        runtime_id=profile_def["runtime_id"],
-                        provider_id=profile_def["provider_id"],
-                        provider_label=profile_def.get("provider_label"),
-                        credential_source=profile_def["credential_source"],
-                        runtime_materialization_mode=profile_def["runtime_materialization_mode"],
-                        volume_ref=profile_def.get("volume_ref"),
-                        volume_mount_path=profile_def.get("volume_mount_path"),
-                        account_label=profile_def.get("account_label"),
-                        secret_refs=profile_def.get("secret_refs"),
-                        clear_env_keys=profile_def.get("clear_env_keys"),
-                        env_template=profile_def.get("env_template"),
-                        max_parallel_runs=1,
-                        cooldown_after_429_seconds=300,
-                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
-                        enabled=True,
-                    )
-                    session.add(profile)
-                    seeded.append(profile_def["runtime_id"])
-                await session.commit()
+                session.add(profile)
+                seeded.append(profile_def["runtime_id"])
 
-            # Update existing profiles: fill NULL fields from defaults.
-            if existing_profiles:
-                logger.info(
-                    "Updating %d existing provider profile(s) NULL fields: %s",
-                    len(existing_profiles),
-                    [p["profile_id"] for p in existing_profiles],
-                )
-                upsert_sql = text("""
-                    UPDATE managed_agent_provider_profiles AS mapp SET
-                        runtime_id                  = COALESCE(:runtime_id, mapp.runtime_id),
-                        provider_id                 = COALESCE(:provider_id, mapp.provider_id),
-                        provider_label              = COALESCE(:provider_label, mapp.provider_label),
-                        credential_source           = COALESCE(:credential_source, mapp.credential_source),
-                        runtime_materialization_mode = COALESCE(:runtime_materialization_mode, mapp.runtime_materialization_mode),
-                        volume_ref                  = COALESCE(:volume_ref, mapp.volume_ref),
-                        volume_mount_path           = COALESCE(:volume_mount_path, mapp.volume_mount_path),
-                        account_label               = COALESCE(:account_label, mapp.account_label),
-                        secret_refs                 = COALESCE(:secret_refs, mapp.secret_refs),
-                        clear_env_keys              = COALESCE(:clear_env_keys, mapp.clear_env_keys),
-                        env_template                = COALESCE(:env_template, mapp.env_template),
-                        file_templates              = COALESCE(:file_templates, mapp.file_templates),
-                        home_path_overrides         = COALESCE(:home_path_overrides, mapp.home_path_overrides),
-                        command_behavior            = COALESCE(:command_behavior, mapp.command_behavior),
-                        tags                        = COALESCE(:tags, mapp.tags),
-                        priority                    = COALESCE(:priority, mapp.priority),
-                        max_parallel_runs           = COALESCE(:max_parallel_runs, mapp.max_parallel_runs),
-                        cooldown_after_429_seconds  = COALESCE(:cooldown_after_429_seconds, mapp.cooldown_after_429_seconds),
-                        rate_limit_policy           = COALESCE(:rate_limit_policy, mapp.rate_limit_policy),
-                        enabled                     = COALESCE(:enabled, mapp.enabled)
-                    WHERE mapp.profile_id = :profile_id
-                """)
-                for profile_def in existing_profiles:
-                    def _json_or_none(val: Any) -> str | None:
-                        return json.dumps(val) if val is not None else None
-
-                    await session.execute(upsert_sql, {
-                        "profile_id": profile_def["profile_id"],
-                        "runtime_id": profile_def["runtime_id"],
-                        "provider_id": profile_def["provider_id"],
-                        "provider_label": profile_def.get("provider_label"),
-                        "credential_source": profile_def["credential_source"].value,
-                        "runtime_materialization_mode": profile_def["runtime_materialization_mode"].value,
-                        "volume_ref": profile_def.get("volume_ref"),
-                        "volume_mount_path": profile_def.get("volume_mount_path"),
-                        "account_label": profile_def.get("account_label"),
-                        "secret_refs": _json_or_none(profile_def.get("secret_refs")),
-                        "clear_env_keys": _json_or_none(profile_def.get("clear_env_keys")),
-                        "env_template": _json_or_none(profile_def.get("env_template")),
-                        "file_templates": _json_or_none(profile_def.get("file_templates")),
-                        "home_path_overrides": _json_or_none(profile_def.get("home_path_overrides")),
-                        "command_behavior": _json_or_none(profile_def.get("command_behavior")),
-                        "tags": _json_or_none(profile_def.get("tags")),
-                        "priority": 100,
-                        "max_parallel_runs": 1,
-                        "cooldown_after_429_seconds": 300,
-                        "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF.value,
-                        "enabled": True,
-                    })
-                await session.commit()
-
-            if not new_profiles and not existing_profiles:
-                logger.info("No provider profiles to seed.")
-
+            await session.commit()
+            logger.info(
+                "Committed %d auto-seeded managed-agent provider profile row(s).",
+                len(seeded),
+            )
     except Exception as e:
         logger.error("Failed to auto-seed provider profiles: %s", e, exc_info=True)
 

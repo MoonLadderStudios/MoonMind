@@ -19,6 +19,7 @@ from moonmind.schemas.jules_models import (
 )
 from moonmind.workflows.adapters.jules_client import JulesClientError
 
+pytestmark = [pytest.mark.asyncio]
 
 
 class _FakeJulesClient:

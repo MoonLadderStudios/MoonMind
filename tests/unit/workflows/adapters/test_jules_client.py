@@ -16,6 +16,7 @@ from moonmind.schemas.jules_models import (
 )
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
+pytestmark = [pytest.mark.asyncio]
 
 _TASK_RESPONSE_DATA = {
     "id": "task-001",

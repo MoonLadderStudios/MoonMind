@@ -16,6 +16,7 @@ from moonmind.auth.secret_refs import (
     parse_vault_reference,
 )
 
+pytestmark = [pytest.mark.asyncio]
 
 
 def test_parse_secret_ref_env() -> None:
@@ -80,7 +81,6 @@ def test_parse_secret_ref_invalid_vault() -> None:
         parse_secret_ref("vault://kv/../secret#field")
 
 
-@pytest.mark.asyncio
 async def test_parse_vault_reference_accepts_valid_ref() -> None:
     """Parser should normalize valid vault:// mount/path#field references."""
 
@@ -95,7 +95,6 @@ async def test_parse_vault_reference_accepts_valid_ref() -> None:
     assert parsed.normalized_ref == "vault://kv/moonmind/repos/Moon/Mind#github_token"
 
 
-@pytest.mark.asyncio
 async def test_parse_vault_reference_rejects_invalid_scheme() -> None:
     """Only vault:// references are allowed in hardened auth contract."""
 
@@ -103,7 +102,6 @@ async def test_parse_vault_reference_rejects_invalid_scheme() -> None:
         parse_vault_reference("https://example.com/secret")
 
 
-@pytest.mark.asyncio
 async def test_load_vault_token_prefers_direct_token(tmp_path: Path) -> None:
     """Explicit token should take precedence over token-file fallback."""
 
@@ -115,7 +113,6 @@ async def test_load_vault_token_prefers_direct_token(tmp_path: Path) -> None:
     assert token == "from-env"
 
 
-@pytest.mark.asyncio
 async def test_vault_secret_resolver_reads_kv_v2_field() -> None:
     """Resolver should read token/metadata from Vault KV-v2 JSON structure."""
 
@@ -157,7 +154,6 @@ async def test_vault_secret_resolver_reads_kv_v2_field() -> None:
     assert resolved.source_ref == "vault://kv/moonmind/repos/Moon/Mind#github_token"
 
 
-@pytest.mark.asyncio
 async def test_vault_secret_resolver_rejects_missing_field() -> None:
     """Missing referenced field should fail with non-secret error details."""
 

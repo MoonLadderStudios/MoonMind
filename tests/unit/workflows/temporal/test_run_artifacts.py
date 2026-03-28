@@ -74,9 +74,10 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
 
     assert captured["activity_type"] == "plan.generate"
     payload = captured["payload"]
-    assert isinstance(payload, dict)
-    assert payload["inputs_ref"] == "art_input_1"
-    assert "workflow_id" in payload["execution_ref"]
+    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+    assert isinstance(payload, PlanGenerateInput)
+    assert payload.inputs_ref == "art_input_1"
+    assert "workflow_id" in payload.execution_ref
     assert resolved == "art_plan_2"
     assert workflow._plan_ref == "art_plan_2"
 
@@ -418,7 +419,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
 
     with pytest.raises(
         ValueError,
-        match="plan node execution failed: gemini CLI command failed",
+        match="plan node execution returned status FAILED",
     ):
         await workflow._run_execution_stage(
             parameters={"repo": "MoonLadderStudios/MoonMind"},

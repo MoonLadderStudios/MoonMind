@@ -16,16 +16,14 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Sequence
-
-if TYPE_CHECKING:
-    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
-from pydantic import ValidationError
-
+from moonmind.schemas.temporal_activity_models import (
+    PlanGenerateInput,
+)
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -645,13 +643,18 @@ class TemporalPlanActivities:
         registry_snapshot_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> PlanGenerateActivityResult:
-        from moonmind.schemas.temporal_activity_models import PlanGenerateInput
-
-        model: PlanGenerateInput | None = None
-        request_payload: dict[str, Any] | None = None
-
         if isinstance(request, PlanGenerateInput):
-            model = request
+            # Model fast path
+            if principal is None:
+                principal = request.principal
+            if inputs_ref is None and request.inputs_ref is not None:
+                inputs_ref = getattr(request.inputs_ref, "artifact_id", request.inputs_ref)
+            if parameters is None:
+                parameters = request.parameters
+            if registry_snapshot_ref is None and request.registry_snapshot_ref is not None:
+                registry_snapshot_ref = getattr(request.registry_snapshot_ref, "artifact_id", request.registry_snapshot_ref)
+            if execution_ref is None:
+                execution_ref = request.execution_ref
         else:
             request_payload = _coerce_activity_request(
                 request, activity_type="plan.generate"
@@ -660,37 +663,28 @@ class TemporalPlanActivities:
                 try:
                     # Validate legacy dictionary through the new model
                     model = PlanGenerateInput.model_validate(request_payload)
-                except ValidationError:
-                    logger.warning(
-                        "Failed to parse plan.generate legacy payload as PlanGenerateInput",
-                        exc_info=True,
-                    )
-
-        if model:
-            if principal is None:
-                principal = model.principal
-            if inputs_ref is None and model.inputs_ref is not None:
-                inputs_ref = getattr(model.inputs_ref, "artifact_id", model.inputs_ref)
-            if parameters is None:
-                parameters = model.parameters
-            if registry_snapshot_ref is None and model.registry_snapshot_ref is not None:
-                registry_snapshot_ref = getattr(
-                    model.registry_snapshot_ref, "artifact_id", model.registry_snapshot_ref
-                )
-            if execution_ref is None:
-                execution_ref = model.execution_ref
-        elif request_payload:
-            # Fallback for unparseable legacy dictionary
-            if principal is None:
-                principal = request_payload.get("principal")
-            if inputs_ref is None:
-                inputs_ref = request_payload.get("inputs_ref")
-            if parameters is None:
-                parameters = request_payload.get("parameters")
-            if registry_snapshot_ref is None:
-                registry_snapshot_ref = request_payload.get("registry_snapshot_ref")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
+                    if principal is None:
+                        principal = model.principal
+                    if inputs_ref is None and model.inputs_ref is not None:
+                        inputs_ref = getattr(model.inputs_ref, "artifact_id", model.inputs_ref)
+                    if parameters is None:
+                        parameters = model.parameters
+                    if registry_snapshot_ref is None and model.registry_snapshot_ref is not None:
+                        registry_snapshot_ref = getattr(model.registry_snapshot_ref, "artifact_id", model.registry_snapshot_ref)
+                    if execution_ref is None:
+                        execution_ref = model.execution_ref
+                except Exception as e:
+                    logger.warning("Failed to parse plan.generate legacy payload as PlanGenerateInput: %s", e)
+                    if principal is None:
+                        principal = request_payload.get("principal")
+                    if inputs_ref is None:
+                        inputs_ref = request_payload.get("inputs_ref")
+                    if parameters is None:
+                        parameters = request_payload.get("parameters")
+                    if registry_snapshot_ref is None:
+                        registry_snapshot_ref = request_payload.get("registry_snapshot_ref")
+                    if execution_ref is None:
+                        execution_ref = request_payload.get("execution_ref")
 
         if not principal or not isinstance(principal, str):
             raise TemporalActivityRuntimeError("plan.generate principal is required")

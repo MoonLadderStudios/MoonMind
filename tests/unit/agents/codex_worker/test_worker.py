@@ -38,6 +38,7 @@ from moonmind.agents.codex_worker.worker import (
 )
 from moonmind.config.settings import settings
 
+pytestmark = [pytest.mark.asyncio]
 
 
 @pytest.fixture(autouse=True)
@@ -252,7 +253,6 @@ class FakeQueueClient:
         return {"id": str(uuid4())}
 
 
-@pytest.mark.asyncio
 async def test_parse_positive_int_field_rejects_invalid_values() -> None:
     """Queue payload integer parsing should fail fast on invalid values."""
 
@@ -597,7 +597,6 @@ class _FakeStreamingProcess:
         return (b"", b"")
 
 
-@pytest.mark.asyncio
 async def test_run_once_returns_false_when_no_job() -> None:
     """No claim should produce a no-work cycle."""
 
@@ -621,7 +620,6 @@ async def test_run_once_returns_false_when_no_job() -> None:
     assert queue.completed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_returns_false_when_system_paused(tmp_path: Path) -> None:
     """Paused system responses should short-circuit claims without work."""
 
@@ -655,7 +653,6 @@ async def test_run_once_returns_false_when_system_paused(tmp_path: Path) -> None
     assert queue.completed == []
 
 
-@pytest.mark.asyncio
 async def test_system_metadata_logging_occurs_once_per_version(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -711,7 +708,6 @@ async def test_system_metadata_logging_occurs_once_per_version(
     assert len(resume_logs) == 1
 
 
-@pytest.mark.asyncio
 async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     """Successful handler execution should upload artifacts and complete job."""
 
@@ -764,7 +760,6 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     "provider",
     ("[REDACTED]", "unsupported-provider", "google"),
 )
-@pytest.mark.asyncio
 async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecutable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -836,7 +831,6 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
     assert "ragCommand" not in rag_payload
 
 
-@pytest.mark.asyncio
 async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) -> None:
     job = ClaimedJob(
         id=uuid4(),
@@ -881,7 +875,6 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
     assert runtime_config["effort"] == "high"
 
 
-@pytest.mark.asyncio
 async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     """Zero-byte artifacts should be skipped to avoid upload validation failures."""
 
@@ -926,7 +919,6 @@ async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     assert queue.failed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
     tmp_path: Path,
 ) -> None:
@@ -992,7 +984,6 @@ async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
     assert "optional artifact upload(s) failed" in queue.completed[0][1]
 
 
-@pytest.mark.asyncio
 async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     """Workers should submit proposals when the feature flag is enabled."""
 
@@ -1063,7 +1054,6 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     assert not proposals_path.exists()
 
 
-@pytest.mark.asyncio
 async def test_task_proposal_request_uses_task_flag_with_config_gate(
     tmp_path: Path,
 ) -> None:
@@ -1105,7 +1095,6 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
     )
 
 
-@pytest.mark.asyncio
 async def test_run_once_exception_still_records_terminal_failure_when_upload_fails(
     tmp_path: Path,
 ) -> None:
@@ -1136,7 +1125,6 @@ async def test_run_once_exception_still_records_terminal_failure_when_upload_fai
     assert queue.completed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_redacts_task_context_payload(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1184,7 +1172,6 @@ async def test_run_once_redacts_task_context_payload(
     assert "[REDACTED]" in task_context_content
 
 
-@pytest.mark.asyncio
 async def test_run_once_unsupported_type_fails_job(tmp_path: Path) -> None:
     """Unsupported claimed job types should be failed explicitly."""
 
@@ -1211,7 +1198,6 @@ async def test_run_once_unsupported_type_fails_job(tmp_path: Path) -> None:
     assert any(event["message"] == "Unsupported job type" for event in queue.events)
 
 
-@pytest.mark.asyncio
 async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) -> None:
     """`codex_skill` jobs should execute through the skills-first path."""
 
@@ -1252,7 +1238,6 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
     assert payload["usedFallback"] is True
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> None:
     """Canonical `task` jobs should execute through direct codex path by default."""
 
@@ -1312,7 +1297,6 @@ async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> 
     assert any(event["message"] == "moonmind.task.publish" for event in queue.events)
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> None:
     """Canonical `task` jobs with concrete skill id should use skill handler path."""
 
@@ -1372,7 +1356,6 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
     assert finish_summary["publish"]["status"] == "not_run"
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_execute_in_order_with_step_events(
     tmp_path: Path,
 ) -> None:
@@ -1466,7 +1449,6 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert started[1]["payload"]["stepId"] == "step-2"
 
 
-@pytest.mark.asyncio
 async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1554,7 +1536,6 @@ async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
     assert "state/steps/step-0000.json" in queue.uploaded
 
 
-@pytest.mark.asyncio
 async def test_run_once_self_heal_exhaustion_marks_retryable_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1627,7 +1608,6 @@ async def test_run_once_self_heal_exhaustion_marks_retryable_failure(
     assert any(event["message"] == "task.self_heal.exhausted" for event in queue.events)
 
 
-@pytest.mark.asyncio
 async def test_run_once_self_heal_deterministic_failure_does_not_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1690,7 +1670,6 @@ async def test_run_once_self_heal_deterministic_failure_does_not_retry(
     )
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
     tmp_path: Path,
 ) -> None:
@@ -1750,7 +1729,6 @@ async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
     assert "SESSION HEADER step-2" in step_two_text
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_log_without_truncation_skips_companion_artifact(
     tmp_path: Path,
 ) -> None:
@@ -1825,7 +1803,6 @@ async def test_run_once_task_step_log_without_truncation_skips_companion_artifac
     assert "logs/steps/step-0000.full.log.metadata.json" not in queue.uploaded
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_truncated_mid_command_fails_with_retryable_run_quality(
     tmp_path: Path,
 ) -> None:
@@ -1894,7 +1871,6 @@ async def test_run_once_task_step_transcript_truncated_mid_command_fails_with_re
     )
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     tmp_path: Path,
 ) -> None:
@@ -1953,7 +1929,6 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
     assert any(event["message"] == "task.step.finished" for event in queue.events)
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_with_multiple_codex_exec_cycles_succeeds(
     tmp_path: Path,
 ) -> None:
@@ -2029,7 +2004,6 @@ async def test_run_once_task_step_transcript_with_multiple_codex_exec_cycles_suc
     assert queue.failed_retryable == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_with_missing_multi_cycle_completion_marker_fails(
     tmp_path: Path,
 ) -> None:
@@ -2101,7 +2075,6 @@ async def test_run_once_task_step_transcript_with_missing_multi_cycle_completion
     assert run_quality["code"] == "step_transcript_invalid_completion_marker_count"
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_ignores_stale_unmatched_starts_before_later_completions(
     tmp_path: Path,
 ) -> None:
@@ -2172,7 +2145,6 @@ async def test_run_once_task_step_transcript_ignores_stale_unmatched_starts_befo
     assert queue.failed_retryable == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_ignores_stale_cross_step_start_markers(
     tmp_path: Path,
 ) -> None:
@@ -2241,7 +2213,6 @@ async def test_run_once_task_step_transcript_ignores_stale_cross_step_start_mark
     assert queue.failed_retryable == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_unmatched_start_after_last_complete_fails(
     tmp_path: Path,
 ) -> None:
@@ -2315,7 +2286,6 @@ async def test_run_once_task_step_transcript_unmatched_start_after_last_complete
     assert run_quality["code"] == "step_transcript_truncated_mid_command"
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_ignores_stale_legacy_unmatched_starts(
     tmp_path: Path,
 ) -> None:
@@ -2377,7 +2347,6 @@ async def test_run_once_task_step_transcript_ignores_stale_legacy_unmatched_star
     assert queue.failed_retryable == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_ignores_untrusted_completion_marker_like_output(
     tmp_path: Path,
 ) -> None:
@@ -2437,7 +2406,6 @@ async def test_run_once_task_step_transcript_ignores_untrusted_completion_marker
     assert queue.failed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds(
     tmp_path: Path,
 ) -> None:
@@ -2499,7 +2467,6 @@ async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds
     assert queue.failed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_reconciles_legacy_multiline_start_markers(
     tmp_path: Path,
 ) -> None:
@@ -2561,7 +2528,6 @@ async def test_run_once_task_step_transcript_reconciles_legacy_multiline_start_m
     assert queue.failed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_with_mismatched_marker_ids_fails(
     tmp_path: Path,
 ) -> None:
@@ -2629,7 +2595,6 @@ async def test_run_once_task_step_transcript_with_mismatched_marker_ids_fails(
     assert run_quality["code"] == "step_transcript_invalid_marker_balance"
 
 
-@pytest.mark.asyncio
 async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2701,7 +2666,6 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
     )
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_uses_full_companion_when_preview_truncated(
     tmp_path: Path,
 ) -> None:
@@ -2769,7 +2733,6 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
     assert queue.failed_retryable == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output(
     tmp_path: Path,
 ) -> None:
@@ -2830,7 +2793,6 @@ async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output
     assert not any(event["message"] == "task.step.failed" for event in queue.events)
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
     tmp_path: Path,
 ) -> None:
@@ -2927,7 +2889,6 @@ async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
     assert "logs/steps/step-0000.full.log.metadata.json" in queue.uploaded
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
     tmp_path: Path,
 ) -> None:
@@ -2990,7 +2951,6 @@ async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
     assert "ERROR: critical failure context that must be preserved" in step_log_content
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
     tmp_path: Path,
 ) -> None:
@@ -3045,7 +3005,6 @@ async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
     assert len(step_two_text) < len(step_one_segment) + len(step_two_segment)
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_log_truncation_preserves_utf8(
     tmp_path: Path,
 ) -> None:
@@ -3109,7 +3068,6 @@ async def test_run_once_task_step_log_truncation_preserves_utf8(
     assert "🚀" in step_log_text
 
 
-@pytest.mark.asyncio
 async def test_copy_incremental_step_log_rejects_symlink_source(tmp_path: Path) -> None:
     """Incremental log copy should reject symlink inputs to avoid disclosure."""
 
@@ -3142,7 +3100,6 @@ async def test_copy_incremental_step_log_rejects_symlink_source(tmp_path: Path) 
         )
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_write_incremental_step_logs_without_duplication(
     tmp_path: Path,
 ) -> None:
@@ -3230,7 +3187,6 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     assert "step-1 output" not in step2_text
 
 
-@pytest.mark.asyncio
 async def test_run_execute_stage_step_log_deltas_survive_worker_restart(
     tmp_path: Path,
 ) -> None:
@@ -3315,7 +3271,6 @@ async def test_run_execute_stage_step_log_deltas_survive_worker_restart(
     assert checkpoint_path.exists()
 
 
-@pytest.mark.asyncio
 async def test_run_execute_stage_step_log_deltas_handle_source_truncation_on_resume(
     tmp_path: Path,
 ) -> None:
@@ -3396,7 +3351,6 @@ async def test_run_execute_stage_step_log_deltas_handle_source_truncation_on_res
     assert source_log.read_text(encoding="utf-8") == step_two_segment
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_turn_repeats(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3497,7 +3451,6 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     assert stdout_event_text.count("Final answer status: tests already green.") == 2
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_completion_identity_dedupes_exact_duplicate_resend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3565,7 +3518,6 @@ async def test_run_once_task_step_completion_identity_dedupes_exact_duplicate_re
     assert stdout_event_text.count(marker_text) == 1
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_completion_identity_dedupes_near_duplicate_resend_with_chunk_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3636,7 +3588,6 @@ async def test_run_once_task_step_completion_identity_dedupes_near_duplicate_res
     assert step_text.count("[moonmind] completion-event key=") == 1
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_completion_identity_preserves_repeated_text_across_distinct_steps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3706,7 +3657,6 @@ async def test_run_once_task_step_completion_identity_preserves_repeated_text_ac
     assert step_two_text.count("[moonmind] completion-event key=") == 1
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_step_and_exec_logs_dedupe_mixed_prefix_final_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3876,7 +3826,6 @@ def test_persist_step_log_offsets_checkpoint_handles_temp_path_directory(
         assert temp_path.is_dir()
 
 
-@pytest.mark.asyncio
 async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     tmp_path: Path,
 ) -> None:
@@ -3986,7 +3935,6 @@ async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     assert "quality-gate gate failed" in str(failed_events[0]["payload"]["summary"])
 
 
-@pytest.mark.asyncio
 async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
     tmp_path: Path,
 ) -> None:
@@ -4097,7 +4045,6 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
     assert "quality-gate gate passed" in str(finished_events[0]["payload"]["summary"])
 
 
-@pytest.mark.asyncio
 async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_roots(
     tmp_path: Path,
 ) -> None:
@@ -4166,7 +4113,6 @@ async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_
     assert "gates/steps/step-0000.json" in queue.uploaded
 
 
-@pytest.mark.asyncio
 async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
     tmp_path: Path,
 ) -> None:
@@ -4268,7 +4214,6 @@ async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
     )
 
 
-@pytest.mark.asyncio
 async def test_compose_step_instruction_dedupes_objective_text(
     tmp_path: Path,
 ) -> None:
@@ -4318,7 +4263,6 @@ async def test_compose_step_instruction_dedupes_objective_text(
     assert instruction.count("Implement direct worker to Qdrant retrieval path.") == 1
 
 
-@pytest.mark.asyncio
 async def test_compose_step_instruction_keeps_distinct_step_text(
     tmp_path: Path,
 ) -> None:
@@ -4369,7 +4313,6 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
     )
 
 
-@pytest.mark.asyncio
 async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_publish_none(
     tmp_path: Path,
 ) -> None:
@@ -4419,7 +4362,6 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
     )
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_fail_fast_on_first_failed_step(
     tmp_path: Path,
 ) -> None:
@@ -4506,7 +4448,6 @@ async def test_run_once_task_steps_fail_fast_on_first_failed_step(
     assert failed_events[0]["payload"]["stepId"] == "step-2"
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_steps_materialize_union_of_selected_skills(
     tmp_path: Path,
     monkeypatch,
@@ -4603,7 +4544,6 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
     assert handler.calls == ["codex_skill:custom:True", "codex_skill:speckit:True"]
 
 
-@pytest.mark.asyncio
 async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
     tmp_path: Path,
 ) -> None:
@@ -4648,7 +4588,6 @@ async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
     assert "unsupported task runtime" in queue.failed[0]
 
 
-@pytest.mark.asyncio
 async def test_run_once_rejects_when_required_capabilities_missing(
     tmp_path: Path,
 ) -> None:
@@ -4693,7 +4632,6 @@ async def test_run_once_rejects_when_required_capabilities_missing(
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
     tmp_path: Path,
 ) -> None:
@@ -4740,7 +4678,6 @@ async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
     tmp_path: Path,
 ) -> None:
@@ -4851,7 +4788,6 @@ async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
     assert handler.calls == ["codex_skill:pr-resolver:True"]
 
 
-@pytest.mark.asyncio
 async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
     tmp_path: Path,
 ) -> None:
@@ -4956,7 +4892,6 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
     assert handler.calls == ["codex_skill:pr-resolver:True"]
 
 
-@pytest.mark.asyncio
 async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
     tmp_path: Path,
 ) -> None:
@@ -5079,7 +5014,6 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
     assert handler.calls == ["codex_skill:pr-resolver:True"]
 
 
-@pytest.mark.asyncio
 async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) -> None:
     """Universal worker mode should execute non-codex runtime tasks."""
 
@@ -5122,7 +5056,6 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_container_executes_generic_docker_path(
     tmp_path: Path,
 ) -> None:
@@ -5186,7 +5119,6 @@ async def test_run_once_task_container_executes_generic_docker_path(
     assert "secret-token-value" not in content
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_container_supports_distinct_images(
     tmp_path: Path,
 ) -> None:
@@ -5264,7 +5196,6 @@ async def test_run_once_task_container_supports_distinct_images(
     assert "alpine:3.20" in second_log
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_container_with_steps_fails_contract_validation(
     tmp_path: Path,
 ) -> None:
@@ -5314,7 +5245,6 @@ async def test_run_once_task_container_with_steps_fails_contract_validation(
     assert "task.steps is not supported" in queue.failed[0]
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -5388,7 +5318,6 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
     assert any(cmd[:2] == ("docker", "stop") for cmd in recorded_commands)
 
 
-@pytest.mark.asyncio
 async def test_run_once_task_container_precreates_artifact_subdir(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -5457,7 +5386,6 @@ async def test_run_once_task_container_precreates_artifact_subdir(
     assert queue.failed == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> None:
     """Disallowed skills should fail before handler execution."""
 
@@ -5490,7 +5418,6 @@ async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> No
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill(
     tmp_path: Path,
     monkeypatch,
@@ -5542,7 +5469,6 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
     assert handler.calls == ["codex_skill:custom-skill:True"]
 
 
-@pytest.mark.asyncio
 async def test_heartbeat_loop_runs_on_lease_interval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5600,7 +5526,6 @@ async def test_heartbeat_loop_runs_on_lease_interval(
     assert len(queue.heartbeats) >= heartbeats_target
 
 
-@pytest.mark.asyncio
 async def test_heartbeat_loop_sets_pause_event_for_quiesce(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5668,7 +5593,6 @@ async def test_heartbeat_loop_sets_pause_event_for_quiesce(
     assert pause_event.is_set()
 
 
-@pytest.mark.asyncio
 async def test_should_bootstrap_live_session_respects_default_enable(
     tmp_path: Path,
 ) -> None:
@@ -5692,7 +5616,6 @@ async def test_should_bootstrap_live_session_respects_default_enable(
     assert await worker._should_bootstrap_live_session(job_id=uuid4()) is True
 
 
-@pytest.mark.asyncio
 async def test_ensure_live_session_started_skips_opt_in_without_request(
     tmp_path: Path,
 ) -> None:
@@ -5742,7 +5665,6 @@ async def test_ensure_live_session_started_skips_opt_in_without_request(
     assert worker._active_live_session is None
 
 
-@pytest.mark.asyncio
 async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmate_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5824,7 +5746,6 @@ async def test_ensure_live_session_started_honors_explicit_request_and_uses_tmat
     assert not config_path.exists()
 
 
-@pytest.mark.asyncio
 async def test_run_once_acks_cancellation_requested_via_heartbeat(
     tmp_path: Path,
 ) -> None:
@@ -5886,7 +5807,6 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
     )
 
 
-@pytest.mark.asyncio
 async def test_determine_finish_outcome_pr_publish_without_pr_url_maps_to_published_pr(
     tmp_path: Path,
 ) -> None:
@@ -5924,7 +5844,6 @@ async def test_determine_finish_outcome_pr_publish_without_pr_url_maps_to_publis
     assert outcome.stage == "publish"
 
 
-@pytest.mark.asyncio
 async def test_live_log_chunk_callback_emits_redacted_step_metadata(
     tmp_path: Path,
 ) -> None:
@@ -5975,7 +5894,6 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
     assert "[REDACTED]" in first_stdout["message"]
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     """Worker config should respect documented defaults and env overrides."""
 
@@ -6022,7 +5940,6 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert config.git_user_email == "nsticco@gmail.com"
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_rejects_non_integer_step_log_max_bytes(
     monkeypatch,
 ) -> None:
@@ -6035,7 +5952,6 @@ async def test_config_from_env_rejects_non_integer_step_log_max_bytes(
         CodexWorkerConfig.from_env()
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_rejects_excessive_step_log_max_bytes(
     monkeypatch,
 ) -> None:
@@ -6048,7 +5964,6 @@ async def test_config_from_env_rejects_excessive_step_log_max_bytes(
         CodexWorkerConfig.from_env()
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) -> None:
     """Legacy WORKFLOW git user env vars should remain supported by worker config."""
 
@@ -6066,7 +5981,6 @@ async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) ->
     assert config.git_user_email == "legacy@example.com"
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
     """Worker config should resolve git user vars as WORKFLOW > WORKFLOW > MOONMIND."""
 
@@ -6084,7 +5998,6 @@ async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
     assert config.git_user_email == "workflow@example.com"
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_supports_legacy_skill_policy_mode_env(
     monkeypatch,
 ) -> None:
@@ -6100,7 +6013,6 @@ async def test_config_from_env_supports_legacy_skill_policy_mode_env(
     assert config.skill_policy_mode == "allowlist"
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
     monkeypatch,
 ) -> None:
@@ -6116,7 +6028,6 @@ async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
     assert config.allowed_skills == ("custom", "speckit", "auto")
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     """Unset optional values should fall back to defaults."""
 
@@ -6168,7 +6079,6 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.step_log_max_bytes == 1024 * 1024
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
     """Flag should toggle worker proposal submission behavior."""
 
@@ -6182,7 +6092,6 @@ async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
     assert config.enable_task_proposals is False
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:
     """Live session config should parse from MOONMIND_LIVE_SESSION_* variables."""
 
@@ -6206,7 +6115,6 @@ async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None
     assert config.live_session_max_concurrent_per_worker == 5
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) -> None:
     """Invalid policy mode should fail fast during worker startup."""
 
@@ -6217,7 +6125,6 @@ async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) ->
         CodexWorkerConfig.from_env()
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_rejects_non_integer_stage_command_timeout(
     monkeypatch,
 ) -> None:
@@ -6233,7 +6140,6 @@ async def test_config_from_env_rejects_non_integer_stage_command_timeout(
         CodexWorkerConfig.from_env()
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_runtime_mode_controls_default_capabilities(
     monkeypatch,
 ) -> None:
@@ -6252,7 +6158,6 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
     assert config.worker_capabilities == ("codex", "gemini_cli", "claude", "git", "gh")
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_rejects_jules_runtime_when_disabled(
     monkeypatch,
 ) -> None:
@@ -6271,7 +6176,6 @@ async def test_config_from_env_rejects_jules_runtime_when_disabled(
         CodexWorkerConfig.from_env()
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_accepts_jules_runtime_when_configured(
     monkeypatch,
 ) -> None:
@@ -6297,7 +6201,6 @@ async def test_config_from_env_accepts_jules_runtime_when_configured(
     assert config.allowed_types == ("task",)
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_rejects_invalid_jules_max_inflight(
     monkeypatch,
 ) -> None:
@@ -6314,7 +6217,6 @@ async def test_config_from_env_rejects_invalid_jules_max_inflight(
         CodexWorkerConfig.from_env()
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_disables_legacy_job_types_when_flag_is_off(
     monkeypatch,
 ) -> None:
@@ -6329,7 +6231,6 @@ async def test_config_from_env_disables_legacy_job_types_when_flag_is_off(
     assert config.allowed_types == ("task",)
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_loads_vault_settings(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -6355,7 +6256,6 @@ async def test_config_from_env_loads_vault_settings(
     assert config.vault_timeout_seconds == 5.0
 
 
-@pytest.mark.asyncio
 async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     tmp_path: Path,
 ) -> None:
@@ -6426,7 +6326,6 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     assert jules_effort == "low"
 
 
-@pytest.mark.asyncio
 async def test_build_proposal_task_request_template_defers_runtime_defaults(
     tmp_path: Path,
 ) -> None:
@@ -6458,7 +6357,6 @@ async def test_build_proposal_task_request_template_defers_runtime_defaults(
     }
 
 
-@pytest.mark.asyncio
 async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6556,7 +6454,6 @@ async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     assert record.provider_status_history == ("pending", "running", "completed")
 
 
-@pytest.mark.asyncio
 async def test_finish_reports_include_jules_runtime_artifact(
     tmp_path: Path,
 ) -> None:
@@ -6661,7 +6558,6 @@ async def test_finish_reports_include_jules_runtime_artifact(
     assert runtime_payload["tasks"][0]["providerStatus"] == "completed"
 
 
-@pytest.mark.asyncio
 async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6786,7 +6682,6 @@ async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
     assert len(queue.runtime_state_updates) >= 4
 
 
-@pytest.mark.asyncio
 async def test_jules_worker_heartbeat_only_tick_returns_inflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6887,7 +6782,6 @@ async def test_jules_worker_heartbeat_only_tick_returns_inflight(
     assert queue.heartbeats == [str(job.id)]
 
 
-@pytest.mark.asyncio
 async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7008,7 +6902,6 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     assert last_state.get("providerStatus") == "completed"
 
 
-@pytest.mark.asyncio
 async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7272,7 +7165,6 @@ def test_resolve_skills_cache_root_uses_worker_workdir_for_relative_paths(
     assert resolved == (worker._config.workdir / "var/skill_cache").resolve()
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
@@ -7299,7 +7191,6 @@ async def test_derive_default_pr_title_prefers_first_non_empty_step_title(
     assert title == "Ship publish title defaults for queue tasks"
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_title_uses_short_correlation_fallback_without_step_titles(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
@@ -7325,7 +7216,6 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback_without_s
     assert len(title) <= 90
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is_numeric(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
@@ -7352,7 +7242,6 @@ async def test_derive_default_pr_title_uses_task_instructions_when_step_title_is
     assert len(title) <= 90
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
@@ -7382,7 +7271,6 @@ async def test_derive_default_pr_title_sanitizes_embedded_uuid_tokens(
     assert full_uuid not in title
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_title_uses_short_correlation_fallback(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
 ) -> None:
@@ -7408,7 +7296,6 @@ async def test_derive_default_pr_title_uses_short_correlation_fallback(
     assert len(title) <= 90
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_body_contains_required_correlation_footer() -> None:
     """Generated PR body should include stable MoonMind metadata footer fields."""
 
@@ -7428,7 +7315,6 @@ async def test_derive_default_pr_body_contains_required_correlation_footer() -> 
     assert "<!-- moonmind:end -->" in body
 
 
-@pytest.mark.asyncio
 async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
     """Generated footer should normalize metadata and redact secret-like branch values."""
 
@@ -7446,7 +7332,6 @@ async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
     assert "Head: [REDACTED]" in body
 
 
-@pytest.mark.asyncio
 async def test_resolve_publish_text_override_preserves_non_empty_verbatim() -> None:
     """Non-empty overrides should remain verbatim while whitespace-only values are omitted."""
 
@@ -7682,7 +7567,6 @@ def test_collect_verification_evidence_prefers_structured_report_records(
     assert evidence[0]["artifact"] == "logs/publish.log"
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7809,7 +7693,6 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     )
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_fails_without_verification_evidence_for_source_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7910,7 +7793,6 @@ async def test_run_publish_stage_fails_without_verification_evidence_for_source_
     )
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_auto_runs_default_test_script_when_evidence_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8015,7 +7897,6 @@ async def test_run_publish_stage_auto_runs_default_test_script_when_evidence_mis
     )
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8096,7 +7977,6 @@ async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_a
     assert any(artifact.name == "logs/publish.log" for artifact in staged_artifacts)
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_fails_for_renamed_source_change_without_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8175,7 +8055,6 @@ async def test_run_publish_stage_fails_for_renamed_source_change_without_evidenc
         )
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_allows_structured_verification_skip_reason(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8346,7 +8225,6 @@ def publish_stage_test_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return worker, queue, run_calls
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_warning(
     tmp_path: Path,
     publish_stage_test_setup,
@@ -8402,7 +8280,6 @@ async def test_run_publish_stage_pr_mode_resolves_missing_pr_base_branch_with_wa
     assert payload["headBranch"] == "feature/branch"
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
     tmp_path: Path,
     publish_stage_test_setup,
@@ -8455,7 +8332,6 @@ async def test_run_publish_stage_pr_mode_fails_when_explicit_base_equals_head(
     assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
 
 
-@pytest.mark.asyncio
 async def test_run_publish_stage_pr_mode_fails_fast_when_no_valid_base_branch(
     tmp_path: Path,
     publish_stage_test_setup,
@@ -8508,7 +8384,6 @@ async def test_run_publish_stage_pr_mode_fails_fast_when_no_valid_base_branch(
     assert all(call[:3] != ("gh", "pr", "create") for call in run_calls)
 
 
-@pytest.mark.asyncio
 async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
     tmp_path: Path,
 ) -> None:
@@ -8561,7 +8436,6 @@ async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
     assert "[REDACTED]" in log_content
 
 
-@pytest.mark.asyncio
 async def test_run_stage_command_records_structured_verification_report(
     tmp_path: Path,
 ) -> None:
@@ -8606,7 +8480,6 @@ async def test_run_stage_command_records_structured_verification_report(
     assert records[0]["logArtifact"] == "logs/publish.log"
 
 
-@pytest.mark.asyncio
 async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -> None:
     """Stage command wrapper should fail fast when a command runner hangs."""
 
@@ -8667,7 +8540,6 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
     assert "command timed out after 0.01s: git status" in log_content
 
 
-@pytest.mark.asyncio
 async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
     """PR base should use explicit override when valid, without warning."""
 
@@ -8682,7 +8554,6 @@ async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
     assert warning is None
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
     """Legacy env defaults should hydrate model/effort when MoonMind overrides unset."""
 
@@ -8698,7 +8569,6 @@ async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None
     assert config.default_codex_effort == "xhigh"
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
     """Gemini worker config should default to the supported production model."""
 
@@ -8711,7 +8581,6 @@ async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
     assert config.default_gemini_model == "gemini-3.1-pro"
 
 
-@pytest.mark.asyncio
 async def test_config_from_env_parses_gemini_allowed_tools(monkeypatch) -> None:
     """Gemini allowed tools should parse from a comma-separated env override."""
 
@@ -8730,7 +8599,6 @@ async def test_config_from_env_parses_gemini_allowed_tools(monkeypatch) -> None:
     )
 
 
-@pytest.mark.asyncio
 async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     tmp_path: Path,
 ) -> None:
@@ -8782,7 +8650,6 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     assert command[-2:] == ["--model", "gemini-2.5-pro"]
 
 
-@pytest.mark.asyncio
 async def test_resolve_task_auth_context_includes_git_identity_without_token(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -8821,7 +8688,6 @@ async def test_resolve_task_auth_context_includes_git_identity_without_token(
     assert auth_context.repo_command_env["GIT_COMMITTER_EMAIL"] == "nsticco@gmail.com"
 
 
-@pytest.mark.asyncio
 async def test_build_command_env_uses_minimal_inherited_environment(
     monkeypatch,
 ) -> None:
@@ -8847,7 +8713,6 @@ async def test_build_command_env_uses_minimal_inherited_environment(
     assert "SECRET_TOKEN" not in command_env
 
 
-@pytest.mark.asyncio
 async def test_prepare_git_identity_preflight_sets_local_identity_for_commit_capable_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8918,7 +8783,6 @@ async def test_prepare_git_identity_preflight_sets_local_identity_for_commit_cap
     ) in calls
 
 
-@pytest.mark.asyncio
 async def test_prepare_git_identity_preflight_allows_commit_without_global_identity(
     tmp_path: Path,
 ) -> None:
@@ -8997,7 +8861,6 @@ async def test_prepare_git_identity_preflight_allows_commit_without_global_ident
     assert configured_email.stdout.strip() == "moonmind-worker@users.noreply.github.com"
 
 
-@pytest.mark.asyncio
 async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> None:
     """Claim request should forward local policy hints without adding repo overrides."""
 
@@ -9028,7 +8891,6 @@ async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> 
     assert claim["worker_capabilities"] == ("codex", "git")
 
 
-@pytest.mark.asyncio
 async def test_run_once_fails_auth_ref_when_vault_not_configured(
     tmp_path: Path,
 ) -> None:
@@ -9075,7 +8937,6 @@ async def test_run_once_fails_auth_ref_when_vault_not_configured(
     assert handler.calls == []
 
 
-@pytest.mark.asyncio
 async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
     tmp_path: Path,
 ) -> None:

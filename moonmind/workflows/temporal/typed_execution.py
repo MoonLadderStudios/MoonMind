@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import Any, Literal, overload
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityCancellationType
 
-if TYPE_CHECKING:
-    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
-    from moonmind.workflows.temporal.activity_runtime import PlanGenerateActivityResult
-    from moonmind.workflows.temporal.artifacts import ArtifactRef
+from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+from moonmind.workflows.temporal.activity_runtime import PlanGenerateActivityResult
+from moonmind.workflows.temporal.artifacts import ArtifactRef
 
 
 @overload

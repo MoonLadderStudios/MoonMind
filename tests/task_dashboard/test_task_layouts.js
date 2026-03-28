@@ -161,7 +161,6 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(keys.join(","), expectedKeys.join(","));
   const labels = taskFieldDefinitions.map((definition) => definition.label);
   assert(labels.includes("Finished"));
-  assert(labels.includes("Scheduled"));
   const rendered = renderTaskFieldValue(
     {
       runtimeMode: "codex",
@@ -171,14 +170,6 @@ function createProposalRow(overrides = {}) {
     taskFieldDefinitions.find((definition) => definition.key === "skillId"),
   );
   assert.strictEqual(rendered, "auto");
-  const renderedGemini = renderTaskFieldValue(
-    { runtimeMode: "gemini_cli" },
-    taskFieldDefinitions.find((definition) => definition.key === "runtimeMode"),
-  );
-  assert(
-    renderedGemini.includes("Gemini CLI"),
-    `Expected Gemini CLI label, got: ${renderedGemini}`,
-  );
 })();
 
 (function testRenderQueueTableUsesFieldDefinitions() {

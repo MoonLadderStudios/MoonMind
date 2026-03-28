@@ -116,7 +116,6 @@ async def verify_volume_credentials(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        # Enforce a timeout around the subprocess communicate() awaitable.
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=30
         )
