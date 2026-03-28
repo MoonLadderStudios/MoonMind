@@ -236,7 +236,6 @@ class ManagedAgentAdapter:
         delta_env_overrides: dict[str, str] = {}
         
         if is_proxy_first:
-            import json
             import time
             from cryptography.fernet import Fernet
             from api_service.core.encryption import get_encryption_key
