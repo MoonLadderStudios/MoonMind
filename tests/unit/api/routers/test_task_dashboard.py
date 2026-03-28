@@ -80,15 +80,10 @@ def test_allowed_path_helper_rejects_unknown_routes() -> None:
 
 
 def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
-    response = client.get("/tasks")
+    response = client.get("/tasks", follow_redirects=False)
 
-    assert response.status_code == 200
-    body = response.text
-    assert "Mission Control" in body
-    assert "task-dashboard-config" in body
-    assert "/static/task_dashboard/dashboard.js" in body
-    assert "viewport-fit=cover" in body
-    assert "moonmind.theme" in body
+    assert response.status_code == 307
+    assert response.headers["location"] == "/tasks/list"
 
 
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
@@ -96,6 +91,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/new",
         "/tasks/create",
         "/tasks/manifests/new",
+        "/tasks/skills",
     ):
         response = client.get(path)
         assert response.status_code == 200

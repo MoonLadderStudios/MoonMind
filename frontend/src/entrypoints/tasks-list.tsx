@@ -36,11 +36,12 @@ function TasksListPage() {
           <DataTable
             data={data?.items || []}
             columns={[
-              { key: 'taskId', header: 'Task ID', render: (item: TaskRun) => <a href={`/tasks/${item.taskId}`} className="text-blue-600 hover:underline">{item.taskId}</a> },
+              { key: 'taskId', header: 'Task ID', render: (item: TaskRun) => <a href={`/tasks/${encodeURIComponent(item.taskId)}`} className="text-blue-600 hover:underline">{item.taskId}</a> },
               { key: 'sourceLabel', header: 'Source', render: (item: TaskRun) => item.sourceLabel || item.source },
               { key: 'status', header: 'Status' },
             ]}
             emptyMessage="No tasks found."
+            getRowKey={(item) => item.taskId}
           />
         )}
       </div>

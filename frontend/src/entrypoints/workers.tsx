@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
+import { BootPayload } from '../boot/parseBootPayload';
 
 interface WorkerSnapshot {
   system?: {
@@ -21,29 +22,21 @@ interface WorkerSnapshot {
   };
 }
 
-function WorkersPage() {
+interface WorkerPauseConfig {
+  get: string;
+  post: string;
+  pollIntervalMs?: number;
+}
+
+function WorkersPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
-  const [workerPauseConfig, setWorkerPauseConfig] = useState<Record<string, string> | null>(null);
+  const workerPauseConfig = (payload.initialData as { workerPause?: WorkerPauseConfig })?.workerPause || null;
   const [notice, setNotice] = useState<{ level: 'ok' | 'error', text: string } | null>(null);
 
   // Form states
   const [pauseMode, setPauseMode] = useState('drain');
   const [pauseReason, setPauseReason] = useState('');
   const [resumeReason, setResumeReason] = useState('');
-
-  useEffect(() => {
-    const scriptTag = document.getElementById('task-dashboard-config');
-    if (scriptTag) {
-      try {
-        const config = JSON.parse(scriptTag.textContent || '{}');
-        if (config.workerPause) {
-          setWorkerPauseConfig(config.workerPause);
-        }
-      } catch (e) {
-        console.error('Failed to parse dashboard config', e);
-      }
-    }
-  }, []);
 
   const { data: snapshot, isLoading, isError, error } = useQuery<WorkerSnapshot>({
     queryKey: ['workers-snapshot'],
@@ -62,7 +55,7 @@ function WorkersPage() {
   });
 
   const actionMutation = useMutation({
-    mutationFn: async (payload: Record<string, unknown>) => {
+    mutationFn: async (payload: { action: 'pause'; mode?: string; reason: string } | { action: 'resume'; reason: string; forceResume?: boolean }) => {
       if (!workerPauseConfig || !workerPauseConfig.post) throw new Error('Worker pause controls are not configured for this deployment.');
       const response = await fetch(workerPauseConfig.post, {
         method: 'POST',

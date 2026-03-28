@@ -14,19 +14,23 @@ interface TaskRunDetail {
 }
 
 function TaskDetailPage(_props: { payload: BootPayload }) {
-  const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/);
+  const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:proposals\/|schedules\/|manifests\/)?([^/]+)$/);
   const taskId = taskIdMatch ? taskIdMatch[1] : null;
+  const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
 
   const { data, isLoading, isError, error } = useQuery<TaskRunDetail>({
     queryKey: ['task-detail', taskId],
     queryFn: async () => {
-      const response = await fetch(`/api/executions/${taskId}`);
+      if (!encodedTaskId) {
+        throw new Error('Task ID is required to fetch task details.');
+      }
+      const response = await fetch(`/api/executions/${encodedTaskId}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch task ${taskId}: ${response.statusText}`);
       }
       return response.json();
     },
-    enabled: !!taskId,
+    enabled: !!encodedTaskId,
   });
 
   return (

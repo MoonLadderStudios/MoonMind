@@ -10,7 +10,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,14 +217,29 @@ def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     )
 
 
-@router.get("/tasks", response_class=HTMLResponse, name="task_dashboard_root")
+def _render_react_page(request: Request, entrypoint: str, current_path: str, initial_data: dict | None = None) -> HTMLResponse:
+    boot_payload = generate_boot_payload(entrypoint, initial_data=initial_data)
+    assets_html = ui_assets(entrypoint)
+    return templates.TemplateResponse(
+        request,
+        "react_dashboard.html",
+        {
+            "request": request,
+            "boot_payload": boot_payload,
+            "assets_html": assets_html,
+            "current_path": current_path,
+        },
+    )
+
+
+@router.get("/tasks", name="task_dashboard_root")
 async def task_dashboard_root(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
+) -> RedirectResponse:
     """Serve the dashboard root page."""
 
-    return _render_dashboard(request, "/tasks")
+    return RedirectResponse(url="/tasks/list")
 
 
 @router.get("/tasks/proposals", response_class=HTMLResponse)
@@ -233,20 +248,7 @@ async def task_proposals_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered proposals page."""
-    current_path = "/tasks/proposals"
-    boot_payload = generate_boot_payload("proposals")
-    assets_html = ui_assets("proposals")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    return _render_react_page(request, "proposals", "/tasks/proposals")
 
 
 @router.get("/tasks/schedules", response_class=HTMLResponse)
@@ -255,20 +257,7 @@ async def task_schedules_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered schedules page."""
-    current_path = "/tasks/schedules"
-    boot_payload = generate_boot_payload("schedules")
-    assets_html = ui_assets("schedules")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    return _render_react_page(request, "schedules", "/tasks/schedules")
 
 
 @router.get("/tasks/manifests", response_class=HTMLResponse)
@@ -277,20 +266,7 @@ async def task_manifests_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered manifests page."""
-    current_path = "/tasks/manifests"
-    boot_payload = generate_boot_payload("manifests")
-    assets_html = ui_assets("manifests")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    return _render_react_page(request, "manifests", "/tasks/manifests")
 
 
 @router.get("/tasks/tasks-list", response_class=HTMLResponse)
@@ -299,20 +275,7 @@ async def task_tasks_list_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered tasks-list page."""
-    current_path = "/tasks/tasks-list"
-    boot_payload = generate_boot_payload("tasks-list")
-    assets_html = ui_assets("tasks-list")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    return _render_react_page(request, "tasks-list", "/tasks/tasks-list")
 
 
 @router.get("/tasks/list", response_class=HTMLResponse)
@@ -321,20 +284,7 @@ async def task_list_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered tasks list page."""
-    current_path = "/tasks/list"
-    boot_payload = generate_boot_payload("tasks-list")
-    assets_html = ui_assets("tasks-list")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    return _render_react_page(request, "tasks-list", "/tasks/list")
 
 
 @router.get("/tasks/workers", response_class=HTMLResponse)
@@ -343,20 +293,13 @@ async def task_workers_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered workers page."""
-    current_path = "/tasks/workers"
-    boot_payload = generate_boot_payload("workers")
-    assets_html = ui_assets("workers")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    initial_data = {
+        "workerPause": {
+            "get": "/api/system/worker-pause",
+            "post": "/api/system/worker-pause",
+        }
+    }
+    return _render_react_page(request, "workers", "/tasks/workers", initial_data=initial_data)
 
 
 @router.get("/tasks/settings", response_class=HTMLResponse)
@@ -365,20 +308,7 @@ async def task_settings_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
-    current_path = "/tasks/settings"
-    boot_payload = generate_boot_payload("settings")
-    assets_html = ui_assets("settings")
-
-    return templates.TemplateResponse(
-        request,
-        "react_dashboard.html",
-        {
-            "request": request,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-            "current_path": current_path,
-        },
-    )
+    return _render_react_page(request, "settings", "/tasks/settings")
 
 
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
@@ -404,22 +334,10 @@ async def task_dashboard_route(
             },
         )
 
-    # Exclude creation paths from the task detail React shell, so they fall back to the legacy shell
-    if normalized not in ("new", "create", "manifests/new"):
-        if _is_safe_detail_segment(normalized) or _is_dynamic_detail(normalized, "temporal") or _is_dynamic_detail(normalized, "proposals") or _is_dynamic_detail(normalized, "manifests") or _is_dynamic_detail(normalized, "schedules"):
-            current_path = f"/tasks/{normalized}"
-            boot_payload = generate_boot_payload("task-detail")
-            assets_html = ui_assets("task-detail")
-            return templates.TemplateResponse(
-                request,
-                "react_dashboard.html",
-                {
-                    "request": request,
-                    "boot_payload": boot_payload,
-                    "assets_html": assets_html,
-                    "current_path": current_path,
-                },
-            )
+    # Exclude known static paths from the task detail React shell, so they fall back to the legacy shell
+    if normalized not in _STATIC_PATHS:
+        if _is_safe_detail_segment(normalized) or any(_is_dynamic_detail(normalized, source) for source in ("proposals", "manifests", "schedules")):
+            return _render_react_page(request, "task-detail", f"/tasks/{normalized}")
 
     return _render_dashboard(request, f"/tasks/{normalized}")
 

@@ -40,6 +40,7 @@ function ProposalsPage() {
               { key: 'status', header: 'Status' },
             ]}
             emptyMessage="No proposals found."
+            getRowKey={(item) => item.id}
           />
         )}
       </div>

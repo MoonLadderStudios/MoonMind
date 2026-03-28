@@ -8,12 +8,18 @@ interface Schedule {
   name: string;
   lastDispatchStatus: string;
   nextRunAt: string;
+  schedule?: string;
+}
+
+interface SaveSchedulePayload {
+  name: string;
+  schedule: string;
 }
 
 function SchedulesPage() {
   const queryClient = useQueryClient();
   const [showModal, setShowModal] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
 
   const { data, isLoading, isError, error } = useQuery<{ items: Schedule[] }>({
     queryKey: ['schedules'],
@@ -27,9 +33,9 @@ function SchedulesPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: Record<string, unknown>) => {
-      const method = editId ? 'PUT' : 'POST';
-      const endpoint = editId ? `/api/recurring-tasks/${editId}` : '/api/recurring-tasks';
+    mutationFn: async (payload: SaveSchedulePayload) => {
+      const method = editingSchedule ? 'PUT' : 'POST';
+      const endpoint = editingSchedule ? `/api/recurring-tasks/${editingSchedule.id}` : '/api/recurring-tasks';
       const response = await fetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -43,17 +49,17 @@ function SchedulesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedules'] });
       setShowModal(false);
-      setEditId(null);
+      setEditingSchedule(null);
     }
   });
 
   const handleEdit = (schedule: Schedule) => {
-    setEditId(schedule.id);
+    setEditingSchedule(schedule);
     setShowModal(true);
   };
 
   const handleCreate = () => {
-    setEditId(null);
+    setEditingSchedule(null);
     setShowModal(true);
   };
 
@@ -84,6 +90,7 @@ function SchedulesPage() {
               { key: 'actions', header: 'Actions', render: (item) => <button onClick={() => handleEdit(item)} className="text-blue-600 hover:underline">Edit</button> },
             ]}
             emptyMessage="No recurring schedules found."
+            getRowKey={(item) => item.id}
           />
         )}
       </div>
@@ -91,25 +98,25 @@ function SchedulesPage() {
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4">
           <div className="bg-white p-6 rounded shadow-lg max-w-md w-full">
-            <h3 className="text-lg font-bold mb-4">{editId ? 'Edit Schedule' : 'Create Schedule'}</h3>
+            <h3 className="text-lg font-bold mb-4">{editingSchedule ? 'Edit Schedule' : 'Create Schedule'}</h3>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
                 saveMutation.mutate({
-                  name: formData.get('name'),
-                  schedule: formData.get('schedule'),
+                  name: String(formData.get('name') || ''),
+                  schedule: String(formData.get('schedule') || ''),
                 });
               }}
               className="space-y-4"
             >
               <div>
                 <label className="block text-sm font-medium text-gray-700">Name</label>
-                <input required type="text" name="name" className="mt-1 block w-full rounded-md border-gray-300 shadow-sm" />
+                <input required type="text" name="name" defaultValue={editingSchedule?.name || ''} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700">Schedule (Cron)</label>
-                <input required type="text" name="schedule" className="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="* * * * *" />
+                <input required type="text" name="schedule" defaultValue={editingSchedule?.schedule || ''} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="* * * * *" />
               </div>
               <div className="flex justify-end space-x-2 pt-4">
                 <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">Cancel</button>
