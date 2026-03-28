@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+from datetime import datetime, timedelta
 
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
@@ -75,7 +76,7 @@ async def mock_auth_profile_list(request: dict) -> dict:
                 "runtime_env_overrides": {},
                 "api_key_env_var": None,
                 "max_parallel_runs": 1,
-                "cooldown_after_429_seconds": 300,
+                "cooldown_after_429_seconds": 900,
                 "rate_limit_policy": "pause_and_retry",
                 "max_lease_duration_seconds": 7200,
                 "enabled": True,
@@ -151,6 +152,8 @@ class MockAuthProfileManager:
         self._shutdown = False
         self.pending_requests = []
         self._leases: dict[str, str] = {}  # profile_id -> workflow_id
+        self.cooldown_reports: list[dict] = []
+        self.cooldowns: dict[str, str] = {}
 
     @workflow.signal
     def request_slot(self, payload: dict) -> None:
@@ -167,7 +170,12 @@ class MockAuthProfileManager:
 
     @workflow.signal
     def report_cooldown(self, payload: dict) -> None:
-        pass
+        self.cooldown_reports.append(dict(payload))
+        profile_id = payload.get("profile_id", "default-managed")
+        cooldown_seconds = int(payload.get("cooldown_seconds", 0))
+        self.cooldowns[profile_id] = (
+            workflow.now() + timedelta(seconds=cooldown_seconds)
+        ).isoformat()
 
     @workflow.signal
     def sync_profiles(self, payload: dict) -> None:
@@ -179,6 +187,8 @@ class MockAuthProfileManager:
         return {
             "leases": dict(self._leases),
             "pending_requests": self.pending_requests,
+            "cooldown_reports": list(self.cooldown_reports),
+            "cooldowns": dict(self.cooldowns),
         }
 
     @workflow.run
@@ -192,10 +202,69 @@ class MockAuthProfileManager:
                 req = self.pending_requests.pop(0)
                 if assign_slots:
                     profile_id = "default-managed"
+                    cooldown_until = self.cooldowns.get(profile_id)
+                    if cooldown_until is not None:
+                        cooldown_dt = datetime.fromisoformat(cooldown_until)
+                        if workflow.now() < cooldown_dt:
+                            self.pending_requests.insert(0, req)
+                            await workflow.sleep(
+                                (cooldown_dt - workflow.now()).total_seconds()
+                            )
+                            continue
                     self._leases[profile_id] = req["requester_workflow_id"]
                     handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
                     await handle.signal("slot_assigned", {"profile_id": profile_id})
         return {}
+
+
+@workflow.defn(name="TestAgentRunParent")
+class TestAgentRunParent:
+    def __init__(self) -> None:
+        self.state_changes: list[dict[str, str]] = []
+        self.profile_assignments: list[dict] = []
+
+    @workflow.signal
+    def child_state_changed(self, new_state: str, reason: str) -> None:
+        self.state_changes.append({"state": new_state, "reason": reason})
+
+    @workflow.signal
+    def profile_assigned(self, payload: dict) -> None:
+        self.profile_assignments.append(dict(payload))
+
+    @workflow.query
+    def get_state(self) -> dict:
+        return {
+            "state_changes": list(self.state_changes),
+            "profile_assignments": list(self.profile_assignments),
+        }
+
+    @workflow.run
+    async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
+        return await workflow.execute_child_workflow(
+            MoonMindAgentRun.run,
+            request,
+            id=f"{workflow.info().workflow_id}:child",
+            task_queue="agent-run-task-queue",
+        )
+
+
+@_activity.defn(name="agent_runtime.status")
+async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
+    return {
+        "runId": request.get("run_id", "managed-rate-limit-run"),
+        "agentKind": "managed",
+        "agentId": request.get("agent_id", "gemini_cli"),
+        "status": "failed",
+    }
+
+
+@_activity.defn(name="agent_runtime.fetch_result")
+async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
+    return {
+        "summary": "Gemini API rate limit exceeded",
+        "failureClass": "integration_error",
+        "providerErrorCode": "429",
+    }
 
 
 @pytest.mark.asyncio
@@ -306,6 +375,88 @@ async def test_agent_run_workflow_cancellation():
                 assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
                     exc_info.value.__cause__, asyncio.CancelledError
                 )
+
+
+@pytest.mark.asyncio
+async def test_agent_run_reports_managed_429_retry_summary_to_parent():
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="mm.workflow",
+            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+        ):
+            async with Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[MoonMindAgentRun, MockAuthProfileManager, TestAgentRunParent],
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                request = AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="gemini_cli",
+                    execution_profile_ref="default-managed",
+                    correlation_id="corr-429",
+                    idempotency_key="idem-429",
+                )
+
+                manager_id = "auth-profile-manager:gemini_cli"
+                await env.client.start_workflow(
+                    MockAuthProfileManager.run,
+                    {"runtime_id": "gemini_cli"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+
+                parent_handle = await env.client.start_workflow(
+                    TestAgentRunParent.run,
+                    request,
+                    id="test-parent-managed-429",
+                    task_queue="agent-run-task-queue",
+                )
+                child_handle = env.client.get_workflow_handle(
+                    "test-parent-managed-429:child"
+                )
+                manager_handle = env.client.get_workflow_handle(manager_id)
+
+                parent_state = {}
+                for _ in range(30):
+                    parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+                    if parent_state.get("profile_assignments"):
+                        break
+                    await asyncio.sleep(0.1)
+
+                await child_handle.signal(
+                    MoonMindAgentRun.completion_signal,
+                    {
+                        "summary": "Gemini API rate limit exceeded",
+                        "failureClass": "integration_error",
+                        "providerErrorCode": "429",
+                    },
+                )
+
+                manager_state = {}
+                for _ in range(30):
+                    parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+                    manager_state = await manager_handle.query(MockAuthProfileManager.get_state)
+                    if manager_state.get("cooldown_reports") and any(
+                        "retry scheduled" in change["reason"].lower()
+                        for change in parent_state.get("state_changes", [])
+                    ):
+                        break
+                    await asyncio.sleep(0.1)
+
+                assert manager_state["cooldown_reports"]
+                assert manager_state["cooldown_reports"][-1]["cooldown_seconds"] == 900
+                assert any(
+                    "retry scheduled" in change["reason"].lower()
+                    and "900s cooldown" in change["reason"].lower()
+                    for change in parent_state["state_changes"]
+                )
+
+                await parent_handle.cancel()
+                with pytest.raises(WorkflowFailureError):
+                    await parent_handle.result()
 
 
 # --- External agent workflow path ---
@@ -589,4 +740,3 @@ async def test_cancellation_releases_auth_profile_slot():
                        manager_state_after.get("leases", {}).get("default-managed") != "test-workflow-cancel-slot", (
                     f"Slot was NOT released after cancellation. Manager state: {manager_state_after}"
                 )
-

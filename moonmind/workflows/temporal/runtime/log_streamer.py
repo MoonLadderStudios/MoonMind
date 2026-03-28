@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import inspect
 from typing import Any
 
 from moonmind.workflows.temporal.runtime.output_parser import (
@@ -32,6 +33,7 @@ class RuntimeLogStreamer:
         run_id: str,
         stream_name: str,
         parser: RuntimeOutputParser | None = None,
+        event_callback: Any | None = None,
     ) -> tuple[str, str, list[dict]]:
         """Read an asyncio.StreamReader in fixed-size chunks and write to an artifact file.
 
@@ -67,11 +69,19 @@ class RuntimeLogStreamer:
                     line_with_nl = line + "\n"
                     parsed_events = parser.parse_stream_chunk(line_with_nl)
                     events.extend(parsed_events)
+                    if parsed_events and event_callback is not None:
+                        callback_result = event_callback(parsed_events)
+                        if inspect.isawaitable(callback_result):
+                            await callback_result
 
         # Flush any remaining partial line to the parser (no trailing newline).
         if parser is not None and _line_buf:
             parsed_events = parser.parse_stream_chunk(_line_buf)
             events.extend(parsed_events)
+            if parsed_events and event_callback is not None:
+                callback_result = event_callback(parsed_events)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
 
         data = b"".join(chunks)
         artifact_name = f"{stream_name}.log"
@@ -89,6 +99,7 @@ class RuntimeLogStreamer:
         *,
         run_id: str,
         parser: RuntimeOutputParser | None = None,
+        event_callback: Any | None = None,
     ) -> tuple[dict[str, str], str, str, ParsedOutput]:
         """Stream both stdout/stderr to artifacts and parse the output.
 
@@ -105,14 +116,26 @@ class RuntimeLogStreamer:
         # issues and performance regressions on heavy output processes.
         stdout_task = (
             asyncio.create_task(
-                self.stream_to_artifact(stdout_reader, run_id=run_id, stream_name="stdout", parser=parser)
+                self.stream_to_artifact(
+                    stdout_reader,
+                    run_id=run_id,
+                    stream_name="stdout",
+                    parser=parser,
+                    event_callback=event_callback,
+                )
             )
             if stdout_reader
             else None
         )
         stderr_task = (
             asyncio.create_task(
-                self.stream_to_artifact(stderr_reader, run_id=run_id, stream_name="stderr", parser=parser)
+                self.stream_to_artifact(
+                    stderr_reader,
+                    run_id=run_id,
+                    stream_name="stderr",
+                    parser=parser,
+                    event_callback=event_callback,
+                )
             )
             if stderr_reader
             else None

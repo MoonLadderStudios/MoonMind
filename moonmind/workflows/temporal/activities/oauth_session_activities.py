@@ -473,7 +473,7 @@ async def oauth_session_register_profile(
             "volume_mount_path": session_obj.volume_mount_path,
             "account_label": session_obj.account_label,
             "max_parallel_runs": metadata.get("max_parallel_runs", 1),
-            "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 300),
+            "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
             "rate_limit_policy": policy_enum,
             "enabled": True,
         }
