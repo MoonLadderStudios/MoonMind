@@ -2,7 +2,7 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "111-live-logs-phase-2",
-    "headRefOid": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+    "headRefOid": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
     "isDraft": false,
     "mergeStateStatus": "DIRTY",
     "mergeable": "CONFLICTING",
@@ -12,100 +12,81 @@
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:23:57Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645807/job/69030402461",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695761953/job/69030689345",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-28T22:23:04Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-28T22:30:01Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:23:52Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645781/job/69030402452",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695761928/job/69030689378",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-28T22:23:06Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-28T22:30:02Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:24:57Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645807/job/69030402448",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695761953/job/69030689352",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-28T22:23:06Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-28T22:30:01Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:24:11Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645781/job/69030402458",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695761928/job/69030689384",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-28T22:23:04Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-28T22:30:01Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:24:19Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645781/job/69030402457",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695761928/job/69030689377",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-28T22:23:05Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-28T22:30:02Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:23:44Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69030431306",
-        "name": "CodeQL",
-        "startedAt": "2026-03-28T22:23:42Z",
-        "status": "COMPLETED",
-        "workflowName": ""
       }
     ],
     "title": "feat: Phase 2 Observability API Endpoints",
     "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048"
   },
   "ci": {
-    "isRunning": false,
-    "hasFailures": true,
-    "failedChecks": [
-      {
-        "name": "CI signal continuity",
-        "state": "MISSING_NON_SECURITY_CHECKS_ON_HEAD",
-        "url": ""
-      }
-    ],
-    "totalCheckCount": 6,
-    "securityCheckCount": 6,
+    "isRunning": true,
+    "hasFailures": false,
+    "failedChecks": [],
+    "totalCheckCount": 5,
+    "securityCheckCount": 5,
     "nonSecurityCheckCount": 0,
     "checkNames": [
       "Analyze (javascript-typescript)",
       "Analyze (actions)",
       "Analyze (python)",
       "Analyze (javascript-typescript)",
-      "Analyze (python)",
-      "CodeQL"
+      "Analyze (python)"
     ],
-    "signalQuality": "degraded",
-    "degradedReasons": [
-      "head_missing_non_security_checks_seen_on_previous_commit"
-    ],
+    "signalQuality": "ok",
+    "degradedReasons": [],
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+    "headShaVerified": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
     "headShaNonSecurityCheckCount": 0,
-    "previousCommitSha": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
-    "previousCommitNonSecurityCheckCount": 6
+    "previousCommitSha": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+    "previousCommitNonSecurityCheckCount": 0
   },
   "commentsFetch": {
     "succeeded": true,
@@ -204,7 +185,7 @@
       "updated_at": "2026-03-28T22:01:54Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382173",
       "path": "tests/unit/api/routers/test_task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 359,
       "side": "RIGHT",
@@ -220,7 +201,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384368",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 223,
       "side": "RIGHT",
@@ -236,7 +217,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384375",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 239,
       "side": "RIGHT",
@@ -252,7 +233,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384377",
       "path": "tests/unit/api/routers/test_task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 365,
       "side": "RIGHT",
@@ -268,7 +249,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384379",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 342,
       "side": "RIGHT",
@@ -316,7 +297,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384390",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 280,
       "side": "RIGHT",
@@ -332,7 +313,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384394",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 289,
       "side": "RIGHT",
@@ -364,7 +345,7 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384402",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "commit_id": "207b134a1a848d5c9bb0161147ee9901b43f60c1",
       "in_reply_to_id": null,
       "line": 276,
       "side": "RIGHT",
@@ -392,10 +373,10 @@
       "path": "api_service/api/routers/task_runs.py",
       "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 21,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     }
   ],
   "commentsSummary": {
@@ -404,16 +385,14 @@
     "reviewCommentCount": 16,
     "issueCommentCount": 1,
     "reviewBodyCount": 2,
-    "actionableCommentCount": 1,
+    "actionableCommentCount": 0,
     "includeBotReviewComments": true,
     "humanCommentCount": 10,
     "botCommentCount": 9,
-    "hasActionableComments": true,
-    "actionableCommentIds": [
-      3005403381
-    ],
+    "hasActionableComments": false,
+    "actionableCommentIds": [],
     "nonActionableReasonCounts": {
-      "addressed_in_ledger": 18
+      "addressed_in_ledger": 19
     },
     "classifiedComments": [
       {
@@ -602,9 +581,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005403381",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 21,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       }
     ]
   }

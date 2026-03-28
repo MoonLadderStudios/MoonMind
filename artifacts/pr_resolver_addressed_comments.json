@@ -88,5 +88,10 @@
     "id": 4026082010,
     "disposition": "not-applicable",
     "rationale": "Top level PR summary from Copilot bot"
+  },
+  {
+    "id": 3005403381,
+    "disposition": "addressed",
+    "rationale": "Removed unused AgentJobLiveSessionProvider import"
   }
 ]
