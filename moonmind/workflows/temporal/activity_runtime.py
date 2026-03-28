@@ -16,16 +16,16 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from pydantic import ValidationError
 
-from moonmind.schemas.temporal_activity_models import (
-    PlanGenerateInput,
-)
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -645,6 +645,8 @@ class TemporalPlanActivities:
         registry_snapshot_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> PlanGenerateActivityResult:
+        from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+
         model: PlanGenerateInput | None = None
         request_payload: dict[str, Any] | None = None
 
