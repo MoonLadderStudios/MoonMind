@@ -21,30 +21,34 @@ def _make_pause_state(paused: bool):
     return state
 
 
-# ---- check_system_paused ----
-
-
-async def test_check_system_paused_returns_false_after_queue_removal():
-    """check_system_paused always returns False after Phase 3.5 queue removal (stub)."""
+@pytest.fixture
+def mock_session():
     session = MagicMock()
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
     session.refresh = AsyncMock()
-    adapter = AsyncMock()
-    svc = TemporalExecutionService(session, client_adapter=adapter)
+    return session
+
+
+@pytest.fixture
+def mock_client_adapter():
+    return AsyncMock()
+
+
+# ---- check_system_paused ----
+
+
+async def test_check_system_paused_returns_false_after_queue_removal(mock_session, mock_client_adapter):
+    """check_system_paused always returns False after Phase 3.5 queue removal (stub)."""
+    svc = TemporalExecutionService(mock_session, client_adapter=mock_client_adapter)
 
     result = await svc.check_system_paused()
     assert result is False
 
 
-async def test_check_system_paused_returns_false():
+async def test_check_system_paused_returns_false(mock_session, mock_client_adapter):
     """check_system_paused should return False when pause state is inactive."""
-    session = MagicMock()
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    session.refresh = AsyncMock()
-    adapter = AsyncMock()
-    svc = TemporalExecutionService(session, client_adapter=adapter)
+    svc = TemporalExecutionService(mock_session, client_adapter=mock_client_adapter)
 
     with patch(
         "unittest.mock.MagicMock",
@@ -62,14 +66,9 @@ async def test_check_system_paused_returns_false():
 # ---- API Guard on create_execution ----
 
 
-async def test_create_execution_blocked_when_paused():
+async def test_create_execution_blocked_when_paused(mock_session, mock_client_adapter):
     """create_execution should raise TemporalExecutionValidationError when system is paused."""
-    session = MagicMock()
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    session.refresh = AsyncMock()
-    adapter = AsyncMock()
-    svc = TemporalExecutionService(session, client_adapter=adapter)
+    svc = TemporalExecutionService(mock_session, client_adapter=mock_client_adapter)
 
     with patch.object(svc, "check_system_paused", return_value=True):
         with pytest.raises(TemporalExecutionValidationError, match="System is paused"):
@@ -86,14 +85,9 @@ async def test_create_execution_blocked_when_paused():
             )
 
 
-async def test_create_execution_allowed_when_not_paused():
+async def test_create_execution_allowed_when_not_paused(mock_session, mock_client_adapter):
     """create_execution should NOT raise the pause error when system is not paused."""
-    session = MagicMock()
-    session.commit = AsyncMock()
-    session.rollback = AsyncMock()
-    session.refresh = AsyncMock()
-    adapter = AsyncMock()
-    svc = TemporalExecutionService(session, client_adapter=adapter)
+    svc = TemporalExecutionService(mock_session, client_adapter=mock_client_adapter)
 
     with patch.object(svc, "check_system_paused", return_value=False):
         try:
