@@ -151,28 +151,31 @@ function createProposalRow(overrides = {}) {
 (function testQueueFieldDefinitionsProvideSingleSourceOfTruth() {
   const keys = taskFieldDefinitions.map((definition) => definition.key);
   const expectedKeys = [
-    "workflowType",
     "runtimeMode",
+    "skillId",
+    "scheduledFor",
     "startedAt",
-    "updatedAt",
+    "finishedAt",
   ];
   assert.strictEqual(keys.length, expectedKeys.length);
   assert.strictEqual(keys.join(","), expectedKeys.join(","));
   const labels = taskFieldDefinitions.map((definition) => definition.label);
-  assert(labels.includes("Workflow"));
+  assert(labels.includes("Finished"));
   const rendered = renderTaskFieldValue(
     {
-      workflowType: "MoonMind.Run",
+      runtimeMode: "codex",
+      skillId: "auto",
+      createdAt: "2026-02-23T12:00:00Z",
     },
-    taskFieldDefinitions.find((definition) => definition.key === "workflowType"),
+    taskFieldDefinitions.find((definition) => definition.key === "skillId"),
   );
-  assert(rendered.includes("Run"));
+  assert.strictEqual(rendered, "auto");
 })();
 
 (function testRenderQueueTableUsesFieldDefinitions() {
   const html = renderTaskTable([createTaskRow()]);
-  assert(html.includes('data-sort-field="workflowType"'), 'Expected sortable Workflow th');
-  assert(html.includes('data-field="updatedAt"'));
+  assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
+  assert(html.includes('data-field="finishedAt"'));
   assert(html.includes("status-running"));
 })();
 
@@ -191,13 +194,20 @@ function createProposalRow(overrides = {}) {
   const headerOrder = Array.from(html.matchAll(/data-sort-field="([^"]+)"/g)).map(
     (match) => match[1],
   );
-  const expectedOrder = ["id", "title", ...taskFieldDefinitions.map((d) => d.key), "status"];
+  // Table order: type, id, primaryFields (non-timeline), status, title, timelineFields
+  const primaryFields = taskFieldDefinitions
+    .filter((d) => d.tableSection !== "timeline")
+    .map((d) => d.key);
+  const timelineFields = taskFieldDefinitions
+    .filter((d) => d.tableSection === "timeline")
+    .map((d) => d.key);
+  const expectedOrder = ["type", "id", ...primaryFields, "status", "title", ...timelineFields];
   assert.strictEqual(headerOrder.join(","), expectedOrder.join(","));
 })();
 
 (function testRenderRowsTableDelegatesToQueueTable() {
   const html = renderRowsTable([createTaskRow()]);
-  assert(html.includes('data-sort-field="workflowType"'), 'Expected sortable Workflow th');
+  assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
 })();
 
 (function testRenderQueueTableWithSortStateAddsAriaSort() {
@@ -211,10 +221,10 @@ function createProposalRow(overrides = {}) {
 })();
 
 (function testRenderQueueTableWithDescSortStateAddsAriaSortDescending() {
-  const sortState = { field: "updatedAt", direction: "desc" };
+  const sortState = { field: "scheduledFor", direction: "desc" };
   const html = renderTaskTable([createTaskRow()], sortState);
-  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on updatedAt column');
-  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on updatedAt column');
+  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on scheduledFor column');
+  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on scheduledFor column');
   assert(html.includes('\u25bc'), 'Expected descending indicator \u25bc');
 })();
 

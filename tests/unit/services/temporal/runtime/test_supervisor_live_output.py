@@ -352,16 +352,21 @@ async def test_streaming_starts_concurrently_with_heartbeat(tmp_path: Path):
     original_stream = supervisor._log_streamer.stream_and_parse
     original_heartbeat = supervisor._heartbeat_and_wait_with_timeout
 
+    stream_ready = asyncio.Event()
+    heartbeat_ready = asyncio.Event()
+
     async def tracking_stream(*args, **kwargs):
         call_order.append("stream_started")
-        await asyncio.sleep(0.01)  # Yield to event loop to ensure concurrency is visible
+        stream_ready.set()
+        await heartbeat_ready.wait()  # Wait for the other to start
         result = await original_stream(*args, **kwargs)
         call_order.append("stream_done")
         return result
 
     async def tracking_heartbeat(*args, **kwargs):
         call_order.append("heartbeat_started")
-        await asyncio.sleep(0.01)  # Yield to event loop to ensure concurrency is visible
+        heartbeat_ready.set()
+        await stream_ready.wait()  # Wait for the other to start
         result = await original_heartbeat(*args, **kwargs)
         call_order.append("heartbeat_done")
         return result

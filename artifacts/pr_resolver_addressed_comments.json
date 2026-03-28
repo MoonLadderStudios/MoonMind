@@ -1,27 +1,67 @@
 [
   {
-    "id": 4146047588,
+    "id": 4145879438,
     "disposition": "not-applicable",
-    "rationale": "Informational greeting from Jules bot, no action needed."
+    "rationale": "Informational summary from Jules bot."
   },
   {
-    "id": 4146047748,
+    "id": 4145879874,
     "disposition": "not-applicable",
-    "rationale": "Informational message about Codex usage limits, no code change needed."
+    "rationale": "Warning about usage limits."
   },
   {
-    "id": 4024256235,
-    "disposition": "not-applicable",
-    "rationale": "Code review approval with no feedback."
-  },
-  {
-    "id": 3003751402,
+    "id": 3003650706,
     "disposition": "addressed",
-    "rationale": "Updated ValueError raised on FAIL_FAST to include result_status and avoid hard-coded 'failed' text per suggestion."
+    "rationale": "Fixed listEndpoint no-op replacement logic."
   },
   {
-    "id": 4024256910,
+    "id": 3003654066,
+    "disposition": "addressed",
+    "rationale": "Updated detail/update/delete endpoints to use /api/v1/provider-profiles."
+  },
+  {
+    "id": 4024139908,
     "disposition": "not-applicable",
-    "rationale": "Automated pull request overview from Copilot, no actionable code changes."
+    "rationale": "Review summary, not actionable code."
+  },
+  {
+    "id": 3003654082,
+    "disposition": "addressed",
+    "rationale": "Renamed queueDraftAuthProfile to queueDraftProviderProfile."
+  },
+  {
+    "id": 3003654086,
+    "disposition": "addressed",
+    "rationale": "Renamed applyQueueDraftAuthProfileOnce and refreshAuthProfileOptions."
+  },
+  {
+    "id": 3003654088,
+    "disposition": "addressed",
+    "rationale": "Fixed listEndpoint no-op replacement logic."
+  },
+  {
+    "id": 3003654091,
+    "disposition": "addressed",
+    "rationale": "Renamed data-auth-profile-form to data-provider-profile-form."
+  },
+  {
+    "id": 3003654096,
+    "disposition": "addressed",
+    "rationale": "Removed temporary artifact changes.patch file."
+  },
+  {
+    "id": 3003660230,
+    "disposition": "addressed",
+    "rationale": "Updated detail/update/delete endpoints to use /api/v1/provider-profiles."
+  },
+  {
+    "id": 3003660259,
+    "disposition": "addressed",
+    "rationale": "Fixed listEndpoint no-op replacement logic."
+  },
+  {
+    "id": 4024146765,
+    "disposition": "not-applicable",
+    "rationale": "Review summary, not actionable code."
   }
 ]

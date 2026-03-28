@@ -455,7 +455,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     exc_info.exception.cause, exceptions.ApplicationError
                 )
                 self.assertIn(
-                    "plan node execution returned status FAILED: forced skill failure",
+                    "plan node execution failed: forced skill failure",
                     exc_info.exception.cause.message,
                 )
                 
