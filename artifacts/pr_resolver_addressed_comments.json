@@ -60,53 +60,63 @@
     "rationale": "Informational bot greeting."
   },
   {
-    "id": 4147586750,
+    "id": 4147688756,
     "disposition": "not-applicable",
-    "rationale": "Informational usage limit warning."
+    "rationale": "Informational greeting from jules bot."
   },
   {
-    "id": 4025232733,
+    "id": 4147689011,
     "disposition": "not-applicable",
-    "rationale": "Informational review summary."
+    "rationale": "Informational usage limit message from codex bot."
   },
   {
-    "id": 3004484766,
-    "disposition": "addressed",
-    "rationale": "Removed unnecessary pass statement from SyncProfilesSignal."
-  },
-  {
-    "id": 3004484768,
-    "disposition": "addressed",
-    "rationale": "Removed unnecessary pass statement from FinalizeSessionSignal."
-  },
-  {
-    "id": 3004484771,
-    "disposition": "addressed",
-    "rationale": "Removed unnecessary pass statement from CancelSessionSignal."
-  },
-  {
-    "id": 3004484777,
-    "disposition": "addressed",
-    "rationale": "Removed unused Literal import."
-  },
-  {
-    "id": 3004485458,
-    "disposition": "addressed",
-    "rationale": "Removed unused Literal import."
-  },
-  {
-    "id": 3004485460,
-    "disposition": "addressed",
-    "rationale": "Wrapped provider_summary Field across lines to fix formatting."
-  },
-  {
-    "id": 3004485464,
-    "disposition": "addressed",
-    "rationale": "Moved tests to tests/unit/schemas/."
-  },
-  {
-    "id": 4025233682,
+    "id": 4025366377,
     "disposition": "not-applicable",
-    "rationale": "Informational PR overview."
+    "rationale": "Overall code review summary from gemini-code-assist bot."
+  },
+  {
+    "id": 3004601024,
+    "disposition": "addressed",
+    "rationale": "Added tests for TemporalArtifactActivities covering the new Pydantic models, legacy dictionaries, and kwargs fallbacks."
+  },
+  {
+    "id": 3004601027,
+    "disposition": "addressed",
+    "rationale": "Refactored artifact_read validation, consolidating parameter access and narrowing the exception block."
+  },
+  {
+    "id": 3004601028,
+    "disposition": "addressed",
+    "rationale": "Refactored artifact_write_complete validation, consolidating parameter access and narrowing the exception block."
+  },
+  {
+    "id": 3004601511,
+    "disposition": "addressed",
+    "rationale": "Tightened the type hint of request for artifact_read by adding ArtifactReadInput."
+  },
+  {
+    "id": 3004601518,
+    "disposition": "addressed",
+    "rationale": "Narrowed exception scope to ValidationError instead of generic Exception in artifact_read."
+  },
+  {
+    "id": 3004601523,
+    "disposition": "addressed",
+    "rationale": "Tightened the type hint of request for artifact_write_complete by adding ArtifactWriteCompleteInput."
+  },
+  {
+    "id": 3004601525,
+    "disposition": "addressed",
+    "rationale": "Narrowed exception scope to ValidationError instead of generic Exception in artifact_write_complete."
+  },
+  {
+    "id": 4025366822,
+    "disposition": "not-applicable",
+    "rationale": "Suppressed low confidence comment by reviewer about legacy list payloads."
+  },
+  {
+    "id": 3004791140,
+    "disposition": "addressed",
+    "rationale": "Removed unused import TemporalArtifactValidationError."
   }
 ]
