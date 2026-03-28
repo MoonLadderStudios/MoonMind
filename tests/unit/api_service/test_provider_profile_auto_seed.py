@@ -81,10 +81,10 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
-    """Seeding should be skipped when MOONMIND_SKIP_AUTH_PROFILE_SEED is set."""
+    """Seeding should be skipped when MOONMIND_SKIP_PROVIDER_PROFILE_SEED is set."""
     from api_service.main import _auto_seed_provider_profiles
 
-    monkeypatch.setenv("MOONMIND_SKIP_AUTH_PROFILE_SEED", "true")
+    monkeypatch.setenv("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "true")
     seeded = await _auto_seed_provider_profiles()
     assert seeded == []
 
@@ -118,7 +118,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     mm_profile = next(p for p in profiles if p.profile_id == "claude_minimax")
     assert mm_profile.runtime_id == "claude_code"
     assert mm_profile.secret_refs is not None
-    assert mm_profile.secret_refs.get("anthropic_api_key") == "MINIMAX_API_KEY"
+    assert mm_profile.secret_refs.get("ANTHROPIC_AUTH_TOKEN") == "env://MINIMAX_API_KEY"
     assert mm_profile.env_template is not None
     assert mm_profile.env_template["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert mm_profile.env_template["ANTHROPIC_MODEL"] == "MiniMax-M2.7"

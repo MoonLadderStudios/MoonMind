@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  test-backend:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,27 +40,57 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-    - name: Install dependencies
+    - name: Install dependencies via uv
       run: |
-        python -m pip install --upgrade pip
-        python -m pip install -e .[tests]
-    - name: Verify Node.js runtime
+        python -m pip install --upgrade pip uv
+        uv pip install --system -e .[tests]
+    - name: Run pytest unit tests
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
-        node --version
-        npm --version
+        set -euo pipefail
+        ./tools/test_unit.sh --python-only
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
         cache: npm
-
     - name: Install Node dependencies
       run: npm ci
     - name: Verify dashboard CSS build is in sync
       run: |
         npm run dashboard:css:min
         git diff --exit-code -- api_service/static/task_dashboard/dashboard.css
-
+    - name: Set up Python for OpenAPI generation
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install system dependencies for backend API check
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libcairo2-dev pkg-config
+    - name: Cache pip dependencies
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    - name: Install backend dependencies via uv
+      run: |
+        python -m pip install --upgrade pip uv
+        uv pip install --system -e .[tests]
     - name: Run frontend tests and build
       run: |
         npm run ui:typecheck
@@ -70,44 +100,13 @@ jobs:
         npm run ui:build
         npm run ui:verify-manifest
         npm run api:types:check
-
     - name: Upload Mission Control dist artifact
       uses: actions/upload-artifact@v4
       with:
         name: mission-control-dist
         path: api_service/static/task_dashboard/dist/
         if-no-files-found: error
-    - name: Run pytest unit tests
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
+    - name: Run dashboard legacy browser tests
       run: |
         set -euo pipefail
-        ./tools/test_unit.sh
-
-
-  # integration:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - name: Check out code
-  #     uses: actions/checkout@v3
-  #   - name: Set up Python
-  #     uses: actions/setup-python@v6
-  #     with:
-  #       python-version: '3.12'
-  #   - name: Cache pip dependencies
-  #     uses: actions/cache@v5
-  #     with:
-  #       path: ~/.cache/pip
-  #       key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
-  #       restore-keys: |
-  #         ${{ runner.os }}-pip-
-  #   - name: Install dependencies
-  #     run: |
-  #       python -m pip install --upgrade pip
-  #       python -m pip install -e .
-  #       python -m pip install readmeai~=0.6.0
-  #   - name: Run integration tests
-  #     env:
-  #       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #     run: |
-  #       python -m pytest tests/integration
+        ./tools/test_unit.sh --dashboard-only

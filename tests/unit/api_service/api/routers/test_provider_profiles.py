@@ -1,4 +1,4 @@
-"""Unit/Integration tests for ManagedAgentAuthProfile CRUD API."""
+"""Unit/Integration tests for ManagedAgentProviderProfile CRUD API."""
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -70,8 +70,8 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
 
 
 @pytest.mark.asyncio
-async def test_create_auth_profile(client_app: AsyncClient, _module_db):
-    """Test creating a new auth profile."""
+async def test_create_provider_profile(client_app: AsyncClient, _module_db):
+    """Test creating a new provider profile."""
     payload = {
         "profile_id": "new_profile",
         "runtime_id": "claude_v1",
@@ -81,6 +81,8 @@ async def test_create_auth_profile(client_app: AsyncClient, _module_db):
         "max_parallel_runs": 5,
         "cooldown_after_429_seconds": 60,
         "rate_limit_policy": "queue",
+        "default_model": "test-model-v2",
+        "model_overrides": {"smart": "test-model-v3"},
         "enabled": True
     }
     
@@ -92,6 +94,27 @@ async def test_create_auth_profile(client_app: AsyncClient, _module_db):
     assert data["profile_id"] == "new_profile"
     assert data["credential_source"] == "secret_ref"
     assert data["rate_limit_policy"] == "queue"
+    assert data["default_model"] == "test-model-v2"
+    assert data["model_overrides"] == {"smart": "test-model-v3"}
+
+
+@pytest.mark.asyncio
+async def test_create_provider_profile_invalid_secret_refs(client_app: AsyncClient, _module_db):
+    """Test that creating a profile with raw secrets fails."""
+    payload = {
+        "profile_id": "invalid_profile",
+        "runtime_id": "claude_v1",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "raw_secret_value"}, # not a valid ref
+        "max_parallel_runs": 1,
+    }
+    
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+    
+    assert response.status_code == 422
+    assert "Invalid secret reference" in response.text
 
 
 @pytest.mark.asyncio
@@ -169,7 +192,7 @@ async def test_delete_profile(client_app: AsyncClient, _module_db):
 
 
 @pytest.mark.asyncio
-async def test_update_profile_syncs_auth_profile_manager(
+async def test_update_profile_syncs_provider_profile_manager(
     client_app: AsyncClient,
     _module_db,
     monkeypatch: pytest.MonkeyPatch,

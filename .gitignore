@@ -75,3 +75,6 @@ tmp-agentkit-analyze.md
 tmp_skill.md
 tmp_agentkit_clarify.md
 var/worker-relative/
+
+# Local-only secrets (e.g. encryption master key); never commit real material.
+var/secrets/

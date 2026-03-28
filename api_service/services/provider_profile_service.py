@@ -13,6 +13,8 @@ def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]
         "runtime_id": row.runtime_id,
         "provider_id": row.provider_id,
         "provider_label": row.provider_label,
+        "default_model": row.default_model,
+        "model_overrides": row.model_overrides or {},
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,
@@ -51,8 +53,8 @@ async def sync_provider_profile_manager(
 
     try:
         from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
-            AuthProfileManagerInput,
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            ProviderProfileManagerInput,
             WORKFLOW_NAME,
         )
         from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -64,8 +66,9 @@ async def sync_provider_profile_manager(
         try:
             await temporal_client.start_workflow(
                 WORKFLOW_NAME,
-                AuthProfileManagerInput(
-                    runtime_id=runtime_id,),
+                ProviderProfileManagerInput(
+                    runtime_id=runtime_id
+                ),
                 id=workflow_id,
                 task_queue="mm.workflow",
             )

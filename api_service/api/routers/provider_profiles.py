@@ -47,6 +47,8 @@ class ProviderProfileCreate(BaseModel):
     runtime_id: str = Field(..., max_length=64)
     provider_id: str = Field(default="unknown", max_length=64)
     provider_label: Optional[str] = None
+    default_model: Optional[str] = None
+    model_overrides: Optional[dict[str, str]] = None
     
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: str = Field(..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
@@ -104,6 +106,8 @@ class ProviderProfileCreate(BaseModel):
 class ProviderProfileUpdate(BaseModel):
     provider_id: Optional[str] = Field(default=None, max_length=64)
     provider_label: Optional[str] = None
+    default_model: Optional[str] = None
+    model_overrides: Optional[dict[str, str]] = None
     credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
     volume_ref: Optional[str] = None
@@ -161,6 +165,8 @@ class ProviderProfileResponse(BaseModel):
     runtime_id: str
     provider_id: str
     provider_label: Optional[str]
+    default_model: Optional[str] = None
+    model_overrides: dict[str, str] = Field(default_factory=dict)
     credential_source: str
     runtime_materialization_mode: str
     volume_ref: Optional[str]
@@ -244,6 +250,8 @@ async def create_profile(
         runtime_id=body.runtime_id,
         provider_id=body.provider_id,
         provider_label=body.provider_label,
+        default_model=body.default_model,
+        model_overrides=body.model_overrides,
         credential_source=ProviderCredentialSource(body.credential_source),
         runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
         volume_ref=body.volume_ref,
@@ -323,6 +331,8 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "runtime_id": row.runtime_id,
         "provider_id": row.provider_id,
         "provider_label": row.provider_label,
+        "default_model": row.default_model,
+        "model_overrides": row.model_overrides or {},
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,
@@ -348,4 +358,4 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     }
 
 
-from api_service.services.auth_profile_service import sync_provider_profile_manager
+from api_service.services.provider_profile_service import sync_provider_profile_manager

@@ -100,14 +100,26 @@ function formatWhen(iso: string | null | undefined): string {
   return d.toLocaleString();
 }
 
-function statusBadgeClass(status: string): string {
-  const s = status.toLowerCase();
-  if (s === 'completed') return 'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100';
-  if (s === 'failed') return 'bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-100';
-  if (s === 'running' || s === 'queued' || s === 'waiting' || s === 'awaiting_action')
-    return 'bg-blue-100 text-blue-900 dark:bg-blue-900/40 dark:text-blue-100';
-  if (s === 'canceled') return 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-100';
-  return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200';
+/** MoonMind dashboard shell tokens — matches `dashboard.tailwind.css` `.status-*` pills. */
+function executionStatusPillClasses(row: ExecutionRow): string {
+  const raw = (row.rawState || row.state || row.status || '').toLowerCase().trim();
+  const key = raw.replace(/\s+/g, '_');
+  const base = 'status';
+  if (key === 'succeeded' || key === 'completed') return `${base} status-completed`;
+  if (key === 'failed') return `${base} status-failed`;
+  if (key === 'canceled' || key === 'cancelled') return `${base} status-cancelled`;
+  if (key === 'queued' || key === 'scheduling') return `${base} status-queued`;
+  if (
+    key === 'running' ||
+    key === 'executing' ||
+    key === 'planning' ||
+    key === 'initializing' ||
+    key === 'finalizing'
+  ) {
+    return `${base} status-running`;
+  }
+  if (key === 'awaiting_action' || key === 'awaiting_external') return `${base} status-awaiting_action`;
+  return `${base} status-neutral`;
 }
 
 function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'): ExecutionRow[] {
@@ -261,13 +273,10 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
   };
 
   return (
-    <div className="max-w-[min(100rem,calc(100vw-2rem))] mx-auto p-6 space-y-4 text-gray-900 dark:text-gray-100">
+    <div className="w-full max-w-none mx-auto p-6 space-y-4 text-gray-900 dark:text-gray-100">
       <header className="border-b border-gray-200 dark:border-gray-700 pb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Tasks List</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Temporal-backed tasks with exact Temporal pagination (legacy dashboard parity).
-          </p>
         </div>
         <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
           <input
@@ -295,27 +304,9 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
 
       <div className="bg-white dark:bg-gray-900/50 rounded-lg shadow-sm p-4 border border-gray-100 dark:border-gray-800 space-y-4">
         <form
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm"
           onSubmit={(e) => e.preventDefault()}
         >
-          <label className="flex flex-col gap-1">
-            <span className="font-medium text-gray-700 dark:text-gray-300">Page Size</span>
-            <select
-              className="border rounded px-2 py-1 bg-white dark:bg-gray-950 dark:border-gray-700"
-              value={pageSize}
-              disabled={!listEnabled}
-              onChange={(e) => {
-                setPageSize(parsePageSize(e.target.value));
-                resetToFirstPage();
-              }}
-            >
-              {PAGE_SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
           <label className="flex flex-col gap-1">
             <span className="font-medium text-gray-700 dark:text-gray-300">Workflow Type</span>
             <select
@@ -375,23 +366,44 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
           </label>
         </form>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-600 dark:text-gray-400">
-          <div>
-            <strong className="text-gray-800 dark:text-gray-200">Page {pageIndex + 1}</strong>
-            <span className="mx-2 opacity-40">|</span>
-            Showing {pageStart}-{pageEnd}
-            {typeof totalCount === 'number' ? (
-              <>
-                {' '}
-                of {totalCount}
-                {countMode && countMode !== 'exact' ? ` (${countMode})` : ''} tasks
-              </>
-            ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-gray-600 dark:text-gray-400">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <strong className="text-gray-800 dark:text-gray-200 shrink-0">Page {pageIndex + 1}</strong>
+            <span className="opacity-40 shrink-0">|</span>
+            <span className="min-w-0">
+              Showing {pageStart}-{pageEnd}
+              {typeof totalCount === 'number' ? (
+                <>
+                  {' '}
+                  of {totalCount}
+                  {countMode && countMode !== 'exact' ? ` (${countMode})` : ''} tasks
+                </>
+              ) : null}
+            </span>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <label className="inline-flex items-center gap-1.5">
+              <span className="text-xs text-gray-500 dark:text-gray-500">Per page</span>
+              <select
+                className="text-xs leading-tight h-7 min-w-[3.25rem] rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 px-1.5 py-0"
+                value={pageSize}
+                disabled={!listEnabled}
+                onChange={(e) => {
+                  setPageSize(parsePageSize(e.target.value));
+                  resetToFirstPage();
+                }}
+                aria-label="Rows per page"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               type="button"
-              className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 disabled:opacity-40"
+              className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 disabled:opacity-40 h-7 text-sm"
               disabled={!listEnabled || cursorStack.length === 0 || sortedItems.length === 0}
               onClick={goPrev}
             >
@@ -399,7 +411,7 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
             </button>
             <button
               type="button"
-              className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 disabled:opacity-40"
+              className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 disabled:opacity-40 h-7 text-sm"
               disabled={!listEnabled || !data?.nextPageToken}
               onClick={goNext}
             >
@@ -419,25 +431,25 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
         ) : (
           <div className="overflow-x-auto w-full rounded border border-gray-200 dark:border-gray-700">
             <table className="min-w-full text-left text-sm whitespace-nowrap">
-              <thead className="border-b border-gray-200/80 dark:border-gray-700/80 bg-transparent">
+              <thead className="border-b border-gray-200 dark:border-gray-700 bg-gray-50/90 dark:bg-gray-950/50">
                 <tr>
                   {TABLE_COLUMNS.map(([field, label]) => {
                     const active = sortField === field;
                     return (
-                      <th key={field} className="px-1.5 py-2 align-bottom first:pl-0 last:pr-0">
+                      <th key={field} className="px-3 py-2.5 align-bottom first:pl-0 last:pr-0">
                         <button
                           type="button"
                           className={[
-                            'w-full min-w-0 rounded-full border px-3 py-1.5 text-left text-sm font-medium backdrop-blur-sm transition',
-                            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500',
+                            'w-full min-w-0 text-left text-xs font-semibold uppercase tracking-wide transition-colors',
+                            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 rounded-sm',
                             active
-                              ? 'border-violet-500 bg-violet-600/15 text-violet-950 shadow-[0_0_0_1px_rgb(139_92_246/0.35)] dark:border-violet-400 dark:bg-violet-500/20 dark:text-violet-50 dark:shadow-[0_0_0_1px_rgb(167_139_250/0.4)]'
-                              : 'border-gray-300/90 bg-white/70 text-gray-800 hover:border-violet-400 hover:bg-violet-500/10 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-100 dark:hover:border-violet-400 dark:hover:bg-violet-500/15',
+                              ? 'text-gray-900 dark:text-gray-100'
+                              : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300',
                           ].join(' ')}
                           onClick={() => onHeaderClick(field)}
                         >
                           {label}
-                          {sortIndicator(field)}
+                          <span className="font-normal normal-case tracking-normal">{sortIndicator(field)}</span>
                         </button>
                       </th>
                     );
@@ -465,12 +477,9 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
                       <td className="px-3 py-2">{row.targetRuntime || '—'}</td>
                       <td className="px-3 py-2">{row.targetSkill || '—'}</td>
                       <td className="px-3 py-2">
-                        <span
-                          className={`inline-block rounded px-2 py-0.5 text-xs font-semibold uppercase ${statusBadgeClass(row.status)}`}
-                        >
-                          {row.rawState || row.state}
+                        <span className={executionStatusPillClasses(row)}>
+                          {row.rawState || row.state || row.status || '—'}
                         </span>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{row.status}</div>
                       </td>
                       <td className="px-3 py-2 max-w-md whitespace-normal break-words">{row.title}</td>
                       <td className="px-3 py-2">{formatWhen(row.scheduledFor)}</td>

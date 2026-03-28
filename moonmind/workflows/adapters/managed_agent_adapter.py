@@ -6,12 +6,12 @@ This adapter fulfils the core requirements of Phase 5
 
 Key responsibilities:
  - Resolve the ``execution_profile_ref`` on an ``AgentExecutionRequest`` to a
-   concrete ``ManagedAgentAuthProfile`` dict returned by the
-   ``auth_profile.list`` activity.
+   concrete ``ManagedAgentProviderProfile`` dict returned by the
+   ``provider_profile.list`` activity.
  - Shape the environment for OAuth (volume-mount) and API-key modes.
    Credentials are never stored in workflow payloads; only ``profile_id`` is
    persisted in ``AgentRunHandle.metadata``.
- - Signal ``AuthProfileManager`` to request / release slot leases and to send
+ - Signal ``ProviderProfileManager`` to request / release slot leases and to send
    cooldown reports on 429 responses.
  - Maintain the ``slot_assigned`` wait loop internally (DOC-REQ-004).
 
@@ -143,16 +143,16 @@ class ManagedAgentAdapter:
     ----------
     profile_fetcher:
         Async callable: ``profile_fetcher(runtime_id=...) -> list[dict]``.
-        Typically backed by the ``auth_profile.list`` Temporal activity.
+        Typically backed by the ``provider_profile.list`` Temporal activity.
     slot_requester:
-        Async callable that signals the AuthProfileManager to request a slot.
+        Async callable that signals the ProviderProfileManager to request a slot.
     slot_releaser:
-        Async callable that signals the AuthProfileManager to release a slot.
+        Async callable that signals the ProviderProfileManager to release a slot.
     cooldown_reporter:
-        Async callable that signals the AuthProfileManager about a 429 event.
+        Async callable that signals the ProviderProfileManager about a 429 event.
     workflow_id:
         Temporal workflow ID of the *current* AgentRun workflow.  Used in
-        slot-request/release signals so the AuthProfileManager can correlate
+        slot-request/release signals so the ProviderProfileManager can correlate
         requests to callers.
     run_launcher:
         Optional async callable that launches the managed agent process via an activity.
@@ -195,6 +195,7 @@ class ManagedAgentAdapter:
         profile = await self._resolve_profile(
             execution_profile_ref=request.execution_profile_ref,
             runtime_id=self._runtime_id or request.agent_id,
+            profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True) if hasattr(request, "profile_selector") and request.profile_selector else None,
         )
         profile_id: str = profile["profile_id"]
         runtime_for_profile = self._runtime_id or request.agent_id
@@ -497,7 +498,7 @@ class ManagedAgentAdapter:
     # ------------------------------------------------------------------
 
     async def release_slot(self) -> None:
-        """Signal AuthProfileManager to release the active slot lease."""
+        """Signal ProviderProfileManager to release the active slot lease."""
         if self._active_profile_id is None:
             logger.warning(
                 "release_slot called but no active profile_id on %s",
@@ -521,7 +522,7 @@ class ManagedAgentAdapter:
         profile_id: str | None = None,
         cooldown_seconds: int = 300,
     ) -> None:
-        """Report a 429 rate-limit hit to the AuthProfileManager (DOC-REQ-009).
+        """Report a 429 rate-limit hit to the ProviderProfileManager (DOC-REQ-009).
 
         Parameters
         ----------
@@ -550,17 +551,15 @@ class ManagedAgentAdapter:
     async def _resolve_profile(
         self,
         *,
-        execution_profile_ref: str,
+        execution_profile_ref: str | None,
         runtime_id: str,
+        profile_selector: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Resolve execution_profile_ref to a concrete profile dict.
+        """Resolve execution_profile_ref or profile_selector to a concrete profile dict.
 
-        The ``execution_profile_ref`` is either:
-         - An exact ``profile_id`` string, or
-         - The special sentinel ``"auto"`` meaning use the first available
-           profile for the runtime family.
-
-        Raises ``ProfileResolutionError`` if no matching profile is found.
+        If ``execution_profile_ref`` is provided, we match exactly by that ID.
+        If ``execution_profile_ref`` is None or \"auto\", we evaluate ``profile_selector``.
+        If no profile matches, raises ``ProfileResolutionError``.
         """
         fetch_res = self._fetch_profiles(runtime_id=runtime_id)
         if isinstance(fetch_res, list):
@@ -577,20 +576,56 @@ class ManagedAgentAdapter:
 
         if not profiles:
             raise ProfileResolutionError(
-                f"No enabled auth profiles found for runtime_id='{runtime_id}'"
+                f"No enabled provider profiles found for runtime_id='{runtime_id}'"
             )
 
         if execution_profile_ref == "auto":
-            return profiles[0]
+            execution_profile_ref = None
 
+        if execution_profile_ref is not None:
+            for profile in profiles:
+                if profile.get("profile_id") == execution_profile_ref:
+                    return profile
+            raise ProfileResolutionError(
+                f"Provider profile '{execution_profile_ref}' not found for "
+                f"runtime_id='{runtime_id}' (available profile count: {len(profiles)})"
+            )
+
+        # Fallback routing via profile_selector when execution_profile_ref is not specified
+        eligible_profiles = []
         for profile in profiles:
-            if profile.get("profile_id") == execution_profile_ref:
-                return profile
+            if not profile.get("enabled", True):
+                continue
+            if profile_selector:
+                if profile_selector.get("providerId") and profile.get("provider_id") != profile_selector.get("providerId"):
+                    continue
+                if profile_selector.get("runtimeMaterializationMode") and profile.get("runtime_materialization_mode") != profile_selector.get("runtimeMaterializationMode"):
+                    continue
+                
+                tags_any = profile_selector.get("tagsAny", [])
+                profile_tags = set(profile.get("tags") or [])
+                if tags_any and not set(tags_any).intersection(profile_tags):
+                    continue
+                    
+                tags_all = profile_selector.get("tagsAll", [])
+                if tags_all and not set(tags_all).issubset(profile_tags):
+                    continue
 
-        raise ProfileResolutionError(
-            f"Auth profile '{execution_profile_ref}' not found for "
-            f"runtime_id='{runtime_id}' (available profile count: {len(profiles)})"
+            eligible_profiles.append(profile)
+
+        if not eligible_profiles:
+            raise ProfileResolutionError(
+                f"No eligible provider profiles found for runtime_id='{runtime_id}' matching selector constraints."
+            )
+
+        eligible_profiles.sort(
+            key=lambda p: (
+                p.get("priority", 100),
+                p.get("available_slots", 0),
+            ),
+            reverse=True,
         )
+        return eligible_profiles[0]
 
 
 __all__ = [

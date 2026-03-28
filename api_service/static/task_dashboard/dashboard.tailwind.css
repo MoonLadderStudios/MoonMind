@@ -67,8 +67,18 @@ body {
 
 .dashboard-root {
   margin: 0 auto;
-  max-width: 1100px;
+  max-width: none;
+  width: 100%;
   padding: 1.25rem 1rem 2.75rem;
+  box-sizing: border-box;
+}
+
+/* Masthead + primary nav stay compact; table-first panels can widen below (see .panel--data-wide). */
+.dashboard-shell-constrained {
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
 
 .masthead {
@@ -165,6 +175,10 @@ h1 {
 
 .panel {
   margin-top: 1rem;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 1100px;
+  width: 100%;
   border-radius: 1rem;
   border: 1px solid rgb(var(--mm-border) / 0.8);
   background: rgb(var(--mm-panel) / 0.74);
@@ -172,6 +186,10 @@ h1 {
   padding: 1rem;
   min-height: 320px;
   animation: panel-enter 220ms cubic-bezier(.2,.8,.2,1);
+}
+
+.panel.panel--data-wide {
+  max-width: min(112rem, calc(100vw - 2rem));
 }
 
 @keyframes panel-enter {
@@ -494,6 +512,12 @@ tr[data-proposal-id].proposal-consuming td {
   color: rgb(var(--mm-danger));
   background: rgb(var(--mm-danger) / 0.14);
   border-color: rgb(var(--mm-danger) / 0.55);
+}
+
+.status-neutral {
+  color: rgb(var(--mm-muted));
+  background: rgb(var(--mm-muted) / 0.12);
+  border-color: rgb(var(--mm-border) / 0.75);
 }
 
 .notice {
