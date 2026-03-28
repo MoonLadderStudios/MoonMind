@@ -53,7 +53,7 @@ Align the codebase, docs, and feature boundaries before changing runtime behavio
 - [x] Decide where the new observability service layer will live in the backend.
 - [x] Define feature flags for incremental rollout, including a `logStreamingEnabled` flag.
 - [x] Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.
-- [x] Update any stale docs/specs that still describe `tmate web_ro` as the primary live-log path.
+- [ ] Update any stale docs/specs that still describe `tmate web_ro` as the primary live-log path.
 - [x] Create implementation issues/tasks for each phase in this plan.
 
 ### Exit criteria

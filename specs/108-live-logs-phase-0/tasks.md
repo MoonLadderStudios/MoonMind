@@ -20,7 +20,7 @@
 - [x] T011 [US2] Define backend observability service boundary path for DOC-REQ-006 inside `specs/108-live-logs-phase-0/research.md`.
 - [x] T012 [US2] Validate observability boundary via unit test: `run test:unit`.
 - [x] T013 [P] [US2] Implement `logStreamingEnabled` feature flag in `moonmind/config/settings.py` for DOC-REQ-007.
-- [x] T014 [US2] Validate feature flag definition by running pytest: `pytest api_service/tests`.
+- [x] T014 [US2] Validate feature flag definition by running pytest: `./tools/test_unit.sh`.
 - [x] T015 [US2] Design migration boundary decoupling legacy sessions for DOC-REQ-008 inside `specs/108-live-logs-phase-0/research.md`.
 - [x] T016 [US2] Validate migration boundary fallback logic structurally via review.
 

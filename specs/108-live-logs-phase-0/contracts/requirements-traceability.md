@@ -5,7 +5,7 @@
 | DOC-REQ-001 | FR-005 | `docs/ManagedAgents/LiveLogs.md` update | Review doc diff |
 | DOC-REQ-002 | FR-001 | Search and document `tmate`, `web_ro`, transcripts | `research.md` artifacts |
 | DOC-REQ-003 | FR-001 | Search `Live Output` elements in `frontend/src` | `research.md` artifacts |
-| DOC-REQ-004 | FR-001 | Search DTOs related to `TaskRunLiveSession` in `api_service/db/models.py` | `data-model.md` |
+| DOC-REQ-004 | FR-001 | Search DTOs related to `TaskRunLiveSession` in `api_service/db/models.py` | `research.md` artifacts |
 | DOC-REQ-005 | FR-001 | Search `stdout` and `stderr` asynchronous artifact paths | `research.md` artifacts |
 | DOC-REQ-006 | FR-002 | Decide backend observation service layer location | `docs/` architecture diagram or specification |
 | DOC-REQ-007 | FR-003 | Define `logStreamingEnabled` feature flag | `moonmind/config/settings.py` modification or `docs/` |

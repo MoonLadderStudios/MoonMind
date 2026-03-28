@@ -616,6 +616,19 @@ class TestWorkflowSettings:
             raising=False,
         )
 
+    def test_log_streaming_env_overrides(self, monkeypatch):
+        """Log streaming should honor MOONMIND_LOG_STREAMING_ENABLED overrides."""
+
+        settings_default = WorkflowSettings(_env_file=None)
+        assert settings_default.log_streaming_enabled is False
+
+        monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.log_streaming_enabled is True
+
+        monkeypatch.delenv("MOONMIND_LOG_STREAMING_ENABLED", raising=False)
+
     def test_app_settings_accepts_task_proposals_env(
         self, app_settings_defaults, monkeypatch
     ):

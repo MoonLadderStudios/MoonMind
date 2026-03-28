@@ -33,8 +33,6 @@ Execute Phase 0 of the Live Logs Implementation Plan: taking stock of existing l
 specs/108-live-logs-phase-0/
 ├── plan.md              # This file
 ├── research.md          # Output of Phase 0 codebase inventory
-├── data-model.md        # Identifies legacy DTO and schema intersections
-├── quickstart.md        # N/A for phase 0
 ├── contracts/           
 │   └── requirements-traceability.md # Tracing of DOC-REQs
 └── tasks.md             # Execution steps
