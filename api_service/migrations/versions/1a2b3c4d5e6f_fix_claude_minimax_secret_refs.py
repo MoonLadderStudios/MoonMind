@@ -55,7 +55,8 @@ def upgrade() -> None:
     conn.execute(
         sa.text(
             "UPDATE managed_agent_provider_profiles "
-            "SET secret_refs = :secret_refs::jsonb, env_template = :env_template::jsonb "
+            "SET secret_refs = CAST(:secret_refs AS jsonb), "
+            "env_template = CAST(:env_template AS jsonb) "
             "WHERE profile_id = 'claude_minimax'"
         ),
         {
@@ -95,7 +96,8 @@ def downgrade() -> None:
     conn.execute(
         sa.text(
             "UPDATE managed_agent_provider_profiles "
-            "SET secret_refs = :secret_refs::jsonb, env_template = :env_template::jsonb "
+            "SET secret_refs = CAST(:secret_refs AS jsonb), "
+            "env_template = CAST(:env_template AS jsonb) "
             "WHERE profile_id = 'claude_minimax'"
         ),
         {
