@@ -4639,9 +4639,9 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div id="queue-auth-profile-wrap" class="hidden">
-          <label>Auth profile
-            <select name="authProfile">
+        <div id="queue-provider-profile-wrap" class="hidden">
+          <label>Provider profile
+            <select name="providerProfile">
               <option value="">Default (system chooses)</option>
             </select>
           </label>
