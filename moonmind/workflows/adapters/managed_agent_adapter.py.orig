@@ -279,7 +279,7 @@ class ManagedAgentAdapter:
         # Persist only the profile_id reference — never raw credentials
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = profile_id
-        
+
         try:
             from temporalio import workflow
             if workflow.in_workflow():
@@ -318,13 +318,11 @@ class ManagedAgentAdapter:
                 command_template=cmd_template,
                 secret_refs=profile.get("secret_refs") or {},
                 clear_env_keys=profile.get("clear_env_keys") or [],
-                default_model=profile.get("default_model"),
-                default_effort=profile.get("default_effort"),
             )
-            
+
             # The workspace path is usually managed by the worker, but we can pass it if known
             workspace_path = None
-            
+
             record_dict = await self._run_launcher(
                 payload={
                     "run_id": run_id,
