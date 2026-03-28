@@ -41,7 +41,7 @@ function ManifestsPage() {
               { key: 'status', header: 'Status' },
             ]}
             emptyMessage="No manifest runs found."
-            getRowKey={(item) => item.id}
+            getRowKey={(item) => item.taskId}
           />
         )}
       </div>
