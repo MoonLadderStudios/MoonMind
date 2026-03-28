@@ -2106,6 +2106,8 @@ class TemporalArtifactActivities:
                     "volume_ref": row.volume_ref,
                     "volume_mount_path": row.volume_mount_path,
                     "account_label": row.account_label,
+                    "secret_refs": row.secret_refs or {},
+                    "clear_env_keys": row.clear_env_keys or [],
                     "api_key_ref": None,
                     "runtime_env_overrides": row.env_template or {},
                     "api_key_env_var": None,
