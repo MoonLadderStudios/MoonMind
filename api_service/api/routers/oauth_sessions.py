@@ -11,11 +11,10 @@ from api_service.services.provider_profile_service import sync_provider_profile_
 from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
-
 _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.PENDING,
     OAuthSessionStatus.STARTING,
-    OAuthSessionStatus.OAUTH_RUNNER_READY,
+    OAuthSessionStatus.BRIDGE_READY,
     OAuthSessionStatus.AWAITING_USER,
     OAuthSessionStatus.VERIFYING,
     OAuthSessionStatus.REGISTERING_PROFILE,
@@ -160,7 +159,7 @@ async def cancel_oauth_session(
     if session.status not in [
         OAuthSessionStatus.PENDING,
         OAuthSessionStatus.STARTING,
-        OAuthSessionStatus.OAUTH_RUNNER_READY,
+        OAuthSessionStatus.BRIDGE_READY,
         OAuthSessionStatus.AWAITING_USER,
         OAuthSessionStatus.VERIFYING
     ]:

@@ -712,13 +712,13 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         runtime_id="claude_code",
         command_template=["claude", "-p", "hello"],
         env_overrides={
-            "MANAGED_API_KEY_REF": "MINIMAX_API_KEY",
-            "MANAGED_API_KEY_TARGET_ENV": "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             "ANTHROPIC_MODEL": "MiniMax-M2.7",
         },
         passthrough_env_keys=[],
-        secret_refs={},
+        secret_refs={
+            "ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY",
+        },
     )
     request = _make_request()
 
@@ -760,5 +760,5 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
     await process.wait()
 
     assert captured_env["ANTHROPIC_AUTH_TOKEN"] == "resolved-minimax-token"
-    assert captured_env["MANAGED_API_KEY_REF"] == "MINIMAX_API_KEY"
-    assert captured_env["MANAGED_API_KEY_TARGET_ENV"] == "ANTHROPIC_AUTH_TOKEN"
+    assert "MANAGED_API_KEY_REF" not in captured_env
+    assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env

@@ -77,23 +77,34 @@ async def oauth_session_ensure_volume(
 async def oauth_session_start_auth_runner(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Browser-based OAuth runners were removed; fail fast with guidance."""
-    _ = request  # reserved for workflow contract compatibility
-    raise RuntimeError(
-        "Managed browser OAuth sessions are not available: the legacy runner was "
-        "removed. Use API-key or token-based auth profiles, or implement the "
-        "first-party flow described in docs/ManagedAgents/OAuthTerminal.md."
+    """Browser-based OAuth runners were removed; start the Terminal PTY bridge."""
+    session_id = request.get("session_id", "")
+    runtime_id = request.get("runtime_id", "")
+    volume_ref = request.get("volume_ref", "")
+    volume_mount_path = request.get("volume_mount_path", "")
+    session_ttl = request.get("session_ttl", 1800)
+    
+    from moonmind.workflows.temporal.runtime.terminal_bridge import start_terminal_bridge_container
+    
+    bridge_info = await start_terminal_bridge_container(
+        session_id=session_id,
+        runtime_id=runtime_id,
+        volume_ref=volume_ref,
+        volume_mount_path=volume_mount_path,
+        session_ttl=session_ttl,
     )
+    
+    return bridge_info
 
 
-@activity.defn(name="oauth_session.update_session_urls")
-async def oauth_session_update_session_urls(
+@activity.defn(name="oauth_session.update_terminal_session")
+async def oauth_session_update_terminal_session(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Write session web/ssh URLs to the session DB row."""
+    """Write terminal session references to the DB row."""
     session_id = request.get("session_id", "")
-    oauth_web_url = request.get("oauth_web_url", "")
-    oauth_ssh_url = request.get("oauth_ssh_url", "")
+    terminal_session_id = request.get("terminal_session_id", "")
+    terminal_bridge_id = request.get("terminal_bridge_id", "")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -110,18 +121,18 @@ async def oauth_session_update_session_urls(
         if not session_obj:
             raise ValueError(f"Session {session_id} not found")
 
-        if oauth_web_url:
-            session_obj.oauth_web_url = oauth_web_url
-        if oauth_ssh_url:
-            session_obj.oauth_ssh_url = oauth_ssh_url
+        if terminal_session_id:
+            session_obj.terminal_session_id = terminal_session_id
+        if terminal_bridge_id:
+            session_obj.terminal_bridge_id = terminal_bridge_id
 
         await db.commit()
 
-    logger.info("Updated OAuth session URLs for session %s", session_id)
+    logger.info("Updated OAuth terminal session refs for session %s", session_id)
     return {
         "session_id": session_id,
-        "oauth_web_url": oauth_web_url,
-        "oauth_ssh_url": oauth_ssh_url,
+        "terminal_session_id": terminal_session_id,
+        "terminal_bridge_id": terminal_bridge_id,
     }
 
 

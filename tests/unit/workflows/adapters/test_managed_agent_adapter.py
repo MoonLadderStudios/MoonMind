@@ -445,8 +445,8 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
         "envOverrides"
     )
     assert isinstance(env_overrides, dict)
-    assert env_overrides.get("MANAGED_API_KEY_REF") == "MINIMAX_API_KEY"
-    assert env_overrides.get("MANAGED_API_KEY_TARGET_ENV") == "ANTHROPIC_AUTH_TOKEN"
+    assert env_overrides.get("MANAGED_API_KEY_REF") is None
+    assert env_overrides.get("MANAGED_API_KEY_TARGET_ENV") is None
     assert env_overrides.get("ANTHROPIC_BASE_URL") == "https://api.minimax.io/anthropic"
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
 
@@ -1309,10 +1309,8 @@ async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
     assert "MINIMAX_API_KEY" not in env_overrides, (
         "Raw API key must not appear in env_overrides"
     )
-    # The API key target reference (non-secret) IS allowed in env_overrides.
-    assert env_overrides.get("MANAGED_API_KEY_TARGET_ENV") == "ANTHROPIC_AUTH_TOKEN"
-    # The api_key_ref (a name/ref, not a secret value) is also allowed.
-    assert env_overrides.get("MANAGED_API_KEY_REF") == "MINIMAX_API_KEY"
+    assert "MANAGED_API_KEY_TARGET_ENV" not in env_overrides
+    assert "MANAGED_API_KEY_REF" not in env_overrides
     # Non-sensitive runtime_env_overrides keys are passed through.
     assert env_overrides.get("ANTHROPIC_BASE_URL") == "https://api.minimax.io/anthropic"
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"

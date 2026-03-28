@@ -446,41 +446,33 @@ class ManagedRuntimeLauncher:
                 workspace_path=workspace_path,
             )
 
-        # Always start from the ambient os.environ so PATH, HOME, and other
-        # required variables are present.  Profile-specific overrides are then
-        # layered on top so they take precedence over system defaults without
-        # discarding the base environment entirely.
-        env_overrides = dict(os.environ)
+        # Phase 4 Materialization
+        from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
+        from moonmind.workflows.adapters.secret_boundary import SecretResolverBoundary
         
-        for key in getattr(profile, "clear_env_keys", []):
-            env_overrides.pop(key, None)
-
-        if profile.env_overrides:
-            env_overrides.update(profile.env_overrides)
-
-        secret_refs = getattr(profile, "secret_refs", None)
-        if secret_refs:
-            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
-            for ref_key, secret_name in secret_refs.items():
-                secret_value = await resolve_managed_api_key_reference(secret_name)
-                # Direct injection: set ref_key as an env var with the resolved value.
-                # This is the primary mechanism for env_bundle profiles where ref_key
-                # is the target env var name (e.g. ANTHROPIC_AUTH_TOKEN).
-                env_overrides[ref_key] = secret_value
-                # Also substitute ${ref_key} placeholders in any existing env values.
-                placeholder = f"${{{ref_key}}}"
-                for k, v in list(env_overrides.items()):
-                    if isinstance(v, str) and placeholder in v:
-                        env_overrides[k] = v.replace(placeholder, secret_value)
-        api_key_ref = str(env_overrides.get("MANAGED_API_KEY_REF") or "").strip()
-        api_key_target_env = str(env_overrides.get("MANAGED_API_KEY_TARGET_ENV") or "").strip()
-        if api_key_ref and api_key_target_env:
-            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
-
-            env_overrides[api_key_target_env] = await resolve_managed_api_key_reference(
-                api_key_ref
-            )
-
+        class DBSyncSecretResolver(SecretResolverBoundary):
+            def resolve_secrets(self, secret_refs: dict[str, str]) -> dict[str, str]:
+                # Since resolve_managed_api_key_reference is async and this method is sync,
+                # we'll iterate and resolve async outside, or rewrite the materializer to be async.
+                pass # placeholder, we need an async implementation
+                
+        # To avoid rewrite of materializer to async right now, resolve secrets here
+        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
+        resolved_secrets = {}
+        for ref_key, secret_name in (getattr(profile, "secret_refs", None) or {}).items():
+            resolved_secrets[ref_key] = await resolve_managed_api_key_reference(secret_name)
+            
+        class DictSecretResolver(SecretResolverBoundary):
+            def resolve_secrets(self, secret_refs: dict[str, str]) -> dict[str, str]:
+                return resolved_secrets
+                
+        materializer = ProviderProfileMaterializer(
+            base_env=dict(os.environ),
+            secret_resolver=DictSecretResolver()
+        )
+        
+        env_overrides, cmd = materializer.materialize(profile)
+        
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).
         if resolved_workspace_path is not None and strategy is not None:
@@ -505,18 +497,9 @@ class ManagedRuntimeLauncher:
                 continue
             env_overrides[key] = value
 
-        # Some AI CLIs (e.g. Gemini CLI) strip secret-like env vars from
-        # their tool-call subprocess environment.  Persist gh auth to disk
-        # so that `gh` can authenticate even when GITHUB_TOKEN is stripped.
         self._persist_gh_config(env_overrides, resolved_workspace_path)
 
-        # Set git identity env vars so that skills (e.g. fix-merge-conflicts)
-        # that run git merge/commit can configure user.name/user.email without
-        # needing a pre-existing local git config in the workspace repo.
-        # These are also consumed by the Codex worker; we set them here so all
-        # managed runtimes get a consistent identity.
         from moonmind.config.settings import settings as _mm_settings
-
         _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
         _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
         if _git_name:

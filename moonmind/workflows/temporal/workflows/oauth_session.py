@@ -79,6 +79,7 @@ class MoonMindOAuthSessionWorkflow:
         self._finalize_requested: bool = False
         self._cancel_requested: bool = False
         self._container_name: str = ""
+        self._terminal_connected: bool = False
 
     # -- Signals ---------------------------------------------------------------
 
@@ -92,6 +93,16 @@ class MoonMindOAuthSessionWorkflow:
         """Cancel the session."""
         self._cancel_requested = True
 
+    @workflow.signal
+    def terminal_connected(self) -> None:
+        """Browser has attached to the terminal bridge."""
+        self._terminal_connected = True
+
+    @workflow.signal
+    def terminal_disconnected(self) -> None:
+        """Browser has detached from the terminal bridge."""
+        self._terminal_connected = False
+
     # -- Queries ---------------------------------------------------------------
 
     @workflow.query
@@ -103,6 +114,7 @@ class MoonMindOAuthSessionWorkflow:
             # Mirrors cancel_requested for consistency with run workflows
             "canceling": self._cancel_requested,
             "container_name": self._container_name,
+            "terminal_connected": self._terminal_connected,
         }
 
     # -- Main workflow ---------------------------------------------------------
@@ -163,16 +175,16 @@ class MoonMindOAuthSessionWorkflow:
                 ),
             )
             self._container_name = runner_result.get("container_name", "")
-            oauth_web_url = runner_result.get("oauth_web_url", "")
-            oauth_ssh_url = runner_result.get("oauth_ssh_url", "")
+            terminal_session_id = runner_result.get("terminal_session_id", "")
+            terminal_bridge_id = runner_result.get("terminal_bridge_id", "")
 
-            # Store extracted URLs in DB
+            # Store extracted terminal IDs in DB
             await workflow.execute_activity(
-                "oauth_session.update_session_urls",
+                "oauth_session.update_terminal_session",
                 {
                     "session_id": self._session_id,
-                    "oauth_web_url": oauth_web_url,
-                    "oauth_ssh_url": oauth_ssh_url,
+                    "terminal_session_id": terminal_session_id,
+                    "terminal_bridge_id": terminal_bridge_id,
                 },
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=15),
@@ -189,8 +201,8 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=f"Auth runner launch failed: {exc}",
             )
 
-        # Step 4: Transition to oauth_runner_ready then awaiting_user
-        await self._update_status("oauth_runner_ready")
+        # Step 4: Transition to bridge_ready then awaiting_user
+        await self._update_status("bridge_ready")
         await self._update_status("awaiting_user")
 
         # Step 5: Wait for finalize, cancel, or session timeout
