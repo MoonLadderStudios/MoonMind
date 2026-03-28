@@ -1,0 +1,107 @@
+{
+  "_DataTable-DRNAzCP-.js": {
+    "file": "assets/DataTable-DRNAzCP-.js",
+    "name": "DataTable",
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  },
+  "_mountPage-vBKAMheD.js": {
+    "file": "assets/mountPage-vBKAMheD.js",
+    "name": "mountPage"
+  },
+  "entrypoints/dashboard-alerts.tsx": {
+    "file": "assets/dashboard-alerts--gkjPw95.js",
+    "name": "dashboard-alerts",
+    "src": "entrypoints/dashboard-alerts.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  },
+  "entrypoints/manifests.tsx": {
+    "file": "assets/manifests-CrEAR0OZ.js",
+    "name": "manifests",
+    "src": "entrypoints/manifests.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js",
+      "_DataTable-DRNAzCP-.js"
+    ]
+  },
+  "entrypoints/proposals.tsx": {
+    "file": "assets/proposals-BTvf-PCq.js",
+    "name": "proposals",
+    "src": "entrypoints/proposals.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js",
+      "_DataTable-DRNAzCP-.js"
+    ]
+  },
+  "entrypoints/schedules.tsx": {
+    "file": "assets/schedules-CalwCngi.js",
+    "name": "schedules",
+    "src": "entrypoints/schedules.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js",
+      "_DataTable-DRNAzCP-.js"
+    ]
+  },
+  "entrypoints/secrets.tsx": {
+    "file": "assets/secrets-DGC8lmmr.js",
+    "name": "secrets",
+    "src": "entrypoints/secrets.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  },
+  "entrypoints/settings.tsx": {
+    "file": "assets/settings--hcprLJk.js",
+    "name": "settings",
+    "src": "entrypoints/settings.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  },
+  "entrypoints/task-detail.tsx": {
+    "file": "assets/task-detail-PS7UfW9G.js",
+    "name": "task-detail",
+    "src": "entrypoints/task-detail.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  },
+  "entrypoints/tasks-home.tsx": {
+    "file": "assets/tasks-home-GALYX6Df.js",
+    "name": "tasks-home",
+    "src": "entrypoints/tasks-home.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  },
+  "entrypoints/tasks-list.tsx": {
+    "file": "assets/tasks-list-B27fNyq3.js",
+    "name": "tasks-list",
+    "src": "entrypoints/tasks-list.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js",
+      "_DataTable-DRNAzCP-.js"
+    ]
+  },
+  "entrypoints/workers.tsx": {
+    "file": "assets/workers-zCll8ae8.js",
+    "name": "workers",
+    "src": "entrypoints/workers.tsx",
+    "isEntry": true,
+    "imports": [
+      "_mountPage-vBKAMheD.js"
+    ]
+  }
+}
