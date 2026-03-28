@@ -768,6 +768,11 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
         description="Enable live task sessions by default for queue task runs.",
     )
+    log_streaming_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_LOG_STREAMING_ENABLED"),
+        description="Enable artifact-backed live log streaming (Phase 0 boundary).",
+    )
     live_session_provider: str = Field(
         "none",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_PROVIDER"),

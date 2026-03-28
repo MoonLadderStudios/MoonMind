@@ -45,22 +45,22 @@ Align the codebase, docs, and feature boundaries before changing runtime behavio
 
 ### Tasks
 
-- [ ] Confirm the canonical implementation target is `docs/ManagedAgents/LiveLogs.md`.
-- [ ] Inventory current managed-run logging, transcript, `tmate`, `web_ro`, and terminal-embed code paths.
-- [ ] Identify all UI surfaces that currently present "Live Output", embedded terminals, or session-viewer semantics.
-- [ ] Identify current data models and DTOs that store log/session metadata for managed runs.
-- [ ] Identify current artifact-writing paths for stdout, stderr, transcripts, and diagnostics.
-- [ ] Decide where the new observability service layer will live in the backend.
-- [ ] Define feature flags for incremental rollout, including a `logStreamingEnabled` flag.
-- [ ] Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.
+- [x] Confirm the canonical implementation target is `docs/ManagedAgents/LiveLogs.md`.
+- [x] Inventory current managed-run logging, transcript, `tmate`, `web_ro`, and terminal-embed code paths.
+- [x] Identify all UI surfaces that currently present "Live Output", embedded terminals, or session-viewer semantics.
+- [x] Identify current data models and DTOs that store log/session metadata for managed runs.
+- [x] Identify current artifact-writing paths for stdout, stderr, transcripts, and diagnostics.
+- [x] Decide where the new observability service layer will live in the backend.
+- [x] Define feature flags for incremental rollout, including a `logStreamingEnabled` flag.
+- [x] Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.
 - [ ] Update any stale docs/specs that still describe `tmate web_ro` as the primary live-log path.
-- [ ] Create implementation issues/tasks for each phase in this plan.
+- [x] Create implementation issues/tasks for each phase in this plan.
 
 ### Exit criteria
 
-- [ ] The team has a single agreed backend architecture for artifact-backed logs and SSE streaming.
-- [ ] The team has a list of current files/modules that must be changed.
-- [ ] Legacy terminal assumptions are explicitly marked deprecated for managed-run observability.
+- [x] The team has a single agreed backend architecture for artifact-backed logs and SSE streaming.
+- [x] The team has a list of current files/modules that must be changed.
+- [x] Legacy terminal assumptions are explicitly marked deprecated for managed-run observability.
 
 ---
 
