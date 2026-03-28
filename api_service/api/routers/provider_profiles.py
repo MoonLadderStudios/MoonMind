@@ -77,6 +77,21 @@ class ProviderProfileCreate(BaseModel):
                 out[key] = str(raw_val)
         return out
 
+    @field_validator("secret_refs", mode="after")
+    @classmethod
+    def _validate_secret_refs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if not value:
+            return value
+        from moonmind.auth.secret_refs import parse_secret_ref, SecretReferenceError
+        for k, v in value.items():
+            if not v:
+                continue
+            try:
+                parse_secret_ref(v)
+            except SecretReferenceError as e:
+                raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
+        return value
+
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
         return self
@@ -127,6 +142,21 @@ class ProviderProfileUpdate(BaseModel):
     )
     enabled: Optional[bool] = None
     max_lease_duration_seconds: Optional[int] = Field(default=None, ge=60)
+
+    @field_validator("secret_refs", mode="after")
+    @classmethod
+    def _validate_secret_refs_update(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if not value:
+            return value
+        from moonmind.auth.secret_refs import parse_secret_ref, SecretReferenceError
+        for k, v in value.items():
+            if not v:
+                continue
+            try:
+                parse_secret_ref(v)
+            except SecretReferenceError as e:
+                raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
+        return value
 
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":

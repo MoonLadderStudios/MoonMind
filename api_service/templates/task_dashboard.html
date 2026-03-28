@@ -30,6 +30,7 @@
   </script>
   <link rel="stylesheet" href="/static/task_dashboard/dashboard.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  {{ assets_html | safe }}
 </head>
 
 <body>
@@ -51,6 +52,8 @@
 
     {% include "_navigation.html" %}
 
+    <div id="dashboard-alerts-root"></div>
+
     <section class="panel" id="dashboard-content" aria-live="polite">
       <p class="loading">Loading dashboard...</p>
     </section>
@@ -59,6 +62,9 @@
   <script id="task-dashboard-config" type="application/json">
       {{ dashboard_config | tojson }}
     </script>
+  <script id="moonmind-ui-boot" type="application/json">
+      {{ boot_payload | safe }}
+  </script>
   <script defer src="/static/task_dashboard/dashboard.js"></script>
 </body>
 

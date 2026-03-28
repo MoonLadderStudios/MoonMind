@@ -14,6 +14,8 @@ export default defineConfig({
         // Entrypoints will be added here as pages are migrated
         'tasks-home': resolve(__dirname, 'src/entrypoints/tasks-home.tsx'),
         'settings': resolve(__dirname, 'src/entrypoints/settings.tsx'),
+        'secrets': resolve(__dirname, 'src/entrypoints/secrets.tsx'),
+        'dashboard-alerts': resolve(__dirname, 'src/entrypoints/dashboard-alerts.tsx'),
       },
     },
   },

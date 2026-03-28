@@ -20,6 +20,22 @@ class SecretReferenceError(RuntimeError):
     """Raised when secret references are invalid or cannot be resolved safely."""
 
 
+class SecretMissingError(SecretReferenceError):
+    """Raised when a secret reference points to a resource that does not exist or is empty."""
+
+
+class SecretAccessDeniedError(SecretReferenceError):
+    """Raised when the process or resolver lacks permission to read the secret."""
+
+
+class SecretUnsupportedBackendError(SecretReferenceError):
+    """Raised when the requested backend is not supported or not configured."""
+
+
+class SecretDecryptionError(SecretReferenceError):
+    """Raised when an encrypted secret cannot be securely decrypted."""
+
+
 class SecretBackend(str, Enum):
     ENV = "env"
     DB_ENCRYPTED = "db"
@@ -273,7 +289,12 @@ __all__ = [
     "ParsedVaultReference",
     "ResolvedGitHubAuth",
     "SecretReferenceError",
+    "SecretMissingError",
+    "SecretAccessDeniedError",
+    "SecretUnsupportedBackendError",
+    "SecretDecryptionError",
     "VaultSecretResolver",
     "load_vault_token",
     "parse_vault_reference",
 ]
+

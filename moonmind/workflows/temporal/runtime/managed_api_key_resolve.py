@@ -1,33 +1,48 @@
-"""Resolve ``MANAGED_API_KEY_REF`` for managed agent subprocess launches."""
+"""Resolve SecretRefs for managed agent subprocess launches."""
 
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
-from moonmind.auth.secret_refs import VaultSecretResolver, load_vault_token
-
-_ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+from moonmind.auth.secret_refs import parse_secret_ref, SecretBackend, VaultSecretResolver, load_vault_token
+from moonmind.auth.resolvers import (
+    EnvSecretResolver,
+    DbEncryptedSecretResolver,
+    ExecSecretResolver,
+    AdapterVaultSecretResolver,
+    MasterSecretResolver,
+)
 
 
 async def resolve_managed_api_key_reference(ref: str) -> str:
-    """Resolve a profile ``api_key_ref`` into the credential string.
+    """Resolve a profile api_key_ref or secret_ref into the credential string using MasterSecretResolver."""
 
-    Supported forms:
-
-    - **Environment indirection**: value is an env var name (e.g. ``MINIMAX_API_KEY``)
-      that is set on the agent worker process.
-    - **Vault**: ``vault://<mount>/<path>#<field>`` when Vault env is configured
-      on the worker (same variables as the codex worker: ``MOONMIND_VAULT_ADDR``,
-      ``MOONMIND_VAULT_TOKEN`` or token file, etc.).
-    """
-
-    stripped = str(ref or "").strip()
+    stripped = ref.strip()
     if not stripped:
         raise ValueError("MANAGED_API_KEY_REF is empty")
+        
+    if "://" not in stripped:
+        stripped = f"env://{stripped}"
 
-    if stripped.lower().startswith("vault://"):
+    try:
+        parsed = parse_secret_ref(stripped)
+    except Exception as e:
+        raise ValueError(f"Unable to resolve MANAGED_API_KEY_REF={ref!r}: {e}")
+
+    resolvers = {}
+    vault_resolver_instance = None
+
+    if parsed.backend == SecretBackend.ENV:
+        resolvers[SecretBackend.ENV] = EnvSecretResolver()
+
+    elif parsed.backend == SecretBackend.DB_ENCRYPTED:
+        resolvers[SecretBackend.DB_ENCRYPTED] = DbEncryptedSecretResolver()
+
+    elif parsed.backend == SecretBackend.EXEC:
+        resolvers[SecretBackend.EXEC] = ExecSecretResolver()
+
+    elif parsed.backend == SecretBackend.VAULT:
         addr = str(
             os.environ.get("MOONMIND_VAULT_ADDR")
             or os.environ.get("VAULT_ADDR")
@@ -58,26 +73,23 @@ async def resolve_managed_api_key_reference(ref: str) -> str:
         allowed = tuple(m.strip() for m in mounts_csv.split(",") if m.strip()) or (
             "kv",
         )
-        resolver = VaultSecretResolver(
+        vault_resolver_instance = VaultSecretResolver(
             address=addr,
             token=token,
             namespace=namespace,
             allowed_mounts=allowed,
         )
-        try:
-            return await resolver.resolve_plain_kv_value(stripped)
-        finally:
-            await resolver.aclose()
+        resolvers[SecretBackend.VAULT] = AdapterVaultSecretResolver(vault_resolver_instance)
 
-    if _ENV_KEY_PATTERN.fullmatch(stripped):
-        val = os.environ.get(stripped)
-        if val and str(val).strip():
-            return str(val).strip()
+    master = MasterSecretResolver(resolvers)
 
-    raise ValueError(
-        f"Unable to resolve MANAGED_API_KEY_REF={stripped!r}: "
-        "set that environment variable on the agent worker, or use vault://..."
-    )
+    try:
+        return await master.resolve(parsed)
+    except Exception as e:
+        raise ValueError(f"Unable to resolve MANAGED_API_KEY_REF={ref!r}: {e}")
+    finally:
+        if vault_resolver_instance is not None:
+            await vault_resolver_instance.aclose()
 
 
 __all__ = ["resolve_managed_api_key_reference"]
