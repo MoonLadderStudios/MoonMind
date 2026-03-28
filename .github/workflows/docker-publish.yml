@@ -60,7 +60,9 @@ jobs:
           npm run ui:typecheck
           npm run ui:lint
           npm run ui:test
+          npm run ui:clean-dist
           npm run ui:build
+          npm run ui:verify-manifest
           npm run api:types:check
 
       - name: Set up Docker Buildx

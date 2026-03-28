@@ -1,7 +1,6 @@
-# Regenerates api_service/static/task_dashboard/dist/ when frontend inputs change and
-# commits the result so Mission Control manifest entrypoints stay in sync (no manual ui:build).
-#
-# Does not run for pull requests from forks (GITHUB_TOKEN cannot push to the contributor's fork).
+# Convenience only: commits refreshed dist/ when inputs change so clones match recent source.
+# CI, Docker, and production images build the UI from source; committed dist/ is not authoritative.
+# Fork PRs are skipped (token cannot push to the fork). Do not use pull_request_target to change that.
 
 name: Sync Vite dist
 
@@ -12,6 +11,12 @@ on:
       - 'frontend/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'tailwind.config.cjs'
+      - 'postcss.config.cjs'
+      - 'api_service/static/task_dashboard/dashboard.tailwind.css'
+      - 'api_service/templates/**'
+      - '.npmrc'
+      - '.nvmrc'
   push:
     branches:
       - '**'
@@ -19,6 +24,12 @@ on:
       - 'frontend/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'tailwind.config.cjs'
+      - 'postcss.config.cjs'
+      - 'api_service/static/task_dashboard/dashboard.tailwind.css'
+      - 'api_service/templates/**'
+      - '.npmrc'
+      - '.nvmrc'
 
 concurrency:
   group: sync-vite-dist-${{ github.repository }}-${{ github.head_ref || github.ref_name }}
@@ -47,7 +58,9 @@ jobs:
       - name: Install dependencies and build UI
         run: |
           npm ci
+          npm run ui:clean-dist
           npm run ui:build
+          npm run ui:verify-manifest
 
       - name: Commit and push dist when changed
         run: |

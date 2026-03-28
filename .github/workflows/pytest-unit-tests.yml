@@ -48,6 +48,12 @@ jobs:
       run: |
         node --version
         npm --version
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+
     - name: Install Node dependencies
       run: npm ci
     - name: Verify dashboard CSS build is in sync
@@ -60,8 +66,17 @@ jobs:
         npm run ui:typecheck
         npm run ui:lint
         npm run ui:test
+        npm run ui:clean-dist
         npm run ui:build
+        npm run ui:verify-manifest
         npm run api:types:check
+
+    - name: Upload Mission Control dist artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mission-control-dist
+        path: api_service/static/task_dashboard/dist/
+        if-no-files-found: error
     - name: Run pytest unit tests
       env:
         GITHUB_TOKEN: ${{ github.token }}

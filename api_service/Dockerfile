@@ -255,6 +255,8 @@ FROM node:22-bookworm AS frontend-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /build
 
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
+
 # Copy only the files needed for the frontend build
 COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
 COPY frontend/ /build/frontend/
@@ -262,8 +264,14 @@ COPY frontend/ /build/frontend/
 COPY api_service/templates/task_dashboard.html /build/api_service/templates/task_dashboard.html
 COPY api_service/templates/_navigation.html /build/api_service/templates/_navigation.html
 COPY api_service/static/task_dashboard/ /build/api_service/static/task_dashboard/
+COPY tools/verify_vite_manifest.py /build/tools/verify_vite_manifest.py
 
-RUN npm ci && npm run dashboard:css:min && npm run ui:build
+# Always rebuild dist from source; do not rely on committed chunks surviving partial copies.
+RUN rm -rf /build/api_service/static/task_dashboard/dist \
+    && npm ci \
+    && npm run dashboard:css:min \
+    && npm run ui:build \
+    && python3 /build/tools/verify_vite_manifest.py
 
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm

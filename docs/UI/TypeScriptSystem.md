@@ -2,7 +2,7 @@
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-03-24
+Last Updated: 2026-03-28
 Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/TaskArchitecture.md`
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-TypeScriptSystem.md`](../tmp/remaining-work/UI-TypeScriptSystem.md)
@@ -289,6 +289,11 @@ FastAPI should use a small asset helper that:
 1. reads the Vite manifest in production
 2. resolves the correct JS and CSS files for an entrypoint
 3. injects those assets into the rendered template
+4. **fails loudly** (HTTP 503 with a clear HTML page) when the manifest is missing, the entrypoint key is absent, or referenced files are missing — never a silent blank region under the shell
+
+For local experiments without a built `dist/`, set **`MOONMIND_LENIENT_UI_ASSETS=1`** so the helper emits HTML comments instead of errors.
+
+CI validates manifest completeness for every rollup entry in `frontend/vite.config.ts` via **`python tools/verify_vite_manifest.py`** (`npm run ui:verify-manifest`) after a **clean** rebuild (`npm run ui:clean-dist` then `npm run ui:build`).
 
 A small backend utility module should own this lookup, for example:
 
@@ -332,17 +337,27 @@ Recommended scripts:
 }
 ```
 
-## 8.5 Docker and CI
+## 8.5 Source of truth, CI, Docker, and committed `dist/`
 
-The standard build pipeline should run:
+**Canonical inputs:** TypeScript/React source under `frontend/`, `frontend/vite.config.ts`, and the root npm lockfile are the source of truth for Mission Control UI bundles.
 
-1. `npm ci`
-2. `npm run ui:typecheck`
-3. `npm run ui:lint`
-4. `npm run ui:test`
-5. `npm run ui:build`
+**Generated output:** `api_service/static/task_dashboard/dist/` (including `.vite/manifest.json`) is generated output only. Do not treat it as hand-maintained source.
 
-The production image should contain built assets, not raw TypeScript-only sources.
+### Authoritative builds (correctness)
+
+- **CI** runs typecheck, lint, and frontend tests, then **`npm run ui:clean-dist`**, **`npm run ui:build`**, and **`npm run ui:verify-manifest`**, followed by OpenAPI type checks as applicable. The workflow may upload **`mission-control-dist`** as an artifact.
+- **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, production Tailwind (`dashboard:css:min`), `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
+- **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the task dashboard router instead of an empty content area.
+
+### Committed `dist/` (convenience only)
+
+Tracking `dist/` in git helps **fresh clones** and local bootstrap when Node has not been run yet.
+
+The **Sync Vite dist** GitHub Action may commit refreshed `dist/` for **same-repo** branches when relevant paths change. That workflow is a **developer convenience**, not the correctness gate. It does **not** run for fork PRs; do **not** “fix” that with **`pull_request_target`** and write access to untrusted code.
+
+### Fork pull requests
+
+Contributors should run **`npm run ui:build`** and commit updated `dist/`, or maintainers apply a follow-up commit after merge.
 
 ---
 

@@ -109,6 +109,8 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
+        assert 'type="module"' in response.text
+        assert "/static/task_dashboard/dist/assets/" in response.text
 
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
@@ -123,6 +125,8 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         response = client.get(path)
         assert response.status_code == 200
         assert "moonmind-ui-boot" in response.text
+        assert 'type="module"' in response.text
+        assert "/static/task_dashboard/dist/assets/" in response.text
 
 
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:

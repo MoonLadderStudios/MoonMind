@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from html import escape
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -28,7 +29,7 @@ from moonmind.workflows.skills.resolver import (
 )
 
 from api_service.ui_boot import generate_boot_payload
-from api_service.ui_assets import ui_assets
+from api_service.ui_assets import MissionControlUIAssetsError, ui_assets
 
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -205,11 +206,39 @@ async def _get_temporal_service(
     )
 
 
+def _mission_control_ui_error_response(entrypoint: str, detail: str) -> HTMLResponse:
+    """503 HTML when Vite assets are missing or incomplete (never a silent blank shell)."""
+    body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mission Control UI unavailable</title>
+</head>
+<body>
+  <h1>Mission Control UI unavailable</h1>
+  <p>Missing or incomplete Vite bundle for entrypoint <code>{escape(entrypoint)}</code>.</p>
+  <p>{escape(detail)}</p>
+  <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
+</body>
+</html>"""
+    return HTMLResponse(status_code=503, content=body, media_type="text/html")
+
+
+def _vite_assets_or_error(entrypoint: str) -> HTMLResponse | str:
+    try:
+        return ui_assets(entrypoint)
+    except MissionControlUIAssetsError as exc:
+        return _mission_control_ui_error_response(entrypoint, str(exc))
+
+
 def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     config = build_runtime_config(current_path)
     boot_payload = generate_boot_payload("dashboard-alerts")
-    assets_html = ui_assets("dashboard-alerts")
-    
+    assets_html = _vite_assets_or_error("dashboard-alerts")
+    if isinstance(assets_html, HTMLResponse):
+        return assets_html
+
     return templates.TemplateResponse(
         request,
         "task_dashboard.html",
@@ -225,7 +254,10 @@ def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
 
 def _render_react_page(request: Request, entrypoint: str, current_path: str, initial_data: dict | None = None) -> HTMLResponse:
     boot_payload = generate_boot_payload(entrypoint, initial_data=initial_data)
-    assets_html = ui_assets(entrypoint)
+    assets_html = _vite_assets_or_error(entrypoint)
+    if isinstance(assets_html, HTMLResponse):
+        return assets_html
+
     return templates.TemplateResponse(
         request,
         "react_dashboard.html",
