@@ -7,7 +7,6 @@ from temporalio.worker import Worker
 
 from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow,
-    OAuthSessionOutput,
     WORKFLOW_TASK_QUEUE,
     ACTIVITY_TASK_QUEUE,
 )

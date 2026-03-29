@@ -37,5 +37,11 @@
   {"id": 3005533633, "disposition": "addressed", "rationale": "Wrapped open(tmp_path).read() in with statement in test_materializer.py."},
   {"id": 3005533635, "disposition": "not-applicable", "rationale": "thread_outdated=true; DBSyncSecretResolver already removed in this PR."},
   {"id": 3005533636, "disposition": "not-applicable", "rationale": "thread_outdated=true; empty except already fixed in this PR."},
-  {"id": 3005533637, "disposition": "addressed", "rationale": "Replaced bare except Exception: pass with logging.debug in websockets.py cleanup handler."}
+  {"id": 3005533637, "disposition": "addressed", "rationale": "Replaced bare except Exception: pass with logging.debug in websockets.py cleanup handler."},
+  {"id": 3005544369, "disposition": "addressed", "rationale": "Removed unused Sequence import from migration file typing import."},
+  {"id": 3005544370, "disposition": "addressed", "rationale": "Removed unused AsyncMock import from test_materializer.py."},
+  {"id": 3005544371, "disposition": "addressed", "rationale": "Removed unused OAuthSessionOutput import from integration test."},
+  {"id": 3005544373, "disposition": "addressed", "rationale": "Removed unused uuid import from websockets.py."},
+  {"id": 3005544374, "disposition": "addressed", "rationale": "Removed unused json import from websockets.py."},
+  {"id": 3005544375, "disposition": "addressed", "rationale": "Removed inline import logging from websockets.py cleanup handler; uses module-level import."}
 ]

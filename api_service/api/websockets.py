@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import uuid
-import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,5 +121,4 @@ async def terminal_websocket(
                 raw_sock.close()
             await websocket.close(code=1000)
         except Exception as exc:
-            import logging
             logging.getLogger(__name__).debug("WebSocket cleanup error: %s", exc)
