@@ -102,6 +102,15 @@ function readDashboardConfig(payload: BootPayload): DashboardConfig | undefined 
   return raw?.dashboardConfig;
 }
 
+function decodeTaskPathSegment(segment: string | null | undefined): string | null {
+  if (!segment) return null;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return '—';
   const date = new Date(iso);
@@ -169,7 +178,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
   );
-  const taskId = taskIdMatch ? taskIdMatch[1] : null;
+  const taskId = decodeTaskPathSegment(taskIdMatch ? taskIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
   const sourceTemporal = search.get('source') === 'temporal';

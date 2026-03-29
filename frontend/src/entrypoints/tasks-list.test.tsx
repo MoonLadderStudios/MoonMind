@@ -81,4 +81,75 @@ describe('Tasks List Entrypoint', () => {
     });
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
+
+  it('renders pagination as arrow buttons beside the table summary', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'succeeded',
+            rawState: 'succeeded',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+        nextPageToken: 'next-token',
+        count: 21,
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Page 1 · 1-1 · 21')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeTruthy();
+  });
+
+  it('keeps the previous-page button enabled on empty pages after pagination', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('nextPageToken=next-token')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [],
+            count: 21,
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'succeeded',
+              rawState: 'succeeded',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+          nextPageToken: 'next-token',
+          count: 21,
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    const nextButton = await screen.findByRole('button', { name: 'Next page' });
+    fireEvent.click(nextButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('No tasks found for the current filters.')).toBeTruthy();
+    });
+
+    expect(screen.getByRole('button', { name: 'Previous page' }).getAttribute('disabled')).toBeNull();
+  });
 });
