@@ -1,5 +1,51 @@
 [
   {
+
+    "id": 4149304502,
+    "disposition": "not-applicable",
+    "rationale": "Codex usage notification. Not a code review concern."
+  },
+  {
+    "id": 3005638733,
+    "disposition": "addressed",
+    "rationale": "Integration test for test_intervention_signal_without_logs has been completely implemented."
+  },
+  {
+    "id": 4026292764,
+    "disposition": "not-applicable",
+    "rationale": "Overview PR summary comment from bot."
+  },
+  {
+    "id": 3005639914,
+    "disposition": "addressed",
+    "rationale": "Implemented real integration test that uses expected ASGI transport and API endpoint validation."
+  },
+  {
+    "id": 3005639918,
+    "disposition": "addressed",
+    "rationale": "httpx.ASGITransport(app=app) is now strictly used in the integration test fixture per feedback."
+  },
+  {
+    "id": 3005639921,
+    "disposition": "addressed",
+    "rationale": "Backend validation implemented via dependency overrides to verify intervention routing."
+  },
+  {
+    "id": 4026293652,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR review summary overview."
+  },
+  {
+    "id": 3005646083,
+    "disposition": "addressed",
+    "rationale": "The unused variable 'adapter' has been removed from test_interventions_temporal.py."
+  },
+  {
+    "id": 3005646084,
+    "disposition": "addressed",
+    "rationale": "Unused imports have been removed from test_interventions_temporal.py."
+  },
+  {
     "id": 4149260383,
     "disposition": "addressed",
     "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
@@ -84,5 +130,10 @@
   {"id": 3005532208, "disposition": "addressed", "rationale": "Updated tasks.md T006 path reference from moonmind/api to api_service/api."},
   {"id": 4149110806, "disposition": "not-applicable", "rationale": "Codex usage limits informational message, no action needed."},
   {"id": 4026200533, "disposition": "not-applicable", "rationale": "Summary review comment from gemini-code-assist, no action needed."},
-  {"id": 4026203950, "disposition": "not-applicable", "rationale": "Summary review from copilot-pull-request-reviewer, no action needed."}
+  {"id": 4026203950, "disposition": "not-applicable", "rationale": "Summary review from copilot-pull-request-reviewer, no action needed."},
+  {"id": 3005672391, "disposition": "addressed", "rationale": "Removed unnecessary lambda wrapping MagicMock."},
+  {"id": 3005672392, "disposition": "addressed", "rationale": "Removed unused TemporalExecutionService import."},
+  {"id": 3005672393, "disposition": "addressed", "rationale": "Removed unused UpdateExecutionRequest and UpdateExecutionResponse imports."},
+  {"id": 3005672394, "disposition": "addressed", "rationale": "Removed unused _get_owned_execution import."},
+  {"id": 3005676123, "disposition": "addressed", "rationale": "Removed unused TemporalClientAdapter import."}
 ]
