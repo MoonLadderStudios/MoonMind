@@ -1311,6 +1311,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-runs/{id}/logs/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Task Run Live Logs
+         * @description Serve SSE real-time stream for active runs.
+         */
+        get: operations["stream_task_run_live_logs_api_task_runs__id__logs_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-runs/{id}/logs/{stream_name}": {
         parameters: {
             query?: never;
@@ -8061,6 +8081,61 @@ export interface operations {
             };
             /** @description Observability record not found for this task run */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_task_run_live_logs_api_task_runs__id__logs_stream_get: {
+        parameters: {
+            query?: {
+                /** @description Resume from sequence number */
+                since?: number | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Requires superuser privileges */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Observability record not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run is no longer active */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
