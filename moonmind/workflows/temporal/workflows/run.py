@@ -25,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
+    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -1500,6 +1501,11 @@ class MoonMindRunWorkflow:
         if not _coerce_bool(propose_tasks, default=False):
             return
 
+        if workflow.patched("enable_task_proposals_gate"):
+            if not settings.workflow.enable_task_proposals:
+                self._get_logger().info("Task proposal generation is globally disabled")
+                return
+
         self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
 
         try:
@@ -1539,19 +1545,43 @@ class MoonMindRunWorkflow:
             submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "proposal.submit"
             )
-            policy = {
-                "max_items": parameters.get("proposalMaxItems", 10),
-                "targets": parameters.get("proposalTargets", "project"),
-                "default_runtime": parameters.get("proposalDefaultRuntime"),
-            }
+            task_node = parameters.get("task")
+            task = task_node if isinstance(task_node, dict) else {}
+            policy = task.get("proposalPolicy")
+            if isinstance(policy, dict):
+                from moonmind.workflows.tasks.task_contract import TaskProposalPolicy
+                try:
+                    parsed_policy = TaskProposalPolicy.model_validate(policy)
+                    max_items_dict = parsed_policy.max_items or {}
+                    max_items_val = max_items_dict.get("project", parameters.get("proposalMaxItems", 10))
+                    
+                    policy_payload = {
+                        "max_items": max_items_val,
+                        "targets": parsed_policy.targets or parameters.get("proposalTargets", "project"),
+                        "default_runtime": parsed_policy.default_runtime or parameters.get("proposalDefaultRuntime"),
+                    }
+                except Exception as exc:
+                    self._get_logger().warning("Failed to validate task.proposalPolicy: %s", exc)
+                    policy_payload = {
+                        "max_items": parameters.get("proposalMaxItems", 10),
+                        "targets": parameters.get("proposalTargets", "project"),
+                        "default_runtime": parameters.get("proposalDefaultRuntime"),
+                    }
+            else:
+                policy_payload = {
+                    "max_items": parameters.get("proposalMaxItems", 10),
+                    "targets": parameters.get("proposalTargets", "project"),
+                    "default_runtime": parameters.get("proposalDefaultRuntime"),
+                }
             origin = {
+                "source": "workflow",
                 "workflow_id": workflow.info().workflow_id,
                 "temporal_run_id": workflow.info().run_id,
                 "trigger_repo": self._repo or "",
             }
             submit_payload = {
                 "candidates": candidate_list,
-                "policy": policy,
+                "policy": policy_payload,
                 "origin": origin,
                 "principal": self._principal(),
             }
@@ -1622,6 +1652,7 @@ class MoonMindRunWorkflow:
                     ),
                 },
                 "proposals": {
+                    "requested": _coerce_bool(parameters.get("proposeTasks"), default=False),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,
