@@ -52,9 +52,9 @@ from moonmind.workflows.skills.skill_plan_contracts import (
     SkillResult,
     parse_plan_definition,
 )
-from moonmind.workflows.skills.tool_plan_contracts import REGISTRY_DIGEST_PREFIX
 from moonmind.workflows.skills.skill_registry import (
     SkillRegistrySnapshot,
+    compute_registry_digest,
     create_registry_snapshot,
     parse_skill_registry,
 )
@@ -347,12 +347,7 @@ def _temporal_snapshot_from_payload(
 
     if isinstance(raw_skills, list) and not raw_skills:
         skills = ()
-        encoded = json.dumps(
-            {"schema_version": "1.0", "tools": [], "skills": []},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        digest = f"{REGISTRY_DIGEST_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
+        digest = compute_registry_digest(skills=skills)
     else:
         skills = parse_skill_registry(payload)
         digest_only = create_registry_snapshot(
