@@ -4449,6 +4449,8 @@ export interface components {
          */
         TaskProposalPromoteResponse: {
             proposal: components["schemas"]["TaskProposalModel"];
+            /** Promotedexecutionid */
+            promotedExecutionId: string;
         };
         /**
          * TaskProposalReviewPriority
