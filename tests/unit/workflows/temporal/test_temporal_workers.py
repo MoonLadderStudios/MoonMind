@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
     build_worker_activity_bindings,
@@ -131,6 +132,9 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),
+                proposal_activities=TemporalProposalActivities(
+                    artifact_service=service,
+                ),
             )
 
             assert bindings
@@ -169,6 +173,9 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                 integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
                     client_factory=lambda: None,
+                ),
+                proposal_activities=TemporalProposalActivities(
+                    artifact_service=service,
                 ),
             )
 
