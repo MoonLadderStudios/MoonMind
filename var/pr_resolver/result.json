@@ -4,44 +4,44 @@
   "status": "attempts_exhausted",
   "merge_outcome": "attempts_exhausted",
   "decision": "no progress after full remediation escalation",
-  "reason": "actionable_comments",
-  "final_reason": "actionable_comments",
-  "next_step": "run_fix_comments_skill",
+  "reason": "merge_conflicts",
+  "final_reason": "merge_conflicts",
+  "next_step": "run_fix_merge_conflicts_skill",
   "max_attempts": 3,
   "finalize_max_retries": 2,
   "fix_max_iterations": 3,
   "escalations": 1,
   "attempt_count": 2,
-  "started_at": "2026-03-29T23:21:41.280428+00:00",
-  "finished_at": "2026-03-29T23:22:07.849133+00:00",
+  "started_at": "2026-03-29T23:32:45.761312+00:00",
+  "finished_at": "2026-03-29T23:33:11.353827+00:00",
   "attempt_history": [
     {
       "attempt": 1,
       "stage": "finalize",
       "status": "blocked",
-      "reason": "actionable_comments",
-      "timestamp": "2026-03-29T23:21:49.980944+00:00"
+      "reason": "merge_conflicts",
+      "timestamp": "2026-03-29T23:32:54.856168+00:00"
     },
     {
       "attempt": 1,
       "stage": "full_remediation",
       "status": "needs_remediation",
-      "reason": "actionable_comments",
+      "reason": "merge_conflicts",
       "escalation": 1,
       "max_iterations": 3,
-      "timestamp": "2026-03-29T23:21:59.362852+00:00"
+      "timestamp": "2026-03-29T23:33:03.318674+00:00"
     },
     {
       "attempt": 2,
       "stage": "finalize",
       "status": "blocked",
-      "reason": "actionable_comments",
-      "timestamp": "2026-03-29T23:22:07.849094+00:00"
+      "reason": "merge_conflicts",
+      "timestamp": "2026-03-29T23:33:11.353795+00:00"
     }
   ],
   "decisions": [
-    "finalize:blocked:actionable_comments",
-    "full_remediation:needs_remediation:actionable_comments",
-    "finalize:blocked:actionable_comments"
+    "finalize:blocked:merge_conflicts",
+    "full_remediation:needs_remediation:merge_conflicts",
+    "finalize:blocked:merge_conflicts"
   ]
 }

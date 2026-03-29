@@ -327,6 +327,55 @@ async def test_update_review_priority_persists_value() -> None:
     assert updated.review_priority is TaskProposalReviewPriority.URGENT
 
 
+@pytest.mark.asyncio
+async def test_promote_proposal_applies_runtime_override() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Refactor logic",
+                    "runtime": {"mode": "gemini_cli"},
+                }
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    override_request = {
+        "type": "task",
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Refactor logic",
+                "runtime": {"mode": "claude"},
+            }
+        }
+    }
+
+    updated_proposal, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+        task_create_request_override=override_request,
+    )
+
+    repo.commit.assert_awaited()
+    assert updated_proposal.status is TaskProposalStatus.PROMOTED
+    
+    assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
+    assert updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
+
+
+
 
 
 

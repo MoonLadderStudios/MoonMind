@@ -219,7 +219,7 @@ async def test_concurrent_stdout_stderr_streaming(tmp_path: Path):
     stderr_reader.feed_data(stderr_content)
     stderr_reader.feed_eof()
 
-    log_refs, stdout_text, stderr_text, parsed = await streamer.stream_and_parse(
+    log_refs, stdout_text, stderr_text, parsed, _events = await streamer.stream_and_parse(
         stdout_reader,
         stderr_reader,
         run_id="managed-concurrent-1",

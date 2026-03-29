@@ -13,6 +13,7 @@ from moonmind.config.settings import settings
 _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 settings.workflow.test_mode = True
+settings.workflow.enable_task_proposals = False
 
 
 @pytest.fixture
