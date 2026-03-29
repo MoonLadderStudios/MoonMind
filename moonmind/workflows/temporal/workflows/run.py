@@ -25,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
+    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -1500,6 +1501,10 @@ class MoonMindRunWorkflow:
         if not _coerce_bool(propose_tasks, default=False):
             return
 
+        if not settings.workflow.enable_task_proposals:
+            self._get_logger().info("Task proposal generation is globally disabled")
+            return
+
         self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
 
         try:
@@ -1539,12 +1544,17 @@ class MoonMindRunWorkflow:
             submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "proposal.submit"
             )
-            policy = {
-                "max_items": parameters.get("proposalMaxItems", 10),
-                "targets": parameters.get("proposalTargets", "project"),
-                "default_runtime": parameters.get("proposalDefaultRuntime"),
-            }
+            task_node = parameters.get("task")
+            task = task_node if isinstance(task_node, dict) else {}
+            policy = task.get("proposalPolicy")
+            if not isinstance(policy, dict):
+                policy = {
+                    "max_items": parameters.get("proposalMaxItems", 10),
+                    "targets": parameters.get("proposalTargets", "project"),
+                    "default_runtime": parameters.get("proposalDefaultRuntime"),
+                }
             origin = {
+                "source": "workflow",
                 "workflow_id": workflow.info().workflow_id,
                 "temporal_run_id": workflow.info().run_id,
                 "trigger_repo": self._repo or "",
@@ -1622,6 +1632,7 @@ class MoonMindRunWorkflow:
                     ),
                 },
                 "proposals": {
+                    "requested": _coerce_bool(parameters.get("proposeTasks"), default=False),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,

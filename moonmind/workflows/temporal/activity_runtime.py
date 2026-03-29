@@ -2714,10 +2714,10 @@ class TemporalProposalActivities:
 
                         origin_source = TaskProposalOriginSource.WORKFLOW
                         origin_metadata = {
-                            "workflowId": workflow_id,
-                            "temporalRunId": run_id,
-                            "triggerRepo": trigger_repo,
-                            "triggerJobId": workflow_id,
+                            "workflow_id": workflow_id,
+                            "temporal_run_id": run_id,
+                            "trigger_repo": trigger_repo,
+                            "trigger_job_id": workflow_id,
                             "signal": {"severity": "normal", "type": "follow_up"}
                         }
                         await service.create_proposal(

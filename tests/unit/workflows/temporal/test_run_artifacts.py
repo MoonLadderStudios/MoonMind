@@ -1000,3 +1000,115 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         "repo.create_pr SHOULD have been called for a non-Jules agent "
         "even when child result metadata contains jules_session_id"
     )
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_global_disable_halts_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+    
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
+    
+    # Enable proposing tasks in params, but global switch should stop it
+    await workflow._run_proposals_stage(parameters={"proposeTasks": True})
+    
+    assert workflow._state == "initializing"  # State shouldn't change to PROPOSALS
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_uses_legacy_fallback_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._owner_type = "user"
+    workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: False)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    
+    captured_policy = None
+    async def mock_execute_activity(activity, payload, **kwargs):
+        nonlocal captured_policy
+        if activity == "proposal.generate":
+            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+        if activity == "proposal.submit":
+            captured_policy = payload["policy"]
+            return {"submitted_count": 1, "errors": []}
+            
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
+    
+    await workflow._run_proposals_stage(
+        parameters={
+            "proposeTasks": True,
+            "proposalMaxItems": 8,
+            "proposalTargets": "file",
+            "proposalDefaultRuntime": "gemini",
+        }
+    )
+    
+    assert captured_policy is not None
+    assert captured_policy["max_items"] == 8
+    assert captured_policy["targets"] == "file"
+    assert captured_policy["default_runtime"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_uses_task_proposal_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._owner_type = "user"
+    workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: False)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    
+    captured_policy = None
+    captured_origin = None
+    async def mock_execute_activity(activity, payload, **kwargs):
+        nonlocal captured_policy, captured_origin
+        if activity == "proposal.generate":
+            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+        if activity == "proposal.submit":
+            captured_policy = payload["policy"]
+            captured_origin = payload["origin"]
+            return {"submitted_count": 1, "errors": []}
+            
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
+    
+    await workflow._run_proposals_stage(
+        parameters={
+            "proposeTasks": True,
+            # Legacy fields should be ignored
+            "proposalMaxItems": 8,
+            "proposalTargets": "file",
+            "proposalDefaultRuntime": "gemini",
+            "task": {
+                "proposalPolicy": {
+                    "max_items": 12,
+                    "targets": "project",
+                    "default_runtime": "claude",
+                }
+            }
+        }
+    )
+    
+    assert captured_policy is not None
+    assert captured_policy["max_items"] == 12
+    assert captured_policy["targets"] == "project"
+    assert captured_policy["default_runtime"] == "claude"
+    
+    # Also verify origin format DOC-REQ-005
+    assert captured_origin["source"] == "workflow"
+    assert "workflow_id" in captured_origin
+    assert "temporal_run_id" in captured_origin
+    assert "trigger_repo" in captured_origin
+
