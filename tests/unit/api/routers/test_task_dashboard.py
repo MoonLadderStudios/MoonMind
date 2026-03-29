@@ -68,7 +68,8 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("manifests/new")
     assert _is_allowed_path("schedules")
     assert _is_allowed_path("settings")
-    assert _is_allowed_path("workers")
+    assert not _is_allowed_path("workers")
+    assert not _is_allowed_path("secrets")
 
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
@@ -101,7 +102,6 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/list",
         "/tasks/manifests",
         "/tasks/schedules",
-        "/tasks/workers",
         "/tasks/settings",
         "/tasks/proposals",
         "/tasks/tasks-list",
@@ -130,13 +130,23 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
 
 
 def test_data_wide_panel_on_table_first_react_routes(client: TestClient) -> None:
-    for path in ("/tasks/list", "/tasks/tasks-list", "/tasks/proposals"):
+    for path in ("/tasks/list", "/tasks/tasks-list", "/tasks/proposals", "/tasks/settings"):
         response = client.get(path)
         assert response.status_code == 200
         assert "panel--data-wide" in response.text
-    narrow = client.get("/tasks/settings")
+    narrow = client.get("/tasks/manifests")
     assert narrow.status_code == 200
     assert "panel--data-wide" not in narrow.text
+
+
+def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:
+    workers = client.get("/tasks/workers", follow_redirects=False)
+    assert workers.status_code == 307
+    assert workers.headers["location"] == "/tasks/settings?section=operations"
+
+    secrets = client.get("/tasks/secrets", follow_redirects=False)
+    assert secrets.status_code == 307
+    assert secrets.headers["location"] == "/tasks/settings?section=providers-secrets"
 
 
 def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestClient) -> None:
@@ -202,7 +212,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/create, /tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-        "/tasks/schedules, /tasks/workers, /tasks/skills, or /tasks/settings."
+        "/tasks/schedules, /tasks/skills, or /tasks/settings."
     )
 
 
@@ -282,6 +292,3 @@ def test_create_dashboard_skill_already_exists(
 
     assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
-
-
-

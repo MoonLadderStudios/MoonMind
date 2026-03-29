@@ -1291,6 +1291,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-runs/{id}/observability-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Observability Summary
+         * @description Fetch the observability summary for a task run from the shared agent jobs volume.
+         */
+        get: operations["get_observability_summary_api_task_runs__id__observability_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-runs/{id}/logs/{stream_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Task Run Log
+         * @description Serve stdout, stderr, or merged logs directly from the shared volume.
+         */
+        get: operations["stream_task_run_log_api_task_runs__id__logs__stream_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-runs/{id}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Run Diagnostics
+         * @description Return the diagnostics.json payload for a task run.
+         */
+        get: operations["get_task_run_diagnostics_api_task_runs__id__diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/secrets": {
         parameters: {
             query?: never;
@@ -1300,7 +1360,7 @@ export interface paths {
         };
         /**
          * Task Secrets Route
-         * @description Serve the React-powered secrets page.
+         * @description Redirect the legacy secrets page into unified settings.
          */
         get: operations["task_secrets_route_tasks_secrets_get"];
         put?: never;
@@ -1440,7 +1500,7 @@ export interface paths {
         };
         /**
          * Task Workers Route
-         * @description Serve the React-powered workers page.
+         * @description Redirect the legacy workers page into unified settings.
          */
         get: operations["task_workers_route_tasks_workers_get"];
         put?: never;
@@ -7979,6 +8039,130 @@ export interface operations {
             };
         };
     };
+    get_observability_summary_api_task_runs__id__observability_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Observability record not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_task_run_log_api_task_runs__id__logs__stream_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                stream_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Invalid stream name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Log artifact not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_run_diagnostics_api_task_runs__id__diagnostics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Diagnostics artifact not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     task_secrets_route_tasks_secrets_get: {
         parameters: {
             query?: never;
@@ -7994,7 +8178,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };
@@ -8134,7 +8318,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };
