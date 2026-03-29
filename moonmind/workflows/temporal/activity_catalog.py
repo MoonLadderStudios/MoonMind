@@ -801,9 +801,9 @@ def build_default_activity_catalog(
         TemporalActivityDefinition(
             activity_type="proposal.submit",
             family="proposal",
-            capability_class="llm",
-            task_queue=cfg.activity_llm_task_queue,
-            fleet=LLM_FLEET,
+            capability_class="integrations",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
             timeouts=TemporalActivityTimeouts(120, 300),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),
