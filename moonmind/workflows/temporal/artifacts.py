@@ -2551,20 +2551,6 @@ class TemporalArtifactActivities:
         payload = request if isinstance(request, dict) else dict(kwargs)
         return await _mark_failed(payload)
 
-    async def oauth_session_update_terminal_session(
-        self,
-        request: Any = None,
-        /,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Delegate to standalone ``oauth_session.update_terminal_session`` activity."""
-        from moonmind.workflows.temporal.activities.oauth_session_activities import (
-            oauth_session_update_terminal_session as _update_terminal_session,
-        )
-
-        payload = request if isinstance(request, dict) else dict(kwargs)
-        return await _update_terminal_session(payload)
-
     async def oauth_session_verify_volume(
         self,
         request: Any = None,

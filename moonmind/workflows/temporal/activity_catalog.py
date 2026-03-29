@@ -535,15 +535,6 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=15),
         ),
         TemporalActivityDefinition(
-            activity_type="oauth_session.update_terminal_session",
-            family="oauth_session",
-            capability_class="artifacts",
-            task_queue=cfg.activity_artifacts_task_queue,
-            fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(15, 30),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
-        ),
-        TemporalActivityDefinition(
             activity_type="oauth_session.verify_volume",
             family="oauth_session",
             capability_class="artifacts",
