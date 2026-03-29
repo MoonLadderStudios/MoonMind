@@ -122,5 +122,6 @@ async def terminal_websocket(
             if 'raw_sock' in locals():
                 raw_sock.close()
             await websocket.close(code=1000)
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("WebSocket cleanup error: %s", exc)

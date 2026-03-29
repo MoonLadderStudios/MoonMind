@@ -62,7 +62,8 @@ async def test_materializer_file_templates_written_and_cleanup():
     tmp_path = env["CREDENTIALS_FILE"]
     assert os.path.exists(tmp_path), "Temp file should exist after materialize()"
 
-    content = open(tmp_path).read()
+    with open(tmp_path) as f:
+        content = f.read()
     assert "decrypted_ref_to_secret" in content
     assert "token=decrypted_ref_to_secret" in content
 
