@@ -28,18 +28,34 @@ All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-
 
 ## Phase 2 - `MoonMind.Run` Dependency Gate
 
-- Add dependency parsing helpers in `moonmind/workflows/temporal/workflows/run.py`.
-- Inspect `initialParameters.task.dependsOn` before `planning`.
-- When dependencies exist, set `STATE_WAITING_ON_DEPENDENCIES`, update metadata with normalized dependency IDs, and record wait timing.
-- Wait on dependencies using Temporal external workflow handles.
-- Preserve cancel and pause behavior while waiting without mutating prerequisite runs.
-- Fail the dependent run with a dependency-specific reason when a prerequisite fails, is canceled, or is terminated.
-- Transition cleanly into `planning` once all prerequisites succeed.
+- Parse `initialParameters.task.dependsOn` in `MoonMindRunWorkflow.run()` after `_initialize_from_payload()` and before entering `STATE_PLANNING`.
+  - The insertion point is `run.py` between the current `STATE_INITIALIZING` and `STATE_PLANNING` transitions (currently lines 413–414).
+- When `dependsOn` is present and non-empty:
+  - Set `mm_state` to `waiting_on_dependencies` and update memo/search attributes with dependency IDs.
+  - Wait on each prerequisite using Temporal external workflow handles:
+    ```python
+    handles = [
+        workflow.get_external_workflow_handle(dep_id)
+        for dep_id in depends_on
+    ]
+    await asyncio.gather(*(handle.result() for handle in handles))
+    ```
+  - Wrap the `gather` in a Temporal `CancellationScope` so cancellation of the dependent run interrupts the wait cleanly.
+  - Guard with `workflow.patched("dependency-gate-v1")` for replay safety.
+- When `dependsOn` is absent or empty, proceed directly to `planning` (current behavior — no change needed).
+- Fail the dependent run with a dependency-specific message when a prerequisite fails, is canceled, or is terminated (propagated via the `handle.result()` exception).
+- Preserve cancel semantics during the dependency wait: canceling the dependent run cancels only that run, not the prerequisites.
+- Pause/resume semantics: check `self._paused` after the dependency wait resolves, consistent with the existing pause gate pattern.
 
 ## Phase 3 - Finish Summary And Read Model Metadata
 
-- Extend `reports/run_summary.json` with dependency outcome data.
-- Include dependency metadata in workflow memo or equivalent read-model metadata needed for detail views.
+- Extend `reports/run_summary.json` with dependency outcome data:
+  - declared dependency IDs
+  - whether a dependency wait occurred
+  - dependency wait duration
+  - resolution outcome (success vs dependency failure)
+  - failed dependency ID when applicable
+- Include dependency presence metadata in workflow memo (for list/detail surfaces).
 - Ensure execution serialization can surface dependency metadata cleanly for the detail page.
 
 ## Phase 4 - Mission Control Create And Detail UX
@@ -58,3 +74,4 @@ All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-
 - Verify Continue-As-New behavior preserves dependency context.
 - Confirm list and detail pages remain performant with dependency metadata present.
 - Document operator guidance for dependency limits, failure semantics, and known v1 non-goals.
+

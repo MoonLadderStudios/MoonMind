@@ -2,122 +2,99 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "feature/15-task-proposal-system-phase-6",
-    "headRefOid": "81c864595dac42380e1ea38faa73120b7f1c1896",
+    "headRefOid": "e40b049635d9d60ab753bcdd35d6b3e511777d15",
     "isDraft": false,
-    "mergeStateStatus": "CLEAN",
-    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "DIRTY",
+    "mergeable": "CONFLICTING",
     "number": 1063,
     "reviewDecision": "",
     "state": "OPEN",
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:28:01Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717155698/job/69086021264",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23721733976/job/69097793410",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-29T19:27:10Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-29T23:32:39Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:27:57Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717155724/job/69086021326",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23721733959/job/69097793386",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-29T19:27:10Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-29T23:32:40Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:29:00Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717156459/job/69086022177",
-        "name": "test-backend",
-        "startedAt": "2026-03-29T19:27:12Z",
-        "status": "COMPLETED",
-        "workflowName": "Run Pytest Unit Tests"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:29:03Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717155698/job/69086021269",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23721733976/job/69097793412",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-29T19:27:10Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-29T23:32:39Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:28:18Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717155724/job/69086021314",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23721733959/job/69097793385",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-29T19:27:10Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-29T23:32:40Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:28:13Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717155724/job/69086021298",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23721733959/job/69097793384",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-29T19:27:10Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-29T23:32:40Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:28:45Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23717156459/job/69086022151",
-        "name": "test-frontend",
-        "startedAt": "2026-03-29T19:27:12Z",
-        "status": "COMPLETED",
-        "workflowName": "Run Pytest Unit Tests"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-29T19:27:48Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69086053929",
-        "name": "CodeQL",
-        "startedAt": "2026-03-29T19:27:47Z",
-        "status": "COMPLETED",
-        "workflowName": ""
       }
     ],
     "title": "feat(proposals): Phase 6 Implementation End-to-End",
     "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063"
   },
   "ci": {
-    "isRunning": false,
-    "hasFailures": false,
-    "failedChecks": [],
-    "totalCheckCount": 8,
-    "securityCheckCount": 6,
-    "nonSecurityCheckCount": 2,
+    "isRunning": true,
+    "hasFailures": true,
+    "failedChecks": [
+      {
+        "name": "CI signal continuity",
+        "state": "MISSING_NON_SECURITY_CHECKS_ON_HEAD",
+        "url": ""
+      }
+    ],
+    "totalCheckCount": 5,
+    "securityCheckCount": 5,
+    "nonSecurityCheckCount": 0,
     "checkNames": [
       "Analyze (javascript-typescript)",
       "Analyze (actions)",
-      "test-backend",
       "Analyze (python)",
       "Analyze (javascript-typescript)",
-      "Analyze (python)",
-      "test-frontend",
-      "CodeQL"
+      "Analyze (python)"
     ],
-    "signalQuality": "ok",
-    "degradedReasons": [],
+    "signalQuality": "degraded",
+    "degradedReasons": [
+      "head_missing_non_security_checks_seen_on_previous_commit"
+    ],
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "81c864595dac42380e1ea38faa73120b7f1c1896",
-    "headShaNonSecurityCheckCount": 6
+    "headShaVerified": "e40b049635d9d60ab753bcdd35d6b3e511777d15",
+    "headShaNonSecurityCheckCount": 0,
+    "previousCommitSha": "81c864595dac42380e1ea38faa73120b7f1c1896",
+    "previousCommitNonSecurityCheckCount": 6
   },
   "commentsFetch": {
     "succeeded": true,
@@ -144,10 +121,10 @@
       "path": "mock_temporal_adapter.patch",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 29,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -160,10 +137,10 @@
       "path": "docs/tmp/015-TaskProposalSystemPlan.md",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 192,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -176,10 +153,10 @@
       "path": "tests/integration/workflows/temporal/workflows/test_run.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 471,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -192,10 +169,10 @@
       "path": "tests/unit/api/routers/test_task_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 258,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -208,10 +185,10 @@
       "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 55,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review",
@@ -234,10 +211,10 @@
       "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 1,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -250,10 +227,10 @@
       "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 2,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -266,10 +243,10 @@
       "path": "tests/integration/temporal/test_managed_runtime_live_logs.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 222,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -282,10 +259,10 @@
       "path": "tests/unit/workflows/adapters/test_secret_redaction.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 33,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -298,10 +275,10 @@
       "path": "tests/unit/workflows/adapters/test_secret_redaction.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 28,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -314,10 +291,10 @@
       "path": "docs/tmp/015-TaskProposalSystemPlan.md",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 192,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -330,10 +307,10 @@
       "path": "tests/integration/temporal/test_integrations_monitoring.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 10,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -346,10 +323,10 @@
       "path": "mock_temporal_adapter.patch",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 29,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -360,7 +337,7 @@
       "updated_at": "2026-03-29T19:32:44Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667798",
       "path": "tests/integration/services/temporal/workflows/test_agent_run.py",
-      "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
+      "commit_id": "e40b049635d9d60ab753bcdd35d6b3e511777d15",
       "in_reply_to_id": null,
       "line": 96,
       "side": "RIGHT",
@@ -378,10 +355,10 @@
       "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 2,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -394,10 +371,10 @@
       "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 57,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -410,10 +387,10 @@
       "path": "tests/unit/api/routers/test_task_proposals.py",
       "commit_id": "81c864595dac42380e1ea38faa73120b7f1c1896",
       "in_reply_to_id": null,
-      "line": 133,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review",
@@ -432,32 +409,14 @@
     "reviewCommentCount": 17,
     "issueCommentCount": 1,
     "reviewBodyCount": 2,
-    "actionableCommentCount": 17,
+    "actionableCommentCount": 0,
     "includeBotReviewComments": true,
     "humanCommentCount": 10,
     "botCommentCount": 10,
-    "hasActionableComments": true,
-    "actionableCommentIds": [
-      3006663513,
-      3006663515,
-      3006663516,
-      3006663518,
-      3006663522,
-      3006663727,
-      3006663731,
-      3006667749,
-      3006667759,
-      3006667770,
-      3006667775,
-      3006667781,
-      3006667789,
-      3006667798,
-      3006667807,
-      3006667809,
-      3006667817
-    ],
+    "hasActionableComments": false,
+    "actionableCommentIds": [],
     "nonActionableReasonCounts": {
-      "bot_comment_excluded": 3
+      "addressed_in_ledger": 20
     },
     "classifiedComments": [
       {
@@ -468,7 +427,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663513,
@@ -476,9 +435,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663513",
         "path": "mock_temporal_adapter.patch",
-        "line": 29,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663515,
@@ -486,9 +445,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663515",
         "path": "docs/tmp/015-TaskProposalSystemPlan.md",
-        "line": 192,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663516,
@@ -496,9 +455,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663516",
         "path": "tests/integration/workflows/temporal/workflows/test_run.py",
-        "line": 471,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663518,
@@ -506,9 +465,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663518",
         "path": "tests/unit/api/routers/test_task_proposals.py",
-        "line": 258,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663522,
@@ -516,9 +475,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663522",
         "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
-        "line": 55,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4027171967,
@@ -528,7 +487,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663727,
@@ -536,9 +495,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663727",
         "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
-        "line": 1,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006663731,
@@ -546,9 +505,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006663731",
         "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
-        "line": 2,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667749,
@@ -556,9 +515,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667749",
         "path": "tests/integration/temporal/test_managed_runtime_live_logs.py",
-        "line": 222,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667759,
@@ -566,9 +525,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667759",
         "path": "tests/unit/workflows/adapters/test_secret_redaction.py",
-        "line": 33,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667770,
@@ -576,9 +535,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667770",
         "path": "tests/unit/workflows/adapters/test_secret_redaction.py",
-        "line": 28,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667775,
@@ -586,9 +545,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667775",
         "path": "docs/tmp/015-TaskProposalSystemPlan.md",
-        "line": 192,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667781,
@@ -596,9 +555,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667781",
         "path": "tests/integration/temporal/test_integrations_monitoring.py",
-        "line": 10,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667789,
@@ -606,9 +565,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667789",
         "path": "mock_temporal_adapter.patch",
-        "line": 29,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667798,
@@ -617,8 +576,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667798",
         "path": "tests/integration/services/temporal/workflows/test_agent_run.py",
         "line": 96,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667807,
@@ -626,9 +585,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667807",
         "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
-        "line": 2,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667809,
@@ -636,9 +595,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667809",
         "path": "tests/unit/workflows/temporal/workflows/test_run_proposals.py",
-        "line": 57,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3006667817,
@@ -646,9 +605,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1063#discussion_r3006667817",
         "path": "tests/unit/api/routers/test_task_proposals.py",
-        "line": 133,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4027175266,
@@ -658,7 +617,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       }
     ]
   }

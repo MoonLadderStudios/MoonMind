@@ -9,7 +9,7 @@ WARNING: This project is still pre-release. A release should be ready in April 2
     </picture>
 </p>
 
-MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, Gemini CLI, and more — adding resiliency, safety, and observability.
+MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, Gemini CLI, and more — adding safety, resiliency, and observability.
 
 ## Quick Start
 

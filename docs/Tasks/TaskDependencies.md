@@ -1,9 +1,9 @@
 # Task Dependencies System
 
-Status: Draft  
-Implementation State: Partially implemented  
+Status: Active  
+Implementation State: Partially implemented (API validation complete, workflow gate pending)  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
+Last Updated: 2026-03-29  
 Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskCancellation.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`  
 Implementation Tracking: `docs/tmp/011-TaskDependenciesPlan.md`
 
@@ -44,17 +44,17 @@ Version 1 of this feature is intentionally narrow:
 
 ### 3.1 Already implemented
 
-- The lifecycle vocabulary already includes `waiting_on_dependencies`.
-- Execution API and UI status mapping already recognize `waiting_on_dependencies`.
-- Current action gating already treats `waiting_on_dependencies` as a first-class pre-execution state.
+- The lifecycle vocabulary includes `waiting_on_dependencies` (`MoonMindWorkflowState` enum, workflow constant, DB migration).
+- Execution API and UI status mapping recognize `waiting_on_dependencies` and map it to dashboard status `waiting`.
+- Action gating treats `waiting_on_dependencies` as a first-class pre-execution state.
+- Task-shaped submit normalizes and persists `payload.task.dependsOn` into `initialParameters.task.dependsOn`.
+- Create-time dependency validation is complete: array coercion, deduplication, 10-item limit, self-dependency rejection, missing-target rejection, non-Run-type rejection, and transitive cycle detection with bounded traversal (depth 10, node limit 50).
 
 ### 3.2 Still missing
 
-- Task-shaped submit does not yet fully normalize and persist `payload.task.dependsOn`.
-- Create-time dependency validation is not yet complete.
 - `MoonMind.Run` does not yet enforce a real dependency gate before `planning`.
 - Dependency outcome details are not yet captured in the finish summary.
-- Mission Control does not yet expose full dependency authoring and inspection UX.
+- Mission Control does not yet expose dependency authoring or inspection UX.
 
 The canonical contract in this document describes the target behavior. Open implementation sequencing lives in `docs/tmp/011-TaskDependenciesPlan.md`.
 
@@ -135,13 +135,13 @@ The workflow should wait on prerequisites using Temporal external workflow handl
 
 ```python
 handles = [
-    workflow.get_external_workflow_handle_for(MoonMindRunWorkflow.run, dep_id)
+    workflow.get_external_workflow_handle(dep_id)
     for dep_id in depends_on
 ]
 await asyncio.gather(*(handle.result() for handle in handles))
 ```
 
-This is the canonical v1 mechanism because it is Temporal-native, avoids polling loops, and lets prerequisite failures surface directly through workflow result waiting.
+This is the canonical v1 mechanism because it is Temporal-native, avoids polling loops, and lets prerequisite failures surface directly through workflow result waiting. The `gather` call should be wrapped in a Temporal `CancellationScope` so that cancellation of the dependent run interrupts the wait cleanly.
 
 ### 5.3 State and control behavior
 
@@ -229,7 +229,7 @@ They are distinct from plan-node or skill-node edges inside a single run. Intra-
 | VIII. Modular Architecture | PASS | The feature extends execution contracts without introducing cross-cutting aliases. |
 | IX. Resilient by Default | PASS | Validation, durable waiting, and explicit failure propagation support unattended execution. |
 | X. Continuous Improvement | N/A | Not directly applicable. |
-| XI. Spec-Driven | PENDING | Full implementation work remains tracked separately. |
+| XI. Spec-Driven | PASS | Phases 0–1 completed via specs `116-task-dep-phase0` and `117-task-dep-phase1`; remaining phases tracked in `docs/tmp/011-TaskDependenciesPlan.md`. |
 | XII. Canonical Documentation Separates Desired State from Migration Backlog | PASS | Desired-state behavior stays here; phase sequencing lives in `docs/tmp/011-TaskDependenciesPlan.md`. |
 
 ---

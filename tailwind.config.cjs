@@ -3,9 +3,11 @@ module.exports = {
   content: [
     "./api_service/templates/task_dashboard.html",
     "./api_service/templates/_navigation.html",
-    "./api_service/static/task_dashboard/**/*.js",
+    // Scan the legacy source file only. Including the whole task_dashboard tree would
+    // pull in checked-in dist bundles and make CSS generation depend on built artifacts.
+    "./api_service/static/task_dashboard/dashboard.js",
     // Vite/React entrypoints use Tailwind utilities in TSX; Docker runs Tailwind after
-    // wiping dist/, so source must be scanned (dist bundles are optional).
+    // wiping dist/, so source must be scanned directly and dist must stay irrelevant.
     "./frontend/src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: "class",
