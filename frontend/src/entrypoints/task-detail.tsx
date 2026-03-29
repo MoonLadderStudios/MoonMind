@@ -276,68 +276,76 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       ) : ex ? (
         <>
           {actionsOn && actions ? (
-            <div className="flex flex-wrap gap-2">
-              {actions.canSetTitle ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
-                  onClick={onRename}
-                >
-                  Rename
-                </button>
-              ) : null}
-              {actions.canPause ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
-                  onClick={onPause}
-                >
-                  Pause
-                </button>
-              ) : null}
-              {actions.canResume ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
-                  onClick={onResume}
-                >
-                  Resume
-                </button>
-              ) : null}
-              {actions.canApprove ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
-                  onClick={onApprove}
-                >
-                  Approve
-                </button>
-              ) : null}
-              {actions.canRerun ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
-                  onClick={onRerun}
-                >
-                  Rerun
-                </button>
-              ) : null}
-              {actions.canCancel ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="px-3 py-1.5 rounded border border-red-300 text-red-800 dark:text-red-300 text-sm"
-                  onClick={onCancel}
-                >
-                  Cancel
-                </button>
-              ) : null}
-            </div>
+            <section className="space-y-4 rounded border border-blue-200 dark:border-blue-900 bg-white dark:bg-gray-800 p-4">
+              <header>
+                <h3 className="text-lg font-semibold text-blue-900 dark:text-blue-100">Intervention Controls</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Explicit operator controls separated from live observability. Interventions trigger backend routing logic rather than injecting log outputs.
+                </p>
+              </header>
+              <div className="flex flex-wrap gap-2">
+                {actions.canSetTitle ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onClick={onRename}
+                  >
+                    Rename
+                  </button>
+                ) : null}
+                {actions.canPause ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onClick={onPause}
+                  >
+                    Pause
+                  </button>
+                ) : null}
+                {actions.canResume ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm hover:bg-gray-50 text-blue-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onClick={onResume}
+                  >
+                    Resume
+                  </button>
+                ) : null}
+                {actions.canApprove ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm hover:bg-green-50 text-green-700 font-medium focus:outline-none focus:ring-2 focus:ring-green-500"
+                    onClick={onApprove}
+                  >
+                    Approve
+                  </button>
+                ) : null}
+                {actions.canRerun ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onClick={onRerun}
+                  >
+                    Rerun
+                  </button>
+                ) : null}
+                {actions.canCancel ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="px-3 py-1.5 rounded border border-red-300 text-red-800 dark:text-red-300 text-sm hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500"
+                    onClick={onCancel}
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+            </section>
           ) : null}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -499,20 +507,28 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             )}
           </section>
 
-          <section className="space-y-2">
-            <h3 className="text-lg font-semibold">Live Logs</h3>
-            {logTailingEnabled && ex.taskRunId ? (
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Task run <code className="text-xs">{ex.taskRunId}</code>: live EventSource tailing matches the
-                legacy <code className="text-xs">dashboard.js</code> client (same server endpoints). A React
-                stream UI can be wired to the same URLs from{' '}
-                <code className="text-xs">dashboardConfig.sources.temporal</code> when needed.
+          <section className="space-y-4">
+            <header>
+              <h3 className="text-lg font-semibold">Observation: Live Logs</h3>
+              <p className="text-sm text-gray-500">
+                Passive observation surface. Logs do not accept manual text input for control signals.
               </p>
-            ) : (
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Live log tailing requires a task run id and enabled log tailing (see server dashboard config).
-              </p>
-            )}
+            </header>
+            
+            <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-4">
+              {logTailingEnabled && ex.taskRunId ? (
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Task run <code className="text-xs">{ex.taskRunId}</code>: live EventSource tailing matches the
+                  legacy <code className="text-xs">dashboard.js</code> client (same server endpoints). A React
+                  stream UI can be wired to the same URLs from{' '}
+                  <code className="text-xs">dashboardConfig.sources.temporal</code> when needed.
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Live log tailing requires a task run id and enabled log tailing (see server dashboard config).
+                </p>
+              )}
+            </div>
           </section>
 
           {debugOn && ex.debugFields ? (
