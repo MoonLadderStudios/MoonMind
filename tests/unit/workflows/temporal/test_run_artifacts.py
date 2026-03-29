@@ -1006,9 +1006,9 @@ async def test_run_proposals_stage_global_disable_halts_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
-    
     workflow = MoonMindRunWorkflow()
     monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
     
     # Enable proposing tasks in params, but global switch should stop it
     await workflow._run_proposals_stage(parameters={"proposeTasks": True})
@@ -1027,7 +1027,7 @@ async def test_run_proposals_stage_uses_legacy_fallback_policy(
     workflow._owner_type = "user"
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: False)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     
     captured_policy = None
@@ -1038,6 +1038,7 @@ async def test_run_proposals_stage_uses_legacy_fallback_policy(
         if activity == "proposal.submit":
             captured_policy = payload["policy"]
             return {"submitted_count": 1, "errors": []}
+        return None
             
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
     
@@ -1068,7 +1069,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     workflow._owner_type = "user"
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: False)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
     
     captured_policy = None
@@ -1081,6 +1082,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
             captured_policy = payload["policy"]
             captured_origin = payload["origin"]
             return {"submitted_count": 1, "errors": []}
+        return None
             
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
     
@@ -1093,9 +1095,9 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
             "proposalDefaultRuntime": "gemini",
             "task": {
                 "proposalPolicy": {
-                    "max_items": 12,
-                    "targets": "project",
-                    "default_runtime": "claude",
+                    "maxItems": {"project": 12},
+                    "targets": ["project"],
+                    "defaultRuntime": "gemini_cli",
                 }
             }
         }
@@ -1103,8 +1105,8 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     
     assert captured_policy is not None
     assert captured_policy["max_items"] == 12
-    assert captured_policy["targets"] == "project"
-    assert captured_policy["default_runtime"] == "claude"
+    assert captured_policy["targets"] == ["project"]
+    assert captured_policy["default_runtime"] == "gemini_cli"
     
     # Also verify origin format DOC-REQ-005
     assert captured_origin["source"] == "workflow"

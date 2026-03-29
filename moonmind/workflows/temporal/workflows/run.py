@@ -1501,9 +1501,10 @@ class MoonMindRunWorkflow:
         if not _coerce_bool(propose_tasks, default=False):
             return
 
-        if not settings.workflow.enable_task_proposals:
-            self._get_logger().info("Task proposal generation is globally disabled")
-            return
+        if workflow.patched("enable_task_proposals_gate"):
+            if not settings.workflow.enable_task_proposals:
+                self._get_logger().info("Task proposal generation is globally disabled")
+                return
 
         self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
 
@@ -1547,8 +1548,27 @@ class MoonMindRunWorkflow:
             task_node = parameters.get("task")
             task = task_node if isinstance(task_node, dict) else {}
             policy = task.get("proposalPolicy")
-            if not isinstance(policy, dict):
-                policy = {
+            if isinstance(policy, dict):
+                from moonmind.workflows.tasks.task_contract import TaskProposalPolicy
+                try:
+                    parsed_policy = TaskProposalPolicy.model_validate(policy)
+                    max_items_dict = parsed_policy.max_items or {}
+                    max_items_val = max_items_dict.get("project", parameters.get("proposalMaxItems", 10))
+                    
+                    policy_payload = {
+                        "max_items": max_items_val,
+                        "targets": parsed_policy.targets or parameters.get("proposalTargets", "project"),
+                        "default_runtime": parsed_policy.default_runtime or parameters.get("proposalDefaultRuntime"),
+                    }
+                except Exception as exc:
+                    self._get_logger().warning("Failed to validate task.proposalPolicy: %s", exc)
+                    policy_payload = {
+                        "max_items": parameters.get("proposalMaxItems", 10),
+                        "targets": parameters.get("proposalTargets", "project"),
+                        "default_runtime": parameters.get("proposalDefaultRuntime"),
+                    }
+            else:
+                policy_payload = {
                     "max_items": parameters.get("proposalMaxItems", 10),
                     "targets": parameters.get("proposalTargets", "project"),
                     "default_runtime": parameters.get("proposalDefaultRuntime"),
@@ -1561,7 +1581,7 @@ class MoonMindRunWorkflow:
             }
             submit_payload = {
                 "candidates": candidate_list,
-                "policy": policy,
+                "policy": policy_payload,
                 "origin": origin,
                 "principal": self._principal(),
             }
