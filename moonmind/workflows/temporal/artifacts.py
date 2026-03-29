@@ -1949,10 +1949,6 @@ class TemporalArtifactActivities:
     async def artifact_read(
         self,
         request: "ArtifactReadInput | Mapping[str, Any] | None" = None,
-        /,
-        *,
-        artifact_ref: ArtifactRef | Mapping[str, Any] | str | None = None,
-        principal: str | None = None,
     ) -> bytes:
         from moonmind.schemas.temporal_activity_models import ArtifactReadInput
         try:
@@ -1961,6 +1957,9 @@ class TemporalArtifactActivities:
             ValidationError = Exception
 
         model = None
+        artifact_ref = None
+        principal = None
+
         if request is not None and isinstance(request, ArtifactReadInput):
             # Model fast path
             model = request
@@ -1973,18 +1972,14 @@ class TemporalArtifactActivities:
                     "Failed to parse artifact.read legacy payload as ArtifactReadInput: %s",
                     e,
                 )
-                if principal is None:
-                    principal = request.get("principal")
-                if artifact_ref is None:
-                    artifact_ref = request.get("artifact_ref")
+                principal = request.get("principal")
+                artifact_ref = request.get("artifact_ref")
 
         if model:
-            if principal is None:
-                principal = model.principal
-            if artifact_ref is None:
-                artifact_ref = getattr(
-                    model.artifact_ref, "artifact_id", model.artifact_ref
-                )
+            principal = model.principal
+            artifact_ref = getattr(
+                model.artifact_ref, "artifact_id", model.artifact_ref
+            )
 
         if artifact_ref is None:
             raise TemporalArtifactValidationError("artifact_ref is required")
@@ -2000,12 +1995,6 @@ class TemporalArtifactActivities:
     async def artifact_write_complete(
         self,
         request: "ArtifactWriteCompleteInput | Mapping[str, Any] | None" = None,
-        /,
-        *,
-        artifact_id: str | None = None,
-        payload: bytes | str | list[int] | None = None,
-        principal: str | None = None,
-        content_type: str | None = None,
     ) -> ArtifactRef:
         from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
         try:
@@ -2014,6 +2003,11 @@ class TemporalArtifactActivities:
             ValidationError = Exception
 
         model = None
+        artifact_id = None
+        payload = None
+        principal = None
+        content_type = None
+
         if request is not None and isinstance(request, ArtifactWriteCompleteInput):
             # Model fast path
             model = request
@@ -2026,24 +2020,17 @@ class TemporalArtifactActivities:
                     "Failed to parse artifact.write_complete legacy payload as ArtifactWriteCompleteInput: %s",
                     e,
                 )
-                if principal is None:
-                    principal = request.get("principal")
-                if artifact_id is None:
-                    artifact_id = request.get("artifact_id")
-                if payload is None:
-                    payload = request.get("payload")
-                if content_type is None and "content_type" in request:
+                principal = request.get("principal")
+                artifact_id = request.get("artifact_id")
+                payload = request.get("payload")
+                if "content_type" in request:
                     content_type = request.get("content_type")
 
         if model:
-            if principal is None:
-                principal = model.principal
-            if artifact_id is None:
-                artifact_id = model.artifact_id
-            if payload is None:
-                payload = model.payload
-            if content_type is None:
-                content_type = model.content_type
+            principal = model.principal
+            artifact_id = model.artifact_id
+            payload = model.payload
+            content_type = model.content_type
 
         if not artifact_id:
             raise TemporalArtifactValidationError("artifact_id is required")

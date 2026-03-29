@@ -26,6 +26,12 @@ def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] 
         "edges": edges or []
     }).encode("utf-8")
 
+def _normalize_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
+    return dump_method() if dump_method else payload
+
 
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
@@ -65,10 +71,10 @@ async def test_run_integration_stage_poll_driven_completion(
     
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, Any],
+        payload: Any,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        captured.append((activity_type, payload))
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
             return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
@@ -196,7 +202,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
         **_kwargs: Any,
     ) -> Any:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "art:sha256:456":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "art:sha256:456":
                 import json
 
                 return json.dumps(
@@ -298,10 +304,10 @@ async def test_run_integration_stage_signal_driven_completion(
     
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, Any],
+        payload: Any,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        captured.append((activity_type, payload))
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
             return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
@@ -340,10 +346,10 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, Any],
+        payload: Any,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        captured.append((activity_type, payload))
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
             return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
@@ -476,10 +482,10 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
     
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, Any],
+        payload: Any,
         **_kwargs: Any,
     ) -> Any:
-        captured.append((activity_type, payload))
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
             return _mock_plan_payload(
                 nodes=[

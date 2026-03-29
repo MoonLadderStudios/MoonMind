@@ -1,4 +1,64 @@
 [
+  {
+    "id": 4149260383,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005612707,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005612709,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 4026273714,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614846,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614848,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614851,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614856,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614860,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614862,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 3005614865,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
+  {
+    "id": 4026275571,
+    "disposition": "addressed",
+    "rationale": "Implemented feedback by adding _normalize_payload to remove duplications and handling artifactId fallback"
+  },
   {"id": 3005528158, "disposition": "addressed", "rationale": "Added history cleanup when last subscriber leaves in publisher.py subscribe() finally block."},
   {"id": 3005528159, "disposition": "addressed", "rationale": "Changed _histories from list to collections.deque with maxlen for O(1) append and automatic eviction."},
   {"id": 3005528161, "disposition": "addressed", "rationale": "Fixed data-model.md stream enum values from 'out, err, system' to 'stdout, stderr, system'."},
