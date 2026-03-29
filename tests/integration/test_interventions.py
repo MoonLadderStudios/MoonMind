@@ -1,29 +1,88 @@
 import pytest
-from httpx import AsyncClient
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
 from typing import AsyncGenerator
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import patch, MagicMock, AsyncMock
 
-@pytest.fixture
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    async with AsyncClient(base_url="http://test") as client:
+from api_service.main import app
+from api_service.db.base import get_async_session
+from moonmind.workflows.temporal import TemporalExecutionService
+from moonmind.schemas.temporal_models import UpdateExecutionRequest, UpdateExecutionResponse
+
+from api_service.api.routers.executions import _get_service, _get_owned_execution, get_current_user
+
+@pytest_asyncio.fixture
+async def mock_execution_service():
+    service_mock = MagicMock()
+    service_mock.update_execution = AsyncMock(
+        return_value={
+            "accepted": True,
+            "applied": "immediate",
+            "message": "Signal routed successfully"
+        }
+    )
+    yield service_mock
+
+@pytest_asyncio.fixture
+async def async_client(mock_execution_service) -> AsyncGenerator[AsyncClient, None]:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(base_url="http://testserver", transport=transport) as client:
         yield client
 
 @pytest.mark.asyncio
-async def test_intervention_signal_without_logs(async_client: AsyncClient):
+async def test_intervention_signal_without_logs(async_client: AsyncClient, mock_execution_service):
     """
     Verify that intervention actions (Phase 5) route through backend signals
     independently of any active live log session.
     """
-    # In a full test, this would hit the actual API service.
-    # Here we assert the conceptual separation that the API does not mandate
-    # an active WebSocket or SSE log connection to accept intervention metadata.
-    
+    task_run_id = str(uuid.uuid4())
     payload = {
         "updateName": "Pause"
     }
-
-    # Simulate success or validation of the schema without needing a log session
-    assert "updateName" in payload
-    assert payload["updateName"] == "Pause"
     
-    # This validates DOC-REQ-003 and DOC-REQ-008
-    assert True
+    # We bypass auth by overriding current_user dependency if necessary, but
+    # _get_owned_execution is mocked anyway. For safety, we'll patch the dependency overrides:
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_async_session] = lambda: MagicMock()
+    
+    app.dependency_overrides[_get_service] = lambda: mock_execution_service
+    class MockRecord:
+        id = 1
+        workflow_id = task_run_id
+        run_id = "run_id_1"
+        state = MagicMock(value="executing")
+        workflow_type = MagicMock(value="MoonMind.Run")
+        close_status = None
+        owner_id = "system"
+        namespace = "default"
+        manifest_artifact_ref = "test_ref"
+        search_attributes = {}
+        memo = {}
+        parameters = {}
+        artifact_refs = []
+        started_at = datetime.now(timezone.utc)
+        created_at = datetime.now(timezone.utc)
+        closed_at = None
+        updated_at = datetime.now(timezone.utc)
+
+    mock_record = MockRecord()
+    mock_record.memo = {}
+    mock_record.parameters = {}
+    mock_record.artifact_refs = []
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="test@test.com")
+    
+    # _get_owned_execution is called directly, not as a dependency
+    with patch("api_service.api.routers.executions._get_owned_execution", new_callable=AsyncMock) as mock_get_owned:
+        mock_get_owned.return_value = mock_record
+        mock_execution_service.describe_execution = AsyncMock(return_value=mock_record)
+        response = await async_client.post(f"/api/executions/{task_run_id}/update", json=payload)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert mock_execution_service.update_execution.called
+    assert mock_execution_service.update_execution.call_args[1]["update_name"] == "Pause"
+    assert response.json().get("accepted") is True
+    assert response.json().get("applied") == "immediate"
+
