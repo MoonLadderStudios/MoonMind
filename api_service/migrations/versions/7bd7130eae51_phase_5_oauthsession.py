@@ -24,12 +24,16 @@ def upgrade() -> None:
     op.add_column('managed_agent_oauth_sessions', sa.Column('disconnected_at', sa.DateTime(timezone=True), nullable=True))
     op.drop_column('managed_agent_oauth_sessions', 'oauth_ssh_url')
     op.drop_column('managed_agent_oauth_sessions', 'oauth_web_url')
-    # Add new enum value and migrate existing rows from oauth_runner_ready -> bridge_ready
-    op.execute("ALTER TYPE oauthsessionstatus ADD VALUE IF NOT EXISTS 'bridge_ready'")
-    op.execute(
+    # PostgreSQL requires ALTER TYPE ADD VALUE to be committed before the new value
+    # can be used in DML statements. Commit the current transaction, then add the
+    # enum value (it auto-commits in the resulting autocommit context), and proceed.
+    connection = op.get_bind()
+    connection.execute(sa.text("COMMIT"))
+    connection.execute(sa.text("ALTER TYPE oauthsessionstatus ADD VALUE IF NOT EXISTS 'bridge_ready'"))
+    connection.execute(sa.text(
         "UPDATE managed_agent_oauth_sessions SET status = 'bridge_ready' "
         "WHERE status = 'oauth_runner_ready'"
-    )
+    ))
     # ### end Alembic commands ###
 
 
