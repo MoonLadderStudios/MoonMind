@@ -244,6 +244,39 @@ h1 {
   margin: 0;
 }
 
+.table-sort-button {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.table-sort-button:hover {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: rgb(var(--mm-accent));
+  transform: none;
+  filter: none;
+}
+
+.table-sort-button:focus-visible,
+.table-sort-button:active,
+.table-sort-button.is-clicked {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: rgb(var(--mm-accent));
+  transform: none;
+  filter: none;
+  outline: 2px solid rgb(var(--mm-accent-2));
+  outline-offset: 3px;
+}
+
 .stack {
   display: grid;
   gap: 0.9rem;

@@ -59,7 +59,7 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-DGkaW3Hl.js",
+    "file": "assets/task-detail-C8iyi_GI.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
@@ -77,7 +77,7 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-BSTrYeAA.js",
+    "file": "assets/tasks-list-ih_WFQt-.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
