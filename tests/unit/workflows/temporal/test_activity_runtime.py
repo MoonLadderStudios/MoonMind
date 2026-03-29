@@ -524,17 +524,15 @@ async def test_artifact_read_invalid_ref_failures_surface_cleanly(tmp_path: Path
 
             with pytest.raises(
                 TemporalArtifactValidationError,
-                match="artifact_ref.artifact_id is required",
+                match="artifact_id is required",
             ):
                 await activities.artifact_read(
-                    artifact_ref={"artifactId": "  "},
-                    principal="user-1",
+                    {"artifact_ref": {"artifactId": "  "}, "principal": "user-1"}
                 )
 
             with pytest.raises(TemporalArtifactNotFoundError):
                 await activities.artifact_read(
-                    artifact_ref="art:sha256:dummy",
-                    principal="user-1",
+                    {"artifact_ref": "art:sha256:dummy", "principal": "user-1"}
                 )
 
 

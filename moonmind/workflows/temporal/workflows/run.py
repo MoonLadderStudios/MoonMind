@@ -14,7 +14,11 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
-    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+    from moonmind.schemas.temporal_activity_models import (
+        ArtifactReadInput,
+        ArtifactWriteCompleteInput,
+        PlanGenerateInput,
+    )
     from moonmind.workflows.temporal.jules_bundle import (
         build_bundle_spec,
         eligible_for_bundle,
@@ -254,14 +258,14 @@ class MoonMindRunWorkflow:
         )
         if not artifact_id:
             raise ValueError(f"artifact.create returned no artifact_id for {name}")
-        await workflow.execute_activity(
+        await execute_typed_activity(
             "artifact.write_complete",
-            {
-                "principal": self._principal(),
-                "artifact_id": artifact_id,
-                "payload": json.dumps(payload),
-                "content_type": "application/json",
-            },
+            ArtifactWriteCompleteInput(
+                principal=self._principal(),
+                artifact_id=artifact_id,
+                payload=json.dumps(payload).encode("utf-8"),
+                content_type="application/json",
+            ),
             **self._execute_kwargs_for_route(artifact_write_route),
         )
         return str(artifact_id)
@@ -573,12 +577,12 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
-        plan_payload = await workflow.execute_activity(
+        plan_payload = await execute_typed_activity(
             "artifact.read",
-            {
-                "principal": self._principal(),
-                "artifact_ref": plan_ref,
-            },
+            ArtifactReadInput(
+                principal=self._principal(),
+                artifact_ref=plan_ref,
+            ),
             **self._execute_kwargs_for_route(artifact_read_route),
         )
         plan_dict = self._decode_json_payload(
@@ -603,12 +607,12 @@ class MoonMindRunWorkflow:
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
 
         if registry_snapshot_ref:
-            registry_payload = await workflow.execute_activity(
+            registry_payload = await execute_typed_activity(
                 "artifact.read",
-                {
-                    "principal": self._principal(),
-                    "artifact_ref": registry_snapshot_ref,
-                },
+                ArtifactReadInput(
+                    principal=self._principal(),
+                    artifact_ref=registry_snapshot_ref,
+                ),
                 **self._execute_kwargs_for_route(artifact_read_route),
             )
             registry_document = self._decode_json_payload(
@@ -798,12 +802,12 @@ class MoonMindRunWorkflow:
                     diag_ref = outputs.get("diagnostics_ref")
                     if diag_ref:
                         try:
-                            diag_payload = await workflow.execute_activity(
+                            diag_payload = await execute_typed_activity(
                                 "artifact.read",
-                                {
-                                    "principal": self._principal(),
-                                    "artifact_ref": diag_ref,
-                                },
+                                ArtifactReadInput(
+                                    principal=self._principal(),
+                                    artifact_ref=diag_ref,
+                                ),
                                 **self._execute_kwargs_for_route(artifact_read_route),
                             )
                             if isinstance(diag_payload, bytes):
@@ -1163,12 +1167,12 @@ class MoonMindRunWorkflow:
         if plan_ref:
             try:
                 artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
-                plan_payload = await workflow.execute_activity(
+                plan_payload = await execute_typed_activity(
                     "artifact.read",
-                    {
-                        "principal": self._principal(),
-                        "artifact_ref": plan_ref,
-                    },
+                    ArtifactReadInput(
+                        principal=self._principal(),
+                        artifact_ref=plan_ref,
+                    ),
                     **self._execute_kwargs_for_route(artifact_read_route),
                 )
                 plan_dict = self._decode_json_payload(
@@ -1636,14 +1640,14 @@ class MoonMindRunWorkflow:
             )
 
             artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
-            await workflow.execute_activity(
+            await execute_typed_activity(
                 "artifact.write_complete",
-                {
-                    "principal": self._principal(),
-                    "artifact_id": self._get_from_result(artifact_ref, "artifact_id") or "",
-                    "payload": json.dumps(finish_summary),
-                    "content_type": "application/json",
-                },
+                ArtifactWriteCompleteInput(
+                    principal=self._principal(),
+                    artifact_id=self._get_from_result(artifact_ref, "artifact_id") or "",
+                    payload=json.dumps(finish_summary).encode("utf-8"),
+                    content_type="application/json",
+                ),
                 **self._execute_kwargs_for_route(artifact_write_route),
             )
             self._summary_ref = self._get_from_result(artifact_ref, "artifact_id") or ""

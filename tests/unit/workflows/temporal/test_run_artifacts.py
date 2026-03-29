@@ -95,9 +95,9 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
-        captured.append((activity_type, payload))
+        captured.append((activity_type, payload if isinstance(payload, dict) else getattr(payload, 'model_dump', lambda: payload)()))
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -202,9 +202,9 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
-        captured.append((activity_type, payload))
+        captured.append((activity_type, payload if isinstance(payload, dict) else getattr(payload, 'model_dump', lambda: payload)()))
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -342,7 +342,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -442,7 +442,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
     ) -> object:
         nonlocal skill_calls
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -553,7 +553,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -650,7 +650,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -765,7 +765,7 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
             create_pr_called = True
 
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -891,7 +891,7 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
             return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999", "created": True}
 
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
