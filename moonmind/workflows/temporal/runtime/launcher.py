@@ -417,7 +417,7 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
-    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None]:
+        ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None, list[str]]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
@@ -428,12 +428,10 @@ class ManagedRuntimeLauncher:
         """
         existing = self._store.load(run_id)
         if existing is not None and existing.status not in TERMINAL_AGENT_RUN_STATES:
-            return existing, None, None
+            return existing, None, None, []
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)
-
-        cmd = self.build_command(profile, request, strategy=strategy)
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
@@ -462,16 +460,21 @@ class ManagedRuntimeLauncher:
         for ref_key, secret_name in (getattr(profile, "secret_refs", None) or {}).items():
             resolved_secrets[ref_key] = await resolve_managed_api_key_reference(secret_name)
             
-        class DictSecretResolver(SecretResolverBoundary):
-            def resolve_secrets(self, secret_refs: dict[str, str]) -> dict[str, str]:
+        class AsyncDictSecretResolver(SecretResolverBoundary):
+            async def resolve_secrets(self, secret_refs: dict[str, str]) -> dict[str, str]:
                 return resolved_secrets
                 
         materializer = ProviderProfileMaterializer(
             base_env=dict(os.environ),
-            secret_resolver=DictSecretResolver()
+            secret_resolver=AsyncDictSecretResolver()
         )
         
-        env_overrides, cmd = materializer.materialize(profile)
+        
+        env_overrides, mat_cmd = await materializer.materialize(profile)
+        # Update profile with the materialized command template so build_command uses it
+        profile.command_template = mat_cmd
+        
+        cmd = self.build_command(profile, request, strategy=strategy)
         
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).
@@ -528,4 +531,4 @@ class ManagedRuntimeLauncher:
             workspace_path=resolved_workspace_path,
         )
         self._store.save(record)
-        return record, process, None
+        return record, process, None, materializer.generated_files

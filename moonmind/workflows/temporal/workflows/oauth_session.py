@@ -234,7 +234,7 @@ class MoonMindOAuthSessionWorkflow:
 
         try:
             verify_result = await workflow.execute_activity(
-                "oauth_session.verify_volume",
+                "oauth_session.verify_cli_fingerprint",
                 {
                     "session_id": self._session_id,
                     "runtime_id": runtime_id,

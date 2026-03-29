@@ -21,7 +21,7 @@ class ProviderProfileMaterializer:
         self._secret_resolver = secret_resolver
         self.generated_files: List[str] = []
 
-    def materialize(self, profile: ManagedRuntimeProfile) -> Tuple[Dict[str, str], List[str]]:
+    async def materialize(self, profile: ManagedRuntimeProfile) -> Tuple[Dict[str, str], List[str]]:
         """Materialize the environment and compute the command line.
         
         Follows a strict 9-step precedence order:
@@ -44,9 +44,30 @@ class ProviderProfileMaterializer:
             env.pop(k, None)
             
         # Step 4: Resolve Plaintext Secrets Just In Time
-        resolved_secrets = self._secret_resolver.resolve_secrets(profile.secret_refs)
+        resolved_secrets = await self._secret_resolver.resolve_secrets(profile.secret_refs)
         env.update(resolved_secrets)
         
+        # Step 5: Materialize file_templates (write secrets to temp files)
+        import os
+        import tempfile
+        for env_var, template_content in (profile.file_templates or {}).items():
+            # Interpolate resolved secrets into the template
+            content = str(template_content)
+            for sec_key, sec_val in resolved_secrets.items():
+                content = content.replace(f"{{{{{sec_key}}}}}", str(sec_val))
+            # Write to a secure temp file
+            fd, tmp_path = tempfile.mkstemp(prefix="mm_profile_", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(content)
+                # Restrict permissions to owner-read-only
+                os.chmod(tmp_path, 0o600)
+            except Exception:
+                os.unlink(tmp_path)
+                raise
+            env[env_var] = tmp_path
+            self.generated_files.append(tmp_path)
+
         # Step 6: Expand templates
         for k, v in profile.env_template.items():
             val = str(v)

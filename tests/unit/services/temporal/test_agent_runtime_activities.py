@@ -157,7 +157,7 @@ async def test_cancel_handles_none_request():
 async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch():
     mock_launcher = MagicMock()
     mock_launcher.launch = AsyncMock(
-        return_value=(SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"}), None, None)
+        return_value=(SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"}), None, None, [])
     )
     mock_supervisor = MagicMock()
 
