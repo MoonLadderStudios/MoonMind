@@ -68,8 +68,8 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("manifests/new")
     assert _is_allowed_path("schedules")
     assert _is_allowed_path("settings")
-    assert _is_allowed_path("workers")
-    assert _is_allowed_path("secrets")
+    assert not _is_allowed_path("workers")
+    assert not _is_allowed_path("secrets")
 
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
@@ -292,4 +292,3 @@ def test_create_dashboard_skill_already_exists(
 
     assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
-

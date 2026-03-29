@@ -435,6 +435,7 @@ export function ProviderProfilesManager({
                 setForm((current) => ({ ...current, runtimeId: event.target.value }))
               }
               placeholder="codex_cli"
+              disabled={isEditing}
               required
             />
           </label>

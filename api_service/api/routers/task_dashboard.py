@@ -61,7 +61,13 @@ _PATH_ALIASES = {
     "create": "new",
 }
 # Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
-_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "temporal", "system"}
+_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
+    "queue",
+    "temporal",
+    "system",
+    "workers",
+    "secrets",
+}
 
 
 class CreateSkillRequest(BaseModel):
