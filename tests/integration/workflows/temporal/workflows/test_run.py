@@ -468,55 +468,60 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
     async def test_proposals_stage_enabled(self) -> None:
         """When proposeTasks is true, proposal activities are invoked."""
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[
-                        mock_plan_generate,
-                        mock_proposal_generate,
-                        mock_proposal_submit,
-                    ],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                result = await env.client.execute_workflow(
-                    MoonMindRunWorkflow.run,
-                    {
-                        "workflowType": "MoonMind.Run",
-                        "initialParameters": {
-                            "repo": "moonladder/moonmind",
-                            "proposeTasks": True,
-                            "proposalDefaultRuntime": "gemini_cli",
+        from moonmind.config import settings
+        original_enabled = settings.workflow.enable_task_proposals
+        settings.workflow.enable_task_proposals = True
+        try:
+            async with await WorkflowEnvironment.start_time_skipping() as env:
+                await _register_test_search_attributes(env)
+                async with (
+                    Worker(
+                        env.client,
+                        task_queue=LLM_TASK_QUEUE,
+                        activities=[
+                            mock_plan_generate,
+                            mock_proposal_generate,
+                        ],
+                    ),
+                    Worker(
+                        env.client,
+                        task_queue=ARTIFACTS_TASK_QUEUE,
+                        activities=[mock_artifact_read, mock_proposal_submit],
+                    ),
+                    Worker(
+                        env.client,
+                        task_queue=SANDBOX_TASK_QUEUE,
+                        activities=[mock_sandbox_command, mock_skill_execute],
+                    ),
+                    Worker(
+                        env.client,
+                        task_queue="test-task-queue",
+                        workflows=[MoonMindRunWorkflow],
+                        workflow_runner=UnsandboxedWorkflowRunner(),
+                    ),
+                ):
+                    result = await env.client.execute_workflow(
+                        MoonMindRunWorkflow.run,
+                        {
+                            "workflowType": "MoonMind.Run",
+                            "initialParameters": {
+                                "repo": "moonladder/moonmind",
+                                "proposeTasks": True,
+                                "proposalDefaultRuntime": "gemini_cli",
+                            },
                         },
-                    },
-                    id="test-workflow-proposals-enabled",
-                    task_queue="test-task-queue",
-                    search_attributes=_trusted_search_attributes(),
-                )
+                        id="test-workflow-proposals-enabled",
+                        task_queue="test-task-queue",
+                        search_attributes=_trusted_search_attributes(),
+                    )
 
-            self.assertEqual(result["status"], "success")
-            self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 1)
-            self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 1)
-            self.assertEqual(result.get("proposals_generated"), 1)
-            self.assertEqual(result.get("proposals_submitted"), 1)
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 1)
+                self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 1)
+                self.assertEqual(result.get("proposals_generated"), 1)
+                self.assertEqual(result.get("proposals_submitted"), 1)
+        finally:
+            settings.workflow.enable_task_proposals = original_enabled
 
     async def test_proposals_stage_disabled(self) -> None:
         """When proposeTasks is absent, proposal activities are not called."""
@@ -529,13 +534,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     activities=[
                         mock_plan_generate,
                         mock_proposal_generate_empty,
-                        mock_proposal_submit,
                     ],
                 ),
                 Worker(
                     env.client,
                     task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
+                    activities=[mock_artifact_read, mock_proposal_submit],
                 ),
                 Worker(
                     env.client,

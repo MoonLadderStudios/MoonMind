@@ -105,7 +105,34 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, Asy
     assert payload["repository"] == "Moon/Repo"
 
 
+def test_create_proposal_accepts_workflow_origin(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.origin_source = TaskProposalOriginSource.WORKFLOW
+    service.create_proposal.return_value = proposal
 
+    response = test_client.post(
+        "/api/proposals",
+        json={
+            "title": "Add tests",
+            "summary": "Ensure coverage",
+            "category": "tests",
+            "tags": ["auth"],
+            "origin": {"source": "workflow", "id": str(uuid4())},
+            "taskCreateRequest": {
+                "type": "task",
+                "priority": 0,
+                "maxAttempts": 3,
+                "payload": {"repository": "Moon/Repo"},
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    kwargs = service.create_proposal.await_args.kwargs
+    assert kwargs["origin_source"] == "workflow"
+    payload = response.json()
+    assert payload["origin"]["source"] == "workflow"
 
 def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
@@ -223,6 +250,24 @@ def test_promote_proposal_accepts_override_payload(
     )
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "edit"
+
+
+def test_promote_proposal_rejects_invalid_state(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    from moonmind.workflows.task_proposals.service import TaskProposalStatusError
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    service.promote_proposal.side_effect = TaskProposalStatusError("invalid state")
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/promote",
+        json={"priority": 5},
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"]["code"] == "invalid_state"
 
 
 def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:

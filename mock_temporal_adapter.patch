@@ -1,0 +1,29 @@
+--- a/tests/integration/temporal/test_integrations_monitoring.py
++++ b/tests/integration/temporal/test_integrations_monitoring.py
+@@ -34,14 +34,22 @@
+         await engine.dispose()
+ 
+ 
++class MockTemporalClientAdapter:
++    async def start_workflow(self, *args, **kwargs):
++        from unittest.mock import MagicMock
++        handle = MagicMock()
++        handle.run_id = "test-run-id"
++        return handle
++    
++    async def update_workflow(self, *args, **kwargs):
++        return True
++
+ async def test_callback_first_completion_uses_single_terminal_path(
+     tmp_path: Path, monkeypatch
+ ) -> None:
+     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
+     async with _db(tmp_path) as maker:
+         async with maker() as session:
+             service = TemporalExecutionService(
+                 session,
+                 integration_poll_initial_seconds=5,
+                 integration_poll_max_seconds=30,
+                 integration_poll_jitter_ratio=0.0,
++                client_adapter=MockTemporalClientAdapter(),
+             )

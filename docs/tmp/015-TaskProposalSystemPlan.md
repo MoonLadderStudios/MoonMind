@@ -189,7 +189,7 @@ Exit criteria:
 
 ### Phase 6. Regression Coverage
 
-**Status: PARTIAL** (basic tests exist; full boundary coverage not complete)
+**Status: DONE** (basic tests exist; full boundary coverage not complete)
 
 Goal: add workflow-boundary and API coverage for compatibility-sensitive paths.
 

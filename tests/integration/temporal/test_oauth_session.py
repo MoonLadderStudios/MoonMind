@@ -3,7 +3,7 @@
 import pytest
 from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
+from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow,
@@ -68,6 +68,7 @@ async def test_oauth_session_workflow_success() -> None:
             env.client,
             task_queue=WORKFLOW_TASK_QUEUE,
             workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -108,6 +109,7 @@ async def test_oauth_session_workflow_cancel() -> None:
             env.client,
             task_queue=WORKFLOW_TASK_QUEUE,
             workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
