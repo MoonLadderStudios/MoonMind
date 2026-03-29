@@ -244,6 +244,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const pageStart = sortedItems.length > 0 ? pageIndex * pageSize + 1 : 0;
   const pageEnd = pageIndex * pageSize + sortedItems.length;
   const countSummary = displayTemporalCount(data?.count, data?.countMode);
+  const hasPaginationContext = cursorStack.length > 0 || Boolean(listCursor);
 
   const resetToFirstPage = () => {
     setListCursor(null);
@@ -454,7 +455,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         <p className="loading">Loading tasks...</p>
       ) : isError ? (
         <div className="notice error">{(error as Error).message}</div>
-      ) : sortedItems.length === 0 ? (
+      ) : sortedItems.length === 0 && !hasPaginationContext ? (
         <p className="small">No tasks found for the current filters.</p>
       ) : (
         <div className="queue-layouts">
@@ -464,7 +465,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               <button
                 type="button"
                 className="secondary queue-pagination-button"
-                disabled={!listEnabled || cursorStack.length === 0 || sortedItems.length === 0}
+                disabled={!listEnabled || cursorStack.length === 0}
                 onClick={goPrev}
                 aria-label="Previous page"
               >
@@ -481,127 +482,133 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               </button>
             </nav>
           </div>
-          <div className="queue-table-wrapper" data-layout="table">
-            <table>
-              <thead>
-                <tr>
-                  {TABLE_COLUMNS.map(([field, label]) => {
-                    const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
-                    return (
-                      <th key={field} aria-sort={ariaSort}>
-                        <button
-                          type="button"
-                          className="table-sort-button"
-                          onClick={() => onHeaderClick(field)}
-                          aria-label={ariaLabel}
-                        >
-                          {label}
-                          {sortIndicator(field)}
-                          <span className="sr-only">{sortHint}</span>
-                        </button>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
+          {sortedItems.length === 0 ? (
+            <div className="card small">No tasks found for the current filters.</div>
+          ) : (
+            <>
+              <div className="queue-table-wrapper" data-layout="table">
+                <table>
+                  <thead>
+                    <tr>
+                      {TABLE_COLUMNS.map(([field, label]) => {
+                        const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
+                        return (
+                          <th key={field} aria-sort={ariaSort}>
+                            <button
+                              type="button"
+                              className="table-sort-button"
+                              onClick={() => onHeaderClick(field)}
+                              aria-label={ariaLabel}
+                            >
+                              {label}
+                              {sortIndicator(field)}
+                              <span className="sr-only">{sortHint}</span>
+                            </button>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedItems.map((row) => (
+                      <tr key={row.taskId}>
+                        <td>
+                          <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
+                            <code>{row.taskId}</code>
+                          </a>
+                        </td>
+                        <td>{row.targetRuntime || '—'}</td>
+                        <td>{row.targetSkill || '—'}</td>
+                        <td>{row.repository || '—'}</td>
+                        <td>{row.integration || '—'}</td>
+                        <td>
+                          <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
+                            {row.rawState || row.state || row.status || '—'}
+                          </span>
+                        </td>
+                        <td>{row.title}</td>
+                        <td>{formatWhen(row.createdAt)}</td>
+                        <td>{formatWhen(row.startedAt)}</td>
+                        <td>{formatWhen(row.closedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => (
-                  <tr key={row.taskId}>
-                    <td>
-                      <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
-                        <code>{row.taskId}</code>
+                  <li key={row.taskId} className="queue-card">
+                    <div className="queue-card-header">
+                      <div>
+                        <a
+                          href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
+                          className="queue-card-title"
+                        >
+                          {row.title}
+                        </a>
+                        <p className="queue-card-meta">
+                          <code>{row.taskId}</code>
+                          {` · ${
+                            [row.targetRuntime, row.targetSkill, row.workflowType].filter(Boolean).join(' · ') || 'Temporal task'
+                          }`}
+                        </p>
+                      </div>
+                      <div className="queue-card-status">
+                        <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
+                          {row.rawState || row.state || row.status || '—'}
+                        </span>
+                      </div>
+                    </div>
+                    <dl className="queue-card-fields">
+                      <div>
+                        <dt>ID</dt>
+                        <dd>
+                          <code>{row.taskId}</code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Runtime</dt>
+                        <dd>{row.targetRuntime || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt>Skill</dt>
+                        <dd>{row.targetSkill || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt>Repository</dt>
+                        <dd>{row.repository || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt>Integration</dt>
+                        <dd>{row.integration || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{formatWhen(row.createdAt)}</dd>
+                      </div>
+                      <div>
+                        <dt>Started</dt>
+                        <dd>{formatWhen(row.startedAt)}</dd>
+                      </div>
+                      <div>
+                        <dt>Finished</dt>
+                        <dd>{formatWhen(row.closedAt)}</dd>
+                      </div>
+                    </dl>
+                    <div className="queue-card-actions">
+                      <a
+                        href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
+                        className="button secondary"
+                        role="button"
+                      >
+                        View details
                       </a>
-                    </td>
-                    <td>{row.targetRuntime || '—'}</td>
-                    <td>{row.targetSkill || '—'}</td>
-                    <td>{row.repository || '—'}</td>
-                    <td>{row.integration || '—'}</td>
-                    <td>
-                      <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
-                        {row.rawState || row.state || row.status || '—'}
-                      </span>
-                    </td>
-                    <td>{row.title}</td>
-                    <td>{formatWhen(row.createdAt)}</td>
-                    <td>{formatWhen(row.startedAt)}</td>
-                    <td>{formatWhen(row.closedAt)}</td>
-                  </tr>
+                    </div>
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </div>
-          <ul className="queue-card-list" data-layout="card" role="list">
-            {sortedItems.map((row) => (
-              <li key={row.taskId} className="queue-card">
-                <div className="queue-card-header">
-                  <div>
-                    <a
-                      href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
-                      className="queue-card-title"
-                    >
-                      {row.title}
-                    </a>
-                    <p className="queue-card-meta">
-                      <code>{row.taskId}</code>
-                      {` · ${
-                        [row.targetRuntime, row.targetSkill, row.workflowType].filter(Boolean).join(' · ') || 'Temporal task'
-                      }`}
-                    </p>
-                  </div>
-                  <div className="queue-card-status">
-                    <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
-                      {row.rawState || row.state || row.status || '—'}
-                    </span>
-                  </div>
-                </div>
-                <dl className="queue-card-fields">
-                  <div>
-                    <dt>ID</dt>
-                    <dd>
-                      <code>{row.taskId}</code>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Runtime</dt>
-                    <dd>{row.targetRuntime || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Skill</dt>
-                    <dd>{row.targetSkill || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Repository</dt>
-                    <dd>{row.repository || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Integration</dt>
-                    <dd>{row.integration || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{formatWhen(row.createdAt)}</dd>
-                  </div>
-                  <div>
-                    <dt>Started</dt>
-                    <dd>{formatWhen(row.startedAt)}</dd>
-                  </div>
-                  <div>
-                    <dt>Finished</dt>
-                    <dd>{formatWhen(row.closedAt)}</dd>
-                  </div>
-                </dl>
-                <div className="queue-card-actions">
-                  <a
-                    href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
-                    className="button secondary"
-                    role="button"
-                  >
-                    View details
-                  </a>
-                </div>
-              </li>
-            ))}
-          </ul>
+              </ul>
+            </>
+          )}
         </div>
       )}
     </div>
