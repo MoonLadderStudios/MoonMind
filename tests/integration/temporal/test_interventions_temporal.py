@@ -5,7 +5,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":

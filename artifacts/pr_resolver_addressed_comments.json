@@ -134,5 +134,6 @@
   {"id": 3005672391, "disposition": "addressed", "rationale": "Removed unnecessary lambda wrapping MagicMock."},
   {"id": 3005672392, "disposition": "addressed", "rationale": "Removed unused TemporalExecutionService import."},
   {"id": 3005672393, "disposition": "addressed", "rationale": "Removed unused UpdateExecutionRequest and UpdateExecutionResponse imports."},
-  {"id": 3005672394, "disposition": "addressed", "rationale": "Removed unused _get_owned_execution import."}
+  {"id": 3005672394, "disposition": "addressed", "rationale": "Removed unused _get_owned_execution import."},
+  {"id": 3005676123, "disposition": "addressed", "rationale": "Removed unused TemporalClientAdapter import."}
 ]
