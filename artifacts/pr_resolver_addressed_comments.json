@@ -1,27 +1,42 @@
 [
   {
-    "id": 4150920228,
+    "id": 4150918742,
     "disposition": "not-applicable",
-    "rationale": "Codex usage-limit notice is an informational bot comment and does not request a code change."
+    "rationale": "Usage limit warning from bot, no action needed."
   },
   {
-    "id": 4027169265,
+    "id": 4027168030,
     "disposition": "not-applicable",
-    "rationale": "Gemini review summary is informational; the actionable feedback was captured in the inline review comment."
+    "rationale": "Automated review summary from gemini bit, no action needed."
   },
   {
-    "id": 3006660389,
+    "id": 3006664892,
     "disposition": "addressed",
-    "rationale": "Replaced the manual empty-registry JSON hashing path with a shared canonical registry digest helper."
+    "rationale": "Removed orphaned bullets under Claude Code in docs/ManagedAgents/OAuthTerminal.md."
   },
   {
-    "id": 3006663916,
+    "id": 3006664902,
     "disposition": "addressed",
-    "rationale": "Gated the conditional registry read behind a replay-stable Temporal patch and added an unpatched-history regression."
+    "rationale": "Removed the blank line inside the table in docs/tmp/101-PlansOverview.md."
   },
   {
-    "id": 4027172243,
+    "id": 3006664919,
+    "disposition": "addressed",
+    "rationale": "Added a replacement test 'test_supervise_uses_output_parser_from_strategy' using the gemini_cli runtime."
+  },
+  {
+    "id": 3006664926,
+    "disposition": "addressed",
+    "rationale": "Removed unused 'import json' in tests/unit/workflows/temporal/runtime/test_output_parser.py."
+  },
+  {
+    "id": 3006664932,
+    "disposition": "addressed",
+    "rationale": "Updated docstring to reference three runtimes instead of four."
+  },
+  {
+    "id": 4027172893,
     "disposition": "not-applicable",
-    "rationale": "Copilot review summary is informational; the actionable feedback was captured in the inline review comment."
+    "rationale": "Pull request overview from Copilot, informational only."
   }
 ]

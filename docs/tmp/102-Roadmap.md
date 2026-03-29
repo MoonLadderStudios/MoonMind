@@ -28,19 +28,19 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 **README claim:** *"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure."*
 
 ### What's shipped
-- Codex, Gemini, Claude, and Cursor Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`, `cursor-worker`)
+- Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`)
 - OAuth auth-volume bootstrap for Codex and Gemini (`tools/auth-*.sh`)
 - Docker-socket-proxy sandboxing for all workers
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`)
 - Claude API key gate removed — Claude runtime available without API key (#795)
-- Cursor CLI added as managed agent runtime (#794)
+
 - Auto-seeding of default auth profiles on API startup
 
 ### Remaining tasks
 - [x] **1.1** Claude auth volume flow matches Codex/Gemini parity — Spec 072 (`managed-agents-auth`)
 - [x] **1.2** Auth profile management UI in Mission Control — API router (`auth_profiles.py`) + dashboard
 - [x] **1.3** Worker health checks & readiness probes — Constitution IX
-- [x] **1.4** Cursor CLI managed runtime — Spec 094 (Phases 1–5)
+
 - [x] **1.5** Remove Claude API key gate — #795
 - [x] **1.6** Auto-seed auth profiles on startup
 - [ ] **1.7** Graceful worker pause / unpause — Spec 038/040 (`worker-pause`), API exists, dashboard wiring needed

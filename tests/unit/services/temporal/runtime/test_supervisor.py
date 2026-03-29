@@ -411,52 +411,38 @@ async def test_completion_callback_error_does_not_crash_supervisor(supervisor_en
     assert record.status == "completed"
 
 
-# ---------------------------------------------------------------------------
-# Output parser integration tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_supervise_uses_output_parser_from_strategy(supervisor_env, tmp_path):
     """Supervisor wires strategy.create_output_parser() and parsed output
     appears in the diagnostics artifact."""
     import json as _json
-
+    from datetime import datetime, UTC
     store, artifact_storage, _, supervisor = supervisor_env
 
-    # Use cursor_cli runtime_id so the supervisor picks up CursorCliStrategy
-    # which returns NdjsonOutputParser
     record = ManagedRunRecord(
-        run_id="run-ndjson",
+        run_id="run-gemini-parser",
         agent_id="agent-1",
-        runtime_id="cursor_cli",
+        runtime_id="gemini_cli",
         status="launching",
         started_at=datetime.now(tz=UTC),
     )
     store.save(record)
 
-    # Process that emits a valid NDJSON event to stdout
-    ndjson_event = '{"type":"progress","message":"Working"}'
+    gemini_err = "message: No capacity available for model\nreason: MODEL_CAPACITY_EXHAUSTED"
     process = await asyncio.create_subprocess_exec(
-        "sh", "-c", f"echo '{ndjson_event}'",
+        "sh", "-c", f"echo '{gemini_err}' >&2",
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
 
     result = await supervisor.supervise(
-        run_id="run-ndjson", process=process, timeout_seconds=30
+        run_id="run-gemini-parser", process=process, timeout_seconds=30
     )
-
-    assert result.status == "completed"
-    assert result.diagnostics_ref is not None
 
     # Read the diagnostics artifact and verify parsed_output is present
     diag_path = artifact_storage.resolve_storage_path(result.diagnostics_ref)
     diag = _json.loads(diag_path.read_text())
     assert "parsed_output" in diag
     po = diag["parsed_output"]
-    assert po["has_structured_output"] is True
-    assert po["event_count"] >= 1
-    assert po["rate_limited"] is False
-
+    assert po["rate_limited"] is True

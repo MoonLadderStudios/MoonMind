@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import json
 
 from moonmind.workflows.temporal.runtime.output_parser import (
     GeminiCliOutputParser,
-    NdjsonOutputParser,
     PlainTextOutputParser,
 )
-from moonmind.workflows.temporal.runtime.strategies.cursor_cli import (
-    CursorCliStrategy,
-)
+
 from moonmind.workflows.temporal.runtime.strategies.gemini_cli import (
     GeminiCliStrategy,
 )
@@ -56,118 +52,6 @@ class TestPlainTextOutputParser:
         result = parser.parse("output", "just some debug info")
         assert result.error_messages == []
 
-
-# ---------------------------------------------------------------------------
-# NdjsonOutputParser
-# ---------------------------------------------------------------------------
-
-
-class TestNdjsonOutputParser:
-    def test_parse_stream_chunk(self) -> None:
-        parser = NdjsonOutputParser()
-        chunk = '{"type": "progress"}\ninvalid\n{"type": "done"}'
-        events = parser.parse_stream_chunk(chunk)
-        assert len(events) == 2
-        assert events[0]["type"] == "progress"
-        assert events[1]["type"] == "done"
-
-    def test_empty_output(self) -> None:
-        parser = NdjsonOutputParser()
-        result = parser.parse("", "")
-        assert result.events == []
-        assert result.error_messages == []
-        assert not result.has_structured_output
-        assert not result.rate_limited
-
-    def test_parses_valid_ndjson(self) -> None:
-        parser = NdjsonOutputParser()
-        events = [
-            {"type": "progress", "message": "Working..."},
-            {"type": "result", "message": "Done"},
-        ]
-        stdout = "\n".join(json.dumps(e) for e in events)
-        result = parser.parse(stdout, "")
-        assert len(result.events) == 2
-        assert result.has_structured_output
-        assert not result.rate_limited
-
-    def test_detects_rate_limit_429(self) -> None:
-        parser = NdjsonOutputParser()
-        events = [
-            {"type": "error", "status_code": 429, "message": "Too many requests"},
-        ]
-        stdout = json.dumps(events[0])
-        result = parser.parse(stdout, "")
-        assert result.rate_limited
-        assert len(result.error_messages) > 0
-
-    def test_detects_rate_limit_text(self) -> None:
-        parser = NdjsonOutputParser()
-        events = [
-            {"type": "error", "error": "Rate limit exceeded"},
-        ]
-        stdout = json.dumps(events[0])
-        result = parser.parse(stdout, "")
-        assert result.rate_limited
-
-    def test_detects_rate_limit_in_stderr(self) -> None:
-        parser = NdjsonOutputParser()
-        result = parser.parse("", "Error: 429 rate limit hit")
-        assert result.rate_limited
-
-    def test_skips_non_json_lines(self) -> None:
-        parser = NdjsonOutputParser()
-        stdout = 'not json\n{"type": "ok"}\nalso not json'
-        result = parser.parse(stdout, "")
-        assert len(result.events) == 1
-
-    def test_error_event_type(self) -> None:
-        parser = NdjsonOutputParser()
-        events = [{"type": "error", "message": "Something failed"}]
-        stdout = json.dumps(events[0])
-        result = parser.parse(stdout, "")
-        assert len(result.error_messages) > 0
-
-
-# ---------------------------------------------------------------------------
-# CursorCliStrategy exit classification
-# ---------------------------------------------------------------------------
-
-
-class TestCursorCliClassifyExit:
-    def test_success(self) -> None:
-        s = CursorCliStrategy()
-        status, failure = s.classify_exit(0, "", "")
-        assert status == "completed"
-        assert failure is None
-
-    def test_failure(self) -> None:
-        s = CursorCliStrategy()
-        status, failure = s.classify_exit(1, "", "")
-        assert status == "failed"
-        assert failure == "execution_error"
-
-    def test_rate_limited_via_ndjson(self) -> None:
-        s = CursorCliStrategy()
-        stdout_line = json.dumps(
-            {"type": "error", "status_code": 429, "message": "Rate limited"}
-        )
-        status, failure = s.classify_exit(1, stdout_line, "")
-        assert status == "failed"
-        assert failure == "integration_error"
-
-    def test_rate_limited_via_stderr(self) -> None:
-        s = CursorCliStrategy()
-        status, failure = s.classify_exit(1, "", "Error: 429 rate limit exceeded")
-        assert status == "failed"
-        assert failure == "integration_error"
-
-
-class TestCursorCliOutputParser:
-    def test_returns_ndjson_parser(self) -> None:
-        s = CursorCliStrategy()
-        parser = s.create_output_parser()
-        assert isinstance(parser, NdjsonOutputParser)
 
 
 # ---------------------------------------------------------------------------

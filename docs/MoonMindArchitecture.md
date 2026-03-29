@@ -149,7 +149,7 @@ MoonMind launches and supervises these runtimes directly. It owns the runtime en
 | Codex CLI | OAuth / API key | `@openai/codex` |
 | Gemini CLI | OAuth | `@google/gemini-cli` |
 | Claude Code | API key / OAuth | `@anthropic-ai/claude-code` |
-| Cursor CLI | OAuth / API key | Cursor CLI |
+
 
 Managed agent runs use:
 
@@ -261,7 +261,7 @@ MoonMind deploys as a set of decoupled containers from a single `docker-compose.
 | `init-db` | Bootstrap DB schema, Qdrant indexes |
 | `temporal-namespace-init` | Apply custom namespace retention policies, register search attributes |
 | `agent-workspaces-init` | Fix volume permissions for `/work/agent_jobs` |
-| `codex-auth-init`, `gemini-auth-init`, `claude-auth-init`, `cursor-auth-init` | Initialize auth volumes |
+| `codex-auth-init`, `gemini-auth-init`, `claude-auth-init` | Initialize auth volumes |
 
 ### Optional Profiles
 
@@ -307,7 +307,7 @@ The `docs/` tree is organized by topic area:
 | [Api/](Api/) | API-specific documentation |
 | [Development/](Development/) | Developer workflow and local tooling guides |
 | [ExternalAgents/](ExternalAgents/) | Jules adapter, OpenClaw adapter, external agent integration system, adding providers |
-| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, and Git integration |
+| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, and Git integration |
 | [Memory/](Memory/) | Memory architecture and research |
 | [Observability/](Observability/) | OpenTelemetry system design |
 | [Rag/](Rag/) | LlamaIndex manifest system, manifest ingest design, workflow RAG |
