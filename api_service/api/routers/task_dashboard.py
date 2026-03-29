@@ -385,7 +385,6 @@ async def task_settings_route(
         "settings",
         "/tasks/settings",
         initial_data=initial_data,
-        data_wide_panel=True,
     )
 
 

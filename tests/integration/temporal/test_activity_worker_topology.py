@@ -307,6 +307,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 {
                     "principal": "user-1",
                     "parameters": {"title": "Topology", "description": "verify"},
+                    "workspace_spec": {"repo": "topology/test"},
                     "idempotency_key": "idem-topology-1",
                 }
             )

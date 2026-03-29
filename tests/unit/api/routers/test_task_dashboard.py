@@ -129,14 +129,15 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert "/static/task_dashboard/dist/assets/" in response.text
 
 
-def test_data_wide_panel_on_table_first_react_routes(client: TestClient) -> None:
-    for path in ("/tasks/list", "/tasks/tasks-list", "/tasks/proposals", "/tasks/settings"):
+def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
+    for path in ("/tasks/list", "/tasks/tasks-list", "/tasks/proposals"):
         response = client.get(path)
         assert response.status_code == 200
         assert "panel--data-wide" in response.text
-    narrow = client.get("/tasks/manifests")
-    assert narrow.status_code == 200
-    assert "panel--data-wide" not in narrow.text
+    for path in ("/tasks/manifests", "/tasks/settings"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "panel--data-wide" not in response.text
 
 
 def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:
