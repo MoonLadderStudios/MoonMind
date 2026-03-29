@@ -448,32 +448,25 @@ class ManagedRuntimeLauncher:
         from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
         from moonmind.workflows.adapters.secret_boundary import SecretResolverBoundary
         
-        class DBSyncSecretResolver(SecretResolverBoundary):
-            def resolve_secrets(self, secret_refs: dict[str, str]) -> dict[str, str]:
-                # Since resolve_managed_api_key_reference is async and this method is sync,
-                # we'll iterate and resolve async outside, or rewrite the materializer to be async.
-                pass # placeholder, we need an async implementation
-                
-        # To avoid rewrite of materializer to async right now, resolve secrets here
+        # Resolve secrets async up-front so the async materializer can access them.
         from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
         resolved_secrets = {}
         for ref_key, secret_name in (getattr(profile, "secret_refs", None) or {}).items():
             resolved_secrets[ref_key] = await resolve_managed_api_key_reference(secret_name)
-            
+
         class AsyncDictSecretResolver(SecretResolverBoundary):
             async def resolve_secrets(self, secret_refs: dict[str, str]) -> dict[str, str]:
-                return resolved_secrets
-                
+                return {k: resolved_secrets[k] for k in secret_refs if k in resolved_secrets}
+
         materializer = ProviderProfileMaterializer(
             base_env=dict(os.environ),
             secret_resolver=AsyncDictSecretResolver()
         )
-        
-        
+
         env_overrides, mat_cmd = await materializer.materialize(profile)
         # Update profile with the materialized command template so build_command uses it
         profile.command_template = mat_cmd
-        
+
         cmd = self.build_command(profile, request, strategy=strategy)
         
         # Invoke strategy-level workspace preparation hook (e.g. RAG context

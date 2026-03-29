@@ -68,7 +68,7 @@ class MoonMindOAuthSessionWorkflow:
       1. Validate input and resolve provider spec
       2. Transition to ``starting``
       3. Ensure Docker volume exists
-      4. Transition to ``oauth_runner_ready`` / ``awaiting_user``
+      4. Transition to ``bridge_ready`` / ``awaiting_user``
       5. Wait for finalize signal or session expiry
       6. On finalize: verify volume, register profile, mark ``succeeded``
       7. On expiry/cancel: mark ``expired`` / ``cancelled``

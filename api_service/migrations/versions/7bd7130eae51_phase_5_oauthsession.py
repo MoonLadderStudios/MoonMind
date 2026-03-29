@@ -14,8 +14,6 @@ import sqlalchemy as sa
 # revision identifiers, used by Alembic.
 revision: str = '7bd7130eae51'
 down_revision: Union[str, None] = '7743cec3c465'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
@@ -26,6 +24,12 @@ def upgrade() -> None:
     op.add_column('managed_agent_oauth_sessions', sa.Column('disconnected_at', sa.DateTime(timezone=True), nullable=True))
     op.drop_column('managed_agent_oauth_sessions', 'oauth_ssh_url')
     op.drop_column('managed_agent_oauth_sessions', 'oauth_web_url')
+    # Add new enum value and migrate existing rows from oauth_runner_ready -> bridge_ready
+    op.execute("ALTER TYPE oauthsessionstatus ADD VALUE IF NOT EXISTS 'bridge_ready'")
+    op.execute(
+        "UPDATE managed_agent_oauth_sessions SET status = 'bridge_ready' "
+        "WHERE status = 'oauth_runner_ready'"
+    )
     # ### end Alembic commands ###
 
 

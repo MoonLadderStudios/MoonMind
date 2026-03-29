@@ -6,7 +6,7 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
   - ``oauth_session.stop_auth_runner``    — tear down auth runner container
   - ``oauth_session.update_status``       — transition session status in DB
   - ``oauth_session.mark_failed``         — mark session as failed with reason
-  - ``oauth_session.update_session_urls`` — store session URLs in DB
+  - ``oauth_session.update_terminal_session`` — store terminal session refs in DB
   - ``oauth_session.verify_volume``       — call provider volume verifier
   - ``oauth_session.register_profile``    — create or update auth profile
 """
@@ -82,8 +82,16 @@ async def oauth_session_start_auth_runner(
     runtime_id = request.get("runtime_id", "")
     volume_ref = request.get("volume_ref", "")
     volume_mount_path = request.get("volume_mount_path", "")
-    session_ttl = request.get("session_ttl", 1800)
-    
+    session_ttl = int(request.get("session_ttl", 1800))
+
+    if not session_id:
+        raise ValueError("session_id is required")
+    if not volume_ref:
+        raise ValueError("volume_ref is required")
+    if not volume_mount_path:
+        raise ValueError("volume_mount_path is required")
+    session_ttl = max(60, min(session_ttl, 86400))
+
     from moonmind.workflows.temporal.runtime.terminal_bridge import start_terminal_bridge_container
     
     bridge_info = await start_terminal_bridge_container(

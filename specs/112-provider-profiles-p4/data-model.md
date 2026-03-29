@@ -12,4 +12,4 @@
 
 ### `ProviderProfileMaterializer` (Internal Runtime Concept)
 - Assembles standard dictionary of environments.
-- Returns a tuple of `(List[str] env, List[str] entrypoint)`.
+- Returns a tuple of `(Dict[str, str] env, List[str] command)`.

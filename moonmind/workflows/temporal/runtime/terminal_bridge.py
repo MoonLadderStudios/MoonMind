@@ -24,18 +24,37 @@ async def start_terminal_bridge_container(
     
     # We create a dummy/sleeping container that maps the volume
     # Actual PTY websocket proxying would attach to this container's PID
-    proc = await asyncio.create_subprocess_exec(
-        "docker", "run", "-d", "--rm",
-        "--name", container_name,
-        "-v", f"{volume_ref}:{volume_mount_path}",
-        "alpine:latest", "sleep", str(session_ttl),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "run", "-d", "--rm",
+            "--name", container_name,
+            "-v", f"{volume_ref}:{volume_mount_path}",
+            "alpine:3.19", "sleep", str(session_ttl),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        logger.error(
+            "Failed to start auth container %s: docker CLI not found on PATH",
+            container_name,
+        )
+        raise RuntimeError(
+            "Docker CLI is not available on this worker. "
+            "Ensure Docker is installed and 'docker' is on the PATH, "
+            "or configure a different terminal bridge backend."
+        ) from exc
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise TimeoutError("Timed out while starting auth container")
+
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed to start auth container: {stderr.decode()}")
+        raise RuntimeError(
+            f"Failed to start auth container: {stderr.decode(errors='replace')}"
+        )
         
     return {
         "container_name": container_name,

@@ -251,7 +251,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "oauth_session.update_status": ("artifacts", "oauth_session_update_status"),
     "oauth_session.mark_failed": ("artifacts", "oauth_session_mark_failed"),
     "oauth_session.cleanup_stale": ("artifacts", "oauth_session_cleanup_stale"),
-    "oauth_session.update_session_urls": ("artifacts", "oauth_session_update_session_urls"),
+    "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
     "oauth_session.verify_volume": ("artifacts", "oauth_session_verify_volume"),
     "oauth_session.verify_cli_fingerprint": ("artifacts", "oauth_session_verify_cli_fingerprint"),
     "oauth_session.register_profile": ("artifacts", "oauth_session_register_profile"),

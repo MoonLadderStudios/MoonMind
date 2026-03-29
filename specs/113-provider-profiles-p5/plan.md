@@ -1,104 +1,53 @@
-# Implementation Plan: [FEATURE]
+# Implementation Plan: Provider Profiles Phase 5 — Terminal PTY Bridge and OAuthSession Completion
 
-**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
-**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Branch**: `113-provider-profiles-p5` | **Date**: 2026-03-28 | **Spec**: [spec.md](spec.md)
 
 ## Summary
 
-[Extract from feature spec: primary requirement + technical approach from research]
+Migrates OAuth session transport from legacy browser-based URL runners to a Terminal PTY bridge
+model. Adds `terminal_session_id`, `terminal_bridge_id`, `connected_at`, and `disconnected_at`
+columns to `managed_agent_oauth_sessions`, and renames the status enum value `oauth_runner_ready`
+to `bridge_ready`. Updates workflow activities and Temporal activity catalog to align with the new
+naming.
 
 ## Technical Context
 
-<!--
-  ACTION REQUIRED: Replace the content in this section with the technical details
-  for the project. The structure here is presented in advisory capacity to guide
-  the iteration process.
--->
-
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
-**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
-**Project Type**: [single/web/mobile - determines source structure]  
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Language/Version**: Python 3.11
+**Primary Dependencies**: FastAPI, SQLAlchemy, Temporalio, asyncio (subprocess)
+**Storage**: PostgreSQL (managed_agent_oauth_sessions, oauthsessionstatus enum)
+**Testing**: pytest
+**Target Platform**: Linux server (Docker worker)
+**Project Type**: Single web application
 
 ## Constitution Check
 
-*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
-
-[Gates determined based on constitution file]
+No violations. Pre-release project. Old activity `oauth_session.update_session_urls` fully replaced
+by `oauth_session.update_terminal_session` in catalog, runtime, artifacts delegate, and workflow.
 
 ## Project Structure
 
-### Documentation (this feature)
-
 ```text
-specs/[###-feature]/
-├── plan.md              # This file (/agentkit.plan command output)
-├── research.md          # Phase 0 output (/agentkit.plan command)
-├── data-model.md        # Phase 1 output (/agentkit.plan command)
-├── quickstart.md        # Phase 1 output (/agentkit.plan command)
-├── contracts/           # Phase 1 output (/agentkit.plan command)
-└── tasks.md             # Phase 2 output (/agentkit.tasks command - NOT created by /agentkit.plan)
+api_service/
+├── db/models.py                            # OAuthSessionStatus: BRIDGE_READY replaces OAUTH_RUNNER_READY
+├── api/routers/oauth_sessions.py           # URL fields removed from responses
+├── api/schemas_oauth_sessions.py           # OAuthSessionResponse: url fields dropped
+└── migrations/versions/7bd7130eae51_*.py  # Schema migration + enum ALTER TYPE
+
+moonmind/workflows/temporal/
+├── runtime/terminal_bridge.py             # start_terminal_bridge_container (docker stub)
+├── activities/oauth_session_activities.py # update_terminal_session + start_auth_runner validation
+├── workflows/oauth_session.py             # Updated to call update_terminal_session
+├── activity_catalog.py                    # Catalog entry updated
+├── activity_runtime.py                    # Runtime routing updated
+└── artifacts.py                           # Delegate updated
+
+specs/113-provider-profiles-p5/
+└── data-model.md                          # OAuthSession terminal fields documented
 ```
 
-### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
+## Key Decisions
 
-```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
-
-tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
-```
-
-**Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
-
-## Complexity Tracking
-
-> **Fill ONLY if Constitution Check has violations that must be justified**
-
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
-| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+- `oauth_runner_ready` enum value is preserved in PostgreSQL via `ADD VALUE IF NOT EXISTS` to avoid
+  locking; rows are backfilled to `bridge_ready` in the same migration.
+- `alpine:3.19` is pinned in the bridge container stub; a 30-second timeout wraps `communicate()`.
+- `docker` CLI absence raises `RuntimeError` with a clear diagnostic message.
