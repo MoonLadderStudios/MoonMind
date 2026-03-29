@@ -16,9 +16,6 @@ from moonmind.workflows.temporal.runtime.strategies.claude_code import (
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     CodexCliStrategy,
 )
-from moonmind.workflows.temporal.runtime.strategies.cursor_cli import (
-    CursorCliStrategy,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -59,75 +56,12 @@ def _make_request(
 
 
 class TestAllStrategiesRegistered:
-    def test_four_strategies_registered(self) -> None:
-        assert len(RUNTIME_STRATEGIES) == 4
+    def test_three_strategies_registered(self) -> None:
+        assert len(RUNTIME_STRATEGIES) == 3
 
     def test_all_ids_present(self) -> None:
-        expected = {"gemini_cli", "cursor_cli", "claude_code", "codex_cli"}
+        expected = {"gemini_cli", "claude_code", "codex_cli"}
         assert set(RUNTIME_STRATEGIES.keys()) == expected
-
-
-# ---------------------------------------------------------------------------
-# CursorCliStrategy
-# ---------------------------------------------------------------------------
-
-
-class TestCursorCliProperties:
-    def test_runtime_id(self) -> None:
-        assert CursorCliStrategy().runtime_id == "cursor_cli"
-
-    def test_default_command_template(self) -> None:
-        assert CursorCliStrategy().default_command_template == ["cursor"]
-
-    def test_default_auth_mode(self) -> None:
-        assert CursorCliStrategy().default_auth_mode == "oauth"
-
-
-class TestCursorCliBuildCommand:
-    def test_basic_prompt(self) -> None:
-        s = CursorCliStrategy()
-        profile = _make_profile(command_template=["cursor"])
-        request = _make_request(instruction_ref="Fix bug")
-        cmd = s.build_command(profile, request)
-        assert cmd == [
-            "cursor", "-p", "Fix bug",
-            "--output-format", "stream-json", "--force",
-        ]
-
-    def test_with_model(self) -> None:
-        s = CursorCliStrategy()
-        profile = _make_profile(command_template=["cursor"], default_model="gpt-4")
-        request = _make_request(instruction_ref="Help")
-        cmd = s.build_command(profile, request)
-        assert "--model" in cmd
-        assert "gpt-4" in cmd
-
-    def test_with_sandbox(self) -> None:
-        s = CursorCliStrategy()
-        profile = _make_profile(command_template=["cursor"])
-        request = _make_request(
-            instruction_ref="Test",
-            parameters={"sandbox_mode": "strict"},
-        )
-        cmd = s.build_command(profile, request)
-        assert "--sandbox" in cmd
-        assert "strict" in cmd
-
-    def test_no_prompt(self) -> None:
-        s = CursorCliStrategy()
-        profile = _make_profile(command_template=["cursor"])
-        request = _make_request()
-        cmd = s.build_command(profile, request)
-        assert cmd == ["cursor", "--output-format", "stream-json", "--force"]
-
-    def test_always_has_force_and_stream_json(self) -> None:
-        s = CursorCliStrategy()
-        profile = _make_profile(command_template=["cursor"])
-        request = _make_request(instruction_ref="Go")
-        cmd = s.build_command(profile, request)
-        assert "--force" in cmd
-        assert "--output-format" in cmd
-        assert "stream-json" in cmd
 
 
 # ---------------------------------------------------------------------------

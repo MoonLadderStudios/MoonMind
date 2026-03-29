@@ -15,9 +15,7 @@ from moonmind.workflows.temporal.runtime.strategies.claude_code import (
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     CodexCliStrategy,
 )
-from moonmind.workflows.temporal.runtime.strategies.cursor_cli import (
-    CursorCliStrategy,
-)
+
 from moonmind.workflows.temporal.runtime.strategies.gemini_cli import (
     GeminiCliStrategy,
 )
@@ -26,7 +24,6 @@ __all__ = [
     "ManagedRuntimeStrategy",
     "ClaudeCodeStrategy",
     "CodexCliStrategy",
-    "CursorCliStrategy",
     "GeminiCliStrategy",
     "RUNTIME_STRATEGIES",
     "get_strategy",
@@ -39,12 +36,11 @@ __all__ = [
 RUNTIME_STRATEGIES: dict[str, ManagedRuntimeStrategy] = {
     "claude_code": ClaudeCodeStrategy(),
     "codex_cli": CodexCliStrategy(),
-    "cursor_cli": CursorCliStrategy(),
     "gemini_cli": GeminiCliStrategy(),
 }
 """Strategy instances keyed by canonical ``runtime_id``.
 
-All four managed runtimes are registered.  The launcher and adapter
+All three managed runtimes are registered.  The launcher and adapter
 delegate fully to strategies — no ``if/elif`` branching remains.
 """
 

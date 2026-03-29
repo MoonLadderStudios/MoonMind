@@ -253,7 +253,7 @@ class TestLauncherDelegation:
 
     def test_all_known_runtimes_are_registered(self) -> None:
         """Since Phase 2, all four runtimes are registered."""
-        assert get_strategy("cursor_cli") is not None
+
         assert get_strategy("codex_cli") is not None
         assert get_strategy("claude_code") is not None
         assert get_strategy("gemini_cli") is not None

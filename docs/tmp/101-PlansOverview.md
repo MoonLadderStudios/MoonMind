@@ -74,7 +74,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | Document | Summary |
 | -------- | ------- |
 | [`docs/ManagedAgents/TmateArchitecture.md`](../ManagedAgents/TmateArchitecture.md) | §16 MVP implementation sequence (four phases). |
-| [`docs/ManagedAgents/CursorCli.md`](../ManagedAgents/CursorCli.md) | §13 Implementation Plan (binary through testing). |
+
 | [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) | DOOD “plan” for generic container runner (desired state). |
 | [`docs/ManagedAgents/ManagedAgentsAuthentication.md`](../ManagedAgents/ManagedAgentsAuthentication.md) | §8 Migration Path — phases for profiles, registry, multi-volume, queuing, dedicated fleet. |
 | [`docs/ManagedAgents/WorkerVectorEmbedding.md`](../ManagedAgents/WorkerVectorEmbedding.md) | Minimal implementation plan. |
@@ -130,7 +130,7 @@ These entries were converted from migration / phased-implementation framing to *
 - [`docs/ExternalAgents/OpenClawAgentAdapter.md`](../ExternalAgents/OpenClawAgentAdapter.md) — streaming-gateway path, settings, and tests exist; implementation checklist removed.
 - [`docs/ManagedAgents/SkillGithubPrResolver.md`](../ManagedAgents/SkillGithubPrResolver.md) — skill tree and unit tests exist; implementation checklist replaced with verification pointers.
 
-**Not rewritten** (incomplete, open research, operational procedure, or product-wide migration still in flight): all other rows in this index — notably task dependencies phases 2–4, Cursor CLI integration checklists, Mission Control / Temporal migration posture docs, `WorkflowRag` and manifest delivery unfinished items, `ManagedAndExternalAgentExecutionModel` Phase 7, `AlembicMigrationGeneration.md` (procedural), and `MemoryResearch.md` (research).
+**Not rewritten** (incomplete, open research, operational procedure, or product-wide migration still in flight): all other rows in this index — notably task dependencies phases 2–4, Mission Control / Temporal migration posture docs, `WorkflowRag` and manifest delivery unfinished items, `ManagedAndExternalAgentExecutionModel` Phase 7, `AlembicMigrationGeneration.md` (procedural), and `MemoryResearch.md` (research).
 
 ---
 

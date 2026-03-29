@@ -584,53 +584,7 @@ async def test_launch_raises_when_workspace_clone_fails(tmp_path, monkeypatch):
     assert store.load("workspace-run-fail") is None
 
 
-def test_build_command_cursor_cli():
-    """Test cursor_cli command construction with -p, --output-format, --force."""
-    store = ManagedRunStore("/tmp/test-store")
-    launcher = ManagedRuntimeLauncher(store)
-    profile = _make_profile(
-        runtime_id="cursor_cli",
-        command_template=["cursor-agent"],
-        default_model="claude-4-sonnet",
-        default_effort=None,
-    )
-    request = _make_request(instruction_ref="implement the task")
 
-    cmd = launcher.build_command(profile, request)
-    assert cmd[0] == "cursor-agent"
-    assert "--model" in cmd
-    assert "claude-4-sonnet" in cmd
-    assert "-p" in cmd
-    assert "implement the task" in cmd
-    assert "--output-format" in cmd
-    assert "stream-json" in cmd
-    assert "--force" in cmd
-    # Should NOT have --instruction-ref (that's for non-cursor runtimes)
-    assert "--instruction-ref" not in cmd
-    # Should NOT have --sandbox when not specified
-    assert "--sandbox" not in cmd
-
-
-def test_build_command_cursor_cli_with_sandbox():
-    """Test cursor_cli --sandbox flag from request parameters."""
-    store = ManagedRunStore("/tmp/test-store")
-    launcher = ManagedRuntimeLauncher(store)
-    profile = _make_profile(
-        runtime_id="cursor_cli",
-        command_template=["cursor-agent"],
-        default_model=None,
-        default_effort=None,
-    )
-    request = _make_request(
-        instruction_ref="implement the feature",
-        parameters={"sandbox_mode": "disabled"},
-    )
-
-    cmd = launcher.build_command(profile, request)
-    assert cmd[0] == "cursor-agent"
-    assert "-p" in cmd
-    assert "--sandbox" in cmd
-    assert "disabled" in cmd
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@
 
 MoonMind should stop using `tmate` for browser-triggered OAuth flows for managed CLI runtimes.
 
-For CLI-based authentication flows such as Claude Code, Gemini CLI, Codex CLI, and future Cursor CLI support, the correct long-term transport is:
+For CLI-based authentication flows such as Claude Code, Gemini CLI, and Codex CLI support, the correct long-term transport is:
 
 * **`xterm.js` in Mission Control**
 * **a MoonMind-owned PTY/WebSocket bridge**
@@ -60,7 +60,7 @@ MoonMind OAuth sessions should provide:
 * volume-backed credential persistence
 * explicit verification and profile registration
 * a short-lived, tightly scoped security model
-* consistent UX across Claude Code, Gemini CLI, Codex CLI, and future Cursor CLI auth flows
+* consistent UX across Claude Code, Gemini CLI, and Codex CLI auth flows
 
 ### 3.2 Non-goals
 
@@ -252,9 +252,7 @@ class OAuthProviderSpec(TypedDict):
 * volume-backed auth home
 * provider-specific login entrypoint
 
-#### Cursor CLI
 
-* `runtime_id = "cursor_cli"`
 * placeholder until runtime support is real
 * same transport model once supported
 
@@ -715,7 +713,7 @@ Suggested additions/renames:
 * `moonmind/auth/providers/codex_cli.py`
 * `moonmind/auth/providers/gemini_cli.py`
 * `moonmind/auth/providers/claude_code.py`
-* `moonmind/auth/providers/cursor_cli.py`
+
 * `moonmind/auth/volume_verifiers.py`
 
 ### Temporal

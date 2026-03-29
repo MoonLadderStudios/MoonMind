@@ -308,7 +308,7 @@
     gemini_cli: "Gemini CLI",
     claude: "Claude Code",
     claude_code: "Claude Code",
-    cursor_cli: "Cursor CLI",
+
     [JULES_RUNTIME]: "Jules",
   };
 
