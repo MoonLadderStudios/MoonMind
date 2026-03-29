@@ -3,7 +3,6 @@ from typing import AsyncGenerator, Optional
 from fastapi import Request
 
 from moonmind.services.observability.publisher import publisher as _default_publisher, ObservabilityPublisher
-from moonmind.services.observability.models import LogStreamEvent
 
 
 async def log_stream_generator(

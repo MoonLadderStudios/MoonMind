@@ -49,15 +49,16 @@ specs/112-live-logs-phase-3/
 ### Source Code (repository root)
 
 ```text
+api_service/
+└── api/
+    └── routers/
+        └── task_runs.py       # Add GET /api/task-runs/{id}/logs/stream endpoint
 moonmind/
-├── api/
-│   └── routers/
-│       └── task_runs.py       # Add GET /api/task-runs/{id}/logs/stream endpoint
-├── services/
-│   └── observability/
-│       ├── publisher.py       # Memory/Redis channel fan-out logic
-│       ├── subscriber.py      # SSE generator logic
-│       └── models.py          # LogStreamEvent DTO
+└── services/
+    └── observability/
+        ├── publisher.py       # Memory/Redis channel fan-out logic
+        ├── subscriber.py      # SSE generator logic
+        └── models.py          # LogStreamEvent DTO
 tests/
 └── integration/
     └── api/

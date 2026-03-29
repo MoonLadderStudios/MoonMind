@@ -27,7 +27,7 @@ Goal: Operators can open a live stream for an active run.
 
 - [x] T004 [US1] Implement in-memory/Redis `ObservabilityPublisher` with `publish` method in `moonmind/services/observability/publisher.py` [DOC-REQ-002]
 - [x] T005 [US1] Implement HTTP log stream proxy generator in `moonmind/services/observability/subscriber.py` [DOC-REQ-001]
-- [x] T006 [US1] Expose `GET /api/task-runs/{id}/logs/stream` endpoint in `moonmind/api/routers/task_runs.py` integrating the publisher [DOC-REQ-004]
+- [x] T006 [US1] Expose `GET /api/task-runs/{id}/logs/stream` endpoint in `api_service/api/routers/task_runs.py` integrating the publisher [DOC-REQ-004]
 - [x] T007 [P] [US1] Write unit tests asserting standard log publication fan-out in `tests/integration/api/test_live_logs.py` [DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-008]
 
 ## Phase 4: User Story 2 - Resilient Streaming & Disconnects (P1)
@@ -50,5 +50,5 @@ Goal: Seamless transition to artifact retrievals.
 
 Goal: Cleanup and style.
 
-- [x] T014 Run `flake8` and `mypy` against `moonmind/services/observability` and `moonmind/api/routers/task_runs.py`
+- [x] T014 Run `ruff` and `black` against `moonmind/services/observability` and `api_service/api/routers/task_runs.py`
 

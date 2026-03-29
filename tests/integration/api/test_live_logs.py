@@ -1,14 +1,13 @@
 """
 Unit tests for Phase 3 Live Logs — SSE publisher/subscriber.
 
-DOC-REQ coverage:
+DOC-REQ coverage (publisher/subscriber layer only):
   DOC-REQ-001  GET /api/task-runs/{id}/logs/stream endpoint contract
   DOC-REQ-002  ObservabilityPublisher fan-out
   DOC-REQ-003  LogStreamEvent payload shape
   DOC-REQ-004  since= resumption semantics
   DOC-REQ-005  Disconnect cleanup
   DOC-REQ-006  last_log_at lifecycle hook (implicit via publisher publish track)
-  DOC-REQ-007  410 fallback for completed runs
   DOC-REQ-008  system stream type
 """
 import asyncio
@@ -42,6 +41,17 @@ class _AlwaysConnected:
 class _AlwaysDisconnected:
     async def is_disconnected(self):
         return True
+
+
+class _DisconnectAfterFirstCheck:
+    """Request stub that is connected for the first check, then disconnects."""
+
+    def __init__(self) -> None:
+        self._checks = 0
+
+    async def is_disconnected(self) -> bool:
+        self._checks += 1
+        return self._checks > 1
 
 
 # ---------------------------------------------------------------------------
@@ -123,21 +133,21 @@ async def test_disconnect_cleanup_releases_subscriber():
     pub = ObservabilityPublisher()
     run_id = "run-disconnect"
 
-    # Pre-publish one event so history is non-empty — generator yields it, then
-    # checks is_disconnected() which returns True and breaks.
+    # Pre-publish one event so history is non-empty — the generator should
+    # register a live subscriber and yield at least one chunk before this
+    # request starts reporting as disconnected.
     await pub.publish(run_id, _evt(0))
 
-    gen = log_stream_generator(run_id, _AlwaysDisconnected(), since=0, publisher=pub)
+    gen = log_stream_generator(run_id, _DisconnectAfterFirstCheck(), since=0, publisher=pub)
 
-    # Collect the first SSE chunk. After that, is_disconnected() returns True → break.
+    # Collect the first SSE chunk(s). After the first disconnect check, the
+    # stub starts reporting disconnected, causing the generator to break.
     chunks = []
     try:
         async for chunk in gen:
             chunks.append(chunk)
             if len(chunks) >= 3:  # 1 event = 3 SSE lines, then the loop breaks
                 break
-    except StopAsyncIteration:
-        pass
     finally:
         await gen.aclose()
 

@@ -1,97 +1,28 @@
 [
-  {
-    "id": 4148891383,
-    "disposition": "not-applicable",
-    "rationale": "Usage limit warning from bots."
-  },
-  {
-    "id": 4026080599,
-    "disposition": "not-applicable",
-    "rationale": "High-level comment from Gemini bot."
-  },
-  {
-    "id": 3005382088,
-    "disposition": "addressed",
-    "rationale": "Validates resolve path with is_relative_to"
-  },
-  {
-    "id": 3005382090,
-    "disposition": "addressed",
-    "rationale": "Validates diagnostics resolve path with is_relative_to"
-  },
-  {
-    "id": 3005382093,
-    "disposition": "addressed",
-    "rationale": "Added explicit check for merged_log_artifact_ref"
-  },
-  {
-    "id": 3005382096,
-    "disposition": "addressed",
-    "rationale": "Moved imports to top of task_runs.py"
-  },
-  {
-    "id": 3005382173,
-    "disposition": "addressed",
-    "rationale": "Cleaned up unused test variables and mapped to HTTP response checking"
-  },
-  {
-    "id": 3005384368,
-    "disposition": "addressed",
-    "rationale": "Added is_superuser dependency validation"
-  },
-  {
-    "id": 3005384375,
-    "disposition": "addressed",
-    "rationale": "Wrapped file operations in asyncio.to_thread"
-  },
-  {
-    "id": 3005384377,
-    "disposition": "addressed",
-    "rationale": "Updated FileResponse mock to return correct object wrapper"
-  },
-  {
-    "id": 3005384379,
-    "disposition": "addressed",
-    "rationale": "Added tests for diagnostics endpoint variants"
-  },
-  {
-    "id": 3005384383,
-    "disposition": "addressed",
-    "rationale": "Unchecked range semantics in docs phase 2 task plan"
-  },
-  {
-    "id": 3005384387,
-    "disposition": "addressed",
-    "rationale": "Fixed Capability typo"
-  },
-  {
-    "id": 3005384390,
-    "disposition": "addressed",
-    "rationale": "Fixed merged fallback logic"
-  },
-  {
-    "id": 3005384394,
-    "disposition": "addressed",
-    "rationale": "Unchecked range semantics in docs phase 2 task plan"
-  },
-  {
-    "id": 3005384397,
-    "disposition": "addressed",
-    "rationale": "Fixed backtick syntax in tasks checklist"
-  },
-  {
-    "id": 3005384402,
-    "disposition": "addressed",
-    "rationale": "Added is_relative_to checks to artifact resolve"
-  },
-  {
-    "id": 4026082010,
-    "disposition": "not-applicable",
-    "rationale": "Top level PR summary from Copilot bot"
-  },
-  {
-    "id": 3005403381,
-    "disposition": "addressed",
-    "rationale": "Removed unused AgentJobLiveSessionProvider import"
-  }
+  {"id": 3005528158, "disposition": "addressed", "rationale": "Added history cleanup when last subscriber leaves in publisher.py subscribe() finally block."},
+  {"id": 3005528159, "disposition": "addressed", "rationale": "Changed _histories from list to collections.deque with maxlen for O(1) append and automatic eviction."},
+  {"id": 3005528161, "disposition": "addressed", "rationale": "Fixed data-model.md stream enum values from 'out, err, system' to 'stdout, stderr, system'."},
+  {"id": 3005528925, "disposition": "addressed", "rationale": "Added explanatory comment for intentional event drop on QueueFull in publisher.py."},
+  {"id": 3005528927, "disposition": "addressed", "rationale": "Removed empty except StopAsyncIteration block from test_disconnect_cleanup_releases_subscriber."},
+  {"id": 3005528930, "disposition": "addressed", "rationale": "Removed unused 'uuid' import from publisher.py."},
+  {"id": 3005528931, "disposition": "addressed", "rationale": "Removed unused 'LogStreamEvent' import from subscriber.py."},
+  {"id": 3005532163, "disposition": "addressed", "rationale": "Changed terminal status check to use full list including canceled, cancelled, timed_out."},
+  {"id": 3005532169, "disposition": "addressed", "rationale": "Consolidated duplicate FileResponse import into single import line."},
+  {"id": 3005532176, "disposition": "addressed", "rationale": "Updated tasks.md T014 to reference ruff and black instead of flake8 and mypy."},
+  {"id": 3005532183, "disposition": "addressed", "rationale": "Replaced _AlwaysDisconnected with _DisconnectAfterFirstCheck stub that allows at least one chunk to be yielded."},
+  {"id": 3005532184, "disposition": "addressed", "rationale": "Updated DOC-REQ coverage list to clarify publisher/subscriber layer only."},
+  {"id": 3005532186, "disposition": "not-applicable", "rationale": "DOC-REQ-007 (410 fallback) requires route-level test outside publisher/subscriber scope; removed from coverage list."},
+  {"id": 3005532187, "disposition": "not-applicable", "rationale": "Production wiring of publisher.publish() is a larger architectural issue deferred to future work."},
+  {"id": 3005532188, "disposition": "addressed", "rationale": "Added 403 and 410 responses to OpenAPI schema for /logs/stream endpoint."},
+  {"id": 3005532190, "disposition": "addressed", "rationale": "Duplicate of 3005528930; removed unused uuid import."},
+  {"id": 3005532193, "disposition": "addressed", "rationale": "Duplicate of 3005528931; removed unused LogStreamEvent import."},
+  {"id": 3005532197, "disposition": "addressed", "rationale": "Added required blank line between imports and class in models.py."},
+  {"id": 3005532201, "disposition": "addressed", "rationale": "Changed iteration to shallow copy list() to avoid mutation during iteration."},
+  {"id": 3005532202, "disposition": "addressed", "rationale": "Same fix as 3005528158; added history cleanup in subscribe() finally block."},
+  {"id": 3005532203, "disposition": "addressed", "rationale": "Updated plan.md path reference from moonmind/api to api_service/api."},
+  {"id": 3005532206, "disposition": "addressed", "rationale": "Added Query(ge=0) validation to since parameter in stream endpoint."},
+  {"id": 3005532208, "disposition": "addressed", "rationale": "Updated tasks.md T006 path reference from moonmind/api to api_service/api."},
+  {"id": 4149110806, "disposition": "not-applicable", "rationale": "Codex usage limits informational message, no action needed."},
+  {"id": 4026200533, "disposition": "not-applicable", "rationale": "Summary review comment from gemini-code-assist, no action needed."},
+  {"id": 4026203950, "disposition": "not-applicable", "rationale": "Summary review from copilot-pull-request-reviewer, no action needed."}
 ]

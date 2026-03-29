@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +20,6 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession, User
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from fastapi.responses import FileResponse, StreamingResponse
 from moonmind.services.observability.subscriber import log_stream_generator
 
 
@@ -215,13 +214,15 @@ async def get_observability_summary(
 @router.get(
     "/{id}/logs/stream",
     responses={
+        403: {"description": "Requires superuser privileges"},
         404: {"description": "Observability record not found for this task run"},
+        410: {"description": "Run is no longer active"},
     },
 )
 async def stream_task_run_live_logs(
     id: UUID,
     request: Request,
-    since: int | None = None,
+    since: int | None = Query(default=None, ge=0, description="Resume from sequence number"),
     _user: User = Depends(get_current_user()),
 ):
     """Serve SSE real-time stream for active runs."""
@@ -230,18 +231,19 @@ async def stream_task_run_live_logs(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requires superuser privileges to access raw observability artifacts.",
         )
-        
+
     store = ManagedRunStore(_get_agent_runtime_store_root())
     record = await asyncio.to_thread(store.load, str(id))
-    
+
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Observability record not found for this task run",
         )
-        
+
     # Check if run ended => artifact fallback
-    if getattr(record, "status", None) in ["completed", "failed", "cancelled"]:
+    terminal_statuses = ["completed", "failed", "canceled", "cancelled", "timed_out"]
+    if getattr(record, "status", None) in terminal_statuses:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Run is no longer active. Use artifact retrieval APIs.",
