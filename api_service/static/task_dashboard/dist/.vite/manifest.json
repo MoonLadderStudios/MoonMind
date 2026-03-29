@@ -6,6 +6,10 @@
       "_mountPage-C2pxuJYj.js"
     ]
   },
+  "_executionStatusPillClasses-CxjYAfBR.js": {
+    "file": "assets/executionStatusPillClasses-CxjYAfBR.js",
+    "name": "executionStatusPillClasses"
+  },
   "_mountPage-C2pxuJYj.js": {
     "file": "assets/mountPage-C2pxuJYj.js",
     "name": "mountPage"
@@ -59,12 +63,13 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-DGkaW3Hl.js",
+    "file": "assets/task-detail-DD77u-Mj.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-C2pxuJYj.js"
+      "_mountPage-C2pxuJYj.js",
+      "_executionStatusPillClasses-CxjYAfBR.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
@@ -77,12 +82,13 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-BSTrYeAA.js",
+    "file": "assets/tasks-list-BxX3fTSw.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-C2pxuJYj.js"
+      "_mountPage-C2pxuJYj.js",
+      "_executionStatusPillClasses-CxjYAfBR.js"
     ]
   }
 }
