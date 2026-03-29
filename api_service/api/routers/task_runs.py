@@ -21,7 +21,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession, User
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.services.observability.subscriber import log_stream_generator
-
+from moonmind.utils.metrics import get_metrics_emitter
 
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])
 
@@ -249,8 +249,21 @@ async def stream_task_run_live_logs(
             detail="Run is no longer active. Use artifact retrieval APIs.",
         )
         
+    metrics = get_metrics_emitter()
+    tags = {"task_run_id": str(id)}
+    metrics.increment("livelogs.stream.connect", tags=tags)
+
+    async def _instrumented_generator():
+        try:
+            async for chunk in log_stream_generator(str(id), request, since=since):
+                yield chunk
+            metrics.increment("livelogs.stream.disconnect", tags=tags)
+        except Exception:
+            metrics.increment("livelogs.stream.error", tags=tags)
+            raise
+
     return StreamingResponse(
-        log_stream_generator(str(id), request, since=since),
+        _instrumented_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

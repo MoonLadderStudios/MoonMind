@@ -620,12 +620,12 @@ class TestWorkflowSettings:
         """Log streaming should honor MOONMIND_LOG_STREAMING_ENABLED overrides."""
 
         settings_default = WorkflowSettings(_env_file=None)
-        assert settings_default.log_streaming_enabled is False
+        assert settings_default.log_streaming_enabled is True
 
-        monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
+        monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "false")
 
         settings = WorkflowSettings(_env_file=None)
-        assert settings.log_streaming_enabled is True
+        assert settings.log_streaming_enabled is False
 
         monkeypatch.delenv("MOONMIND_LOG_STREAMING_ENABLED", raising=False)
 

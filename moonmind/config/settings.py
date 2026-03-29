@@ -769,7 +769,7 @@ class WorkflowSettings(BaseSettings):
         description="Enable live task sessions by default for queue task runs.",
     )
     log_streaming_enabled: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices("MOONMIND_LOG_STREAMING_ENABLED"),
         description="Enable artifact-backed live log streaming (Phase 0 boundary).",
     )
