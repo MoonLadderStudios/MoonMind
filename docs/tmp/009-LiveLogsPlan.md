@@ -72,27 +72,27 @@ Make managed runs always capture raw `stdout` and `stderr` durably, independent 
 
 ### Tasks
 
-- [ ] Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`.
-- [ ] Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility.
-- [ ] Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously.
-- [ ] Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence.
-- [ ] Implement or finalize spool/buffer handling for long-running streams.
-- [ ] Write durable stdout artifacts for every managed run.
-- [ ] Write durable stderr artifacts for every managed run.
-- [ ] Write diagnostics artifacts for every managed run.
-- [ ] Optionally generate a merged log artifact if that materially simplifies retrieval or support workflows.
-- [ ] Record artifact refs and summary metadata when the run ends.
-- [ ] Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI.
-- [ ] Ensure artifact generation succeeds even when the frontend never connects.
-- [ ] Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture.
-- [ ] Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination.
-- [ ] Add tests for high-volume log output and interleaved stdout/stderr.
+- [x] Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`.
+- [x] Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility.
+- [x] Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously.
+- [x] Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence.
+- [x] Implement or finalize spool/buffer handling for long-running streams.
+- [x] Write durable stdout artifacts for every managed run.
+- [x] Write durable stderr artifacts for every managed run.
+- [x] Write diagnostics artifacts for every managed run.
+- [x] Optionally generate a merged log artifact if that materially simplifies retrieval or support workflows.
+- [x] Record artifact refs and summary metadata when the run ends.
+- [x] Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI.
+- [x] Ensure artifact generation succeeds even when the frontend never connects.
+- [x] Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture.
+- [x] Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination.
+- [x] Add tests for high-volume log output and interleaved stdout/stderr.
 
 ### Exit criteria
 
-- [ ] Every managed run produces durable stdout, stderr, and diagnostics outputs.
-- [ ] Log capture no longer depends on interactive terminal infrastructure.
-- [ ] Raw stdout/stderr fidelity is preserved well enough for replay, download, and troubleshooting.
+- [x] Every managed run produces durable stdout, stderr, and diagnostics outputs.
+- [x] Log capture no longer depends on interactive terminal infrastructure.
+- [x] Raw stdout/stderr fidelity is preserved well enough for replay, download, and troubleshooting.
 
 ---
 
@@ -104,27 +104,27 @@ Expose artifact-backed observability through MoonMind-owned backend APIs and rec
 
 ### Tasks
 
-- [ ] Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
-- [ ] Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
-- [ ] Design and implement the replacement or successor to terminal-session-style observability records.
-- [ ] Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
-- [ ] Add an observability summary endpoint for task runs.
-- [ ] Add stdout tail retrieval endpoint(s).
-- [ ] Add stderr tail retrieval endpoint(s).
-- [ ] Add merged tail retrieval endpoint(s).
-- [ ] Add diagnostics retrieval endpoint(s).
-- [ ] Add full stdout/stderr download endpoint(s).
-- [ ] Ensure API responses are stable, typed, and suitable for Mission Control consumption.
-- [ ] Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.
-- [ ] Add authorization checks for observability endpoints.
-- [ ] Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
+- [x] Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
+- [x] Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
+- [x] Design and implement the replacement or successor to terminal-session-style observability records.
+- [x] Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
+- [x] Add an observability summary endpoint for task runs.
+- [x] Add stdout tail retrieval endpoint(s).
+- [x] Add stderr tail retrieval endpoint(s).
+- [x] Add merged tail retrieval endpoint(s).
+- [x] Add diagnostics retrieval endpoint(s).
+- [x] Add full stdout/stderr download endpoint(s).
+- [x] Ensure API responses are stable, typed, and suitable for Mission Control consumption.
+- [x] Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.  
+- [x] Add authorization checks for observability endpoints.
+- [x] Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
 - [ ] Add tests for tail semantics, pagination/range behavior, and large artifacts.
 
 ### Exit criteria
 
-- [ ] Mission Control can fetch observability metadata without relying on terminal-session endpoints.
-- [ ] Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
-- [ ] The persisted model matches the contract described in `LiveLogs.md`.
+- [x] Mission Control can fetch observability metadata without relying on terminal-session endpoints.
+- [x] Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
+- [x] The persisted model matches the contract described in `LiveLogs.md`.
 
 ---
 
