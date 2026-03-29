@@ -475,6 +475,12 @@ class TaskProposalPolicy(BaseModel):
     targets: list[str] | None = Field(None, alias="targets")
     max_items: dict[str, int] | None = Field(None, alias="maxItems")
     min_severity_for_moonmind: str | None = Field(None, alias="minSeverityForMoonMind")
+    default_runtime: str | None = Field(None, alias="defaultRuntime")
+
+    @field_validator("default_runtime", mode="before")
+    @classmethod
+    def _normalize_default_runtime(cls, value: object) -> str | None:
+        return _normalize_runtime_value(value, field_name="task.proposalPolicy.defaultRuntime")
 
     @field_validator("targets", mode="before")
     @classmethod

@@ -358,7 +358,7 @@ async def promote_proposal(
         if not title:
             title = "Promoted Task"
 
-        await execution_service.create_execution(
+        execution_record = await execution_service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=getattr(user, "id"),
             owner_type="user",
@@ -394,6 +394,7 @@ async def promote_proposal(
         
     return TaskProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
+        promoted_execution_id=execution_record.workflow_id,
     )
 
 
