@@ -395,6 +395,23 @@ async def test_create_execution_rejects_dependency_graph_too_large(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_self_dependency(tmp_path):
+    """FR-008: A workflow MUST NOT declare itself as a dependency (DOC-REQ-007)."""
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        self_id = "mm:self-dependency-test-id"
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match=f"Workflow cannot depend on itself: {self_id}",
+        ):
+            await service._validate_dependencies(
+                depends_on=[self_id],
+                new_workflow_id=self_id,
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_returns_existing_record_after_idempotency_race(
     tmp_path, monkeypatch
 ):
