@@ -79,4 +79,20 @@ async def test_artifact_write_complete_legacy_dict(activities, mock_service, pat
         content_type="text/plain"
     )
 
+@pytest.mark.asyncio
+async def test_artifact_write_complete_payload_roundtrip_legacy_list_ints(activities, mock_service, patch_build_artifact_ref):
+    request = {
+        "artifact_id": "test-id",
+        "payload": list(b"test payload"),
+        "principal": "test-principal",
+        "content_type": "text/plain"
+    }
+    await activities.artifact_write_complete(request)
+    mock_service.write_complete.assert_called_once_with(
+        artifact_id="test-id",
+        principal="test-principal",
+        payload=b"test payload",
+        content_type="text/plain"
+    )
+
 

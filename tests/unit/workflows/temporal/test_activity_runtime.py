@@ -362,6 +362,65 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
                 )
 
 
+async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
+    """
+    Simulates a workflow replay where an older dict-based payload arrives
+    at the plan.generate activity, ensuring dual-read parses to PlanGenerateInput.
+    """
+    from unittest.mock import AsyncMock, patch
+    from moonmind.schemas.temporal_activity_models import ArtifactRefModel
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            def _dummy_planner(_inputs, _parameters, _snapshot):
+                return {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Dual-Read Replay Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "n1",
+                            "skill": {"name": "dummy", "version": "1.0"},
+                            "inputs": {"arg": "val"}
+                        }
+                    ],
+                    "edges": [],
+                }
+            
+            # Setup mock registry wrapper
+            with patch("moonmind.workflows.temporal.activity_runtime._temporal_snapshot_from_payload") as mock_snapshot:
+                from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
+                mock_snapshot.return_value = ToolRegistrySnapshot(
+                    digest="reg:sha256:test1234",
+                    artifact_ref="art:sha256:test1234",
+                    skills=()
+                )
+
+                planner = TemporalPlanActivities(
+                    artifact_service=service,
+                    planner=_dummy_planner,
+                )
+                
+                # The exact dict layout historically emitted by workflow.execute_activity
+                legacy_payload = {
+                    "principal": "user-replay",
+                    "inputs_ref": None,
+                    "parameters": {"strategy": "default"},
+                    "idempotency_key": "replay-test"
+                }
+                
+                # Should deserialize correctly matching `PlanGenerateInput` fallback
+                result = await planner.plan_generate(legacy_payload) # type: ignore
+                assert result.plan_ref.artifact_ref_v == 1
+
+
 async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_selected():
     """When an explicit skill is selected, 'auto' (the placeholder) must not appear in the registry."""
     payload = _default_skill_registry_payload(
