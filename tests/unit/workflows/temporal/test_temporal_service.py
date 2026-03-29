@@ -395,7 +395,7 @@ async def test_create_execution_rejects_dependency_graph_too_large(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_self_dependency(tmp_path):
+async def test_validate_dependencies_rejects_self_dependency(tmp_path):
     """FR-008: A workflow MUST NOT declare itself as a dependency (DOC-REQ-007)."""
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
