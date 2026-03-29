@@ -54,6 +54,7 @@ from moonmind.workflows.skills.skill_plan_contracts import (
 )
 from moonmind.workflows.skills.skill_registry import (
     SkillRegistrySnapshot,
+    compute_registry_digest,
     create_registry_snapshot,
     parse_skill_registry,
 )
@@ -336,13 +337,27 @@ def _temporal_snapshot_from_payload(
     *,
     artifact_locator: str,
 ) -> SkillRegistrySnapshot:
-    skills = parse_skill_registry(payload)
-    digest_only = create_registry_snapshot(
-        skills=skills,
-        artifact_store=InMemoryArtifactStore(),
-    )
+    raw_skills: Any
+    if "tools" in payload:
+        raw_skills = payload.get("tools")
+    elif "skills" in payload:
+        raw_skills = payload.get("skills")
+    else:
+        raw_skills = payload
+
+    if isinstance(raw_skills, list) and not raw_skills:
+        skills = ()
+        digest = compute_registry_digest(skills=skills)
+    else:
+        skills = parse_skill_registry(payload)
+        digest_only = create_registry_snapshot(
+            skills=skills,
+            artifact_store=InMemoryArtifactStore(),
+        )
+        digest = digest_only.digest
+
     return SkillRegistrySnapshot(
-        digest=digest_only.digest,
+        digest=digest,
         artifact_ref=artifact_locator,
         skills=skills,
     )

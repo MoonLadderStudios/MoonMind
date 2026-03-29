@@ -1,4 +1,5 @@
 [
+
     {
       "id": 4150924370,
       "disposition": "not-applicable",
@@ -118,5 +119,30 @@
       "id": 4027091119,
       "disposition": "not-applicable",
       "rationale": "Copilot overview contained no requested change or defect report to address."
+    },
+    {
+      "id": 4150920228,
+      "disposition": "not-applicable",
+      "rationale": "Codex usage-limit notice is an informational bot comment and does not request a code change."
+    },
+    {
+      "id": 4027169265,
+      "disposition": "not-applicable",
+      "rationale": "Gemini review summary is informational; the actionable feedback was captured in the inline review comment."
+    },
+    {
+      "id": 3006660389,
+      "disposition": "addressed",
+      "rationale": "Replaced the manual empty-registry JSON hashing path with a shared canonical registry digest helper."
+    },
+    {
+      "id": 3006663916,
+      "disposition": "addressed",
+      "rationale": "Gated the conditional registry read behind a replay-stable Temporal patch and added an unpatched-history regression."
+    },
+    {
+      "id": 4027172243,
+      "disposition": "not-applicable",
+      "rationale": "Copilot review summary is informational; the actionable feedback was captured in the inline review comment."
     }
 ]
