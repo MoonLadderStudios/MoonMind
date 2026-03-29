@@ -21,6 +21,7 @@ def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app = FastAPI()
     service = AsyncMock()
     execution_service = AsyncMock()
+    execution_service.create_execution.return_value = SimpleNamespace(workflow_id="wf-abc-123")
     app.include_router(router)
 
     async def _service_override():

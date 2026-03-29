@@ -4048,264 +4048,6 @@
         }
       }
     },
-    "/api/task-runs/{id}/live-session": {
-      "get": {
-        "tags": [
-          "task_runs"
-        ],
-        "summary": "Get Live Session",
-        "description": "Get the current live session status for a task run.\n\nThis is intended for Mission Control operators to view live log outputs.",
-        "operationId": "get_live_session_api_task_runs__id__live_session_get",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Live Session Api Task Runs  Id  Live Session Get"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Live session not found for this task run"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/task-runs/{id}/live-session/worker": {
-      "get": {
-        "tags": [
-          "task_runs"
-        ],
-        "summary": "Get Live Session Worker",
-        "description": "Fetch current live-session payload for a worker.",
-        "operationId": "get_live_session_worker_api_task_runs__id__live_session_worker_get",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Id"
-            }
-          },
-          {
-            "name": "X-MoonMind-Worker-Token",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Moonmind-Worker-Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Live Session Worker Api Task Runs  Id  Live Session Worker Get"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Live session not found for this task run"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/task-runs/{id}/live-session/report": {
-      "post": {
-        "tags": [
-          "task_runs"
-        ],
-        "summary": "Report Live Session",
-        "description": "Report live-session lifecycle updates for a task run.",
-        "operationId": "report_live_session_api_task_runs__id__live_session_report_post",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Id"
-            }
-          },
-          {
-            "name": "X-MoonMind-Worker-Token",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Moonmind-Worker-Token"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskRunLiveSessionReportRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Report Live Session Api Task Runs  Id  Live Session Report Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/task-runs/{id}/live-session/heartbeat": {
-      "post": {
-        "tags": [
-          "task_runs"
-        ],
-        "summary": "Heartbeat Live Session",
-        "description": "Send live-session heartbeat updates.",
-        "operationId": "heartbeat_live_session_api_task_runs__id__live_session_heartbeat_post",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Id"
-            }
-          },
-          {
-            "name": "X-MoonMind-Worker-Token",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Moonmind-Worker-Token"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskRunLiveSessionHeartbeatRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Heartbeat Live Session Api Task Runs  Id  Live Session Heartbeat Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/task-runs/{id}/observability-summary": {
       "get": {
         "tags": [
@@ -4341,6 +4083,76 @@
           },
           "404": {
             "description": "Observability record not found for this task run"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/task-runs/{id}/logs/stream": {
+      "get": {
+        "tags": [
+          "task_runs"
+        ],
+        "summary": "Stream Task Run Live Logs",
+        "description": "Serve SSE real-time stream for active runs.",
+        "operationId": "stream_task_run_live_logs_api_task_runs__id__logs_stream_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Resume from sequence number",
+              "title": "Since"
+            },
+            "description": "Resume from sequence number"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Requires superuser privileges"
+          },
+          "404": {
+            "description": "Observability record not found for this task run"
+          },
+          "410": {
+            "description": "Run is no longer active"
           },
           "422": {
             "description": "Validation Error",
@@ -6691,25 +6503,6 @@
   },
   "components": {
     "schemas": {
-      "AgentJobLiveSessionProvider": {
-        "type": "string",
-        "enum": [
-          "none"
-        ],
-        "title": "AgentJobLiveSessionProvider"
-      },
-      "AgentJobLiveSessionStatus": {
-        "type": "string",
-        "enum": [
-          "disabled",
-          "starting",
-          "ready",
-          "revoked",
-          "ended",
-          "error"
-        ],
-        "title": "AgentJobLiveSessionStatus"
-      },
       "ArtifactCreateExecutionLinkRequest": {
         "properties": {
           "namespace": {
@@ -13405,146 +13198,6 @@
         ],
         "title": "TaskProposalTaskPreview",
         "description": "Derived summary of the canonical task payload."
-      },
-      "TaskRunLiveSessionHeartbeatRequest": {
-        "properties": {
-          "workerId": {
-            "type": "string",
-            "title": "Workerid"
-          }
-        },
-        "type": "object",
-        "required": [
-          "workerId"
-        ],
-        "title": "TaskRunLiveSessionHeartbeatRequest"
-      },
-      "TaskRunLiveSessionReportRequest": {
-        "properties": {
-          "workerId": {
-            "type": "string",
-            "title": "Workerid"
-          },
-          "status": {
-            "$ref": "#/components/schemas/AgentJobLiveSessionStatus"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AgentJobLiveSessionProvider"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "workerHostname": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Workerhostname"
-          },
-          "liveSessionName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Livesessionname"
-          },
-          "liveSessionSocketPath": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Livesessionsocketpath"
-          },
-          "attachRo": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attachro"
-          },
-          "attachRw": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attachrw"
-          },
-          "webRo": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Webro"
-          },
-          "webRw": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Webrw"
-          },
-          "expiresAt": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expiresat"
-          },
-          "errorMessage": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Errormessage"
-          }
-        },
-        "type": "object",
-        "required": [
-          "workerId",
-          "status"
-        ],
-        "title": "TaskRunLiveSessionReportRequest"
       },
       "TaskTemplateAppliedMetadataSchema": {
         "properties": {

@@ -1,10 +1,17 @@
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+def _normalize_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
+    return dump_method() if dump_method else payload
 
 
 def test_initialize_from_payload_captures_input_and_plan_refs(
@@ -92,12 +99,12 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, object],
-        **_kwargs: object,
-    ) -> object:
-        captured.append((activity_type, payload))
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -199,12 +206,12 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, object],
-        **_kwargs: object,
-    ) -> object:
-        captured.append((activity_type, payload))
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -342,7 +349,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -442,7 +449,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
     ) -> object:
         nonlocal skill_calls
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -553,7 +560,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -650,7 +657,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         **_kwargs: object,
     ) -> object:
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -765,7 +772,7 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
             create_pr_called = True
 
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -891,7 +898,7 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
             return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999", "created": True}
 
         if activity_type == "artifact.read":
-            if payload.get("artifact_ref") == "artifact://registry/1":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
                     {
                         "skills": [
@@ -993,3 +1000,117 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         "repo.create_pr SHOULD have been called for a non-Jules agent "
         "even when child result metadata contains jules_session_id"
     )
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_global_disable_halts_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    
+    # Enable proposing tasks in params, but global switch should stop it
+    await workflow._run_proposals_stage(parameters={"proposeTasks": True})
+    
+    assert workflow._state == "initializing"  # State shouldn't change to PROPOSALS
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_uses_legacy_fallback_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._owner_type = "user"
+    workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    
+    captured_policy = None
+    async def mock_execute_activity(activity, payload, **kwargs):
+        nonlocal captured_policy
+        if activity == "proposal.generate":
+            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+        if activity == "proposal.submit":
+            captured_policy = payload["policy"]
+            return {"submitted_count": 1, "errors": []}
+        return None
+            
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
+    
+    await workflow._run_proposals_stage(
+        parameters={
+            "proposeTasks": True,
+            "proposalMaxItems": 8,
+            "proposalTargets": "file",
+            "proposalDefaultRuntime": "gemini",
+        }
+    )
+    
+    assert captured_policy is not None
+    assert captured_policy["max_items"] == 8
+    assert captured_policy["targets"] == "file"
+    assert captured_policy["default_runtime"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_uses_task_proposal_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True)
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._owner_type = "user"
+    workflow_info = type("WorkflowInfo", (), {"workflow_id": "wf-1", "run_id": "run-1", "namespace": "default"})()
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda x: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    
+    captured_policy = None
+    captured_origin = None
+    async def mock_execute_activity(activity, payload, **kwargs):
+        nonlocal captured_policy, captured_origin
+        if activity == "proposal.generate":
+            return [{"title": "t1", "summary": "s1", "taskCreateRequest": {}}]
+        if activity == "proposal.submit":
+            captured_policy = payload["policy"]
+            captured_origin = payload["origin"]
+            return {"submitted_count": 1, "errors": []}
+        return None
+            
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", mock_execute_activity)
+    
+    await workflow._run_proposals_stage(
+        parameters={
+            "proposeTasks": True,
+            # Legacy fields should be ignored
+            "proposalMaxItems": 8,
+            "proposalTargets": "file",
+            "proposalDefaultRuntime": "gemini",
+            "task": {
+                "proposalPolicy": {
+                    "maxItems": {"project": 12},
+                    "targets": ["project"],
+                    "defaultRuntime": "gemini_cli",
+                }
+            }
+        }
+    )
+    
+    assert captured_policy is not None
+    assert captured_policy["max_items"] == 12
+    assert captured_policy["targets"] == ["project"]
+    assert captured_policy["default_runtime"] == "gemini_cli"
+    
+    # Also verify origin format DOC-REQ-005
+    assert captured_origin["source"] == "workflow"
+    assert "workflow_id" in captured_origin
+    assert "temporal_run_id" in captured_origin
+    assert "trigger_repo" in captured_origin
+

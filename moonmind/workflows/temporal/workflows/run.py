@@ -14,13 +14,18 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
-    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+    from moonmind.schemas.temporal_activity_models import (
+        ArtifactReadInput,
+        ArtifactWriteCompleteInput,
+        PlanGenerateInput,
+    )
     from moonmind.workflows.temporal.jules_bundle import (
         build_bundle_spec,
         eligible_for_bundle,
         is_jules_agent_runtime_node,
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
+    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -254,14 +259,14 @@ class MoonMindRunWorkflow:
         )
         if not artifact_id:
             raise ValueError(f"artifact.create returned no artifact_id for {name}")
-        await workflow.execute_activity(
+        await execute_typed_activity(
             "artifact.write_complete",
-            {
-                "principal": self._principal(),
-                "artifact_id": artifact_id,
-                "payload": json.dumps(payload),
-                "content_type": "application/json",
-            },
+            ArtifactWriteCompleteInput(
+                principal=self._principal(),
+                artifact_id=artifact_id,
+                payload=json.dumps(payload).encode("utf-8"),
+                content_type="application/json",
+            ),
             **self._execute_kwargs_for_route(artifact_write_route),
         )
         return str(artifact_id)
@@ -573,12 +578,12 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
-        plan_payload = await workflow.execute_activity(
+        plan_payload = await execute_typed_activity(
             "artifact.read",
-            {
-                "principal": self._principal(),
-                "artifact_ref": plan_ref,
-            },
+            ArtifactReadInput(
+                principal=self._principal(),
+                artifact_ref=plan_ref,
+            ),
             **self._execute_kwargs_for_route(artifact_read_route),
         )
         plan_dict = self._decode_json_payload(
@@ -603,12 +608,12 @@ class MoonMindRunWorkflow:
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
 
         if registry_snapshot_ref:
-            registry_payload = await workflow.execute_activity(
+            registry_payload = await execute_typed_activity(
                 "artifact.read",
-                {
-                    "principal": self._principal(),
-                    "artifact_ref": registry_snapshot_ref,
-                },
+                ArtifactReadInput(
+                    principal=self._principal(),
+                    artifact_ref=registry_snapshot_ref,
+                ),
                 **self._execute_kwargs_for_route(artifact_read_route),
             )
             registry_document = self._decode_json_payload(
@@ -798,12 +803,12 @@ class MoonMindRunWorkflow:
                     diag_ref = outputs.get("diagnostics_ref")
                     if diag_ref:
                         try:
-                            diag_payload = await workflow.execute_activity(
+                            diag_payload = await execute_typed_activity(
                                 "artifact.read",
-                                {
-                                    "principal": self._principal(),
-                                    "artifact_ref": diag_ref,
-                                },
+                                ArtifactReadInput(
+                                    principal=self._principal(),
+                                    artifact_ref=diag_ref,
+                                ),
                                 **self._execute_kwargs_for_route(artifact_read_route),
                             )
                             if isinstance(diag_payload, bytes):
@@ -1163,12 +1168,12 @@ class MoonMindRunWorkflow:
         if plan_ref:
             try:
                 artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
-                plan_payload = await workflow.execute_activity(
+                plan_payload = await execute_typed_activity(
                     "artifact.read",
-                    {
-                        "principal": self._principal(),
-                        "artifact_ref": plan_ref,
-                    },
+                    ArtifactReadInput(
+                        principal=self._principal(),
+                        artifact_ref=plan_ref,
+                    ),
                     **self._execute_kwargs_for_route(artifact_read_route),
                 )
                 plan_dict = self._decode_json_payload(
@@ -1496,6 +1501,11 @@ class MoonMindRunWorkflow:
         if not _coerce_bool(propose_tasks, default=False):
             return
 
+        if workflow.patched("enable_task_proposals_gate"):
+            if not settings.workflow.enable_task_proposals:
+                self._get_logger().info("Task proposal generation is globally disabled")
+                return
+
         self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
 
         try:
@@ -1535,19 +1545,43 @@ class MoonMindRunWorkflow:
             submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "proposal.submit"
             )
-            policy = {
-                "max_items": parameters.get("proposalMaxItems", 10),
-                "targets": parameters.get("proposalTargets", "project"),
-                "default_runtime": parameters.get("proposalDefaultRuntime"),
-            }
+            task_node = parameters.get("task")
+            task = task_node if isinstance(task_node, dict) else {}
+            policy = task.get("proposalPolicy")
+            if isinstance(policy, dict):
+                from moonmind.workflows.tasks.task_contract import TaskProposalPolicy
+                try:
+                    parsed_policy = TaskProposalPolicy.model_validate(policy)
+                    max_items_dict = parsed_policy.max_items or {}
+                    max_items_val = max_items_dict.get("project", parameters.get("proposalMaxItems", 10))
+                    
+                    policy_payload = {
+                        "max_items": max_items_val,
+                        "targets": parsed_policy.targets or parameters.get("proposalTargets", "project"),
+                        "default_runtime": parsed_policy.default_runtime or parameters.get("proposalDefaultRuntime"),
+                    }
+                except Exception as exc:
+                    self._get_logger().warning("Failed to validate task.proposalPolicy: %s", exc)
+                    policy_payload = {
+                        "max_items": parameters.get("proposalMaxItems", 10),
+                        "targets": parameters.get("proposalTargets", "project"),
+                        "default_runtime": parameters.get("proposalDefaultRuntime"),
+                    }
+            else:
+                policy_payload = {
+                    "max_items": parameters.get("proposalMaxItems", 10),
+                    "targets": parameters.get("proposalTargets", "project"),
+                    "default_runtime": parameters.get("proposalDefaultRuntime"),
+                }
             origin = {
+                "source": "workflow",
                 "workflow_id": workflow.info().workflow_id,
                 "temporal_run_id": workflow.info().run_id,
                 "trigger_repo": self._repo or "",
             }
             submit_payload = {
                 "candidates": candidate_list,
-                "policy": policy,
+                "policy": policy_payload,
                 "origin": origin,
                 "principal": self._principal(),
             }
@@ -1618,6 +1652,7 @@ class MoonMindRunWorkflow:
                     ),
                 },
                 "proposals": {
+                    "requested": _coerce_bool(parameters.get("proposeTasks"), default=False),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,
@@ -1636,17 +1671,22 @@ class MoonMindRunWorkflow:
             )
 
             artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
-            await workflow.execute_activity(
+            resolved_artifact_id = (
+                self._get_from_result(artifact_ref, "artifact_id")
+                or self._get_from_result(artifact_ref, "artifactId")
+                or ""
+            )
+            await execute_typed_activity(
                 "artifact.write_complete",
-                {
-                    "principal": self._principal(),
-                    "artifact_id": self._get_from_result(artifact_ref, "artifact_id") or "",
-                    "payload": json.dumps(finish_summary),
-                    "content_type": "application/json",
-                },
+                ArtifactWriteCompleteInput(
+                    principal=self._principal(),
+                    artifact_id=resolved_artifact_id,
+                    payload=json.dumps(finish_summary).encode("utf-8"),
+                    content_type="application/json",
+                ),
                 **self._execute_kwargs_for_route(artifact_write_route),
             )
-            self._summary_ref = self._get_from_result(artifact_ref, "artifact_id") or ""
+            self._summary_ref = resolved_artifact_id
         except Exception as exc:
             self._get_logger().warning(f"Failed to generate finish summary: {exc}")
 

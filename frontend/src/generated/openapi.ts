@@ -1209,88 +1209,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/task-runs/{id}/live-session": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Live Session
-         * @description Get the current live session status for a task run.
-         *
-         *     This is intended for Mission Control operators to view live log outputs.
-         */
-        get: operations["get_live_session_api_task_runs__id__live_session_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/task-runs/{id}/live-session/worker": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Live Session Worker
-         * @description Fetch current live-session payload for a worker.
-         */
-        get: operations["get_live_session_worker_api_task_runs__id__live_session_worker_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/task-runs/{id}/live-session/report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Report Live Session
-         * @description Report live-session lifecycle updates for a task run.
-         */
-        post: operations["report_live_session_api_task_runs__id__live_session_report_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/task-runs/{id}/live-session/heartbeat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Heartbeat Live Session
-         * @description Send live-session heartbeat updates.
-         */
-        post: operations["heartbeat_live_session_api_task_runs__id__live_session_heartbeat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/task-runs/{id}/observability-summary": {
         parameters: {
             query?: never;
@@ -2033,16 +1951,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /**
-         * AgentJobLiveSessionProvider
-         * @enum {string}
-         */
-        AgentJobLiveSessionProvider: "none";
-        /**
-         * AgentJobLiveSessionStatus
-         * @enum {string}
-         */
-        AgentJobLiveSessionStatus: "disabled" | "starting" | "ready" | "revoked" | "ended" | "error";
         /**
          * ArtifactCreateExecutionLinkRequest
          * @description Optional initial execution linkage for artifact creation.
@@ -4449,6 +4357,8 @@ export interface components {
          */
         TaskProposalPromoteResponse: {
             proposal: components["schemas"]["TaskProposalModel"];
+            /** Promotedexecutionid */
+            promotedExecutionId: string;
         };
         /**
          * TaskProposalReviewPriority
@@ -4503,36 +4413,6 @@ export interface components {
             targetBranch?: string | null;
             /** Instructions */
             instructions?: string | null;
-        };
-        /** TaskRunLiveSessionHeartbeatRequest */
-        TaskRunLiveSessionHeartbeatRequest: {
-            /** Workerid */
-            workerId: string;
-        };
-        /** TaskRunLiveSessionReportRequest */
-        TaskRunLiveSessionReportRequest: {
-            /** Workerid */
-            workerId: string;
-            status: components["schemas"]["AgentJobLiveSessionStatus"];
-            provider?: components["schemas"]["AgentJobLiveSessionProvider"] | null;
-            /** Workerhostname */
-            workerHostname?: string | null;
-            /** Livesessionname */
-            liveSessionName?: string | null;
-            /** Livesessionsocketpath */
-            liveSessionSocketPath?: string | null;
-            /** Attachro */
-            attachRo?: string | null;
-            /** Attachrw */
-            attachRw?: string | null;
-            /** Webro */
-            webRo?: string | null;
-            /** Webrw */
-            webRw?: string | null;
-            /** Expiresat */
-            expiresAt?: string | null;
-            /** Errormessage */
-            errorMessage?: string | null;
         };
         /**
          * TaskTemplateAppliedMetadataSchema
@@ -7884,166 +7764,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecurringTaskRunListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_live_session_api_task_runs__id__live_session_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Live session not found for this task run */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_live_session_worker_api_task_runs__id__live_session_worker_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-MoonMind-Worker-Token"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Live session not found for this task run */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    report_live_session_api_task_runs__id__live_session_report_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-MoonMind-Worker-Token"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskRunLiveSessionReportRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    heartbeat_live_session_api_task_runs__id__live_session_heartbeat_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-MoonMind-Worker-Token"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskRunLiveSessionHeartbeatRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
                 };
             };
             /** @description Validation Error */
