@@ -17,6 +17,7 @@ from temporalio.common import (
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
+from moonmind.config import settings
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
@@ -468,7 +469,6 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
     async def test_proposals_stage_enabled(self) -> None:
         """When proposeTasks is true, proposal activities are invoked."""
-        from moonmind.config import settings
         original_enabled = settings.workflow.enable_task_proposals
         settings.workflow.enable_task_proposals = True
         try:

@@ -1,5 +1,5 @@
-import asyncio
-from datetime import datetime, timezone, timedelta
+import json
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -51,9 +51,14 @@ async def test_run_proposals_stage_propagates_policy(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
-        # Convert Pydantic models to dict if needed
-        import json
-        dumped = json.loads(json.dumps(payload, default=lambda x: getattr(x, "model_dump", getattr(x, "dict", lambda: str(x)))() if hasattr(x, "model_dump") or hasattr(x, "dict") else x))
+        def _to_serializable(obj: Any) -> Any:
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            if hasattr(obj, "dict"):
+                return obj.dict()
+            return str(obj)
+
+        dumped = json.loads(json.dumps(payload, default=_to_serializable))
         captured.append((activity_type, dumped))
         if activity_type == "proposal.generate":
             return [{"title": "Generated proposal 1"}]

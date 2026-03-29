@@ -14,6 +14,7 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalReviewPriority,
     TaskProposalStatus,
 )
+from moonmind.workflows.task_proposals.service import TaskProposalStatusError
 
 
 @pytest.fixture
@@ -130,7 +131,7 @@ def test_create_proposal_accepts_workflow_origin(client: tuple[TestClient, Async
 
     assert response.status_code == 201
     kwargs = service.create_proposal.await_args.kwargs
-    assert kwargs["origin_source"] == "workflow"
+    assert kwargs["origin_source"] == TaskProposalOriginSource.WORKFLOW
     payload = response.json()
     assert payload["origin"]["source"] == "workflow"
 
@@ -255,7 +256,6 @@ def test_promote_proposal_accepts_override_payload(
 def test_promote_proposal_rejects_invalid_state(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
-    from moonmind.workflows.task_proposals.service import TaskProposalStatusError
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.promote_proposal.side_effect = TaskProposalStatusError("invalid state")

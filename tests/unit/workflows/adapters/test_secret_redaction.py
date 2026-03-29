@@ -1,6 +1,7 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 import uuid
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from moonmind.workflows.adapters.secret_boundary import DatabaseSecretResolver
 
@@ -12,7 +13,7 @@ async def test_database_secret_resolver():
     result_mock = MagicMock()
     # Assume secret_val inside result.scalars().first()
     secret_mock = MagicMock()
-    secret_mock.ciphertext = "decrypted_super_secret_key"
+    secret_mock.ciphertext = "encrypted_super_secret_key"
     
     result_mock.scalars.return_value.first.return_value = secret_mock
     db_session_mock.execute.return_value = result_mock
@@ -25,7 +26,8 @@ async def test_database_secret_resolver():
     resolved = await resolver.resolve_secrets(secret_refs)
     
     assert "ANTHROPIC_API_KEY" in resolved
-    assert resolved["ANTHROPIC_API_KEY"] == "decrypted_super_secret_key"
+    assert resolved["ANTHROPIC_API_KEY"] == "encrypted_super_secret_key"
+
 
 @pytest.mark.asyncio
 async def test_database_secret_resolver_invalid_uuid():
