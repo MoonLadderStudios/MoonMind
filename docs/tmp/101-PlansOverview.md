@@ -74,7 +74,6 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | Document | Summary |
 | -------- | ------- |
 | [`docs/ManagedAgents/TmateArchitecture.md`](../ManagedAgents/TmateArchitecture.md) | §16 MVP implementation sequence (four phases). |
-
 | [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) | DOOD “plan” for generic container runner (desired state). |
 | [`docs/ManagedAgents/ManagedAgentsAuthentication.md`](../ManagedAgents/ManagedAgentsAuthentication.md) | §8 Migration Path — phases for profiles, registry, multi-volume, queuing, dedicated fleet. |
 | [`docs/ManagedAgents/WorkerVectorEmbedding.md`](../ManagedAgents/WorkerVectorEmbedding.md) | Minimal implementation plan. |

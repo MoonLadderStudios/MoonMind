@@ -253,8 +253,6 @@ class OAuthProviderSpec(TypedDict):
 * provider-specific login entrypoint
 
 
-* placeholder until runtime support is real
-* same transport model once supported
 
 ---
 

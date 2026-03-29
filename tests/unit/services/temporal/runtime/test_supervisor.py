@@ -411,4 +411,38 @@ async def test_completion_callback_error_does_not_crash_supervisor(supervisor_en
     assert record.status == "completed"
 
 
+@pytest.mark.asyncio
+async def test_supervise_uses_output_parser_from_strategy(supervisor_env, tmp_path):
+    """Supervisor wires strategy.create_output_parser() and parsed output
+    appears in the diagnostics artifact."""
+    import json as _json
+    from datetime import datetime, UTC
+    store, artifact_storage, _, supervisor = supervisor_env
 
+    record = ManagedRunRecord(
+        run_id="run-gemini-parser",
+        agent_id="agent-1",
+        runtime_id="gemini_cli",
+        status="launching",
+        started_at=datetime.now(tz=UTC),
+    )
+    store.save(record)
+
+    gemini_err = "message: No capacity available for model\nreason: MODEL_CAPACITY_EXHAUSTED"
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", f"echo '{gemini_err}' >&2",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    result = await supervisor.supervise(
+        run_id="run-gemini-parser", process=process, timeout_seconds=30
+    )
+
+    # Read the diagnostics artifact and verify parsed_output is present
+    diag_path = artifact_storage.resolve_storage_path(result.diagnostics_ref)
+    diag = _json.loads(diag_path.read_text())
+    assert "parsed_output" in diag
+    po = diag["parsed_output"]
+    assert po["rate_limited"] is True
