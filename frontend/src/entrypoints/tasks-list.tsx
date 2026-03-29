@@ -273,119 +273,189 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
   };
 
   return (
-    <div className="w-full max-w-none mx-auto p-6 space-y-4 text-gray-900 dark:text-gray-100">
-      <header className="border-b border-gray-200 dark:border-gray-700 pb-4 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Tasks List</h2>
+    <div className="w-full max-w-none mx-auto p-4 md:p-6 text-gray-900 dark:text-gray-100 flex flex-col min-h-screen sm:min-h-[calc(100vh-4rem)]">
+      <div className="bg-white/70 dark:bg-gray-900/40 backdrop-blur-md shadow-lg border border-gray-200/50 dark:border-gray-700/50 rounded-2xl flex flex-col flex-grow overflow-hidden transition-all duration-300">
+        
+        {/* Header Section */}
+        <header className="px-4 py-3 sm:px-6 flex flex-wrap items-center justify-between gap-4 bg-white/40 dark:bg-gray-950/20 border-b border-gray-200/50 dark:border-gray-800/50">
+          <div className="flex items-center gap-4">
+            <h2 className="text-xl font-semibold tracking-tight">Tasks List</h2>
+            <label className="flex items-center gap-2 text-xs cursor-pointer select-none text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors">
+              <input
+                type="checkbox"
+                checked={liveUpdates}
+                disabled={!listEnabled}
+                onChange={(e) => setLiveUpdates(e.target.checked)}
+                className="rounded text-blue-500 bg-white/50 border-gray-300 dark:border-gray-600 dark:bg-gray-800/50 focus:ring-blue-500/50"
+              />
+              Live updates
+              {isFetching && liveUpdates && listEnabled ? (
+                <span className="animate-pulse text-blue-500 ml-1">●</span>
+              ) : null}
+            </label>
+          </div>
+
+          <form
+            className="flex flex-wrap items-center gap-3 text-xs"
+            onSubmit={(e) => e.preventDefault()}
+          >
+            <div className="flex items-center gap-2 bg-white/50 dark:bg-gray-900/50 px-3 py-1.5 rounded-full border border-gray-200/50 dark:border-gray-700/50 shadow-sm">
+              <span className="font-medium text-gray-500 dark:text-gray-400">Type</span>
+              <select
+                className="bg-transparent border-none py-0 pl-1 pr-6 focus:ring-0 text-gray-800 dark:text-gray-200 cursor-pointer text-xs"
+                value={workflowType}
+                disabled={!listEnabled}
+                onChange={(e) => {
+                  setWorkflowType(e.target.value);
+                  resetToFirstPage();
+                }}
+              >
+                <option value="">All Types</option>
+                {WORKFLOW_TYPES.map((w) => (
+                  <option key={w} value={w}>{w}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2 bg-white/50 dark:bg-gray-900/50 px-3 py-1.5 rounded-full border border-gray-200/50 dark:border-gray-700/50 shadow-sm">
+              <span className="font-medium text-gray-500 dark:text-gray-400">State</span>
+              <select
+                className="bg-transparent border-none py-0 pl-1 pr-6 focus:ring-0 text-gray-800 dark:text-gray-200 cursor-pointer text-xs"
+                value={temporalState}
+                disabled={!listEnabled}
+                onChange={(e) => {
+                  setTemporalState(e.target.value.toLowerCase());
+                  resetToFirstPage();
+                }}
+              >
+                <option value="">All States</option>
+                {TEMPORAL_STATES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2 bg-white/50 dark:bg-gray-900/50 px-3 py-1.5 rounded-full border border-gray-200/50 dark:border-gray-700/50 shadow-sm">
+              <span className="font-medium text-gray-500 dark:text-gray-400">Entry</span>
+              <select
+                className="bg-transparent border-none py-0 pl-1 pr-6 focus:ring-0 text-gray-800 dark:text-gray-200 cursor-pointer text-xs"
+                value={entry}
+                disabled={!listEnabled}
+                onChange={(e) => {
+                  setEntry(e.target.value.toLowerCase());
+                  resetToFirstPage();
+                }}
+              >
+                <option value="">All Entries</option>
+                {ENTRY_OPTIONS.map((en) => (
+                  <option key={en} value={en}>{en}</option>
+                ))}
+              </select>
+            </div>
+          </form>
+        </header>
+
+        {!listEnabled ? (
+          <div className="p-4 m-4 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-sm flex items-center gap-2 shadow-sm backdrop-blur-sm">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            Temporal task list is disabled in server configuration.
+          </div>
+        ) : null}
+
+        {/* Table Area */}
+        <div className="flex-grow overflow-x-auto overflow-y-auto relative min-h-[400px]">
+          {isLoading ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/40 dark:bg-gray-900/40 backdrop-blur-sm z-10">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
+                <p className="text-gray-500 dark:text-gray-400 text-sm animate-pulse">Loading tasks...</p>
+              </div>
+            </div>
+          ) : isError ? (
+            <div className="m-6 p-4 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 shadow-sm backdrop-blur-sm">
+              {(error as Error).message}
+            </div>
+          ) : (
+            <table className="min-w-full text-left text-sm whitespace-nowrap">
+              <thead className="sticky top-0 z-10 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.05)] border-b border-gray-200/50 dark:border-gray-800/50">
+                <tr>
+                  {TABLE_COLUMNS.map(([field, label]) => {
+                    const active = sortField === field;
+                    return (
+                      <th key={field} className="px-4 py-3 align-middle font-medium text-gray-500 dark:text-gray-400">
+                        <button
+                          type="button"
+                          className={[
+                            'flex items-center gap-1.5 w-full text-left text-xs uppercase tracking-wider transition-colors',
+                            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 rounded-md',
+                            active ? 'text-blue-600 dark:text-blue-400 font-semibold' : 'hover:text-gray-800 dark:hover:text-gray-200',
+                          ].join(' ')}
+                          onClick={() => onHeaderClick(field)}
+                        >
+                          {label}
+                          <span className="font-normal normal-case tracking-normal text-[0.65rem] opacity-80">{sortIndicator(field)}</span>
+                        </button>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 text-gray-600 dark:text-gray-300">
+                {sortedItems.length === 0 && listEnabled ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-12 text-center text-gray-500 dark:text-gray-400">
+                      <div className="flex flex-col items-center gap-2">
+                        <svg className="w-8 h-8 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
+                        <span>No tasks found.</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  sortedItems.map((row) => (
+                    <tr key={row.taskId} className="hover:bg-blue-50/30 dark:hover:bg-blue-900/20 transition-colors group">
+                      <td className="px-4 py-2.5 font-mono text-xs">
+                        <a
+                          className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline decoration-blue-500/30 underline-offset-4 transition-colors"
+                          href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
+                        >
+                          {row.taskId}
+                        </a>
+                      </td>
+                      <td className="px-4 py-2.5">{row.targetRuntime || '—'}</td>
+                      <td className="px-4 py-2.5">{row.targetSkill || '—'}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={executionStatusPillClasses(row)}>
+                          {row.rawState || row.state || row.status || '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 max-w-sm whitespace-normal break-words text-gray-900 dark:text-gray-100 group-hover:text-blue-950 dark:group-hover:text-blue-50 transition-colors">{row.title}</td>
+                      <td className="px-4 py-2.5 text-xs opacity-80">{formatWhen(row.scheduledFor)}</td>
+                      <td className="px-4 py-2.5 text-xs opacity-80">{formatWhen(row.startedAt)}</td>
+                      <td className="px-4 py-2.5 text-xs opacity-80">{formatWhen(row.closedAt)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
-        <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={liveUpdates}
-            disabled={!listEnabled}
-            onChange={(e) => setLiveUpdates(e.target.checked)}
-          />
-          Live updates
-          {isFetching && liveUpdates && listEnabled ? (
-            <span className="text-xs text-gray-500">refreshing…</span>
-          ) : null}
-        </label>
-      </header>
 
-      {!listEnabled ? (
-        <div
-          className="p-4 rounded-md bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-100 border border-amber-200 dark:border-amber-800 text-sm"
-          role="status"
-        >
-          The Temporal task list is disabled in server configuration (
-          <code className="text-xs">temporal_dashboard.list_enabled</code>).
-        </div>
-      ) : null}
-
-      <div className="bg-white dark:bg-gray-900/50 rounded-lg shadow-sm p-4 border border-gray-100 dark:border-gray-800 space-y-4">
-        <form
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm"
-          onSubmit={(e) => e.preventDefault()}
-        >
-          <label className="flex flex-col gap-1">
-            <span className="font-medium text-gray-700 dark:text-gray-300">Workflow Type</span>
-            <select
-              className="border rounded px-2 py-1 bg-white dark:bg-gray-950 dark:border-gray-700"
-              value={workflowType}
-              disabled={!listEnabled}
-              onChange={(e) => {
-                setWorkflowType(e.target.value);
-                resetToFirstPage();
-              }}
-            >
-              <option value="">(all)</option>
-              {WORKFLOW_TYPES.map((w) => (
-                <option key={w} value={w}>
-                  {w}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="font-medium text-gray-700 dark:text-gray-300">Temporal State</span>
-            <select
-              className="border rounded px-2 py-1 bg-white dark:bg-gray-950 dark:border-gray-700"
-              value={temporalState}
-              disabled={!listEnabled}
-              onChange={(e) => {
-                setTemporalState(e.target.value.toLowerCase());
-                resetToFirstPage();
-              }}
-            >
-              <option value="">(all)</option>
-              {TEMPORAL_STATES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="font-medium text-gray-700 dark:text-gray-300">Entry</span>
-            <select
-              className="border rounded px-2 py-1 bg-white dark:bg-gray-950 dark:border-gray-700"
-              value={entry}
-              disabled={!listEnabled}
-              onChange={(e) => {
-                setEntry(e.target.value.toLowerCase());
-                resetToFirstPage();
-              }}
-            >
-              <option value="">(all)</option>
-              {ENTRY_OPTIONS.map((en) => (
-                <option key={en} value={en}>
-                  {en}
-                </option>
-              ))}
-            </select>
-          </label>
-        </form>
-
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-gray-600 dark:text-gray-400">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
-            <strong className="text-gray-800 dark:text-gray-200 shrink-0">Page {pageIndex + 1}</strong>
-            <span className="opacity-40 shrink-0">|</span>
-            <span className="min-w-0">
-              Showing {pageStart}-{pageEnd}
+        {/* Footer / Pagination */}
+        <div className="px-4 py-3 sm:px-6 flex flex-wrap items-center justify-between gap-4 bg-gray-50/50 dark:bg-gray-900/30 border-t border-gray-200/50 dark:border-gray-800/50 text-xs">
+          <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+            <span className="font-medium text-gray-700 dark:text-gray-300">Page {pageIndex + 1}</span>
+            <span className="opacity-40">•</span>
+            <span>
+              {pageStart}-{pageEnd}
               {typeof totalCount === 'number' ? (
-                <>
-                  {' '}
-                  of {totalCount}
-                  {countMode && countMode !== 'exact' ? ` (${countMode})` : ''} tasks
-                </>
+                <> of {totalCount}{countMode && countMode !== 'exact' ? ` (${countMode})` : ''}</>
               ) : null}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <label className="inline-flex items-center gap-1.5">
-              <span className="text-xs text-gray-500 dark:text-gray-500">Per page</span>
+          
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400">Show</span>
               <select
-                className="text-xs leading-tight h-7 min-w-[3.25rem] rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 px-1.5 py-0"
+                className="bg-white/60 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-md py-1 px-2 pr-6 text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500 shadow-sm transition-shadow cursor-pointer"
                 value={pageSize}
                 disabled={!listEnabled}
                 onChange={(e) => {
@@ -395,103 +465,34 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
                 aria-label="Rows per page"
               >
                 {PAGE_SIZE_OPTIONS.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
+                  <option key={n} value={n}>{n}</option>
                 ))}
               </select>
-            </label>
-            <button
-              type="button"
-              className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 disabled:opacity-40 h-7 text-sm"
-              disabled={!listEnabled || cursorStack.length === 0 || sortedItems.length === 0}
-              onClick={goPrev}
-            >
-              ← Prev
-            </button>
-            <button
-              type="button"
-              className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 disabled:opacity-40 h-7 text-sm"
-              disabled={!listEnabled || !data?.nextPageToken}
-              onClick={goNext}
-            >
-              Next →
-            </button>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:hover:bg-white/80 dark:disabled:hover:bg-gray-800/80 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                disabled={!listEnabled || cursorStack.length === 0 || sortedItems.length === 0}
+                onClick={goPrev}
+                aria-label="Previous page"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              </button>
+              <button
+                type="button"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:hover:bg-white/80 dark:disabled:hover:bg-gray-800/80 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                disabled={!listEnabled || !data?.nextPageToken}
+                onClick={goNext}
+                aria-label="Next page"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </button>
+            </div>
           </div>
         </div>
 
-        {!listEnabled ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400">Enable the list in configuration to load tasks.</p>
-        ) : isLoading ? (
-          <p className="text-gray-500 italic animate-pulse">Loading tasks...</p>
-        ) : isError ? (
-          <div className="p-4 rounded-md bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
-            {(error as Error).message}
-          </div>
-        ) : (
-          <div className="overflow-x-auto w-full rounded border border-gray-200 dark:border-gray-700">
-            <table className="min-w-full text-left text-sm whitespace-nowrap">
-              <thead className="border-b border-gray-200 dark:border-gray-700 bg-gray-50/90 dark:bg-gray-950/50">
-                <tr>
-                  {TABLE_COLUMNS.map(([field, label]) => {
-                    const active = sortField === field;
-                    return (
-                      <th key={field} className="px-3 py-2.5 align-bottom first:pl-0 last:pr-0">
-                        <button
-                          type="button"
-                          className={[
-                            'w-full min-w-0 text-left text-xs font-semibold uppercase tracking-wide transition-colors',
-                            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 rounded-sm',
-                            active
-                              ? 'text-gray-900 dark:text-gray-100'
-                              : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300',
-                          ].join(' ')}
-                          onClick={() => onHeaderClick(field)}
-                        >
-                          {label}
-                          <span className="font-normal normal-case tracking-normal">{sortIndicator(field)}</span>
-                        </button>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {sortedItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-gray-500">
-                      No tasks found.
-                    </td>
-                  </tr>
-                ) : (
-                  sortedItems.map((row) => (
-                    <tr key={row.taskId} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td className="px-3 py-2 font-mono text-xs">
-                        <a
-                          className="text-blue-600 dark:text-blue-400 hover:underline"
-                          href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
-                        >
-                          {row.taskId}
-                        </a>
-                      </td>
-                      <td className="px-3 py-2">{row.targetRuntime || '—'}</td>
-                      <td className="px-3 py-2">{row.targetSkill || '—'}</td>
-                      <td className="px-3 py-2">
-                        <span className={executionStatusPillClasses(row)}>
-                          {row.rawState || row.state || row.status || '—'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 max-w-md whitespace-normal break-words">{row.title}</td>
-                      <td className="px-3 py-2">{formatWhen(row.scheduledFor)}</td>
-                      <td className="px-3 py-2">{formatWhen(row.startedAt)}</td>
-                      <td className="px-3 py-2">{formatWhen(row.closedAt)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </div>
   );
