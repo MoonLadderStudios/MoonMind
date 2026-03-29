@@ -1,5 +1,4 @@
 [
-
     {
       "id": 4150924370,
       "disposition": "not-applicable",
@@ -144,5 +143,45 @@
       "id": 4027172243,
       "disposition": "not-applicable",
       "rationale": "Copilot review summary is informational; the actionable feedback was captured in the inline review comment."
+    },
+    {
+      "id": 4150918742,
+      "disposition": "not-applicable",
+      "rationale": "Usage limit warning from bot, no action needed."
+    },
+    {
+      "id": 4027168030,
+      "disposition": "not-applicable",
+      "rationale": "Automated review summary from gemini bit, no action needed."
+    },
+    {
+      "id": 3006664892,
+      "disposition": "addressed",
+      "rationale": "Removed orphaned bullets under Claude Code in docs/ManagedAgents/OAuthTerminal.md."
+    },
+    {
+      "id": 3006664902,
+      "disposition": "addressed",
+      "rationale": "Removed the blank line inside the table in docs/tmp/101-PlansOverview.md."
+    },
+    {
+      "id": 3006664919,
+      "disposition": "addressed",
+      "rationale": "Added a replacement test 'test_supervise_uses_output_parser_from_strategy' using the gemini_cli runtime."
+    },
+    {
+      "id": 3006664926,
+      "disposition": "addressed",
+      "rationale": "Removed unused 'import json' in tests/unit/workflows/temporal/runtime/test_output_parser.py."
+    },
+    {
+      "id": 3006664932,
+      "disposition": "addressed",
+      "rationale": "Updated docstring to reference three runtimes instead of four."
+    },
+    {
+      "id": 4027172893,
+      "disposition": "not-applicable",
+      "rationale": "Pull request overview from Copilot, informational only."
     }
 ]

@@ -206,7 +206,7 @@ class ManagedAgentAdapter:
         default_auth = (
             _strategy.default_auth_mode
             if _strategy is not None
-            else ("oauth" if runtime_for_profile == "cursor_cli" else "api_key")
+            else "api_key"
         )
         auth_mode: str = profile.get("auth_mode", default_auth)
 

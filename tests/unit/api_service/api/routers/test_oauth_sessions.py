@@ -51,10 +51,10 @@ def client_app(_module_db) -> AsyncClient:
 
 def _oauth_payload(profile_id: str) -> dict[str, object]:
     return {
-        "runtime_id": "cursor_cli",
+        "runtime_id": "codex_cli",
         "profile_id": profile_id,
-        "volume_ref": "cursor-auth-volume",
-        "account_label": "cursor account",
+        "volume_ref": "codex_auth_volume",
+        "account_label": "codex account",
         "max_parallel_runs": 1,
         "cooldown_after_429_seconds": 300,
         "rate_limit_policy": "backoff",
@@ -65,12 +65,12 @@ def _oauth_payload(profile_id: str) -> dict[str, object]:
 async def test_create_oauth_session_expires_stale_active_before_conflict_check(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stale_profile_id = "cursor-cli-stale-profile"
+    stale_profile_id = "codex-cli-stale-profile"
 
     async with db_base.async_session_maker() as session:
         stale = ManagedAgentOAuthSession(
             session_id="oas_staleexisting1",
-            runtime_id="cursor_cli",
+            runtime_id="codex_cli",
             profile_id=stale_profile_id,
             status=OAuthSessionStatus.PENDING,
             requested_by_user_id="None",
@@ -109,12 +109,12 @@ async def test_create_oauth_session_expires_stale_active_before_conflict_check(
 async def test_create_oauth_session_returns_conflict_for_non_stale_active(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    profile_id = "cursor-cli-busy-profile"
+    profile_id = "codex-cli-busy-profile"
 
     async with db_base.async_session_maker() as session:
         active = ManagedAgentOAuthSession(
             session_id="oas_activeexisting1",
-            runtime_id="cursor_cli",
+            runtime_id="codex_cli",
             profile_id=profile_id,
             status=OAuthSessionStatus.PENDING,
             requested_by_user_id="None",
@@ -142,7 +142,7 @@ async def test_create_oauth_session_returns_conflict_for_non_stale_active(
 async def test_create_oauth_session_marks_failed_when_workflow_start_fails(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    profile_id = "cursor-cli-start-failure"
+    profile_id = "codex-cli-start-failure"
 
     async def _raise_start(_session_model):
         raise RuntimeError("temporal unavailable")

@@ -252,8 +252,8 @@ class TestLauncherDelegation:
         assert get_strategy("some_future_cli") is None
 
     def test_all_known_runtimes_are_registered(self) -> None:
-        """Since Phase 2, all four runtimes are registered."""
-        assert get_strategy("cursor_cli") is not None
+        """All three known runtimes (codex_cli, claude_code, gemini_cli) are registered."""
+
         assert get_strategy("codex_cli") is not None
         assert get_strategy("claude_code") is not None
         assert get_strategy("gemini_cli") is not None
