@@ -1,0 +1,4 @@
+- [x] Add `get_metrics_emitter` integration to `api_service/api/routers/task_runs.py` for stream metric tracking.
+- [x] Set `log_streaming_enabled` to `True` globally in `moonmind/config/settings.py`.
+- [x] Create integration stress test in `tests/integration/temporal/test_live_logs_performance.py`.
+- [x] Pass all tests via `./tools/test_unit.sh` and integration commands.

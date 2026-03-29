@@ -1,6 +1,80 @@
 [
   {
-
+    "id": 4149542802,
+    "disposition": "not-applicable",
+    "rationale": "Notice about usage limits."
+  },
+  {
+    "id": 3005782644,
+    "disposition": "addressed",
+    "rationale": "Added finally block and explicitly raised CancelledError to prevent skewing metrics."
+  },
+  {
+    "id": 3005782649,
+    "disposition": "addressed",
+    "rationale": "Implemented json.loads parser instead of volatile string matching for stream sequences."
+  },
+  {
+    "id": 4026424109,
+    "disposition": "not-applicable",
+    "rationale": "Automated code review summary block."
+  },
+  {
+    "id": 3005783361,
+    "disposition": "addressed",
+    "rationale": "Changed empty timeout except clauses to directly fail the pytest routine."
+  },
+  {
+    "id": 3005783363,
+    "disposition": "addressed",
+    "rationale": "Consolidated fix into the previous timeout failure implementation."
+  },
+  {
+    "id": 3005783365,
+    "disposition": "addressed",
+    "rationale": "Removed AsyncGenerator import."
+  },
+  {
+    "id": 3005783368,
+    "disposition": "addressed",
+    "rationale": "Removed trailing fastapi Request import."
+  },
+  {
+    "id": 3005783571,
+    "disposition": "addressed",
+    "rationale": "Corrected markdown syntax on tasks list."
+  },
+  {
+    "id": 3005783587,
+    "disposition": "addressed",
+    "rationale": "Duplicate of 3005782644. Handled CancelledError independently."
+  },
+  {
+    "id": 3005783598,
+    "disposition": "addressed",
+    "rationale": "Refactored tags to use constant 'stream': 'livelogs' instead of high cardinality IDs."
+  },
+  {
+    "id": 3005783608,
+    "disposition": "addressed",
+    "rationale": "Duplicate of the unused import reports."
+  },
+  {
+    "id": 3005783614,
+    "disposition": "addressed",
+    "rationale": "Duplicate of timeout unreliability. Addressed via pytest.fail implementation."
+  },
+  {
+    "id": 3005783617,
+    "disposition": "addressed",
+    "rationale": "Bound file level integration and asyncio pytestmark labels."
+  },
+  {
+    "id": 4026425341,
+    "disposition": "not-applicable",
+    "rationale": "PR context summary."
+  },
+  {
     "id": 4149304502,
     "disposition": "not-applicable",
     "rationale": "Codex usage notification. Not a code review concern."
@@ -135,5 +209,10 @@
   {"id": 3005672392, "disposition": "addressed", "rationale": "Removed unused TemporalExecutionService import."},
   {"id": 3005672393, "disposition": "addressed", "rationale": "Removed unused UpdateExecutionRequest and UpdateExecutionResponse imports."},
   {"id": 3005672394, "disposition": "addressed", "rationale": "Removed unused _get_owned_execution import."},
-  {"id": 3005676123, "disposition": "addressed", "rationale": "Removed unused TemporalClientAdapter import."}
+  {"id": 3005676123, "disposition": "addressed", "rationale": "Removed unused TemporalClientAdapter import."},
+  {
+    "id": 3005821649,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty json exception handler."
+  }
 ]
