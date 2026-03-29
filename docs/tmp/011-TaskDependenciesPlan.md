@@ -1,16 +1,18 @@
 # Task Dependencies Implementation Plan
 
-Status: Proposed  
+Status: In Progress  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
+Last Updated: 2026-03-29  
 Related: `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 
-## Phase 0 - Spec Alignment
+## Phase 0 - Spec Alignment ✅ COMPLETE
 
-- Rewrite `docs/Tasks/TaskDependencies.md` to align with the current Temporal architecture.
-- Update terminology to use `/api/executions`, `workflowId`, `taskId == workflowId`, and `initialParameters.task.dependsOn`.
-- Add a current implementation snapshot covering what already exists and what is still missing.
-- Clarify v1 scope as create-time only, `MoonMind.Run` only, no edit support, and no cross-type dependencies.
+- [x] Rewrite `docs/Tasks/TaskDependencies.md` to align with the current Temporal architecture.
+- [x] Update terminology to use `/api/executions`, `workflowId`, `taskId == workflowId`, and `initialParameters.task.dependsOn`.
+- [x] Add a current implementation snapshot covering what already exists and what is still missing.
+- [x] Clarify v1 scope as create-time only, `MoonMind.Run` only, no edit support, and no cross-type dependencies.
+
+All Phase 0 requirements verified complete as of 2026-03-29 (spec `116-task-dep-phase0`).
 
 ## Phase 1 - Submit Contract And Validation
 
