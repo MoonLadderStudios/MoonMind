@@ -1,10 +1,15 @@
 # Live Task Management
 
+> [!WARNING]
+> **DEPRECATED (Phase 6)**: This document describes the legacy terminal-session observability pattern (e.g., `web_ro`, `tmate` embedding). 
+> **Managed run observability is now strictly artifact-backed.**
+> Please see [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) for the active architecture.
+
 **Implementation tracking:** [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) · [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/)
 
-Status: Draft  
+Status: Deprecated (Replaced by Phase 6 Live Logs)  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-26
+Last Updated: 2026-03-28
 
 ---
 
