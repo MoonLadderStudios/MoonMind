@@ -1,6 +1,5 @@
 import pytest
 import asyncio
-from datetime import timedelta, timezone, datetime
 
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
@@ -55,7 +54,6 @@ async def test_workflow_pause_resume(mock_run_environment):
             workflows=[MoonMindRunWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            adapter = TemporalClientAdapter(client=env.client)
             workflow_id = "test-wf-interventions-1"
             
             # Start workflow
