@@ -64,6 +64,7 @@ async def test_log_stream_high_volume_performance():
                         if payload.get("sequence") == 9999:
                             break
                     except json.JSONDecodeError:
+                        # Intentionally ignore malformed/incomplete JSON data frames expected from SSE chunking
                         pass
         except asyncio.TimeoutError:
             pytest.fail("Consumer loop timed out unexpectedly")
