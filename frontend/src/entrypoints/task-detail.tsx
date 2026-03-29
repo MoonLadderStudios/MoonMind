@@ -541,14 +541,20 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
           <section>
             <h3>Live Logs</h3>
-            {logTailingEnabled && execution.taskRunId ? (
-              <p className="small">
-                Task run <code className="text-xs">{execution.taskRunId}</code> can use the same live tailing
-                endpoints as the legacy dashboard client.
-              </p>
+            {logTailingEnabled ? (
+              execution.taskRunId ? (
+                <p className="small">
+                  Task run <code className="text-xs">{execution.taskRunId}</code> can use the same live tailing
+                  endpoints as the legacy dashboard client.
+                </p>
+              ) : (
+                <p className="small">
+                  Live log tailing requires a task run id. Waiting for the task to start executing...
+                </p>
+              )
             ) : (
               <p className="small">
-                Live log tailing requires a task run id and enabled log tailing in the server dashboard config.
+                Live log tailing is disabled in the server dashboard config.
               </p>
             )}
           </section>
