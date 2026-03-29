@@ -1932,7 +1932,7 @@ class OAuthSessionStatus(str, enum.Enum):
 
     PENDING = "pending"
     STARTING = "starting"
-    OAUTH_RUNNER_READY = "oauth_runner_ready"
+    BRIDGE_READY = "bridge_ready"
     AWAITING_USER = "awaiting_user"
     VERIFYING = "verifying"
     REGISTERING_PROFILE = "registering_profile"
@@ -1987,8 +1987,10 @@ class ManagedAgentOAuthSession(Base):
     )
     requested_by_user_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    oauth_web_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    oauth_ssh_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    terminal_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    terminal_bridge_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    connected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    disconnected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     worker_service: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

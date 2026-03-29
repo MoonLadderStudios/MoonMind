@@ -4306,22 +4306,171 @@
         }
       }
     },
+    "/api/task-runs/{id}/observability-summary": {
+      "get": {
+        "tags": [
+          "task_runs"
+        ],
+        "summary": "Get Observability Summary",
+        "description": "Fetch the observability summary for a task run from the shared agent jobs volume.",
+        "operationId": "get_observability_summary_api_task_runs__id__observability_summary_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Observability Summary Api Task Runs  Id  Observability Summary Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Observability record not found for this task run"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/task-runs/{id}/logs/{stream_name}": {
+      "get": {
+        "tags": [
+          "task_runs"
+        ],
+        "summary": "Stream Task Run Log",
+        "description": "Serve stdout, stderr, or merged logs directly from the shared volume.",
+        "operationId": "stream_task_run_log_api_task_runs__id__logs__stream_name__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "stream_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stream Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Log artifact not found"
+          },
+          "400": {
+            "description": "Invalid stream name"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/task-runs/{id}/diagnostics": {
+      "get": {
+        "tags": [
+          "task_runs"
+        ],
+        "summary": "Get Task Run Diagnostics",
+        "description": "Return the diagnostics.json payload for a task run.",
+        "operationId": "get_task_run_diagnostics_api_task_runs__id__diagnostics_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Diagnostics artifact not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/secrets": {
       "get": {
         "tags": [
           "task-dashboard"
         ],
         "summary": "Task Secrets Route",
-        "description": "Serve the React-powered secrets page.",
+        "description": "Redirect the legacy secrets page into unified settings.",
         "operationId": "task_secrets_route_tasks_secrets_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -4464,16 +4613,14 @@
           "task-dashboard"
         ],
         "summary": "Task Workers Route",
-        "description": "Serve the React-powered workers page.",
+        "description": "Redirect the legacy workers page into unified settings.",
         "operationId": "task_workers_route_tasks_workers_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -10957,28 +11104,6 @@
           "status": {
             "$ref": "#/components/schemas/OAuthSessionStatus"
           },
-          "oauth_web_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Oauth Web Url"
-          },
-          "oauth_ssh_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Oauth Ssh Url"
-          },
           "expires_at": {
             "anyOf": [
               {
@@ -11001,6 +11126,18 @@
               }
             ],
             "title": "Failure Reason"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
           }
         },
         "type": "object",
@@ -11017,7 +11154,7 @@
         "enum": [
           "pending",
           "starting",
-          "oauth_runner_ready",
+          "bridge_ready",
           "awaiting_user",
           "verifying",
           "registering_profile",
@@ -11229,6 +11366,31 @@
             ],
             "title": "Provider Label"
           },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "model_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Overrides"
+          },
           "credential_source": {
             "type": "string",
             "pattern": "^(oauth_volume|secret_ref|none)$",
@@ -11439,6 +11601,24 @@
               }
             ],
             "title": "Provider Label"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "model_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Model Overrides"
           },
           "credential_source": {
             "type": "string",
@@ -11673,6 +11853,31 @@
               }
             ],
             "title": "Provider Label"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "model_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Overrides"
           },
           "credential_source": {
             "anyOf": [

@@ -150,7 +150,7 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process, endpoints = await launcher.launch(
+    record, process, endpoints, _cleanup = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
@@ -203,7 +203,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints = await launcher.launch(
+    _record, process, endpoints, _cleanup = await launcher.launch(
         run_id="run-passthrough-1", request=request, profile=profile
     )
     await process.wait()
@@ -307,13 +307,13 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     request = _make_request()
 
     # First launch
-    record, process, _ = await launcher.launch(
+    record, process, _, _cleanup = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
 
     # Second launch with same run_id returns existing record (idempotent)
-    existing, exc_process, exc_endpoints = await launcher.launch(
+    existing, exc_process, exc_endpoints, _cleanup2 = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     assert existing.run_id == "run-1"
@@ -346,7 +346,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _endpoints = await launcher.launch(
+    record, process, _endpoints, _cleanup = await launcher.launch(
         run_id="run-2",
         request=request,
         profile=profile,
@@ -429,7 +429,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    record, process, endpoints = await launcher.launch(
+    record, process, endpoints, _cleanup = await launcher.launch(
         run_id="workspace-run-1",
         request=request,
         profile=profile,
@@ -518,7 +518,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _endpoints = await launcher.launch(
+    _record, process, _endpoints, _cleanup = await launcher.launch(
         run_id="workspace-run-existing-branch",
         request=request,
         profile=profile,
@@ -685,7 +685,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints = await launcher.launch(
+    _record, process, endpoints, _cleanup = await launcher.launch(
         run_id="run-env-layer-1", request=request, profile=profile
     )
     await process.wait()
@@ -712,13 +712,13 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         runtime_id="claude_code",
         command_template=["claude", "-p", "hello"],
         env_overrides={
-            "MANAGED_API_KEY_REF": "MINIMAX_API_KEY",
-            "MANAGED_API_KEY_TARGET_ENV": "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             "ANTHROPIC_MODEL": "MiniMax-M2.7",
         },
         passthrough_env_keys=[],
-        secret_refs={},
+        secret_refs={
+            "ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY",
+        },
     )
     request = _make_request()
 
@@ -754,11 +754,11 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         _fake_resolve,
     )
 
-    _record, process, _endpoints = await launcher.launch(
+    _record, process, _endpoints, _cleanup = await launcher.launch(
         run_id="run-managed-api-key-1", request=request, profile=profile
     )
     await process.wait()
 
     assert captured_env["ANTHROPIC_AUTH_TOKEN"] == "resolved-minimax-token"
-    assert captured_env["MANAGED_API_KEY_REF"] == "MINIMAX_API_KEY"
-    assert captured_env["MANAGED_API_KEY_TARGET_ENV"] == "ANTHROPIC_AUTH_TOKEN"
+    assert "MANAGED_API_KEY_REF" not in captured_env
+    assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env

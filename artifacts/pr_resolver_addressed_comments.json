@@ -1,97 +1,47 @@
 [
-  {
-    "id": 4148891383,
-    "disposition": "not-applicable",
-    "rationale": "Usage limit warning from bots."
-  },
-  {
-    "id": 4026080599,
-    "disposition": "not-applicable",
-    "rationale": "High-level comment from Gemini bot."
-  },
-  {
-    "id": 3005382088,
-    "disposition": "addressed",
-    "rationale": "Validates resolve path with is_relative_to"
-  },
-  {
-    "id": 3005382090,
-    "disposition": "addressed",
-    "rationale": "Validates diagnostics resolve path with is_relative_to"
-  },
-  {
-    "id": 3005382093,
-    "disposition": "addressed",
-    "rationale": "Added explicit check for merged_log_artifact_ref"
-  },
-  {
-    "id": 3005382096,
-    "disposition": "addressed",
-    "rationale": "Moved imports to top of task_runs.py"
-  },
-  {
-    "id": 3005382173,
-    "disposition": "addressed",
-    "rationale": "Cleaned up unused test variables and mapped to HTTP response checking"
-  },
-  {
-    "id": 3005384368,
-    "disposition": "addressed",
-    "rationale": "Added is_superuser dependency validation"
-  },
-  {
-    "id": 3005384375,
-    "disposition": "addressed",
-    "rationale": "Wrapped file operations in asyncio.to_thread"
-  },
-  {
-    "id": 3005384377,
-    "disposition": "addressed",
-    "rationale": "Updated FileResponse mock to return correct object wrapper"
-  },
-  {
-    "id": 3005384379,
-    "disposition": "addressed",
-    "rationale": "Added tests for diagnostics endpoint variants"
-  },
-  {
-    "id": 3005384383,
-    "disposition": "addressed",
-    "rationale": "Unchecked range semantics in docs phase 2 task plan"
-  },
-  {
-    "id": 3005384387,
-    "disposition": "addressed",
-    "rationale": "Fixed Capability typo"
-  },
-  {
-    "id": 3005384390,
-    "disposition": "addressed",
-    "rationale": "Fixed merged fallback logic"
-  },
-  {
-    "id": 3005384394,
-    "disposition": "addressed",
-    "rationale": "Unchecked range semantics in docs phase 2 task plan"
-  },
-  {
-    "id": 3005384397,
-    "disposition": "addressed",
-    "rationale": "Fixed backtick syntax in tasks checklist"
-  },
-  {
-    "id": 3005384402,
-    "disposition": "addressed",
-    "rationale": "Added is_relative_to checks to artifact resolve"
-  },
-  {
-    "id": 4026082010,
-    "disposition": "not-applicable",
-    "rationale": "Top level PR summary from Copilot bot"
-  },
-  {
-    "id": 3005403381,
-    "disposition": "addressed",
-    "rationale": "Removed unused AgentJobLiveSessionProvider import"
-  }
+  {"id": 4149058100, "disposition": "not-applicable", "rationale": "Bot usage-limit notification, not code feedback."},
+  {"id": 3005503017, "disposition": "not-applicable", "rationale": "revision is required by Alembic at module scope; linter false positive."},
+  {"id": 3005503034, "disposition": "not-applicable", "rationale": "down_revision is required by Alembic at module scope; linter false positive."},
+  {"id": 3005503039, "disposition": "addressed", "rationale": "Removed unused branch_labels = None from migration file."},
+  {"id": 3005503045, "disposition": "addressed", "rationale": "Removed unused depends_on = None from migration file."},
+  {"id": 3005503053, "disposition": "addressed", "rationale": "Removed DBSyncSecretResolver placeholder class from launcher.py."},
+  {"id": 3005503060, "disposition": "addressed", "rationale": "Replaced bare except OSError: pass with logging.debug in materializer.py cleanup."},
+  {"id": 3005503064, "disposition": "addressed", "rationale": "Removed unused Any and Optional imports from materializer.py."},
+  {"id": 3005503071, "disposition": "addressed", "rationale": "Removed unused ABC and abstractmethod imports from materializer.py."},
+  {"id": 3005507489, "disposition": "addressed", "rationale": "Added ALTER TYPE to add bridge_ready enum value and backfill rows in migration."},
+  {"id": 3005507495, "disposition": "addressed", "rationale": "Filled out specs/112-provider-profiles-p4/plan.md replacing template placeholders."},
+  {"id": 3005507498, "disposition": "addressed", "rationale": "Added FileNotFoundError handling with clear error message in terminal_bridge.py."},
+  {"id": 3005507505, "disposition": "addressed", "rationale": "Deleted committed var/pr_resolver/attempts/*.json files and added path to .gitignore."},
+  {"id": 3005507512, "disposition": "addressed", "rationale": "Pinned alpine:3.19 and added 30-second asyncio.wait_for timeout in terminal_bridge.py."},
+  {"id": 3005507515, "disposition": "addressed", "rationale": "Removed oauth_web_url/oauth_ssh_url access from GET and history router handlers."},
+  {"id": 3005507523, "disposition": "addressed", "rationale": "Filled out specs/113-provider-profiles-p5/plan.md replacing template placeholders."},
+  {"id": 3005507526, "disposition": "addressed", "rationale": "Deleted committed var/pr_resolver/attempts/*.json files (same fix as 3005507505)."},
+  {"id": 3005507529, "disposition": "addressed", "rationale": "Materializer cmd passed through profile.command_template before build_command; request overrides preserved."},
+  {"id": 3005507531, "disposition": "addressed", "rationale": "Removed DBSyncSecretResolver placeholder (same fix as 3005503053)."},
+  {"id": 3005507535, "disposition": "addressed", "rationale": "Removed unused imports (same fix as 3005503064+71)."},
+  {"id": 3005507537, "disposition": "addressed", "rationale": "Updated activity_catalog, activity_runtime, and artifacts to register oauth_session.update_terminal_session."},
+  {"id": 3005507538, "disposition": "addressed", "rationale": "Added validation for session_id, volume_ref, volume_mount_path and clamped session_ttl in start_auth_runner."},
+  {"id": 3005507539, "disposition": "not-applicable", "rationale": "thread_outdated=true; test was already updated in an earlier commit on this branch."},
+  {"id": 3005507542, "disposition": "addressed", "rationale": "Updated materialize docstring to match actual 7-step implementation."},
+  {"id": 3005507551, "disposition": "not-applicable", "rationale": "Pre-release project: compatibility aliases for internal contracts are prohibited per constitution."},
+  {"id": 3005507552, "disposition": "addressed", "rationale": "Fixed OAUTH_RUNNER_READY -> BRIDGE_READY in oauth_session_cleanup.py; enum migration added."},
+  {"id": 3005507554, "disposition": "addressed", "rationale": "New activity type registered in catalog and runtime (same fix as 3005507537)."},
+  {"id": 3005507555, "disposition": "addressed", "rationale": "DictSecretResolver now filters resolved_secrets by requested secret_refs keys."},
+  {"id": 4026183683, "disposition": "not-applicable", "rationale": "Copilot review summary comment, no action required."},
+  {"id": 4026184878, "disposition": "not-applicable", "rationale": "Gemini review summary comment, no action required."},
+  {"id": 3005508964, "disposition": "addressed", "rationale": "Fixed f-string syntax error: replaced malformed f-string with string concatenation in materializer.py."},
+  {"id": 3005508965, "disposition": "addressed", "rationale": "Implemented file_templates materialization in async materialize(); generated_files now populated."},
+  {"id": 3005508967, "disposition": "addressed", "rationale": "Updated materialize docstring (same fix as 3005507542)."},
+  {"id": 3005508969, "disposition": "not-applicable", "rationale": "Design refactor suggestion; DBSyncSecretResolver already removed and materializer made async."},
+  {"id": 3005508971, "disposition": "addressed", "rationale": "Fixed data-model.md to say (Dict[str, str] env, List[str] command)."},
+  {"id": 3005533633, "disposition": "addressed", "rationale": "Wrapped open(tmp_path).read() in with statement in test_materializer.py."},
+  {"id": 3005533635, "disposition": "not-applicable", "rationale": "thread_outdated=true; DBSyncSecretResolver already removed in this PR."},
+  {"id": 3005533636, "disposition": "not-applicable", "rationale": "thread_outdated=true; empty except already fixed in this PR."},
+  {"id": 3005533637, "disposition": "addressed", "rationale": "Replaced bare except Exception: pass with logging.debug in websockets.py cleanup handler."},
+  {"id": 3005544369, "disposition": "addressed", "rationale": "Removed unused Sequence import from migration file typing import."},
+  {"id": 3005544370, "disposition": "addressed", "rationale": "Removed unused AsyncMock import from test_materializer.py."},
+  {"id": 3005544371, "disposition": "addressed", "rationale": "Removed unused OAuthSessionOutput import from integration test."},
+  {"id": 3005544373, "disposition": "addressed", "rationale": "Removed unused uuid import from websockets.py."},
+  {"id": 3005544374, "disposition": "addressed", "rationale": "Removed unused json import from websockets.py."},
+  {"id": 3005544375, "disposition": "addressed", "rationale": "Removed inline import logging from websockets.py cleanup handler; uses module-level import."}
 ]

@@ -3613,21 +3613,19 @@ export interface components {
             /** Profile Id */
             profile_id: string;
             status: components["schemas"]["OAuthSessionStatus"];
-            /** Oauth Web Url */
-            oauth_web_url?: string | null;
-            /** Oauth Ssh Url */
-            oauth_ssh_url?: string | null;
             /** Expires At */
             expires_at?: string | null;
             /** Failure Reason */
             failure_reason?: string | null;
+            /** Created At */
+            created_at?: string | null;
         };
         /**
          * OAuthSessionStatus
          * @description Lifecycle status for a managed agent OAuth session.
          * @enum {string}
          */
-        OAuthSessionStatus: "pending" | "starting" | "oauth_runner_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
+        OAuthSessionStatus: "pending" | "starting" | "bridge_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
         /**
          * PinArtifactRequest
          * @description Request body for explicit artifact pinning.

@@ -46,8 +46,6 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.auth.env_shaping import (
     OAUTH_CLEARED_VARS,
     _should_filter_base_env_var,
-    shape_environment_for_api_key,
-    shape_environment_for_oauth,
 )
 
 logger = logging.getLogger(__name__)
@@ -267,55 +265,34 @@ class ManagedAgentAdapter:
                 delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
                 delta_env_overrides["OPENAI_API_KEY"] = proxy_token
 
-        if auth_mode == "oauth":
-            shaped_env = shape_environment_for_oauth(
-                base_env,
-                volume_mount_path=profile.get("volume_mount_path"),
-            )
-            volume_mount_path = profile.get("volume_mount_path")
-            if volume_mount_path:
-                delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
-        else:
-            shaped_env = shape_environment_for_api_key(
-                base_env,
-                api_key_ref=profile.get("api_key_ref"),
-                account_label=profile.get("account_label"),
-            )
-            api_key_ref = profile.get("api_key_ref")
-            
-            # SUPPRESS raw key distribution downstream if proxy mode is enabled.
-            if api_key_ref and not is_proxy_first:
-                # Pass only the reference name, not any raw credential value.
-                delta_env_overrides["MANAGED_API_KEY_REF"] = api_key_ref
-                
-            account_label = profile.get("account_label")
-            if account_label:
-                delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
-            runtime_env_overrides = profile.get("runtime_env_overrides") or {}
-            if isinstance(runtime_env_overrides, dict):
-                for key, value in runtime_env_overrides.items():
-                    ks = str(key).strip()
-                    if not ks:
-                        continue
-                    shaped_env[ks] = str(value) if value is not None else ""
-                    # Only propagate non-sensitive runtime_env_overrides keys
-                    # into delta_env_overrides so they reach the launcher.
-                    # Sensitive-keyed entries must be handled through secret_refs.
-                    # Exception: explicitly injected proxy variables
-                    is_safe_proxy_var = is_proxy_first and (
-                        ks == "MOONMIND_PROXY_TOKEN" or ks.endswith("_BASE_URL")
-                    )
-                    if not _should_filter_base_env_var(ks) or is_safe_proxy_var:
-                        delta_env_overrides[ks] = str(value) if value is not None else ""
-            api_key_env_var = profile.get("api_key_env_var")
-            if api_key_env_var and str(api_key_env_var).strip():
-                shaped_env["MANAGED_API_KEY_TARGET_ENV"] = (
-                    str(api_key_env_var).strip().upper()
+        # Phase 4: Removed auth_mode branching and shape_environment_* calls.
+        # Ensure base environment variables from proxy and runtime overrides are preserved.
+        volume_mount_path = profile.get("volume_mount_path")
+        if volume_mount_path:
+            delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
+
+        account_label = profile.get("account_label")
+        if account_label:
+            delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
+
+        runtime_env_overrides = profile.get("runtime_env_overrides") or {}
+        if isinstance(runtime_env_overrides, dict):
+            for key, value in runtime_env_overrides.items():
+                ks = str(key).strip()
+                if not ks:
+                    continue
+                # Only propagate non-sensitive runtime_env_overrides keys
+                # into delta_env_overrides so they reach the launcher.
+                is_safe_proxy_var = is_proxy_first and (
+                    ks == "MOONMIND_PROXY_TOKEN" or ks.endswith("_BASE_URL")
                 )
-                if not is_proxy_first:
-                    delta_env_overrides["MANAGED_API_KEY_TARGET_ENV"] = (
-                        str(api_key_env_var).strip().upper()
-                    )
+                if not _should_filter_base_env_var(ks) or is_safe_proxy_var:
+                    delta_env_overrides[ks] = str(value) if value is not None else ""
+
+        # We construct shaped_env purely for the metadata count metric, matching the old behavior
+        # where it included base_env + delta.
+        shaped_env = base_env.copy()
+        shaped_env.update(delta_env_overrides)
         passthrough_env_keys = [
             key
             for key in _SECRET_ENV_PASSTHROUGH_KEYS

@@ -40,10 +40,10 @@ class TestOAuthSessionCatalogRegistration:
         assert route.timeouts.start_to_close_seconds == 15
         assert route.timeouts.schedule_to_close_seconds == 30
 
-    def test_update_session_urls_in_catalog(self) -> None:
+    def test_update_terminal_session_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
-        route = catalog.resolve_activity("oauth_session.update_session_urls")
-        assert route.activity_type == "oauth_session.update_session_urls"
+        route = catalog.resolve_activity("oauth_session.update_terminal_session")
+        assert route.activity_type == "oauth_session.update_terminal_session"
         assert route.fleet == "artifacts"
         assert route.timeouts.start_to_close_seconds == 15
         assert route.timeouts.schedule_to_close_seconds == 30

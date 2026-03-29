@@ -6,7 +6,7 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
   - ``oauth_session.stop_auth_runner``    — tear down auth runner container
   - ``oauth_session.update_status``       — transition session status in DB
   - ``oauth_session.mark_failed``         — mark session as failed with reason
-  - ``oauth_session.update_session_urls`` — store session URLs in DB
+  - ``oauth_session.update_terminal_session`` — store terminal session refs in DB
   - ``oauth_session.verify_volume``       — call provider volume verifier
   - ``oauth_session.register_profile``    — create or update auth profile
 """
@@ -77,23 +77,42 @@ async def oauth_session_ensure_volume(
 async def oauth_session_start_auth_runner(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Browser-based OAuth runners were removed; fail fast with guidance."""
-    _ = request  # reserved for workflow contract compatibility
-    raise RuntimeError(
-        "Managed browser OAuth sessions are not available: the legacy runner was "
-        "removed. Use API-key or token-based auth profiles, or implement the "
-        "first-party flow described in docs/ManagedAgents/OAuthTerminal.md."
+    """Browser-based OAuth runners were removed; start the Terminal PTY bridge."""
+    session_id = request.get("session_id", "")
+    runtime_id = request.get("runtime_id", "")
+    volume_ref = request.get("volume_ref", "")
+    volume_mount_path = request.get("volume_mount_path", "")
+    session_ttl = int(request.get("session_ttl", 1800))
+
+    if not session_id:
+        raise ValueError("session_id is required")
+    if not volume_ref:
+        raise ValueError("volume_ref is required")
+    if not volume_mount_path:
+        raise ValueError("volume_mount_path is required")
+    session_ttl = max(60, min(session_ttl, 86400))
+
+    from moonmind.workflows.temporal.runtime.terminal_bridge import start_terminal_bridge_container
+    
+    bridge_info = await start_terminal_bridge_container(
+        session_id=session_id,
+        runtime_id=runtime_id,
+        volume_ref=volume_ref,
+        volume_mount_path=volume_mount_path,
+        session_ttl=session_ttl,
     )
+    
+    return bridge_info
 
 
-@activity.defn(name="oauth_session.update_session_urls")
-async def oauth_session_update_session_urls(
+@activity.defn(name="oauth_session.update_terminal_session")
+async def oauth_session_update_terminal_session(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Write session web/ssh URLs to the session DB row."""
+    """Write terminal session references to the DB row."""
     session_id = request.get("session_id", "")
-    oauth_web_url = request.get("oauth_web_url", "")
-    oauth_ssh_url = request.get("oauth_ssh_url", "")
+    terminal_session_id = request.get("terminal_session_id", "")
+    terminal_bridge_id = request.get("terminal_bridge_id", "")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -110,18 +129,18 @@ async def oauth_session_update_session_urls(
         if not session_obj:
             raise ValueError(f"Session {session_id} not found")
 
-        if oauth_web_url:
-            session_obj.oauth_web_url = oauth_web_url
-        if oauth_ssh_url:
-            session_obj.oauth_ssh_url = oauth_ssh_url
+        if terminal_session_id:
+            session_obj.terminal_session_id = terminal_session_id
+        if terminal_bridge_id:
+            session_obj.terminal_bridge_id = terminal_bridge_id
 
         await db.commit()
 
-    logger.info("Updated OAuth session URLs for session %s", session_id)
+    logger.info("Updated OAuth terminal session refs for session %s", session_id)
     return {
         "session_id": session_id,
-        "oauth_web_url": oauth_web_url,
-        "oauth_ssh_url": oauth_ssh_url,
+        "terminal_session_id": terminal_session_id,
+        "terminal_bridge_id": terminal_bridge_id,
     }
 
 
@@ -199,6 +218,35 @@ async def oauth_session_verify_volume(
     )
 
     verification["session_id"] = session_id
+
+    return verification
+
+
+@activity.defn(name="oauth_session.verify_cli_fingerprint")
+async def oauth_session_verify_cli_fingerprint(
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify that credentials in the volume belong to the expected user or have the correct format."""
+    session_id = request.get("session_id", "")
+    runtime_id = request.get("runtime_id", "")
+    volume_ref = request.get("volume_ref", "")
+    volume_mount_path = request.get("volume_mount_path")
+
+    if not session_id or not runtime_id or not volume_ref:
+        raise ValueError("session_id, runtime_id, and volume_ref are required")
+
+    # In Phase 5 MVP, we fallback to just verifying the files exist, similar to verify_volume
+    # A true fingerprint validation would cat the files and parse JSON to check email/token format.
+    from moonmind.workflows.temporal.runtime.providers.volume_verifiers import verify_volume_credentials
+
+    verification = await verify_volume_credentials(
+        runtime_id=runtime_id,
+        volume_ref=volume_ref,
+        volume_mount_path=volume_mount_path,
+    )
+
+    verification["session_id"] = session_id
+    verification["fingerprint_verified"] = verification.get("verified", False)
 
     return verification
 

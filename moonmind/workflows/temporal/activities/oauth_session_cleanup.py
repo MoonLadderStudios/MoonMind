@@ -44,7 +44,7 @@ async def oauth_session_cleanup_stale(
     non_terminal_statuses = [
         OAuthSessionStatus.PENDING,
         OAuthSessionStatus.STARTING,
-        OAuthSessionStatus.OAUTH_RUNNER_READY,
+        OAuthSessionStatus.BRIDGE_READY,
         OAuthSessionStatus.AWAITING_USER,
         OAuthSessionStatus.VERIFYING,
         OAuthSessionStatus.REGISTERING_PROFILE,

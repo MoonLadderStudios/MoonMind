@@ -11,11 +11,10 @@ from api_service.services.provider_profile_service import sync_provider_profile_
 from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
-
 _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.PENDING,
     OAuthSessionStatus.STARTING,
-    OAuthSessionStatus.OAUTH_RUNNER_READY,
+    OAuthSessionStatus.BRIDGE_READY,
     OAuthSessionStatus.AWAITING_USER,
     OAuthSessionStatus.VERIFYING,
     OAuthSessionStatus.REGISTERING_PROFILE,
@@ -135,8 +134,6 @@ async def get_oauth_session(
         runtime_id=session.runtime_id,
         profile_id=session.profile_id,
         status=session.status,
-        oauth_web_url=session.oauth_web_url,
-        oauth_ssh_url=session.oauth_ssh_url,
         expires_at=session.expires_at,
         failure_reason=session.failure_reason,
     )
@@ -160,7 +157,7 @@ async def cancel_oauth_session(
     if session.status not in [
         OAuthSessionStatus.PENDING,
         OAuthSessionStatus.STARTING,
-        OAuthSessionStatus.OAUTH_RUNNER_READY,
+        OAuthSessionStatus.BRIDGE_READY,
         OAuthSessionStatus.AWAITING_USER,
         OAuthSessionStatus.VERIFYING
     ]:
@@ -303,7 +300,6 @@ async def get_session_history(
             "created_at": s.created_at.isoformat() if s.created_at else None,
             "completed_at": s.completed_at.isoformat() if s.completed_at else None,
             "failure_reason": s.failure_reason,
-            "oauth_web_url": s.oauth_web_url,
         }
         for s in sessions
     ]
@@ -375,7 +371,5 @@ async def reconnect_oauth_session(
         runtime_id=new_session.runtime_id,
         status=new_session.status.value,
         created_at=new_session.created_at,
-        oauth_web_url=new_session.oauth_web_url,
-        oauth_ssh_url=new_session.oauth_ssh_url,
         expires_at=new_session.expires_at,
     )
