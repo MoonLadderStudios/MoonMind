@@ -1,13 +1,20 @@
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
+import { BootPayload } from '../boot/parseBootPayload';
+import { SecretManager } from '../components/secrets/SecretManager';
+import {
+  OperationsSettingsSection,
+  type WorkerPauseConfig,
+} from '../components/settings/OperationsSettingsSection';
+import {
+  ProviderProfilesManager,
+  type ProviderProfile,
+} from '../components/settings/ProviderProfilesManager';
 
 interface ProfileData {
   id?: string;
   email?: string;
-  anthropic_api_key_set?: boolean;
-  openai_api_key_set?: boolean;
-  google_api_key_set?: boolean;
 }
 
 interface Notice {
@@ -15,14 +22,76 @@ interface Notice {
   text: string;
 }
 
-function UserSettingsPage() {
+interface SecretMetadata {
+  slug: string;
+  status: string;
+  details: Record<string, unknown>;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+interface SecretsListResponse {
+  items: SecretMetadata[];
+}
+
+const SETTINGS_SECTIONS = [
+  {
+    id: 'providers-secrets',
+    label: 'Providers & Secrets',
+    description:
+      'Configure provider profiles, managed secrets, and the bindings that make runtimes launchable.',
+  },
+  {
+    id: 'user-workspace',
+    label: 'User / Workspace',
+    description:
+      'Hold user-scoped and workspace-scoped settings as Mission Control exposes more of the broader configuration model.',
+  },
+  {
+    id: 'operations',
+    label: 'Operations',
+    description:
+      'Keep worker pause, drain, quiesce, and related operational controls under Settings.',
+  },
+] as const;
+
+type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
+
+function isSettingsSection(value: string | null): value is SettingsSectionId {
+  return SETTINGS_SECTIONS.some((section) => section.id === value);
+}
+
+function readSectionFromLocation(): SettingsSectionId {
+  const params = new URLSearchParams(window.location.search);
+  const section = params.get('section');
+  return isSettingsSection(section) ? section : 'providers-secrets';
+}
+
+function updateSectionInLocation(section: SettingsSectionId): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set('section', section);
+  window.history.pushState({}, '', url.toString());
+}
+
+function SettingsPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [section, setSection] = useState<SettingsSectionId>(() => readSectionFromLocation());
+  const workerPauseConfig =
+    (payload.initialData as { workerPause?: WorkerPauseConfig } | undefined)?.workerPause ??
+    null;
 
-  // Form states for API keys
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [googleKey, setGoogleKey] = useState('');
-  const [anthropicKey, setAnthropicKey] = useState('');
+  useEffect(() => {
+    const handlePopState = () => {
+      setSection(readSectionFromLocation());
+      setNotice(null);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
 
   const { data: profile, isLoading, isError } = useQuery<ProfileData>({
     queryKey: ['profile'],
@@ -38,141 +107,204 @@ function UserSettingsPage() {
       }
       return response.json();
     },
+    enabled: section === 'user-workspace',
   });
 
-  const updateProfileMutation = useMutation({
-    mutationFn: async (updates: Record<string, string>) => {
-      const response = await fetch('/me/profile', {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(updates),
+  const {
+    data: secretsData,
+    isLoading: areSecretsLoading,
+    isError: areSecretsErrored,
+  } = useQuery<SecretsListResponse>({
+    queryKey: ['secrets'],
+    queryFn: async () => {
+      const response = await fetch('/api/v1/secrets', {
+        headers: { Accept: 'application/json' },
       });
-
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || `Server error: ${response.status}`);
+        throw new Error(`Failed to fetch secrets: ${response.statusText}`);
       }
-
       return response.json();
     },
-    onSuccess: () => {
-      setNotice({ level: 'ok', text: 'API keys updated successfully.' });
-      setOpenaiKey('');
-      setGoogleKey('');
-      setAnthropicKey('');
-      queryClient.invalidateQueries({ queryKey: ['profile'] });
-    },
-    onError: (error: Error) => {
-      setNotice({ level: 'error', text: error.message || 'Failed to update API keys.' });
-    },
+    enabled: section === 'providers-secrets',
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setNotice(null);
+  const {
+    data: providerProfiles,
+    isLoading: areProfilesLoading,
+    isError: areProfilesErrored,
+  } = useQuery<ProviderProfile[]>({
+    queryKey: ['provider-profiles'],
+    queryFn: async () => {
+      const response = await fetch('/api/v1/provider-profiles', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch provider profiles: ${response.statusText}`);
+      }
+      return response.json();
+    },
+    enabled: section === 'providers-secrets',
+  });
 
-    const updates: Record<string, string> = {};
-    if (openaiKey.trim()) updates.openai_api_key = openaiKey.trim();
-    if (googleKey.trim()) updates.google_api_key = googleKey.trim();
-    if (anthropicKey.trim()) updates.anthropic_api_key = anthropicKey.trim();
+  const currentSection =
+    SETTINGS_SECTIONS.find((candidate) => candidate.id === section) ?? SETTINGS_SECTIONS[0];
 
-    if (Object.keys(updates).length === 0) {
-      setNotice({ level: 'ok', text: 'No changes to save.' });
+  const handleSelectSection = (nextSection: SettingsSectionId) => {
+    if (nextSection === section) {
       return;
     }
-
-    updateProfileMutation.mutate(updates);
+    updateSectionInLocation(nextSection);
+    setSection(nextSection);
+    setNotice(null);
   };
 
   return (
-    <div className="view-container">
-      <header className="view-header">
-        <h2 className="view-title">Settings</h2>
-        <p className="view-description">Manage your profile settings and API keys.</p>
+    <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <header className="rounded-[2rem] border border-slate-200 bg-white px-6 py-6 shadow-sm">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+            Mission Control Settings
+          </p>
+          <h2 className="text-3xl font-semibold tracking-tight text-slate-950">Settings</h2>
+          <p className="max-w-3xl text-sm text-slate-600">{currentSection.description}</p>
+        </div>
       </header>
 
-      {isLoading ? (
-        <p className="loading">Loading profile settings...</p>
-      ) : isError ? (
-        <div className="notice notice-error">Failed to load profile data.</div>
-      ) : (
-        <div className="view-content">
-          {notice && (
-            <div data-user-settings-notice>
-              <div className={`notice notice-${notice.level}`}>
-                {notice.text}
+      <section className="rounded-[2rem] border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap gap-2">
+          {SETTINGS_SECTIONS.map((candidate) => {
+            const active = candidate.id === section;
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                  active
+                    ? 'bg-slate-900 text-white'
+                    : 'border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:text-slate-900'
+                }`}
+                onClick={() => handleSelectSection(candidate.id)}
+              >
+                {candidate.label}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {notice ? (
+        <div
+          className={`rounded-3xl border px-5 py-4 text-sm shadow-sm ${
+            notice.level === 'error'
+              ? 'border-rose-200 bg-rose-50 text-rose-700'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          }`}
+        >
+          {notice.text}
+        </div>
+      ) : null}
+
+      {section === 'providers-secrets' ? (
+        <div className="space-y-6">
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+              <div className="space-y-2">
+                <h3 className="text-lg font-semibold text-slate-900">Providers & Secrets</h3>
+                <p className="text-sm text-slate-600">
+                  Provider profiles are the durable runtime and provider launch contract.
+                  Managed secrets back those profiles without re-exposing raw credential
+                  values after creation.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                Use secret refs such as <code>db://OPENAI_API_KEY</code> inside provider
+                profiles. Secrets stay in the managed secret store; profiles only keep the
+                refs and launch metadata.
               </div>
             </div>
+          </section>
+
+          {areProfilesLoading ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+              Loading provider profiles...
+            </div>
+          ) : areProfilesErrored ? (
+            <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm">
+              Failed to load provider profiles.
+            </div>
+          ) : (
+            <ProviderProfilesManager
+              profiles={providerProfiles ?? []}
+              secretSlugs={(secretsData?.items ?? []).map((secret) => secret.slug)}
+              onNotice={setNotice}
+              queryClient={queryClient}
+            />
           )}
 
-          <div className="system-settings-grid">
-            <section className="card system-settings-forms" style={{ gridColumn: '1 / -1' }}>
-              <div className="card-header">
-                <h3>User Settings</h3>
-              </div>
-              <div className="card-body">
-                <form data-user-settings-form className="stack" onSubmit={handleSubmit}>
-                  <div className="field">
-                    <label htmlFor="openai_api_key">OpenAI API Key</label>
-                    <input
-                      type="password"
-                      id="openai_api_key"
-                      name="openai_api_key"
-                      placeholder={profile?.openai_api_key_set ? '••••••••' : 'sk-...'}
-                      value={openaiKey}
-                      onChange={(e) => setOpenaiKey(e.target.value)}
-                      disabled={updateProfileMutation.isPending}
-                    />
-                    <div className="field-hint">Leave blank to keep existing key.</div>
-                  </div>
-
-                  <div className="field">
-                    <label htmlFor="google_api_key">Google (Gemini) API Key</label>
-                    <input
-                      type="password"
-                      id="google_api_key"
-                      name="google_api_key"
-                      placeholder={profile?.google_api_key_set ? '••••••••' : 'AIza...'}
-                      value={googleKey}
-                      onChange={(e) => setGoogleKey(e.target.value)}
-                      disabled={updateProfileMutation.isPending}
-                    />
-                    <div className="field-hint">Leave blank to keep existing key.</div>
-                  </div>
-
-                  <div className="field">
-                    <label htmlFor="anthropic_api_key">Anthropic API Key</label>
-                    <input
-                      type="password"
-                      id="anthropic_api_key"
-                      name="anthropic_api_key"
-                      placeholder={profile?.anthropic_api_key_set ? '••••••••' : 'sk-ant-...'}
-                      value={anthropicKey}
-                      onChange={(e) => setAnthropicKey(e.target.value)}
-                      disabled={updateProfileMutation.isPending}
-                    />
-                    <div className="field-hint">Leave blank to keep existing key.</div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="settings-submit-btn"
-                    disabled={updateProfileMutation.isPending}
-                  >
-                    {updateProfileMutation.isPending ? 'Saving...' : 'Save API Keys'}
-                  </button>
-                </form>
-              </div>
-            </section>
-          </div>
+          {areSecretsLoading ? (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+              Loading managed secrets...
+            </div>
+          ) : areSecretsErrored ? (
+            <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm">
+              Failed to load managed secrets.
+            </div>
+          ) : (
+            <SecretManager
+              secrets={secretsData?.items ?? []}
+              onNotice={setNotice}
+              queryClient={queryClient}
+            />
+          )}
         </div>
-      )}
+      ) : null}
+
+      {section === 'user-workspace' ? (
+        <div className="space-y-6">
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-900">User / Workspace</h3>
+            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+              This section is reserved for the broader project settings model. The
+              unified Settings tab now provides a stable home for those controls as
+              Mission Control exposes more runtime, workspace, and operator preferences.
+            </p>
+          </section>
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            {isLoading ? (
+              <p className="text-sm text-slate-500">Loading current user...</p>
+            ) : isError ? (
+              <p className="text-sm text-rose-700">Failed to load profile data.</p>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <div className="text-sm font-medium text-slate-500">Signed-in user</div>
+                  <div className="mt-2 text-base font-semibold text-slate-900">
+                    {profile?.email || 'Unknown user'}
+                  </div>
+                  {profile?.id ? (
+                    <div className="mt-1 font-mono text-xs text-slate-500">
+                      {profile.id}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+                  Future user and workspace settings should land here instead of adding
+                  more top-level tabs. This keeps the main product surface centered on
+                  tasks while still leaving room for the project&apos;s wider configuration
+                  model.
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
+
+      {section === 'operations' ? (
+        <OperationsSettingsSection workerPauseConfig={workerPauseConfig} />
+      ) : null}
     </div>
   );
 }
 
-mountPage(UserSettingsPage);
+mountPage(SettingsPage);

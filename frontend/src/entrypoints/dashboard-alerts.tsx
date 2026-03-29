@@ -55,19 +55,19 @@ function DashboardAlerts() {
       <ul style={{ marginTop: '8px', marginLeft: '20px', listStyleType: 'disc' }}>
          {needsAiKey && (
            <li>
-             A provider API key in Secrets Manager is missing (e.g.{' '}
+             A provider API key in Settings is missing (e.g.{' '}
              <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>MINIMAX_API_KEY</code>).
            </li>
          )}
          {!hasGithub && (
            <li>
-             A GitHub token in Secrets Manager is missing (use slug <code>GITHUB_TOKEN</code>, <code>GH_TOKEN</code>, or{' '}
+             A GitHub token in Settings is missing (use slug <code>GITHUB_TOKEN</code>, <code>GH_TOKEN</code>, or{' '}
              <code>GITHUB_PAT</code> — runtime and docs use <code>GITHUB_TOKEN</code> most often).
            </li>
          )}
       </ul>
       <div style={{ marginTop: '12px' }}>
-         <a href="/tasks/secrets" className="btn btn-sm btn-outline">Go to Secrets Manager</a>
+         <a href="/tasks/settings?section=providers-secrets" className="btn btn-sm btn-outline">Open Settings</a>
       </div>
     </div>
   );
