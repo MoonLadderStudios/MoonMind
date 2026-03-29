@@ -1640,17 +1640,22 @@ class MoonMindRunWorkflow:
             )
 
             artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
+            resolved_artifact_id = (
+                self._get_from_result(artifact_ref, "artifact_id")
+                or self._get_from_result(artifact_ref, "artifactId")
+                or ""
+            )
             await execute_typed_activity(
                 "artifact.write_complete",
                 ArtifactWriteCompleteInput(
                     principal=self._principal(),
-                    artifact_id=self._get_from_result(artifact_ref, "artifact_id") or "",
+                    artifact_id=resolved_artifact_id,
                     payload=json.dumps(finish_summary).encode("utf-8"),
                     content_type="application/json",
                 ),
                 **self._execute_kwargs_for_route(artifact_write_route),
             )
-            self._summary_ref = self._get_from_result(artifact_ref, "artifact_id") or ""
+            self._summary_ref = resolved_artifact_id
         except Exception as exc:
             self._get_logger().warning(f"Failed to generate finish summary: {exc}")
 

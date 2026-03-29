@@ -1,10 +1,17 @@
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+def _normalize_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
+    return dump_method() if dump_method else payload
 
 
 def test_initialize_from_payload_captures_input_and_plan_refs(
@@ -92,10 +99,10 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, object],
-        **_kwargs: object,
-    ) -> object:
-        captured.append((activity_type, payload if isinstance(payload, dict) else getattr(payload, 'model_dump', lambda: payload)()))
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
             if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
@@ -199,10 +206,10 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
 
     async def fake_execute_activity(
         activity_type: str,
-        payload: dict[str, object],
-        **_kwargs: object,
-    ) -> object:
-        captured.append((activity_type, payload if isinstance(payload, dict) else getattr(payload, 'model_dump', lambda: payload)()))
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
             if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
