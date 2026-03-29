@@ -296,6 +296,14 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     setListCursor(previousCursor === undefined || previousCursor === '' ? null : previousCursor);
   };
 
+  const pageSummary = [
+    `Page ${pageIndex + 1}`,
+    pageEnd > 0 ? `${pageStart}-${pageEnd}` : null,
+    countSummary || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <div className="stack">
       <div className="toolbar">
@@ -338,27 +346,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               ))}
             </select>
           </label>
-          <span className="small">
-            Page {pageIndex + 1}
-            {pageEnd > 0 ? ` · ${pageStart}-${pageEnd}` : ''}
-            {countSummary ? ` · ${countSummary}` : ''}
-          </span>
-          <button
-            type="button"
-            className="secondary"
-            disabled={!listEnabled || cursorStack.length === 0 || sortedItems.length === 0}
-            onClick={goPrev}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={!listEnabled || !data?.nextPageToken}
-            onClick={goNext}
-          >
-            Next
-          </button>
         </div>
       </div>
 
@@ -471,6 +458,29 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
         <p className="small">No tasks found for the current filters.</p>
       ) : (
         <div className="queue-layouts">
+          <div className="queue-results-toolbar">
+            <span className="small">{pageSummary}</span>
+            <nav className="queue-pagination" aria-label="Pagination">
+              <button
+                type="button"
+                className="secondary queue-pagination-button"
+                disabled={!listEnabled || cursorStack.length === 0 || sortedItems.length === 0}
+                onClick={goPrev}
+                aria-label="Previous page"
+              >
+                <span aria-hidden="true">&larr;</span>
+              </button>
+              <button
+                type="button"
+                className="secondary queue-pagination-button"
+                disabled={!listEnabled || !data?.nextPageToken}
+                onClick={goNext}
+                aria-label="Next page"
+              >
+                <span aria-hidden="true">&rarr;</span>
+              </button>
+            </nav>
+          </div>
           <div className="queue-table-wrapper" data-layout="table">
             <table>
               <thead>

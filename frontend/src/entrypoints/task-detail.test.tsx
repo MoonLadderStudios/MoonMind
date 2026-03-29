@@ -85,4 +85,45 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText(/Failed to fetch task: Not Found/i)).toBeTruthy();
     });
   });
+
+  it('decodes encoded task ids from the route before fetching', async () => {
+    window.history.pushState({}, 'Encoded Test', '/tasks/mm%3Atest-123?source=temporal');
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'mm:test-123',
+          workflowId: 'mm:test-123',
+          namespace: 'default',
+          temporalRunId: '01-run',
+          runId: '01-run',
+          source: 'temporal',
+          title: 'Encoded task',
+          summary: 'Decoded route id',
+          status: 'completed',
+          state: 'succeeded',
+          createdAt: '2026-03-28T00:00:00Z',
+          updatedAt: '2026-03-28T00:00:02Z',
+          actions: {},
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Encoded task')).toBeTruthy();
+      expect(screen.getByText('Task mm:test-123')).toBeTruthy();
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');
+  });
 });

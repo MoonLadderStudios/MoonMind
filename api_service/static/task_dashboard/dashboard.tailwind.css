@@ -245,6 +245,9 @@ h1 {
 }
 
 .table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -252,6 +255,7 @@ h1 {
   color: inherit;
   font: inherit;
   font-weight: 600;
+  text-align: left;
   box-shadow: none;
 }
 
@@ -353,6 +357,29 @@ tbody tr:hover {
 .queue-layouts {
   display: grid;
   gap: 1rem;
+}
+
+.queue-results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.queue-pagination {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+.queue-pagination-button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 2.5rem;
+  padding-inline: 0;
+  justify-content: center;
 }
 
 .queue-table-wrapper {
@@ -677,12 +704,12 @@ button {
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button) {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):hover {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button):hover {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -699,8 +726,8 @@ button:focus-visible {
   outline-offset: 3px;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):active,
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button).is-clicked {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button):active,
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button).is-clicked {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
