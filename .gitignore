@@ -39,6 +39,10 @@ uv.lock
 # Worker runtime scratch outputs
 agent_jobs/
 
+# PR resolver run artifacts
+var/pr_resolver/attempts/
+var/pr_resolver/result.json
+
 # Local saved artifacts
 /Saved/
 

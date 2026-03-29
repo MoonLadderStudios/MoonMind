@@ -80,10 +80,15 @@ class ManagedRuntimeStrategy(ABC):
         """
 
     def get_model(self, profile: Any, request: Any) -> str | None:
-        """Extract model from request parameters or profile default."""
-        return (
-            request.parameters.get("model") if request.parameters else None
-        ) or getattr(profile, "default_model", None)
+        """Extract model from request parameters or profile default with overrides."""
+        requested_model = request.parameters.get("model") if request.parameters else None
+        
+        if requested_model:
+            overrides = getattr(profile, "model_overrides", {}) or {}
+            resolved = overrides.get(requested_model, requested_model)
+            return resolved
+            
+        return getattr(profile, "default_model", None)
 
     def get_effort(self, profile: Any, request: Any) -> str | None:
         """Extract effort from request parameters or profile default."""

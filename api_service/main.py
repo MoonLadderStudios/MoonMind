@@ -61,6 +61,7 @@ from api_service.api.routers.temporal_artifacts import (
 from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.routers.secrets import router as secrets_router
 from api_service.api.routers.proxy import router as proxy_router
+from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
 from api_service.services.task_templates.catalog import TaskTemplateCatalogService
@@ -342,6 +343,7 @@ app.include_router(task_runs_router, prefix="/api")
 app.include_router(task_dashboard_router)
 app.include_router(task_step_templates_router)
 app.include_router(temporal_artifacts_router)
+app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 

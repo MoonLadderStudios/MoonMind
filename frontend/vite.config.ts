@@ -14,13 +14,11 @@ export default defineConfig({
         // Entrypoints will be added here as pages are migrated
         'tasks-home': resolve(__dirname, 'src/entrypoints/tasks-home.tsx'),
         'settings': resolve(__dirname, 'src/entrypoints/settings.tsx'),
-        'secrets': resolve(__dirname, 'src/entrypoints/secrets.tsx'),
         'dashboard-alerts': resolve(__dirname, 'src/entrypoints/dashboard-alerts.tsx'),
         'proposals': resolve(__dirname, 'src/entrypoints/proposals.tsx'),
         'schedules': resolve(__dirname, 'src/entrypoints/schedules.tsx'),
         'manifests': resolve(__dirname, 'src/entrypoints/manifests.tsx'),
         'tasks-list': resolve(__dirname, 'src/entrypoints/tasks-list.tsx'),
-        'workers': resolve(__dirname, 'src/entrypoints/workers.tsx'),
         'task-detail': resolve(__dirname, 'src/entrypoints/task-detail.tsx'),
       },
     },
