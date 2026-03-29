@@ -1300,7 +1300,7 @@ export interface paths {
         };
         /**
          * Task Secrets Route
-         * @description Serve the React-powered secrets page.
+         * @description Redirect the legacy secrets page into unified settings.
          */
         get: operations["task_secrets_route_tasks_secrets_get"];
         put?: never;
@@ -1440,7 +1440,7 @@ export interface paths {
         };
         /**
          * Task Workers Route
-         * @description Serve the React-powered workers page.
+         * @description Redirect the legacy workers page into unified settings.
          */
         get: operations["task_workers_route_tasks_workers_get"];
         put?: never;
@@ -7994,7 +7994,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };
@@ -8134,7 +8134,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };
