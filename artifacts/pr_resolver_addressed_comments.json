@@ -130,6 +130,9 @@
   {"id": 3005532208, "disposition": "addressed", "rationale": "Updated tasks.md T006 path reference from moonmind/api to api_service/api."},
   {"id": 4149110806, "disposition": "not-applicable", "rationale": "Codex usage limits informational message, no action needed."},
   {"id": 4026200533, "disposition": "not-applicable", "rationale": "Summary review comment from gemini-code-assist, no action needed."},
-  {"id": 4026203950, "disposition": "not-applicable", "rationale": "Summary review from copilot-pull-request-reviewer, no action needed."}
-
+  {"id": 4026203950, "disposition": "not-applicable", "rationale": "Summary review from copilot-pull-request-reviewer, no action needed."},
+  {"id": 3005672391, "disposition": "addressed", "rationale": "Removed unnecessary lambda wrapping MagicMock."},
+  {"id": 3005672392, "disposition": "addressed", "rationale": "Removed unused TemporalExecutionService import."},
+  {"id": 3005672393, "disposition": "addressed", "rationale": "Removed unused UpdateExecutionRequest and UpdateExecutionResponse imports."},
+  {"id": 3005672394, "disposition": "addressed", "rationale": "Removed unused _get_owned_execution import."}
 ]

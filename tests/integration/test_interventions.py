@@ -8,10 +8,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 from api_service.main import app
 from api_service.db.base import get_async_session
-from moonmind.workflows.temporal import TemporalExecutionService
-from moonmind.schemas.temporal_models import UpdateExecutionRequest, UpdateExecutionResponse
-
-from api_service.api.routers.executions import _get_service, _get_owned_execution, get_current_user
+from api_service.api.routers.executions import _get_service, get_current_user
 
 @pytest_asyncio.fixture
 async def mock_execution_service():
@@ -45,7 +42,7 @@ async def test_intervention_signal_without_logs(async_client: AsyncClient, mock_
     # We bypass auth by overriding current_user dependency if necessary, but
     # _get_owned_execution is mocked anyway. For safety, we'll patch the dependency overrides:
     app.dependency_overrides.clear()
-    app.dependency_overrides[get_async_session] = lambda: MagicMock()
+    app.dependency_overrides[get_async_session] = MagicMock
     
     app.dependency_overrides[_get_service] = lambda: mock_execution_service
     class MockRecord:
