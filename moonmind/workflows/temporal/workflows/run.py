@@ -95,6 +95,8 @@ _GITHUB_PR_URL_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
+# Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
+RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -606,8 +608,17 @@ class MoonMindRunWorkflow:
         require_pull_request_url = publish_mode == "pr" and self._integration is None
         pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
+        requires_registry_lookup = any(
+            node.tool_type == "skill" for node in plan_definition.nodes
+        )
+        if workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH):
+            should_read_registry = bool(
+                registry_snapshot_ref and requires_registry_lookup
+            )
+        else:
+            should_read_registry = bool(registry_snapshot_ref)
 
-        if registry_snapshot_ref:
+        if should_read_registry:
             registry_payload = await execute_typed_activity(
                 "artifact.read",
                 ArtifactReadInput(

@@ -85,6 +85,12 @@ def _digest_registry_doc(payload: Mapping[str, Any]) -> str:
     return f"{REGISTRY_DIGEST_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
 
 
+def compute_registry_digest(*, skills: tuple[ToolDefinition, ...]) -> str:
+    """Compute the canonical digest for a registry snapshot payload."""
+
+    return _digest_registry_doc(_canonical_registry_doc(skills))
+
+
 def validate_tool_registry(skills: tuple[ToolDefinition, ...]) -> None:
     """Validate a registry payload after it has been parsed."""
 
@@ -158,7 +164,7 @@ def create_registry_snapshot(
 
     validate_tool_registry(skills)
     canonical = _canonical_registry_doc(skills)
-    digest = _digest_registry_doc(canonical)
+    digest = compute_registry_digest(skills=skills)
 
     artifact = artifact_store.put_json(
         canonical,
@@ -194,6 +200,7 @@ def load_registry_snapshot_from_artifact(
 __all__ = [
     "ToolRegistryError",
     "ToolRegistrySnapshot",
+    "compute_registry_digest",
     "create_registry_snapshot",
     "load_registry_snapshot_from_artifact",
     "load_tool_registry",
