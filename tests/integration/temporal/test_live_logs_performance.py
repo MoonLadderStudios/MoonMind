@@ -1,12 +1,13 @@
 """Integration tests for Live Logs Phase 7 Performance and Hardening."""
 
 import asyncio
+import json
 import time
 from datetime import datetime, timezone
-from typing import AsyncGenerator
 
 import pytest
-from fastapi import Request
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 from moonmind.services.observability.publisher import ObservabilityPublisher
 from moonmind.services.observability.models import LogStreamEvent, LogStreamType
@@ -25,7 +26,6 @@ class MockRequest:
         return False
 
 
-@pytest.mark.asyncio
 async def test_log_stream_high_volume_performance():
     """Simulate a publisher emitting 10,000 logs and verify subscriber yields them promptly."""
     publisher = ObservabilityPublisher()
@@ -58,10 +58,15 @@ async def test_log_stream_high_volume_performance():
                 run_id, request=mock_request, publisher=publisher
             ):
                 chunks.append(chunk)
-                if '"sequence":9999' in chunk or '"sequence": 9999' in chunk:
-                    break
+                if chunk.startswith("data:"):
+                    try:
+                        payload = json.loads(chunk[len("data:"):])
+                        if payload.get("sequence") == 9999:
+                            break
+                    except json.JSONDecodeError:
+                        pass
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("Consumer loop timed out unexpectedly")
 
     # Run publisher and consumer concurrently
     start = time.perf_counter()
@@ -69,9 +74,10 @@ async def test_log_stream_high_volume_performance():
     await _emit_events()
     
     try:
-        await asyncio.wait_for(consume_task, timeout=1.0)
+        await asyncio.wait_for(consume_task, timeout=2.0)
     except asyncio.TimeoutError:
         consume_task.cancel()
+        pytest.fail("Test timed out before receiving expected sequence")
     
     duration = time.perf_counter() - start
 
@@ -79,7 +85,6 @@ async def test_log_stream_high_volume_performance():
     assert duration < 5.0  # Realistically should take way less than 5 seconds
 
 
-@pytest.mark.asyncio
 async def test_log_stream_graceful_disconnect():
     """Verify stream handles client disconnects effectively without unbounded memory growth."""
     publisher = ObservabilityPublisher()
@@ -107,15 +112,16 @@ async def test_log_stream_graceful_disconnect():
             ):
                 chunks.append(chunk)
         except asyncio.TimeoutError:
-            pass
+            pytest.fail("Consumer loop timed out unexpectedly")
 
     consume_task = asyncio.create_task(_consume_stream())
     await _emit_events()
     
     try:
-        await asyncio.wait_for(consume_task, timeout=1.0)
+        await asyncio.wait_for(consume_task, timeout=2.0)
     except asyncio.TimeoutError:
         consume_task.cancel()
+        pytest.fail("Test timed out: client disconnect didn't stop the stream")
     
     # We should have cleanly disconnected after ~50 events
     # Or 50 events * 3 lines per event = 150

@@ -1,28 +1,77 @@
 [
-  {"id": 3005528158, "disposition": "addressed", "rationale": "Added history cleanup when last subscriber leaves in publisher.py subscribe() finally block."},
-  {"id": 3005528159, "disposition": "addressed", "rationale": "Changed _histories from list to collections.deque with maxlen for O(1) append and automatic eviction."},
-  {"id": 3005528161, "disposition": "addressed", "rationale": "Fixed data-model.md stream enum values from 'out, err, system' to 'stdout, stderr, system'."},
-  {"id": 3005528925, "disposition": "addressed", "rationale": "Added explanatory comment for intentional event drop on QueueFull in publisher.py."},
-  {"id": 3005528927, "disposition": "addressed", "rationale": "Removed empty except StopAsyncIteration block from test_disconnect_cleanup_releases_subscriber."},
-  {"id": 3005528930, "disposition": "addressed", "rationale": "Removed unused 'uuid' import from publisher.py."},
-  {"id": 3005528931, "disposition": "addressed", "rationale": "Removed unused 'LogStreamEvent' import from subscriber.py."},
-  {"id": 3005532163, "disposition": "addressed", "rationale": "Changed terminal status check to use full list including canceled, cancelled, timed_out."},
-  {"id": 3005532169, "disposition": "addressed", "rationale": "Consolidated duplicate FileResponse import into single import line."},
-  {"id": 3005532176, "disposition": "addressed", "rationale": "Updated tasks.md T014 to reference ruff and black instead of flake8 and mypy."},
-  {"id": 3005532183, "disposition": "addressed", "rationale": "Replaced _AlwaysDisconnected with _DisconnectAfterFirstCheck stub that allows at least one chunk to be yielded."},
-  {"id": 3005532184, "disposition": "addressed", "rationale": "Updated DOC-REQ coverage list to clarify publisher/subscriber layer only."},
-  {"id": 3005532186, "disposition": "not-applicable", "rationale": "DOC-REQ-007 (410 fallback) requires route-level test outside publisher/subscriber scope; removed from coverage list."},
-  {"id": 3005532187, "disposition": "not-applicable", "rationale": "Production wiring of publisher.publish() is a larger architectural issue deferred to future work."},
-  {"id": 3005532188, "disposition": "addressed", "rationale": "Added 403 and 410 responses to OpenAPI schema for /logs/stream endpoint."},
-  {"id": 3005532190, "disposition": "addressed", "rationale": "Duplicate of 3005528930; removed unused uuid import."},
-  {"id": 3005532193, "disposition": "addressed", "rationale": "Duplicate of 3005528931; removed unused LogStreamEvent import."},
-  {"id": 3005532197, "disposition": "addressed", "rationale": "Added required blank line between imports and class in models.py."},
-  {"id": 3005532201, "disposition": "addressed", "rationale": "Changed iteration to shallow copy list() to avoid mutation during iteration."},
-  {"id": 3005532202, "disposition": "addressed", "rationale": "Same fix as 3005528158; added history cleanup in subscribe() finally block."},
-  {"id": 3005532203, "disposition": "addressed", "rationale": "Updated plan.md path reference from moonmind/api to api_service/api."},
-  {"id": 3005532206, "disposition": "addressed", "rationale": "Added Query(ge=0) validation to since parameter in stream endpoint."},
-  {"id": 3005532208, "disposition": "addressed", "rationale": "Updated tasks.md T006 path reference from moonmind/api to api_service/api."},
-  {"id": 4149110806, "disposition": "not-applicable", "rationale": "Codex usage limits informational message, no action needed."},
-  {"id": 4026200533, "disposition": "not-applicable", "rationale": "Summary review comment from gemini-code-assist, no action needed."},
-  {"id": 4026203950, "disposition": "not-applicable", "rationale": "Summary review from copilot-pull-request-reviewer, no action needed."}
+  {
+    "id": 4149542802,
+    "disposition": "not-applicable",
+    "rationale": "Notice about usage limits."
+  },
+  {
+    "id": 3005782644,
+    "disposition": "addressed",
+    "rationale": "Added finally block and explicitly raised CancelledError to prevent skewing metrics."
+  },
+  {
+    "id": 3005782649,
+    "disposition": "addressed",
+    "rationale": "Implemented json.loads parser instead of volatile string matching for stream sequences."
+  },
+  {
+    "id": 4026424109,
+    "disposition": "not-applicable",
+    "rationale": "Automated code review summary block."
+  },
+  {
+    "id": 3005783361,
+    "disposition": "addressed",
+    "rationale": "Changed empty timeout except clauses to directly fail the pytest routine."
+  },
+  {
+    "id": 3005783363,
+    "disposition": "addressed",
+    "rationale": "Consolidated fix into the previous timeout failure implementation."
+  },
+  {
+    "id": 3005783365,
+    "disposition": "addressed",
+    "rationale": "Removed AsyncGenerator import."
+  },
+  {
+    "id": 3005783368,
+    "disposition": "addressed",
+    "rationale": "Removed trailing fastapi Request import."
+  },
+  {
+    "id": 3005783571,
+    "disposition": "addressed",
+    "rationale": "Corrected markdown syntax on tasks list."
+  },
+  {
+    "id": 3005783587,
+    "disposition": "addressed",
+    "rationale": "Duplicate of 3005782644. Handled CancelledError independently."
+  },
+  {
+    "id": 3005783598,
+    "disposition": "addressed",
+    "rationale": "Refactored tags to use constant 'stream': 'livelogs' instead of high cardinality IDs."
+  },
+  {
+    "id": 3005783608,
+    "disposition": "addressed",
+    "rationale": "Duplicate of the unused import reports."
+  },
+  {
+    "id": 3005783614,
+    "disposition": "addressed",
+    "rationale": "Duplicate of timeout unreliability. Addressed via pytest.fail implementation."
+  },
+  {
+    "id": 3005783617,
+    "disposition": "addressed",
+    "rationale": "Bound file level integration and asyncio pytestmark labels."
+  },
+  {
+    "id": 4026425341,
+    "disposition": "not-applicable",
+    "rationale": "PR context summary."
+  }
 ]

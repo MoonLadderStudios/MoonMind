@@ -250,17 +250,20 @@ async def stream_task_run_live_logs(
         )
         
     metrics = get_metrics_emitter()
-    tags = {"task_run_id": str(id)}
+    tags = {"stream": "livelogs"}
     metrics.increment("livelogs.stream.connect", tags=tags)
 
     async def _instrumented_generator():
         try:
             async for chunk in log_stream_generator(str(id), request, since=since):
                 yield chunk
-            metrics.increment("livelogs.stream.disconnect", tags=tags)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             metrics.increment("livelogs.stream.error", tags=tags)
             raise
+        finally:
+            metrics.increment("livelogs.stream.disconnect", tags=tags)
 
     return StreamingResponse(
         _instrumented_generator(),
