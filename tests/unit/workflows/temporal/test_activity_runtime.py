@@ -471,6 +471,55 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     assert ("auto", "1.0") not in keyset
 
 
+async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
+    tmp_path: Path,
+):
+    from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            planner = TemporalPlanActivities(
+                artifact_service=service,
+                planner=_build_runtime_planner(),
+            )
+
+            result = await planner.plan_generate(
+                principal="user-1",
+                parameters={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "claude",
+                    "model": "MiniMax-M2.7",
+                    "instructions": "Move the pagination control next to next/prev buttons.",
+                    "task": {
+                        "tool": {"type": "skill", "name": "auto", "version": "1.0"},
+                        "skill": {"name": "auto", "version": "1.0"},
+                        "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
+                        "instructions": "Move the pagination control next to next/prev buttons.",
+                    },
+                },
+            )
+
+            _artifact, payload = await service.read(
+                artifact_id=result.plan_ref.artifact_id,
+                principal="user-1",
+            )
+            plan_payload = json.loads(payload.decode("utf-8"))
+            registry_ref = plan_payload["metadata"]["registry_snapshot"]["artifact_ref"]
+
+            _registry_artifact, registry_payload_raw = await service.read(
+                artifact_id=registry_ref,
+                principal="user-1",
+            )
+            registry_payload = json.loads(registry_payload_raw.decode("utf-8"))
+
+            assert plan_payload["nodes"][0]["tool"]["type"] == "agent_runtime"
+            assert registry_payload == {"skills": []}
+
+
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
     payload = _default_registry_skill_payload(name="pr-resolver", version="1.0")
     policies = payload.get("policies", {})

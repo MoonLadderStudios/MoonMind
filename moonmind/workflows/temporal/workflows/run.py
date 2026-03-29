@@ -606,8 +606,11 @@ class MoonMindRunWorkflow:
         require_pull_request_url = publish_mode == "pr" and self._integration is None
         pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
+        requires_registry_lookup = any(
+            node.tool_type == "skill" for node in plan_definition.nodes
+        )
 
-        if registry_snapshot_ref:
+        if registry_snapshot_ref and requires_registry_lookup:
             registry_payload = await execute_typed_activity(
                 "artifact.read",
                 ArtifactReadInput(
