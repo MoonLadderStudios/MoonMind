@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import secrets
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -409,15 +410,24 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             )
 
         self._bucket = bucket.strip()
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=endpoint_url.strip(),
-            aws_access_key_id=access_key_id.strip(),
-            aws_secret_access_key=secret_access_key.strip(),
-            region_name=region_name.strip() or "us-east-1",
-            use_ssl=bool(use_ssl),
-        )
+        self._client_kwargs = {
+            "service_name": "s3",
+            "endpoint_url": endpoint_url.strip(),
+            "aws_access_key_id": access_key_id.strip(),
+            "aws_secret_access_key": secret_access_key.strip(),
+            "region_name": region_name.strip() or "us-east-1",
+            "use_ssl": bool(use_ssl),
+        }
+        self._client_local = threading.local()
         self._ensure_bucket_exists()
+
+    @property
+    def _client(self):
+        client = getattr(self._client_local, "client", None)
+        if client is None:
+            client = boto3.client(**self._client_kwargs)
+            self._client_local.client = client
+        return client
 
     @property
     def backend(self) -> db_models.TemporalArtifactStorageBackend:

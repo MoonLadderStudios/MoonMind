@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from api_service.db.models import (
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
+    S3TemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalArtifactStore,
@@ -153,6 +155,53 @@ async def test_local_store_rejects_traversal_storage_key(tmp_path: Path) -> None
     store = LocalTemporalArtifactStore(tmp_path)
     with pytest.raises(TemporalArtifactValidationError):
         store.resolve_storage_key("../escape.txt")
+
+
+async def test_s3_store_uses_thread_local_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3 store should allocate one boto3 client per thread."""
+
+    created_clients: list[object] = []
+
+    class _DummyS3Client:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def head_bucket(self, *, Bucket: str) -> None:
+            _ = Bucket
+
+    def _fake_boto3_client(service_name: str, **kwargs: object) -> _DummyS3Client:
+        assert service_name == "s3"
+        assert kwargs["endpoint_url"] == "http://example.test:9000"
+        client = _DummyS3Client(len(created_clients))
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.boto3.client",
+        _fake_boto3_client,
+    )
+
+    store = S3TemporalArtifactStore(
+        endpoint_url="http://example.test:9000",
+        bucket="bucket-1",
+        access_key_id="access",
+        secret_access_key="secret",
+        region_name="us-east-1",
+        use_ssl=False,
+    )
+
+    main_thread_client = store._client
+    assert store._client is main_thread_client
+
+    other_thread_client = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: store._client,
+    )
+
+    assert other_thread_client is not main_thread_client
+    assert len(created_clients) == 2
 
 
 async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:

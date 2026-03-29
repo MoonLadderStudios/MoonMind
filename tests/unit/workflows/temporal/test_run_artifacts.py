@@ -7,6 +7,7 @@ import pytest
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
+
 def _normalize_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
@@ -301,6 +302,248 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
 
     assert captured[2][0] == "mm.tool.execute"
     assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        captured.append((activity_type, normalized))
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "artifact://registry/empty":
+                raise AssertionError(
+                    "agent_runtime-only plans should not read the empty registry snapshot"
+                )
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Runtime Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/empty",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "step-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "claude",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "instructions": "Adjust the dashboard pagination control.",
+                                "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
+                                "repository": "MoonLadderStudios/MoonMind",
+                            },
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Agent finished",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    artifact_reads = [
+        payload["artifact_ref"]
+        for activity_type, payload in captured
+        if activity_type == "artifact.read"
+    ]
+    assert artifact_reads == ["art_plan_1"]
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_preserves_registry_read_for_unpatched_histories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        captured.append((activity_type, normalized))
+        if activity_type == "artifact.read":
+            artifact_ref = normalized.get("artifact_ref")
+            if artifact_ref == "artifact://registry/empty":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                                "description": "Run tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.skill.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 3},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Runtime Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/empty",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "step-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "claude",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "instructions": "Adjust the dashboard pagination control.",
+                                "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
+                                "repository": "MoonLadderStudios/MoonMind",
+                            },
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Agent finished",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: False)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    artifact_reads = [
+        payload["artifact_ref"]
+        for activity_type, payload in captured
+        if activity_type == "artifact.read"
+    ]
+    assert artifact_reads == ["art_plan_1", "artifact://registry/empty"]
 
 
 def test_build_agent_execution_request_includes_bundle_metadata(
@@ -1113,4 +1356,3 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     assert "workflow_id" in captured_origin
     assert "temporal_run_id" in captured_origin
     assert "trigger_repo" in captured_origin
-
