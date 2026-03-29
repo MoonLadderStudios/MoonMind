@@ -181,6 +181,18 @@ These values should come from the Temporal runtime/activity context for logging,
 * `StageExecutionDecision` / `StageExecutionOutcome` — see `moonmind/workflows/skills/contracts.py`
 * `PlanDefinition`, `SkillDefinition`, `SkillPolicies` — see `moonmind/workflows/skills/skill_plan_contracts.py`
 
+### 5.3 High-Risk Activity Contract Schema (Type Safety)
+
+Activities operating on byte payloads, base64 data, or deeply nested parameter matrices are strictly mapped to `Pydantic` schema layouts to ensure standard serialization without corruption on the wire (such as the JSON codec dropping `bytes` into `list[int]`).
+
+| Activity Name | Input Model Schema | Purpose |
+|---------------|----------------------|-----------|
+| `artifact.read` | `ArtifactReadInput` | Fetches an artifact safely encoding byte outputs securely. |
+| `artifact.write_complete` | `ArtifactWriteCompleteInput`| Marshals base64 encoded streams into the backend without buffer drops. |
+| `plan.generate` | `PlanGenerateInput` | Generates a complex nested Plan validating payload consistency. |
+
+*(Reference `moonmind/schemas/temporal_activity_models.py` for exact model implementations).*
+
 ---
 
 ## 6) Activity families (canonical set)

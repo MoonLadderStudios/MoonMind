@@ -10,7 +10,11 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityCancellationType
 
-from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+from moonmind.schemas.temporal_activity_models import (
+    ArtifactReadInput,
+    ArtifactWriteCompleteInput,
+    PlanGenerateInput,
+)
 from moonmind.workflows.temporal.activity_runtime import PlanGenerateActivityResult
 from moonmind.workflows.temporal.artifacts import ArtifactRef
 
@@ -18,7 +22,7 @@ from moonmind.workflows.temporal.artifacts import ArtifactRef
 @overload
 async def execute_typed_activity(
     activity: Literal["artifact.read"],
-    arg: Mapping[str, Any],
+    arg: Mapping[str, Any] | ArtifactReadInput,
     *,
     task_queue: str | None = None,
     start_to_close_timeout: timedelta | None = None,
@@ -33,7 +37,7 @@ async def execute_typed_activity(
 @overload
 async def execute_typed_activity(
     activity: Literal["artifact.write_complete"],
-    arg: Mapping[str, Any],
+    arg: Mapping[str, Any] | ArtifactWriteCompleteInput,
     *,
     task_queue: str | None = None,
     start_to_close_timeout: timedelta | None = None,
