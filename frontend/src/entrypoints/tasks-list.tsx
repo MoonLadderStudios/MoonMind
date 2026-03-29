@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
+import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 
 const PAGE_SIZE_OPTIONS = [20, 25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
@@ -108,26 +109,6 @@ function displayTemporalCount(count: number | null | undefined, countMode: strin
   return countMode && countMode !== 'exact' ? `${count} (${countMode})` : String(count);
 }
 
-function executionStatusPillClasses(row: ExecutionRow): string {
-  const raw = (row.rawState || row.state || row.status || '').toLowerCase().trim();
-  const key = raw.replace(/\s+/g, '_');
-  if (key === 'succeeded' || key === 'completed') return 'status status-completed';
-  if (key === 'failed') return 'status status-failed';
-  if (key === 'canceled' || key === 'cancelled') return 'status status-cancelled';
-  if (key === 'queued' || key === 'scheduling') return 'status status-queued';
-  if (
-    key === 'running' ||
-    key === 'executing' ||
-    key === 'planning' ||
-    key === 'initializing' ||
-    key === 'finalizing'
-  ) {
-    return 'status status-running';
-  }
-  if (key === 'awaiting_action' || key === 'awaiting_external') return 'status status-awaiting_action';
-  return 'status status-neutral';
-}
-
 function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'): ExecutionRow[] {
   const dir = direction === 'asc' ? 1 : -1;
   const copy = rows.slice();
@@ -164,7 +145,7 @@ function replaceUrlQuery(params: URLSearchParams) {
   window.history.replaceState({}, '', queryText ? `${path}?${queryText}` : path);
 }
 
-function TasksListPage({ payload }: { payload: BootPayload }) {
+export function TasksListPage({ payload }: { payload: BootPayload }) {
   const dashboardCfg = useMemo(() => readListDashboardConfig(payload), [payload.initialData]);
   const listPollMs = useMemo(() => {
     const candidate = dashboardCfg?.pollIntervalsMs?.list;
@@ -187,14 +168,16 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(
     () => (initial.get('sortDir') === 'asc' ? 'asc' : 'desc'),
   );
+  const normalizedRepository = repository.trim();
+  const normalizedIntegration = integration.trim();
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
     if (workflowType) params.set('workflowType', workflowType);
     if (temporalState) params.set('state', temporalState);
     if (entry) params.set('entry', entry);
-    if (repository.trim()) params.set('repo', repository.trim());
-    if (integration.trim()) params.set('integration', integration.trim());
+    if (normalizedRepository) params.set('repo', normalizedRepository);
+    if (normalizedIntegration) params.set('integration', normalizedIntegration);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
     if (sortField !== 'createdAt' || sortDir !== 'desc') {
@@ -202,7 +185,17 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
       params.set('sortDir', sortDir);
     }
     replaceUrlQuery(params);
-  }, [workflowType, temporalState, entry, repository, integration, pageSize, listCursor, sortField, sortDir]);
+  }, [
+    workflowType,
+    temporalState,
+    entry,
+    normalizedRepository,
+    normalizedIntegration,
+    pageSize,
+    listCursor,
+    sortField,
+    sortDir,
+  ]);
 
   useEffect(() => {
     syncUrl();
@@ -215,8 +208,8 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
     workflowType,
     temporalState,
     entry,
-    repository,
-    integration,
+    normalizedRepository,
+    normalizedIntegration,
     listCursor,
   ] as const;
 
@@ -231,8 +224,8 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
       if (workflowType) params.set('workflowType', workflowType);
       if (temporalState) params.set('state', temporalState);
       if (entry) params.set('entry', entry);
-      if (repository.trim()) params.set('repo', repository.trim());
-      if (integration.trim()) params.set('integration', integration.trim());
+      if (normalizedRepository) params.set('repo', normalizedRepository);
+      if (normalizedIntegration) params.set('integration', normalizedIntegration);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
@@ -268,6 +261,25 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
 
   const sortIndicator = (field: string) =>
     sortField === field ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+  const sortAccessibilityProps = (field: string, label: string) => {
+    const isSorted = sortField === field;
+    const ariaSort: 'none' | 'ascending' | 'descending' = !isSorted
+      ? 'none'
+      : sortDir === 'asc'
+        ? 'ascending'
+        : 'descending';
+    const sortHint = !isSorted
+      ? 'Not sorted. Activate to sort ascending.'
+      : sortDir === 'asc'
+        ? 'Sorted ascending. Activate to sort descending.'
+        : 'Sorted descending. Activate to sort ascending.';
+    return {
+      ariaSort,
+      ariaLabel: `${label}. ${sortHint}`,
+      sortHint,
+    };
+  };
 
   const goNext = () => {
     const token = data?.nextPageToken?.trim();
@@ -463,14 +475,23 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
             <table>
               <thead>
                 <tr>
-                  {TABLE_COLUMNS.map(([field, label]) => (
-                    <th key={field}>
-                      <button type="button" className="table-sort-button" onClick={() => onHeaderClick(field)}>
-                        {label}
-                        {sortIndicator(field)}
-                      </button>
-                    </th>
-                  ))}
+                  {TABLE_COLUMNS.map(([field, label]) => {
+                    const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
+                    return (
+                      <th key={field} aria-sort={ariaSort}>
+                        <button
+                          type="button"
+                          className="table-sort-button"
+                          onClick={() => onHeaderClick(field)}
+                          aria-label={ariaLabel}
+                        >
+                          {label}
+                          {sortIndicator(field)}
+                          <span className="sr-only">{sortHint}</span>
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -486,7 +507,7 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
                     <td>{row.repository || '—'}</td>
                     <td>{row.integration || '—'}</td>
                     <td>
-                      <span className={executionStatusPillClasses(row)}>
+                      <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
                         {row.rawState || row.state || row.status || '—'}
                       </span>
                     </td>
@@ -518,7 +539,7 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
                     </p>
                   </div>
                   <div className="queue-card-status">
-                    <span className={executionStatusPillClasses(row)}>
+                    <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
                       {row.rawState || row.state || row.status || '—'}
                     </span>
                   </div>
