@@ -1,25 +1,30 @@
 # Task Dependencies Implementation Plan
 
-Status: Proposed  
+Status: In Progress  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
+Last Updated: 2026-03-29  
 Related: `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 
-## Phase 0 - Spec Alignment
+## Phase 0 - Spec Alignment ✅ COMPLETE
 
-- Rewrite `docs/Tasks/TaskDependencies.md` to align with the current Temporal architecture.
-- Update terminology to use `/api/executions`, `workflowId`, `taskId == workflowId`, and `initialParameters.task.dependsOn`.
-- Add a current implementation snapshot covering what already exists and what is still missing.
-- Clarify v1 scope as create-time only, `MoonMind.Run` only, no edit support, and no cross-type dependencies.
+- [x] Rewrite `docs/Tasks/TaskDependencies.md` to align with the current Temporal architecture.
+- [x] Update terminology to use `/api/executions`, `workflowId`, `taskId == workflowId`, and `initialParameters.task.dependsOn`.
+- [x] Add a current implementation snapshot covering what already exists and what is still missing.
+- [x] Clarify v1 scope as create-time only, `MoonMind.Run` only, no edit support, and no cross-type dependencies.
 
-## Phase 1 - Submit Contract And Validation
+All Phase 0 requirements verified complete as of 2026-03-29 (spec `116-task-dep-phase0`).
 
-- Extend task-shaped submit normalization in `api_service/api/routers/executions.py` to read `payload.task.dependsOn`.
-- Validate `dependsOn` shape as an array of strings, trim empties, deduplicate, enforce the 10-item limit, and reject invalid types.
-- Persist normalized dependency IDs into `initial_parameters["task"]["dependsOn"]`.
-- Add create-time validation so each ID resolves to an existing `MoonMind.Run` execution and does not create self-dependency.
-- Implement cycle detection across transitive `dependsOn` chains with bounded traversal (limit 20 hops).
-- Return clear validation errors for missing targets, unsupported workflow types, cycles, and limit violations.
+## Phase 1 - Submit Contract And Validation ✅ COMPLETE
+
+- [x] Extend task-shaped submit normalization in `api_service/api/routers/executions.py` to read `payload.task.dependsOn`.
+- [x] Validate `dependsOn` shape as an array of strings, trim empties, deduplicate, enforce the 10-item limit, and reject invalid types.
+- [x] Persist normalized dependency IDs into `initial_parameters["task"]["dependsOn"]`.
+- [x] Add create-time validation so each ID resolves to an existing `MoonMind.Run` execution and does not create self-dependency.
+- [x] Implement cycle detection across transitive `dependsOn` chains with bounded traversal (depth 10, node limit 50).
+- [x] Return clear validation errors for missing targets, unsupported workflow types, cycles, and limit violations.
+- [x] Add missing `test_create_execution_rejects_self_dependency` unit test (FR-008 coverage).
+
+All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-phase1`).
 
 ## Phase 2 - `MoonMind.Run` Dependency Gate
 
