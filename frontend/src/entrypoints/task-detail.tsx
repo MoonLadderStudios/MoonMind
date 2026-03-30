@@ -81,18 +81,41 @@ const ExecutionDetailSchema = z
   })
   .passthrough();
 
+const ArtifactSummarySchema = z
+  .object({
+    artifactId: z.string(),
+    contentType: z.string().nullable().optional(),
+    sizeBytes: z.number().nullable().optional(),
+    status: z.string().optional(),
+    downloadUrl: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const ArtifactListSchema = z.object({
   artifacts: z
     .array(
       z
         .object({
-          artifactId: z.string(),
+          artifactId: z.string().optional(),
+          artifact_id: z.string().optional(),
           contentType: z.string().nullable().optional(),
+          content_type: z.string().nullable().optional(),
           sizeBytes: z.number().nullable().optional(),
+          size_bytes: z.number().nullable().optional(),
           status: z.string().optional(),
           downloadUrl: z.string().nullable().optional(),
+          download_url: z.string().nullable().optional(),
         })
-        .passthrough(),
+        .passthrough()
+        .transform((artifact) =>
+          ArtifactSummarySchema.parse({
+            ...artifact,
+            artifactId: artifact.artifactId ?? artifact.artifact_id,
+            contentType: artifact.contentType ?? artifact.content_type ?? null,
+            sizeBytes: artifact.sizeBytes ?? artifact.size_bytes ?? null,
+            downloadUrl: artifact.downloadUrl ?? artifact.download_url ?? null,
+          }),
+        ),
     )
     .default([]),
 });

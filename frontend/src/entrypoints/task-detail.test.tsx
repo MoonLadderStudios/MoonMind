@@ -72,6 +72,56 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it('renders artifact rows from snake_case temporal artifact payloads', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Artifact task',
+      summary: 'Artifact payload',
+      status: 'running',
+      state: 'executing',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifact_id: 'art-001',
+                content_type: 'application/json',
+                size_bytes: 512,
+                status: 'complete',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifact task')).toBeTruthy();
+      expect(screen.getByText('art-001')).toBeTruthy();
+      expect(screen.getByText('512')).toBeTruthy();
+      expect(screen.getByText('complete')).toBeTruthy();
+    });
+  });
+
   it('renders error state on failed fetch', async () => {
     fetchSpy.mockResolvedValueOnce({
       ok: false,
