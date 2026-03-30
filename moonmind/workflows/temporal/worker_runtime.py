@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
+from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
@@ -535,6 +536,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 proposal_service_factory=_build_proposal_service_factory(),
             ),
             review_activities=TemporalReviewActivities(),
+            agent_skills_activities=AgentSkillsActivities(),
         )
         binding_descriptors = sorted(
             f"{binding.activity_type}->{binding.task_queue}" for binding in bindings

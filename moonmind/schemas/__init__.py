@@ -6,6 +6,16 @@ from .agent_runtime_models import (
     ManagedAgentProviderProfile,
     is_terminal_agent_run_state,
 )
+from .agent_skill_models import (
+    AgentSkillFormat,
+    AgentSkillProvenance,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    ResolvedSkillSet,
+    RuntimeMaterializationMode,
+    SkillSelector,
+    SkillSelectorEntry,
+)
 from .manifest_models import (
     AuthItem,
     Defaults,
@@ -122,4 +132,12 @@ __all__ = [
     "RescheduleSignal",
     "SlotAssignedSignal",
     "SyncProfilesSignal",
+    "AgentSkillFormat",
+    "AgentSkillProvenance",
+    "AgentSkillSourceKind",
+    "ResolvedSkillEntry",
+    "ResolvedSkillSet",
+    "RuntimeMaterializationMode",
+    "SkillSelector",
+    "SkillSelectorEntry",
 ]
