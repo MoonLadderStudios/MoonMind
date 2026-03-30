@@ -37,16 +37,10 @@ _CLAUDE_CREDENTIAL_PATHS = (
     ".claude.json",
 )
 
-_CURSOR_CREDENTIAL_PATHS = (
-    ".cursor/auth.json",
-    ".cursor/config.json",
-)
-
 PROVIDER_CREDENTIAL_PATHS: dict[str, tuple[str, ...]] = {
     "gemini_cli": _GEMINI_CREDENTIAL_PATHS,
     "codex_cli": _CODEX_CREDENTIAL_PATHS,
     "claude_code": _CLAUDE_CREDENTIAL_PATHS,
-    "cursor_cli": _CURSOR_CREDENTIAL_PATHS,
 }
 
 
