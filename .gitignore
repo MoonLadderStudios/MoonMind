@@ -39,9 +39,9 @@ uv.lock
 # Worker runtime scratch outputs
 agent_jobs/
 
-# PR resolver run artifacts
-var/pr_resolver/attempts/
-var/pr_resolver/result.json
+# Runtime / ephemeral data (never commit)
+var/
+artifacts/
 
 # Local saved artifacts
 /Saved/
@@ -78,7 +78,4 @@ tmp-comments*.json
 tmp-agentkit-analyze.md
 tmp_skill.md
 tmp_agentkit_clarify.md
-var/worker-relative/
-
-# Local-only secrets (e.g. encryption master key); never commit real material.
-var/secrets/
+# var/ entries below are subsumed by the blanket var/ rule above.
