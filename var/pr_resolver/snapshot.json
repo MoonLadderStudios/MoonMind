@@ -2,7 +2,7 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "feature/agent-skill-system-phase-2",
-    "headRefOid": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
+    "headRefOid": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
     "isDraft": false,
     "mergeStateStatus": "CLEAN",
     "mergeable": "MERGEABLE",
@@ -12,81 +12,81 @@
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:18:36Z",
+        "completedAt": "2026-03-30T20:31:56Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765674382/job/69244372140",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766257862/job/69246397072",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-30T20:17:36Z",
+        "startedAt": "2026-03-30T20:31:01Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:18:20Z",
+        "completedAt": "2026-03-30T20:31:49Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765674255/job/69244372019",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766257845/job/69246397306",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-30T20:17:35Z",
+        "startedAt": "2026-03-30T20:31:01Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:19:27Z",
+        "completedAt": "2026-03-30T20:32:49Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765676042/job/69244375023",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766260550/job/69246403381",
         "name": "test-backend",
-        "startedAt": "2026-03-30T20:17:36Z",
+        "startedAt": "2026-03-30T20:31:03Z",
         "status": "COMPLETED",
         "workflowName": "Run Pytest Unit Tests"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:19:27Z",
+        "completedAt": "2026-03-30T20:32:57Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765674382/job/69244372090",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766257862/job/69246397085",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-30T20:17:35Z",
+        "startedAt": "2026-03-30T20:31:01Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:18:34Z",
+        "completedAt": "2026-03-30T20:32:11Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765674255/job/69244372048",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766257845/job/69246397219",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-30T20:17:35Z",
+        "startedAt": "2026-03-30T20:31:01Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:18:39Z",
+        "completedAt": "2026-03-30T20:32:09Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765674255/job/69244372069",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766257845/job/69246397254",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-30T20:17:35Z",
+        "startedAt": "2026-03-30T20:31:00Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:19:06Z",
+        "completedAt": "2026-03-30T20:32:23Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23765676042/job/69244375018",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23766260550/job/69246403455",
         "name": "test-frontend",
-        "startedAt": "2026-03-30T20:17:37Z",
+        "startedAt": "2026-03-30T20:31:03Z",
         "status": "COMPLETED",
         "workflowName": "Run Pytest Unit Tests"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T20:18:12Z",
+        "completedAt": "2026-03-30T20:31:40Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69244469473",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69246498398",
         "name": "CodeQL",
-        "startedAt": "2026-03-30T20:18:10Z",
+        "startedAt": "2026-03-30T20:31:38Z",
         "status": "COMPLETED",
         "workflowName": ""
       }
@@ -116,8 +116,10 @@
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
-    "headShaNonSecurityCheckCount": 6
+    "headShaVerified": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
+    "headShaNonSecurityCheckCount": 2,
+    "previousCommitSha": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
+    "previousCommitNonSecurityCheckCount": 6
   },
   "commentsFetch": {
     "succeeded": true,
@@ -135,10 +137,10 @@
       "path": "api_service/services/agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 7,
+      "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
-      "thread_outdated": false
+      "thread_resolved": true,
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -151,10 +153,10 @@
       "path": "api_service/services/agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 8,
+      "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
-      "thread_outdated": false
+      "thread_resolved": true,
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -167,10 +169,10 @@
       "path": "api_service/services/agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 21,
+      "line": 18,
       "side": "RIGHT",
-      "thread_resolved": false,
-      "thread_outdated": false
+      "thread_resolved": true,
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -183,10 +185,10 @@
       "path": "api_service/services/agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 8,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -197,7 +199,7 @@
       "updated_at": "2026-03-30T20:21:09Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009422",
       "path": "api_service/services/agent_skills_service.py",
-      "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
+      "commit_id": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
       "in_reply_to_id": null,
       "line": 146,
       "side": "RIGHT",
@@ -213,7 +215,7 @@
       "updated_at": "2026-03-30T20:21:09Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009430",
       "path": "api_service/services/agent_skills_service.py",
-      "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
+      "commit_id": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
       "in_reply_to_id": null,
       "line": 162,
       "side": "RIGHT",
@@ -231,10 +233,10 @@
       "path": "api_service/api/schemas.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 609,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -247,10 +249,10 @@
       "path": "api_service/migrations/versions/b47e8ad48d4c_agent_skill_system_phase_2.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 70,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -263,10 +265,10 @@
       "path": "tests/unit/api/test_agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 113,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review",
@@ -289,10 +291,10 @@
       "path": "api_service/api/schemas.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 609,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -303,7 +305,7 @@
       "updated_at": "2026-03-30T20:23:20Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019027",
       "path": "api_service/db/models.py",
-      "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
+      "commit_id": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
       "in_reply_to_id": null,
       "line": 2165,
       "side": "RIGHT",
@@ -329,9 +331,9 @@
       "updated_at": "2026-03-30T20:23:20Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019031",
       "path": "api_service/db/models.py",
-      "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
+      "commit_id": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
       "in_reply_to_id": null,
-      "line": 2261,
+      "line": 2266,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -347,10 +349,10 @@
       "path": "api_service/services/agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 94,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -363,7 +365,23 @@
       "path": "api_service/services/agent_skills_service.py",
       "commit_id": "14d00812ad9cc12bd29d1c6bbf9f7071dc617cab",
       "in_reply_to_id": null,
-      "line": 143,
+      "line": null,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": true
+    },
+    {
+      "type": "review_comment",
+      "id": 3012062487,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'build_artifact_ref' is not used.\n\n---\n\nTo fix this problem, remove the unused symbol from the import statement while keeping any symbols that are actually used. This eliminates the unnecessary import without affecting runtime behavior.</p>\n<p>Concretely, in <code>api_service/services/agent_skills_service.py</code>, the line:</p>\n<pre><code>from moonmind.workflows.temporal import (\n    TemporalArtifactService,\n    build_artifact_ref,\n)\n</code></pre>\n<p>should be updated so that only <code>TemporalArtifactService</code> is imported, since that is referenced as the type of <code>artifact_service</code> in <code>__init__</code>. The best minimal change is to remove <code>build_artifact_ref</code> from the import list and keep the multi-line style or collapse to a single line; either is fine functionally, but maintaining a simple, readable single-line import is acceptable and does not change functionality.</p>\n<p>No new methods, imports, or definitions are required; this is purely an import cleanup.",
+      "created_at": "2026-03-30T20:33:08Z",
+      "updated_at": "2026-03-30T20:33:08Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012062487",
+      "path": "api_service/services/agent_skills_service.py",
+      "commit_id": "7d1a17de2e043ddce53cf62f83d34e5df15b2df2",
+      "in_reply_to_id": null,
+      "line": 22,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -371,33 +389,20 @@
   ],
   "commentsSummary": {
     "classificationVersion": 2,
-    "total": 16,
-    "reviewCommentCount": 14,
+    "total": 17,
+    "reviewCommentCount": 15,
     "issueCommentCount": 0,
     "reviewBodyCount": 2,
-    "actionableCommentCount": 14,
+    "actionableCommentCount": 1,
     "includeBotReviewComments": true,
     "humanCommentCount": 6,
-    "botCommentCount": 10,
+    "botCommentCount": 11,
     "hasActionableComments": true,
     "actionableCommentIds": [
-      3012003016,
-      3012003019,
-      3012003025,
-      3012009394,
-      3012009422,
-      3012009430,
-      3012009449,
-      3012009462,
-      3012009479,
-      3012019016,
-      3012019027,
-      3012019031,
-      3012019037,
-      3012019050
+      3012062487
     ],
     "nonActionableReasonCounts": {
-      "bot_comment_excluded": 2
+      "addressed_in_ledger": 16
     },
     "classifiedComments": [
       {
@@ -406,9 +411,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012003016",
         "path": "api_service/services/agent_skills_service.py",
-        "line": 7,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012003019,
@@ -416,9 +421,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012003019",
         "path": "api_service/services/agent_skills_service.py",
-        "line": 8,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012003025,
@@ -426,9 +431,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012003025",
         "path": "api_service/services/agent_skills_service.py",
-        "line": 21,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 18,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012009394,
@@ -436,9 +441,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009394",
         "path": "api_service/services/agent_skills_service.py",
-        "line": 8,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012009422,
@@ -447,8 +452,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009422",
         "path": "api_service/services/agent_skills_service.py",
         "line": 146,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012009430,
@@ -457,8 +462,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009430",
         "path": "api_service/services/agent_skills_service.py",
         "line": 162,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012009449,
@@ -466,9 +471,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009449",
         "path": "api_service/api/schemas.py",
-        "line": 609,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012009462,
@@ -476,9 +481,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009462",
         "path": "api_service/migrations/versions/b47e8ad48d4c_agent_skill_system_phase_2.py",
-        "line": 70,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012009479,
@@ -486,9 +491,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012009479",
         "path": "tests/unit/api/test_agent_skills_service.py",
-        "line": 113,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4033103786,
@@ -498,7 +503,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012019016,
@@ -506,9 +511,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019016",
         "path": "api_service/api/schemas.py",
-        "line": 609,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012019027,
@@ -517,8 +522,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019027",
         "path": "api_service/db/models.py",
         "line": 2165,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4033114406,
@@ -528,7 +533,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012019031,
@@ -536,9 +541,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019031",
         "path": "api_service/db/models.py",
-        "line": 2261,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 2266,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012019037,
@@ -546,9 +551,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019037",
         "path": "api_service/services/agent_skills_service.py",
-        "line": 94,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012019050,
@@ -556,7 +561,17 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012019050",
         "path": "api_service/services/agent_skills_service.py",
-        "line": 143,
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
+      },
+      {
+        "id": 3012062487,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1084#discussion_r3012062487",
+        "path": "api_service/services/agent_skills_service.py",
+        "line": 22,
         "actionable": true,
         "reason": "actionable"
       }

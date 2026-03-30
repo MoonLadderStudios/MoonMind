@@ -78,5 +78,10 @@
     "id": 3012019050,
     "disposition": "addressed",
     "rationale": "Assigned artifact.artifact_id directly to artifact_ref."
+  },
+  {
+    "id": 3012062487,
+    "disposition": "addressed",
+    "rationale": "Removed unused build_artifact_ref import."
   }
 ]

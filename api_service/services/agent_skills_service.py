@@ -16,10 +16,7 @@ from api_service.db.models import (
     AgentSkillVersion,
     SkillSet,
 )
-from moonmind.workflows.temporal import (
-    TemporalArtifactService,
-    build_artifact_ref,
-)
+from moonmind.workflows.temporal import TemporalArtifactService
 
 
 class AgentSkillDuplicateError(ValueError):
