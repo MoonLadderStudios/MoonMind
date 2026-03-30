@@ -11,7 +11,7 @@ __pycache__/
 .venv/
 venv/
 node_modules/
-dist/
+**/dist/
 build/
 coverage/
 .env
