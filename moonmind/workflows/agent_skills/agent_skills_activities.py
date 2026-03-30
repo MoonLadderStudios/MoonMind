@@ -3,11 +3,14 @@ from temporalio import activity
 from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
     SkillSelector,
+    RuntimeSkillMaterialization,
+    RuntimeMaterializationMode,
 )
 from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
+from moonmind.services.skill_materialization import AgentSkillMaterializer
 
 
 class AgentSkillsActivities:
@@ -71,4 +74,20 @@ class AgentSkillsActivities:
             lines.append("")
 
         return "\n".join(lines)
+
+    @activity.defn(name="agent_skill.materialize")
+    async def materialize(
+        self,
+        resolved_skillset: ResolvedSkillSet,
+        runtime_id: str,
+        mode: RuntimeMaterializationMode,
+        workspace_root: str,
+    ) -> RuntimeSkillMaterialization:
+        """Materialize the immutable skill snapshot for a given runtime."""
+        materializer = AgentSkillMaterializer(workspace_root=workspace_root)
+        return await materializer.materialize(
+            resolved_skillset=resolved_skillset,
+            runtime_id=runtime_id,
+            mode=mode,
+        )
 

@@ -87,3 +87,16 @@ class ResolvedSkillSet(BaseModel):
     policy_summary: dict[str, Any] = Field(default_factory=dict)
     
     model_config = ConfigDict(extra="forbid")
+
+
+class RuntimeSkillMaterialization(BaseModel):
+    """The runtime-facing rendering of a resolved skill snapshot."""
+
+    runtime_id: str
+    materialization_mode: RuntimeMaterializationMode
+    workspace_paths: list[str] = Field(default_factory=list)
+    prompt_index_ref: str | None = None
+    retrieval_manifest_ref: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    
+    model_config = ConfigDict(extra="forbid")

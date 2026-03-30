@@ -484,6 +484,24 @@ class ManagedRuntimeLauncher:
                     exc_info=True,
                 )
 
+        # Expose active skills projection if present
+        if resolved_workspace_path is not None:
+            run_root = (self._workspace_root() / run_id).resolve()
+            active_skills_dir = run_root / ".agents" / "skills_active"
+            if active_skills_dir.exists():
+                target_skills_dir = Path(resolved_workspace_path) / ".agents" / "skills"
+                try:
+                    if target_skills_dir.exists() and not target_skills_dir.is_symlink():
+                        # We must expose active_skills_dir as .agents/skills without overwriting the checked-in files.
+                        # Renaming the existing folder allows symlinking.
+                        target_skills_dir.rename(Path(resolved_workspace_path) / ".agents" / "skills_repo_source")
+                    if not target_skills_dir.parent.exists():
+                        target_skills_dir.parent.mkdir(parents=True)
+                    if not target_skills_dir.exists():
+                        target_skills_dir.symlink_to(active_skills_dir, target_is_directory=True)
+                except OSError as ex:
+                    logger.warning("Failed to link active skills directory: %s", ex)
+
         if strategy is not None:
             env_overrides = strategy.shape_environment(env_overrides, profile)
 

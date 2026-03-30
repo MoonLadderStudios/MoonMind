@@ -234,23 +234,23 @@ Make managed runtimes consume resolved skill snapshots consistently.
 
 ### Tasks
 
-- [ ] Define concrete runtime contract for `RuntimeSkillMaterialization`
-- [ ] Implement materialization activity or service for workspace-mounted skill content
-- [ ] Implement materialization of a compact prompt index or summary for hybrid mode
-- [ ] Implement the active manifest/index written alongside the active skill view
-- [ ] Materialize the active run snapshot into a run-scoped location rather than mutating checked-in skill folders
-- [ ] Expose the active set through `.agents/skills` as the immutable, canonical runtime-visible active path
-- [ ] Preserve `.agents/skills/local` explicitly as a local-only overlay input path, not an active output
-- [ ] Enforce the "do not mutate checked-in skill folders in place" constraint at the materialization boundary
-- [ ] Produce adapter compatibility links (`skills_active` fallback) and prompt-index generations where historically required
-- [ ] Update managed runtime adapters to accept `resolved_skillset_ref` or equivalent input
-- [ ] Update managed runtime launch flows to consume the resolved active set and prompt index
-- [ ] Ensure any runtime-specific compatibility links still preserve `.agents/skills` as the canonical path
-- [ ] Add tests for:
-  - [ ] `.agents/skills` active projection
-  - [ ] non-mutation of checked-in skill files
-  - [ ] hybrid materialization output
-  - [ ] adapter consumption of resolved snapshot refs
+- [x] Define concrete runtime contract for `RuntimeSkillMaterialization`
+- [x] Implement materialization activity or service for workspace-mounted skill content
+- [x] Implement materialization of a compact prompt index or summary for hybrid mode
+- [x] Implement the active manifest/index written alongside the active skill view
+- [x] Materialize the active run snapshot into a run-scoped location rather than mutating checked-in skill folders
+- [x] Expose the active set through `.agents/skills` as the immutable, canonical runtime-visible active path
+- [x] Preserve `.agents/skills/local` explicitly as a local-only overlay input path, not an active output
+- [x] Enforce the "do not mutate checked-in skill folders in place" constraint at the materialization boundary
+- [x] Produce adapter compatibility links (`skills_active` fallback) and prompt-index generations where historically required
+- [x] Update managed runtime adapters to accept `resolved_skillset_ref` or equivalent input
+- [x] Update managed runtime launch flows to consume the resolved active set and prompt index
+- [x] Ensure any runtime-specific compatibility links still preserve `.agents/skills` as the canonical path
+- [x] Add tests for:
+  - [x] `.agents/skills` active projection
+  - [x] non-mutation of checked-in skill files
+  - [x] hybrid materialization output
+  - [x] adapter consumption of resolved snapshot refs
 
 ### Exit criteria
 
