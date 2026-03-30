@@ -2643,14 +2643,14 @@ llama-parse = ">=0.5.0"
 
 [[package]]
 name = "llama-index-vector-stores-qdrant"
-version = "0.9.2"
+version = "0.10.0"
 description = "llama-index vector_stores qdrant integration"
 optional = false
-python-versions = "<3.14,>=3.9"
+python-versions = "<3.14,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_vector_stores_qdrant-0.9.2-py3-none-any.whl", hash = "sha256:631139e3dc84a831e949758f99b0858a53c835c5a5878a68d676b3eb579c824f"},
-    {file = "llama_index_vector_stores_qdrant-0.9.2.tar.gz", hash = "sha256:c7f8138a0f4f79bed79a32b7c875d2766849b02a779617e55b8d1feb1a9e605a"},
+    {file = "llama_index_vector_stores_qdrant-0.10.0-py3-none-any.whl", hash = "sha256:a883c9bd3d301b434fdf1645a5118b18db0b429d4011ba275ce23a69297606c6"},
+    {file = "llama_index_vector_stores_qdrant-0.10.0.tar.gz", hash = "sha256:173855ff82fffedda5b24c2561f8a6dcd9da24318143188de85470f6667a84ea"},
 ]
 
 [package.dependencies]
@@ -6354,4 +6354,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "66d0aac6e785d4d36549786a01534ddfae4abe9d1cddad38863daa699c803970"
+content-hash = "a62e8d7af29cd85098ca2c67262032810618e6489710dbf5f9d4016d8d40f40a"
