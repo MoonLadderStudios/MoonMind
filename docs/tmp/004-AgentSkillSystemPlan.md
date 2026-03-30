@@ -188,28 +188,28 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 
 - [x] Define concrete runtime contract for `ResolvedSkillSet`
 - [x] Define concrete runtime contract for source provenance and resolution inputs
-- [x] Implement built-in skill source loader
-- [x] Implement deployment skill source loader
-- [x] Implement repo checked-in skill source loader
-- [x] Implement `.agents/skills/local` source loader
-- [x] Implement precedence rules from the canonical doc
-- [x] Implement collision detection and deterministic resolution failures
-- [x] Implement policy enforcement for disallowed source kinds
-- [x] Implement explicit include, exclude, and pinned-version selectors
-- [x] Implement `task.skills` baseline resolution
-- [x] Implement `step.skills` override and inheritance behavior
+- [ ] Implement built-in skill source loader
+- [ ] Implement deployment skill source loader
+- [ ] Implement repo checked-in skill source loader
+- [ ] Implement `.agents/skills/local` source loader
+- [ ] Implement precedence rules from the canonical doc
+- [ ] Implement collision detection and deterministic resolution failures
+- [ ] Implement policy enforcement for disallowed source kinds
+- [ ] Implement explicit include, exclude, and pinned-version selectors
+- [ ] Implement `task.skills` baseline resolution
+- [ ] Implement `step.skills` override and inheritance behavior
 - [x] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
 - [x] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
 - [x] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
-- [x] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
+- [ ] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
 - [x] Return compact refs and metadata rather than full bodies in workflow history
-- [x] Add tests covering:
-  - [x] source precedence
-  - [x] collisions
-  - [x] pinned version failures
-  - [x] policy blocks
-  - [x] step-level exclusions
-  - [x] deterministic snapshot reuse across retries
+- [ ] Add tests covering:
+  - [ ] source precedence
+  - [ ] collisions
+  - [ ] pinned version failures
+  - [ ] policy blocks
+  - [ ] step-level exclusions
+  - [ ] deterministic snapshot reuse across retries
 
 
 ### Exit criteria

@@ -58,7 +58,7 @@ class AgentSkillProvenance(BaseModel):
     source_path: str | None = None
     skill_set_name: str | None = None
     
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 class ResolvedSkillEntry(BaseModel):
@@ -71,7 +71,7 @@ class ResolvedSkillEntry(BaseModel):
     content_digest: str | None = None
     provenance: AgentSkillProvenance
     
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 class ResolvedSkillSet(BaseModel):
@@ -86,4 +86,4 @@ class ResolvedSkillSet(BaseModel):
     resolution_inputs: dict[str, Any] = Field(default_factory=dict)
     policy_summary: dict[str, Any] = Field(default_factory=dict)
     
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")

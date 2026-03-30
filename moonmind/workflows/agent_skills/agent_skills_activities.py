@@ -1,16 +1,11 @@
-import json
-from datetime import UTC, datetime
-from typing import Any
-from uuid import uuid4
+from datetime import datetime
 
 from temporalio import activity
 
 from moonmind.schemas.agent_skill_models import (
-    AgentSkillFormat,
     ResolvedSkillSet,
     SkillSelector,
 )
-from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
 from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
@@ -32,7 +27,7 @@ class AgentSkillsActivities:
         
         # Instantiate the proper context bounds
         info = activity.info()
-        snapshot_id = f"skillset_{info.workflow_id}_{uuid4().hex[:8]}"
+        snapshot_id = f"skillset_{info.workflow_id}_{info.activity_id}"
         
         context = SkillResolutionContext(
             snapshot_id=snapshot_id,

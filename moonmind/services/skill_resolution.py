@@ -1,14 +1,10 @@
 import abc
 from datetime import UTC, datetime
-from typing import Any
-
 from moonmind.schemas.agent_skill_models import (
-    AgentSkillProvenance,
     AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
     SkillSelector,
-    SkillSelectorEntry,
 )
 
 
@@ -59,10 +55,8 @@ class DeploymentSkillLoader(SkillLoader):
         # AgentSkillDefinition, AgentSkillVersion
         
         # We need an async session to query `api_service` models here.
+        # We need an async session to query `api_service` models here.
         # This will be filled in the detailed DB logic.
-        from api_service.db.base import get_async_session_context
-        from api_service.db.models import AgentSkillDefinition, AgentSkillVersion, SkillSet
-        from sqlalchemy import select
         
         results: list[ResolvedSkillEntry] = []
         
