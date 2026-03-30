@@ -165,7 +165,7 @@ export function OperationsSettingsSection({
 
   if (!workerPauseConfig) {
     return (
-      <section className="rounded-3xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-6 text-sm text-amber-900 dark:text-amber-400 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-400 shadow-sm">
+      <section className="rounded-3xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-6 text-sm text-amber-900 dark:text-amber-400 shadow-sm">
         Worker pause controls are not configured for this deployment.
       </section>
     );
@@ -182,9 +182,9 @@ export function OperationsSettingsSection({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 dark:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:bg-slate-100 p-6 shadow-sm">
+      <section className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
         <div className="space-y-2">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-white dark:text-slate-900">Operations</h3>
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Operations</h3>
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
             Worker pause, drain, quiesce, and recent operational audit actions live
             here under Settings.
@@ -192,13 +192,13 @@ export function OperationsSettingsSection({
         </div>
       </section>
 
-      <section className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 dark:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:bg-slate-100 p-6 shadow-sm">
+      <section className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
         {notice ? (
           <div
-            className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
+            className={`mb-4 rounded-2xl border px-4 py-3 text-sm shadow-sm ${
               notice.level === 'error'
-                ? 'border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400'
-                : 'border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400'
+                ? 'border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400'
+                : 'border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
             }`}
           >
             {notice.text}
@@ -212,7 +212,7 @@ export function OperationsSettingsSection({
         ) : (
           <div className="space-y-6">
             <div className="space-y-2">
-              <h4 className="text-lg font-semibold text-slate-900 dark:text-white dark:text-slate-900">{stateLabel}</h4>
+              <h4 className="text-lg font-semibold text-slate-900 dark:text-white">{stateLabel}</h4>
               <p className="text-sm text-slate-600 dark:text-slate-400">{system.reason || 'Normal operation'}</p>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Mode: {system.mode || (isPaused ? 'paused' : 'running')} | Version:{' '}
@@ -221,23 +221,23 @@ export function OperationsSettingsSection({
             </div>
 
             <div className="grid gap-4 md:grid-cols-4">
-              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50 p-4 text-center">
+              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4 text-center">
                 <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Queued</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-white dark:text-slate-900">{metrics.queued || 0}</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white">{metrics.queued || 0}</div>
               </div>
-              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50 p-4 text-center">
+              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4 text-center">
                 <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Running</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-white dark:text-slate-900">{metrics.running || 0}</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white">{metrics.running || 0}</div>
               </div>
-              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50 p-4 text-center">
+              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4 text-center">
                 <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Stale</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-white dark:text-slate-900">
+                <div className="text-2xl font-bold text-slate-900 dark:text-white">
                   {metrics.staleRunning || 0}
                 </div>
               </div>
-              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50 p-4 text-center">
+              <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4 text-center">
                 <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Drained</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-white dark:text-slate-900">
+                <div className="text-2xl font-bold text-slate-900 dark:text-white">
                   {metrics.isDrained ? 'Yes' : 'No'}
                 </div>
               </div>
@@ -245,20 +245,20 @@ export function OperationsSettingsSection({
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
               <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
-                <h4 className="text-base font-semibold text-slate-900 dark:text-white dark:text-slate-900">Worker controls</h4>
+                <h4 className="text-base font-semibold text-slate-900 dark:text-white">Worker controls</h4>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   Drain lets running jobs finish. Quiesce stops new claims immediately.
                 </p>
 
                 <form className="mt-5 space-y-4" onSubmit={handlePause}>
                   <fieldset className="space-y-3" disabled={actionMutation.isPending}>
-                    <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <legend className="text-sm font-medium text-slate-700 dark:text-300">
                       Pause workers
                     </legend>
                     <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                       <span>Mode</span>
                       <select
-                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                         value={pauseMode}
                         onChange={(event) => setPauseMode(event.target.value)}
                       >
@@ -269,7 +269,7 @@ export function OperationsSettingsSection({
                     <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                       <span>Reason</span>
                       <input
-                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                         type="text"
                         maxLength={160}
                         value={pauseReason}
@@ -279,7 +279,7 @@ export function OperationsSettingsSection({
                     </label>
                     <button
                       type="submit"
-                      className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200 dark:bg-slate-200 dark:hover:bg-slate-200"
+                      className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
                     >
                       Pause workers
                     </button>
@@ -296,7 +296,7 @@ export function OperationsSettingsSection({
                     <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
                       <span>Reason</span>
                       <input
-                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                         type="text"
                         maxLength={160}
                         value={resumeReason}
@@ -306,7 +306,7 @@ export function OperationsSettingsSection({
                     </label>
                     <button
                       type="submit"
-                      className="inline-flex items-center justify-center rounded-full bg-emerald-600 dark:bg-emerald-500 px-5 dark:bg-emerald-500 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-emerald-500 dark:hover:bg-emerald-400"
+                      className="inline-flex items-center justify-center rounded-full bg-emerald-600 dark:bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white dark:text-white transition hover:bg-emerald-500 dark:hover:bg-emerald-400"
                     >
                       Resume workers
                     </button>
@@ -315,15 +315,15 @@ export function OperationsSettingsSection({
               </section>
 
               <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
-                <h4 className="text-base font-semibold text-slate-900 dark:text-white dark:text-slate-900">Recent actions</h4>
+                <h4 className="text-base font-semibold text-slate-900 dark:text-white">Recent actions</h4>
                 <div className="mt-4 space-y-3">
                   {snapshot?.audit?.latest && snapshot.audit.latest.length > 0 ? (
                     snapshot.audit.latest.map((event, index) => (
                       <div
                         key={`${event.createdAt || 'event'}-${index}`}
-                        className="rounded-2xl bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50 p-4"
+                        className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4"
                       >
-                        <div className="text-sm font-semibold text-slate-900 dark:text-white dark:text-slate-900">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-white">
                           {(event.action || '-').toUpperCase()}
                           {event.mode ? ` | ${event.mode.toUpperCase()}` : ''}
                         </div>

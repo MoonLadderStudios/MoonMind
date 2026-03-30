@@ -1,187 +1,92 @@
 [
-    {
-      "id": 4150924370,
-      "disposition": "not-applicable",
-      "rationale": "Codex usage limits information."
-    },
-    {
-      "id": 3006663513,
-      "disposition": "addressed",
-      "rationale": "mock_temporal_adapter.patch removed."
-    },
-    {
-      "id": 3006663515,
-      "disposition": "addressed",
-      "rationale": "Status updated from DONE to PARTIAL."
-    },
-    {
-      "id": 3006663516,
-      "disposition": "addressed",
-      "rationale": "Moved config import to top of test_run.py."
-    },
-    {
-      "id": 3006663518,
-      "disposition": "addressed",
-      "rationale": "Moved TaskProposalStatusError to top of test_task_proposals.py."
-    },
-    {
-      "id": 3006663522,
-      "disposition": "addressed",
-      "rationale": "Moved json import to top."
-    },
-    {
-      "id": 4027171967,
-      "disposition": "not-applicable",
-      "rationale": "Review summary."
-    },
-    {
-      "id": 3006663727,
-      "disposition": "addressed",
-      "rationale": "Removed unused asyncio import."
-    },
-    {
-      "id": 3006663731,
-      "disposition": "addressed",
-      "rationale": "Removed unused timedelta import."
-    },
-    {
-      "id": 3006667749,
-      "disposition": "addressed",
-      "rationale": "Assigned to _events."
-    },
-    {
-      "id": 3006667759,
-      "disposition": "addressed",
-      "rationale": "Reordered imports in test_secret_redaction.py."
-    },
-    {
-      "id": 3006667770,
-      "disposition": "addressed",
-      "rationale": "Updated mock string from decrypted_... to encrypted_..."
-    },
-    {
-      "id": 3006667775,
-      "disposition": "addressed",
-      "rationale": "Addressed duplicate comment - changed status to PARTIAL."
-    },
-    {
-      "id": 3006667781,
-      "disposition": "addressed",
-      "rationale": "Reordered AsyncMock import in test_integrations_monitoring.py."
-    },
-    {
-      "id": 3006667789,
-      "disposition": "addressed",
-      "rationale": "Removed mock_temporal_adapter.patch again."
-    },
-    {
-      "id": 3006667798,
-      "disposition": "addressed",
-      "rationale": "Changed provider-profile-manager to auth-profile-manager in artifacts.py."
-    },
-    {
-      "id": 3006667807,
-      "disposition": "addressed",
-      "rationale": "Removed unused imports duplicate."
-    },
-    {
-      "id": 3006667809,
-      "disposition": "addressed",
-      "rationale": "Extracted _to_serializable in test_run_proposals.py."
-    },
-    {
-      "id": 3006667817,
-      "disposition": "addressed",
-      "rationale": "Changed string assertion to TaskProposalOriginSource.WORKFLOW enum."
-    },
-    {
-      "id": 4027175266,
-      "disposition": "not-applicable",
-      "rationale": "Copilot reviewer summary bot."
-    },
-    {
-      "id": 4150745049,
-      "disposition": "not-applicable",
-      "rationale": "Codex usage-limit notice is informational and does not describe a code defect in this PR."
-    },
-    {
-      "id": 3006565445,
-      "disposition": "addressed",
-      "rationale": "Kept pagination visible on empty paginated pages and removed the extra empty-results disable guard for the Previous button."
-    },
-    {
-      "id": 4027089950,
-      "disposition": "not-applicable",
-      "rationale": "This review summary only restates the actionable pagination comment already tracked separately."
-    },
-    {
-      "id": 4027091119,
-      "disposition": "not-applicable",
-      "rationale": "Copilot overview contained no requested change or defect report to address."
-    },
-    {
-      "id": 4150920228,
-      "disposition": "not-applicable",
-      "rationale": "Codex usage-limit notice is an informational bot comment and does not request a code change."
-    },
-    {
-      "id": 4027169265,
-      "disposition": "not-applicable",
-      "rationale": "Gemini review summary is informational; the actionable feedback was captured in the inline review comment."
-    },
-    {
-      "id": 3006660389,
-      "disposition": "addressed",
-      "rationale": "Replaced the manual empty-registry JSON hashing path with a shared canonical registry digest helper."
-    },
-    {
-      "id": 3006663916,
-      "disposition": "addressed",
-      "rationale": "Gated the conditional registry read behind a replay-stable Temporal patch and added an unpatched-history regression."
-    },
-    {
-      "id": 4027172243,
-      "disposition": "not-applicable",
-      "rationale": "Copilot review summary is informational; the actionable feedback was captured in the inline review comment."
-    },
-    {
-      "id": 4150918742,
-      "disposition": "not-applicable",
-      "rationale": "Usage limit warning from bot, no action needed."
-    },
-    {
-      "id": 4027168030,
-      "disposition": "not-applicable",
-      "rationale": "Automated review summary from gemini bit, no action needed."
-    },
-    {
-      "id": 3006664892,
-      "disposition": "addressed",
-      "rationale": "Removed orphaned bullets under Claude Code in docs/ManagedAgents/OAuthTerminal.md."
-    },
-    {
-      "id": 3006664902,
-      "disposition": "addressed",
-      "rationale": "Removed the blank line inside the table in docs/tmp/101-PlansOverview.md."
-    },
-    {
-      "id": 3006664919,
-      "disposition": "addressed",
-      "rationale": "Added a replacement test 'test_supervise_uses_output_parser_from_strategy' using the gemini_cli runtime."
-    },
-    {
-      "id": 3006664926,
-      "disposition": "addressed",
-      "rationale": "Removed unused 'import json' in tests/unit/workflows/temporal/runtime/test_output_parser.py."
-    },
-    {
-      "id": 3006664932,
-      "disposition": "addressed",
-      "rationale": "Updated docstring to reference three runtimes instead of four."
-    },
-    {
-      "id": 4027172893,
-      "disposition": "not-applicable",
-      "rationale": "Pull request overview from Copilot, informational only."
-    }
+  {
+    "id": 4156996442,
+    "disposition": "not-applicable",
+    "rationale": "Informational message about Codex usage limits."
+  },
+  {
+    "id": 3011357812,
+    "disposition": "addressed",
+    "rationale": "Cleaned up duplicated and conflicting Tailwind classes in section buttons in settings.tsx."
+  },
+  {
+    "id": 3011357823,
+    "disposition": "addressed",
+    "rationale": "Cleaned up duplicated and conflicting Tailwind classes in SecretManager.tsx container."
+  },
+  {
+    "id": 3011357827,
+    "disposition": "addressed",
+    "rationale": "Removed conflicting dark mode text color classes in SecretManager.tsx header."
+  },
+  {
+    "id": 3011357834,
+    "disposition": "addressed",
+    "rationale": "Deduplicated Tailwind classes in OperationsSettingsSection.tsx alert."
+  },
+  {
+    "id": 3011357849,
+    "disposition": "addressed",
+    "rationale": "Cleaned up class strings for error and success notices in OperationsSettingsSection.tsx."
+  },
+  {
+    "id": 4032363674,
+    "disposition": "not-applicable",
+    "rationale": "General review summary comment."
+  },
+  {
+    "id": 3011357859,
+    "disposition": "addressed",
+    "rationale": "Simplified conflicting dark mode background classes in ProviderProfilesManager.tsx badge."
+  },
+  {
+    "id": 3011360898,
+    "disposition": "addressed",
+    "rationale": "Deduplicated classes and migrated hard-coded inline colors to Tailwind in SecretManager.tsx table."
+  },
+  {
+    "id": 3011360928,
+    "disposition": "addressed",
+    "rationale": "Deduplicated and simplified header container classes in settings.tsx."
+  },
+  {
+    "id": 3011360946,
+    "disposition": "addressed",
+    "rationale": "Cleaned up section tab button class strings in settings.tsx."
+  },
+  {
+    "id": 3011360972,
+    "disposition": "addressed",
+    "rationale": "Simplified contradictory text color classes in ProviderProfilesManager.tsx reset button."
+  },
+  {
+    "id": 3011360998,
+    "disposition": "addressed",
+    "rationale": "Simplified conflicting dark mode background classes in ProviderProfilesManager.tsx badge (duplicate feedback)."
+  },
+  {
+    "id": 3011361020,
+    "disposition": "addressed",
+    "rationale": "Deduplicated and simplified pause button classes in OperationsSettingsSection.tsx."
+  },
+  {
+    "id": 3011361038,
+    "disposition": "addressed",
+    "rationale": "Deduplicated repeated classes and ensured proper contrast for resume button in OperationsSettingsSection.tsx."
+  },
+  {
+    "id": 3011361058,
+    "disposition": "addressed",
+    "rationale": "Deduplicated background classes for section wrapper in ProviderProfilesManager.tsx."
+  },
+  {
+    "id": 3011361078,
+    "disposition": "addressed",
+    "rationale": "Cleaned up repeated/conflicting dark mode classes in OperationsSettingsSection.tsx wrapper."
+  },
+  {
+    "id": 4032367139,
+    "disposition": "not-applicable",
+    "rationale": "General PR overview comment."
+  }
 ]
