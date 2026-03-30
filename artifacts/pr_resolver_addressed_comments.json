@@ -1,162 +1,22 @@
 [
   {
-    "id": 4157563183,
+    "id": 3011898909,
+    "disposition": "addressed",
+    "rationale": "Simplified download link condition to a 2-way branch in task-detail.tsx since artifactId is guaranteed by schema."
+  },
+  {
+    "id": 3011898939,
+    "disposition": "addressed",
+    "rationale": "Added unit tests to assert the correct href renders for both fallback artifactId-based and explicit downloadUrl-based download links."
+  },
+  {
+    "id": 4032980388,
     "disposition": "not-applicable",
-    "rationale": "Informational limit warning."
+    "rationale": "Automated pull request summary from copilot bot; no action needed."
   },
   {
-    "id": 3011757793,
-    "disposition": "addressed",
-    "rationale": "Removed duplicate sentence in docs/Temporal/ManagedAndExternalAgentExecutionModel.md."
-  },
-  {
-    "id": 3011757838,
-    "disposition": "addressed",
-    "rationale": "Clarified target-state vs current state in docs/Temporal/ManagedAndExternalAgentExecutionModel.md."
-  },
-  {
-    "id": 3011757850,
-    "disposition": "addressed",
-    "rationale": "Aligned featureFlags in docs/UI/MissionControlArchitecture.md."
-  },
-  {
-    "id": 3011757875,
-    "disposition": "addressed",
-    "rationale": "Fixed numbering sequence in docs/Temporal/WorkflowArtifactSystemDesign.md."
-  },
-  {
-    "id": 3011757896,
-    "disposition": "addressed",
-    "rationale": "Corrected file path reference to docs/Tasks/SkillAndPlanContracts.md."
-  },
-  {
-    "id": 3011757915,
-    "disposition": "addressed",
-    "rationale": "Changed planning is a skill to executable tool terminology."
-  },
-  {
-    "id": 4032825917,
+    "id": 4032995897,
     "disposition": "not-applicable",
-    "rationale": "PR review summary, no action needed."
-  },
-  {
-    "id": 4156996442,
-    "disposition": "not-applicable",
-    "rationale": "Informational message about Codex usage limits."
-  },
-  {
-    "id": 3011357812,
-    "disposition": "addressed",
-    "rationale": "Cleaned up duplicated and conflicting Tailwind classes in section buttons in settings.tsx."
-  },
-  {
-    "id": 3011357823,
-    "disposition": "addressed",
-    "rationale": "Cleaned up duplicated and conflicting Tailwind classes in SecretManager.tsx container."
-  },
-  {
-    "id": 3011357827,
-    "disposition": "addressed",
-    "rationale": "Removed conflicting dark mode text color classes in SecretManager.tsx header."
-  },
-  {
-    "id": 3011357834,
-    "disposition": "addressed",
-    "rationale": "Deduplicated Tailwind classes in OperationsSettingsSection.tsx alert."
-  },
-  {
-    "id": 3011357849,
-    "disposition": "addressed",
-    "rationale": "Cleaned up class strings for error and success notices in OperationsSettingsSection.tsx."
-  },
-  {
-    "id": 4032363674,
-    "disposition": "not-applicable",
-    "rationale": "General review summary comment."
-  },
-  {
-    "id": 3011357859,
-    "disposition": "addressed",
-    "rationale": "Simplified conflicting dark mode background classes in ProviderProfilesManager.tsx badge."
-  },
-  {
-    "id": 3011360898,
-    "disposition": "addressed",
-    "rationale": "Deduplicated classes and migrated hard-coded inline colors to Tailwind in SecretManager.tsx table."
-  },
-  {
-    "id": 3011360928,
-    "disposition": "addressed",
-    "rationale": "Deduplicated and simplified header container classes in settings.tsx."
-  },
-  {
-    "id": 3011360946,
-    "disposition": "addressed",
-    "rationale": "Cleaned up section tab button class strings in settings.tsx."
-  },
-  {
-    "id": 3011360972,
-    "disposition": "addressed",
-    "rationale": "Simplified contradictory text color classes in ProviderProfilesManager.tsx reset button."
-  },
-  {
-    "id": 3011360998,
-    "disposition": "addressed",
-    "rationale": "Simplified conflicting dark mode background classes in ProviderProfilesManager.tsx badge (duplicate feedback)."
-  },
-  {
-    "id": 3011361020,
-    "disposition": "addressed",
-    "rationale": "Deduplicated and simplified pause button classes in OperationsSettingsSection.tsx."
-  },
-  {
-    "id": 3011361038,
-    "disposition": "addressed",
-    "rationale": "Deduplicated repeated classes and ensured proper contrast for resume button in OperationsSettingsSection.tsx."
-  },
-  {
-    "id": 3011361058,
-    "disposition": "addressed",
-    "rationale": "Deduplicated background classes for section wrapper in ProviderProfilesManager.tsx."
-  },
-  {
-    "id": 3011361078,
-    "disposition": "addressed",
-    "rationale": "Cleaned up repeated/conflicting dark mode classes in OperationsSettingsSection.tsx wrapper."
-  },
-  {
-    "id": 4032367139,
-    "disposition": "not-applicable",
-    "rationale": "General PR overview comment."
-  },
-  {
-    "id": 4156149245,
-    "disposition": "not-applicable",
-    "rationale": "Informational codex limits warning."
-  },
-  {
-    "id": 4156792642,
-    "disposition": "not-applicable",
-    "rationale": "Informational codex limits warning."
-  },
-  {
-    "id": 3011199838,
-    "disposition": "addressed",
-    "rationale": "Removed integration filter state and UI."
-  },
-  {
-    "id": 4032180484,
-    "disposition": "not-applicable",
-    "rationale": "PR review summary generated by bot."
-  },
-  {
-    "id": 3011201783,
-    "disposition": "addressed",
-    "rationale": "Added 'integration' back to sort fields set."
-  },
-  {
-    "id": 4032182933,
-    "disposition": "not-applicable",
-    "rationale": "Copilot review summary."
+    "rationale": "Automated code review summary from gemini-code-assist bot indicating no feedback; no action needed."
   }
 ]

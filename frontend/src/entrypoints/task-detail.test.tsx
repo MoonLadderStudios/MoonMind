@@ -119,6 +119,9 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('art-001')).toBeTruthy();
       expect(screen.getByText('512')).toBeTruthy();
       expect(screen.getByText('complete')).toBeTruthy();
+      expect(screen.getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
+        '/api/artifacts/art-001/download'
+      );
     });
   });
 
@@ -175,5 +178,57 @@ describe('Task Detail Entrypoint', () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');
+  });
+
+  it('renders artifact download link using explicit downloadUrl when present', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Artifact task with download_url',
+      summary: 'Artifact payload',
+      status: 'running',
+      state: 'executing',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifact_id: 'art-with-url',
+                content_type: 'application/json',
+                size_bytes: 1024,
+                status: 'complete',
+                download_url: 'https://external-storage.com/art-with-url',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifact task with download_url')).toBeTruthy();
+      expect(screen.getByText('art-with-url')).toBeTruthy();
+      expect(screen.getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
+        'https://external-storage.com/art-with-url'
+      );
+    });
   });
 });
