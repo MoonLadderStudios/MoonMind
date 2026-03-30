@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -189,6 +189,112 @@ function buildDebugFieldEntries(execution: z.infer<typeof ExecutionDetailSchema>
     .filter(([key]) => !knownKeys.has(key))
     .map(([key, value]) => [key, value] as [string, unknown]);
   return [...primaryEntries, ...extraEntries];
+}
+
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled', 'completed']);
+
+interface LogLine {
+  sequence: number;
+  stream: string;
+  text: string;
+}
+
+function LiveLogsPanel({
+  apiBase,
+  taskRunId,
+  isTerminal,
+}: {
+  apiBase: string;
+  taskRunId: string;
+  isTerminal: boolean;
+}) {
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const [status, setStatus] = useState<'connecting' | 'connected' | 'done' | 'error'>('connecting');
+  const lastSeqRef = useRef<number | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!taskRunId) return;
+
+    const since = lastSeqRef.current != null ? `?since=${lastSeqRef.current}` : '';
+    const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
+    const es = new EventSource(url, { withCredentials: true });
+    esRef.current = es;
+
+    es.onopen = () => setStatus('connected');
+
+    es.addEventListener('log_chunk', (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data) as LogLine;
+        lastSeqRef.current = data.sequence;
+        setLines((prev) => [...prev, data]);
+      } catch {
+        // ignore malformed events
+      }
+    });
+
+    es.onerror = () => {
+      es.close();
+      esRef.current = null;
+      setStatus(isTerminal ? 'done' : 'error');
+    };
+
+    return () => {
+      es.close();
+      esRef.current = null;
+    };
+  // Re-connect only when taskRunId changes. Terminal transitions are handled below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBase, taskRunId]);
+
+  // Close the stream once the task reaches a terminal state.
+  useEffect(() => {
+    if (isTerminal && esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+      setStatus('done');
+    }
+  }, [isTerminal]);
+
+  // Auto-scroll to the bottom when new lines arrive.
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [lines]);
+
+  const statusLabel =
+    status === 'connected'
+      ? 'Connected'
+      : status === 'done'
+        ? 'Stream ended'
+        : status === 'error'
+          ? 'Disconnected'
+          : 'Connecting…';
+
+  return (
+    <div className="stack">
+      <p className="small">
+        Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
+      </p>
+      <pre
+        style={{
+          maxHeight: '400px',
+          overflowY: 'auto',
+          background: '#111',
+          color: '#e8e8e8',
+          padding: '0.75rem',
+          fontSize: '0.7rem',
+          lineHeight: 1.4,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          borderRadius: '4px',
+        }}
+      >
+        {lines.length === 0 ? '(waiting for output…)' : lines.map((l) => l.text).join('')}
+        <div ref={bottomRef} />
+      </pre>
+    </div>
+  );
 }
 
 export function TaskDetailPage({ payload }: { payload: BootPayload }) {
@@ -574,23 +680,22 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             )}
           </section>
 
-          <section>
+          <section className="stack">
             <h3>Live Logs</h3>
             {logTailingEnabled ? (
               resolvedTaskRunId ? (
-                <p className="small">
-                  Task run <code className="text-xs">{resolvedTaskRunId}</code> can use the same live tailing
-                  endpoints as the legacy dashboard client.
-                </p>
+                <LiveLogsPanel
+                  apiBase={payload.apiBase}
+                  taskRunId={resolvedTaskRunId}
+                  isTerminal={TERMINAL_STATES.has(execution.rawState || execution.state || '')}
+                />
               ) : (
                 <p className="small">
                   Live log tailing requires a task run id. Waiting for the task to start executing...
                 </p>
               )
             ) : (
-              <p className="small">
-                Live log tailing is disabled in the server dashboard config.
-              </p>
+              <p className="small">Live log tailing is disabled in the server dashboard config.</p>
             )}
           </section>
 
