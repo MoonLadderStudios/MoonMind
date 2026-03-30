@@ -38,7 +38,6 @@ const TABLE_COLUMNS = [
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
   ['repository', 'Repository'],
-  ['integration', 'Integration'],
   ['status', 'Status'],
   ['title', 'Title'],
   ['createdAt', 'Created'],
@@ -520,7 +519,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         <td>{row.targetRuntime || '—'}</td>
                         <td>{row.targetSkill || '—'}</td>
                         <td>{row.repository || '—'}</td>
-                        <td>{row.integration || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
                             {row.rawState || row.state || row.status || '—'}
@@ -577,10 +575,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       <div>
                         <dt>Repository</dt>
                         <dd>{row.repository || '—'}</dd>
-                      </div>
-                      <div>
-                        <dt>Integration</dt>
-                        <dd>{row.integration || '—'}</dd>
                       </div>
                       <div>
                         <dt>Created</dt>
