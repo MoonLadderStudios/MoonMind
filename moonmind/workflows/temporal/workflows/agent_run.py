@@ -28,6 +28,9 @@ with workflow.unsafe.imports_passed_through():
         build_default_activity_catalog,
     )
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        workflow_id_for_runtime,
+    )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
 # Named RunStatus (not AgentRunStatus) to avoid shadowing the Pydantic model
@@ -95,6 +98,7 @@ WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_429_CONTINUE_AS_NEW_PATCH_ID = "agent-run-managed-429-continue-as-new-v1"
+PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 
 # How long to wait for a slot_assigned signal before assuming the manager is
 # stuck (e.g. nondeterminism error) and resetting it.
@@ -107,6 +111,10 @@ _INTERNAL_REQUEST_STATE_KEY = "__moonmind_temporal_internal"
 _INTERNAL_MANAGED_429_RETRY_COUNT_KEY = "managed_429_retry_count"
 _INTERNAL_MANAGED_429_WAITING_REASON_KEY = "managed_429_waiting_reason"
 _INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY = "managed_429_slot_wait_timeout_seconds"
+
+
+def _legacy_manager_workflow_id(runtime_id: str) -> str:
+    return f"auth-profile-manager:{runtime_id}"
 
 
 @activity.defn(name="integration.get_activity_route")
@@ -532,6 +540,13 @@ class MoonMindAgentRun:
             )
             return -1
 
+    def _manager_workflow_id(self, runtime_id: str) -> str:
+        """Return the manager workflow ID for this execution's compatibility line."""
+
+        if workflow.patched(PROVIDER_PROFILE_MANAGER_ID_PATCH):
+            return workflow_id_for_runtime(runtime_id)
+        return _legacy_manager_workflow_id(runtime_id)
+
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
         self.final_result = AgentRunResult(**result_dict)
@@ -781,7 +796,7 @@ class MoonMindAgentRun:
                 # Acquire auth slot if managed
                 if request.agent_kind == "managed":
                     runtime_id = self._managed_runtime_id(request.agent_id)
-                    manager_id = f"auth-profile-manager:{runtime_id}"
+                    manager_id = self._manager_workflow_id(runtime_id)
 
                     self.slot_assigned_event.clear()
                     manager_handle = await self._ensure_manager_and_signal(
@@ -1550,7 +1565,7 @@ class MoonMindAgentRun:
                 try:
                     runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                     runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                    manager_id = f"auth-profile-manager:{runtime_id}"
+                    manager_id = self._manager_workflow_id(runtime_id)
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
@@ -1563,7 +1578,7 @@ class MoonMindAgentRun:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"auth-profile-manager:{runtime_id}"
+                manager_id = self._manager_workflow_id(runtime_id)
                 
                 async def _release_slot():
                     try:
@@ -1611,7 +1626,7 @@ class MoonMindAgentRun:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"auth-profile-manager:{runtime_id}"
+                manager_id = self._manager_workflow_id(runtime_id)
                 try:
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})

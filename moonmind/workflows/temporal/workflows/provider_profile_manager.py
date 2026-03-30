@@ -28,6 +28,7 @@ with workflow.unsafe.imports_passed_through():
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
+WORKFLOW_ID_PREFIX = "provider-profile-manager"
 
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
@@ -36,6 +37,15 @@ DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
 
 logger = logging.getLogger(__name__)
+
+
+def workflow_id_for_runtime(runtime_id: str) -> str:
+    """Return the canonical ProviderProfileManager workflow ID for a runtime."""
+
+    normalized = str(runtime_id or "").strip()
+    if not normalized:
+        raise ValueError("runtime_id is required")
+    return f"{WORKFLOW_ID_PREFIX}:{normalized}"
 
 
 # ---------------------------------------------------------------------------

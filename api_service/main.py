@@ -563,7 +563,11 @@ async def ensure_provider_profile_managers_started():
     from sqlalchemy import select
     from api_service.db.models import ManagedAgentProviderProfile
     from moonmind.workflows.temporal.client import TemporalClientAdapter
-    from moonmind.workflows.temporal.workflows.provider_profile_manager import WORKFLOW_NAME, ProviderProfileManagerInput
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        WORKFLOW_NAME,
+        ProviderProfileManagerInput,
+        workflow_id_for_runtime,
+    )
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     # Auto-seed default profiles if table is empty.
@@ -584,7 +588,7 @@ async def ensure_provider_profile_managers_started():
         temporal_client = await temporal_adapter.get_client()
         
         for runtime_id in runtime_ids:
-            workflow_id = f"provider-profile-manager:{runtime_id}"
+            workflow_id = workflow_id_for_runtime(runtime_id)
             try:
                 await temporal_client.start_workflow(
                     WORKFLOW_NAME,

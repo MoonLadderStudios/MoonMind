@@ -27,6 +27,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.tasks.routing import _coerce_bool
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        workflow_id_for_runtime,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
@@ -97,6 +100,7 @@ INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
+RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -108,8 +112,17 @@ def _normalize_agent_runtime_id(agent_id: str) -> str:
     return str(agent_id).strip().lower().replace("-", "_")
 
 
+def _legacy_manager_workflow_id(runtime_id: str) -> str:
+    return f"auth-profile-manager:{runtime_id}"
+
+
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
+    def _manager_workflow_id(self, runtime_id: str) -> str:
+        if workflow.patched(RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH):
+            return workflow_id_for_runtime(runtime_id)
+        return _legacy_manager_workflow_id(runtime_id)
+
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
             info = workflow.info()
@@ -1930,7 +1943,7 @@ class MoonMindRunWorkflow:
         # Fall back to inference from child_workflow_id if not available.
         runtime_id = self._assigned_runtime_id or self._infer_runtime_from_child(child_wf_id)
         if runtime_id:
-            manager_id = f"auth-profile-manager:{runtime_id}"
+            manager_id = self._manager_workflow_id(runtime_id)
             try:
                 manager_handle = workflow.get_external_workflow_handle(manager_id)
                 # Schedule the async signal without awaiting - best effort cleanup.

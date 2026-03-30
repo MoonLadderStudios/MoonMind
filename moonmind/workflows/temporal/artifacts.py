@@ -2233,9 +2233,10 @@ class TemporalArtifactActivities:
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
             WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
+            workflow_id_for_runtime,
         )
 
-        workflow_id = f"auth-profile-manager:{runtime_id}"
+        workflow_id = workflow_id_for_runtime(runtime_id)
         adapter = TemporalClientAdapter()
         client = await adapter.get_client()
 
@@ -2276,9 +2277,10 @@ class TemporalArtifactActivities:
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
             WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
+            workflow_id_for_runtime,
         )
 
-        workflow_id = f"auth-profile-manager:{runtime_id}"
+        workflow_id = workflow_id_for_runtime(runtime_id)
         adapter = TemporalClientAdapter()
         client = await adapter.get_client()
 

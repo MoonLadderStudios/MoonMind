@@ -210,7 +210,7 @@ async def test_update_profile_syncs_provider_profile_manager(
             started.append({"args": args, "kwargs": kwargs})
 
         def get_workflow_handle(self, workflow_id: str):
-            assert workflow_id == f"auth-profile-manager:{sample_profile.runtime_id}"
+            assert workflow_id == f"provider-profile-manager:{sample_profile.runtime_id}"
             return _FakeHandle()
 
     class _FakeTemporalAdapter:
