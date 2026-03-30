@@ -149,6 +149,7 @@ _run_execution_stage()
   │   │
   │   ▼
   │ MoonMind.AgentRun child workflow
+  │   → resolve_adapter_metadata (single-hop deterministic catalog routing)
   │   → selects AgentAdapter (ManagedAgentAdapter or ExternalAgentAdapter)
   │   → start → wait → fetch_result → publish outputs
   │   → returns AgentRunResult { output_refs, summary, diagnostics, ... }
@@ -236,6 +237,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 | `mm.skill.execute` | by_capability | `mm.activity.llm` (default) | Skill dispatch via registry |
 | `agent_runtime.publish_artifacts` | agent_runtime | `mm.activity.agent_runtime` | Publish agent run outputs |
 | `agent_runtime.cancel` | agent_runtime | `mm.activity.agent_runtime` | Cancel managed/external agent run |
+| `integration.resolve_adapter_metadata`| integrations | `mm.activity.integrations` | Single-hop adapter validation and resolution |
 | `sandbox.run_command` | sandbox | `mm.activity.sandbox` | Shell command execution |
 | `sandbox.checkout_repo` | sandbox | `mm.activity.sandbox` | Git repo checkout |
 | `sandbox.apply_patch` | sandbox | `mm.activity.sandbox` | Patch application |
