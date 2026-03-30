@@ -76,6 +76,30 @@ def merged_parameters_for_projection(
     return {**canonical_params, **synced_params}
 
 
+def merged_memo_for_projection(
+    payload: dict[str, Any],
+    canonical: TemporalExecutionCanonicalRecord | None,
+) -> dict[str, Any]:
+    """Merge the canonical DB memo with the Temporal-derived memo.
+
+    Temporal workflow memos are immutable after workflow start, so any key written
+    to the canonical DB memo after launch (e.g. ``taskRunId`` set by
+    ``_report_task_run_binding``) will never appear in Temporal's memo.  Letting
+    Temporal's memo overwrite the projection memo on every sync would silently
+    discard these DB-side additions.
+
+    Strategy: Temporal wins for any key it provides (it is authoritative for
+    lifecycle fields).  The canonical DB memo only fills in keys that Temporal
+    does not supply.
+    """
+    temporal_memo = dict(payload.get("memo") or {})
+    if canonical is None:
+        return temporal_memo
+    canonical_memo = dict(canonical.memo or {})
+    # DB-only keys supplement; Temporal keys take precedence.
+    return {**canonical_memo, **temporal_memo}
+
+
 async def map_temporal_state_to_projection(
     desc: WorkflowExecutionDescription,
 ) -> dict[str, Any]:
@@ -278,6 +302,11 @@ async def sync_execution_projection(
     # empty; the canonical record is the source of truth for creation-time parameters.
     if canonical is not None:
         projection.parameters = merged_parameters_for_projection(payload, canonical)
+
+    # Preserve DB-only memo keys (e.g. taskRunId written by _report_task_run_binding)
+    # that are absent from Temporal's immutable workflow memo.  Temporal keys win for
+    # any key present in both sources.
+    projection.memo = merged_memo_for_projection(payload, canonical)
 
     if canonical is not None and canonical.state != state_value:
         canonical.state = state_value
