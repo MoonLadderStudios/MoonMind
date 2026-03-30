@@ -66,6 +66,9 @@ from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_ser
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     resolve_adapter_metadata,
+    get_activity_route,
+    resolve_external_adapter,
+    external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow as MoonMindOAuthSession,
@@ -543,7 +546,12 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         )
         return resources, [
             binding.handler for binding in bindings
-        ] + [resolve_adapter_metadata]
+        ] + [
+            resolve_adapter_metadata,
+            get_activity_route,
+            resolve_external_adapter,
+            external_adapter_execution_style,
+        ]
     except Exception:
         await resources.aclose()
         raise
@@ -651,7 +659,12 @@ async def main_async() -> None:
 
     if topology.fleet == WORKFLOW_FLEET:
         workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindProviderProfileManager, MoonMindAgentRun, MoonMindOAuthSession]
-        activities = [resolve_adapter_metadata]
+        activities = [
+            resolve_adapter_metadata,
+            get_activity_route,
+            resolve_external_adapter,
+            external_adapter_execution_style,
+        ]
         logger.info(
             "Temporal workflow fleet registrations: %s",
             ", ".join(list_registered_workflow_types()),

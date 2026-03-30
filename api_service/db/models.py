@@ -101,6 +101,9 @@ class UserProfile(Base):
         StringEncryptedType(String, get_encryption_key), nullable=True
     )
 
+    agent_skill_repo_sources_enabled = Column(Boolean, nullable=False, default=True)
+    agent_skill_local_sources_enabled = Column(Boolean, nullable=False, default=False)
+
     user = relationship("User", back_populates="user_profile")
 
 
@@ -393,6 +396,12 @@ __all__ = [
     "TaskStepTemplateRecent",
     "SecretStatus",
     "ManagedSecret",
+    "AgentSkillSourceKind",
+    "AgentSkillFormat",
+    "AgentSkillDefinition",
+    "AgentSkillVersion",
+    "SkillSet",
+    "SkillSetEntry",
 ]
 
 
@@ -2107,6 +2116,159 @@ class ProviderProfileSlotLease(Base):
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class AgentSkillSourceKind(str, enum.Enum):
+    """Source provenance for a resolved skill."""
+
+    BUILT_IN = "built_in"
+    DEPLOYMENT = "deployment"
+    REPO = "repo"
+    LOCAL = "local"
+
+
+class AgentSkillFormat(str, enum.Enum):
+    """Supported payload formatting inside a given skill version."""
+
+    MARKDOWN = "markdown"
+    BUNDLE = "bundle"
+
+
+class AgentSkillDefinition(Base):
+    """Core definition for a reusable agent skill block/bundle."""
+
+    __tablename__ = "agent_skill_definitions"
+    __table_args__ = (
+        Index("ix_agent_skill_definitions_slug", "slug", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    author: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    versions: Mapped[list["AgentSkillVersion"]] = relationship(
+        "AgentSkillVersion",
+        back_populates="skill",
+        cascade="all, delete-orphan",
+        order_by="AgentSkillVersion.created_at",
+    )
+
+    @property
+    def latest_version(self) -> str | None:
+        """Return the version string of the most recently created version."""
+        return self.versions[-1].version_string if self.versions else None
+
+
+class AgentSkillVersion(Base):
+    """Immutable version release pointing to blob contents in artifact storage."""
+
+    __tablename__ = "agent_skill_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "skill_id", "version_string", name="uq_agent_skill_version_string"
+        ),
+        Index("ix_agent_skill_versions_skill", "skill_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    skill_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("agent_skill_definitions.id", ondelete="CASCADE"), nullable=False
+    )
+    version_string: Mapped[str] = mapped_column(String(64), nullable=False)
+    format: Mapped[AgentSkillFormat] = mapped_column(
+        Enum(
+            AgentSkillFormat,
+            name="agentskillformat",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=AgentSkillFormat.MARKDOWN,
+    )
+    artifact_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    skill: Mapped[AgentSkillDefinition] = relationship(
+        "AgentSkillDefinition", back_populates="versions"
+    )
+
+
+class SkillSet(Base):
+    """A collection of selected skills for task context grouping."""
+
+    __tablename__ = "skill_sets"
+    __table_args__ = (
+        Index("ix_skill_sets_slug", "slug", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    entries: Mapped[list["SkillSetEntry"]] = relationship(
+        "SkillSetEntry",
+        back_populates="skill_set",
+        cascade="all, delete-orphan",
+    )
+
+
+class SkillSetEntry(Base):
+    """Membership rule explicitly including an agent skill block within a SkillSet."""
+
+    __tablename__ = "skill_set_entries"
+    __table_args__ = (
+        UniqueConstraint("skill_set_id", "skill_id", name="uq_skill_set_entry"),
+        Index("ix_skill_set_entries_set", "skill_set_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    skill_set_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("skill_sets.id", ondelete="CASCADE"), nullable=False
+    )
+    skill_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("agent_skill_definitions.id", ondelete="CASCADE"), nullable=False
+    )
+    version_constraint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    skill_set: Mapped[SkillSet] = relationship(
+        "SkillSet", back_populates="entries"
+    )
+    skill: Mapped[AgentSkillDefinition] = relationship(
+        "AgentSkillDefinition"
+    )
+
+    @property
+    def skill_slug(self) -> str:
+        """Return the slug of the associated skill."""
+        return self.skill.slug
 
 
 def _register_workflow_model_dependencies() -> None:

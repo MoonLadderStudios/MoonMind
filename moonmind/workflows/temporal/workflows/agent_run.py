@@ -134,6 +134,34 @@ async def resolve_adapter_metadata(agent_id: str) -> dict:
     return {"agent_id": agent_id, "execution_style": execution_style}
 
 
+# --- In-flight compatibility shims (spec #285) ---
+# These activities were superseded by resolve_adapter_metadata but must remain
+# registered so that in-flight workflow histories do not fail with NotFoundError.
+
+@activity.defn(name="integration.get_activity_route")
+async def get_activity_route(activity_name: str) -> dict:
+    import dataclasses
+    from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+    catalog = build_default_activity_catalog()
+    route = catalog.resolve_activity(activity_name)
+    return dataclasses.asdict(route)
+
+@activity.defn(name="integration.resolve_external_adapter")
+async def resolve_external_adapter(agent_id: str) -> str:
+    registry = build_default_registry()
+    registry.create(agent_id)
+    return agent_id
+
+@activity.defn(name="integration.external_adapter_execution_style")
+async def external_adapter_execution_style(agent_id: str) -> str:
+    registry = build_default_registry()
+    adapter = registry.create(agent_id)
+    if isinstance(adapter, BaseExternalAgentAdapter):
+        return adapter.provider_capability.execution_style
+    return "polling"
+
+
+
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:

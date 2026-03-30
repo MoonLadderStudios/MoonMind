@@ -18,5 +18,90 @@
     "id": 4032995897,
     "disposition": "not-applicable",
     "rationale": "Automated code review summary from gemini-code-assist bot indicating no feedback; no action needed."
+  },
+  {
+    "id": 3012003016,
+    "disposition": "addressed",
+    "rationale": "Removed unused 'Any' import."
+  },
+  {
+    "id": 3012003019,
+    "disposition": "addressed",
+    "rationale": "Removed unused 'UUID' import."
+  },
+  {
+    "id": 3012003025,
+    "disposition": "addressed",
+    "rationale": "Removed unused 'SkillSetEntry' import."
+  },
+  {
+    "id": 3012009394,
+    "disposition": "addressed",
+    "rationale": "Removed unused 'Any' and 'UUID' imports."
+  },
+  {
+    "id": 3012009422,
+    "disposition": "addressed",
+    "rationale": "Moved format_str validation before artifact creation."
+  },
+  {
+    "id": 3012009430,
+    "disposition": "not-applicable",
+    "rationale": "Deferred deletion logic since Temporal artifacts uses lifecycle sweeps for orphaned resources."
+  },
+  {
+    "id": 3012009449,
+    "disposition": "addressed",
+    "rationale": "Updated format schema field to use Literal and string types properly."
+  },
+  {
+    "id": 3012009462,
+    "disposition": "addressed",
+    "rationale": "Updated migration to use sa.true() and sa.false()."
+  },
+  {
+    "id": 3012009479,
+    "disposition": "addressed",
+    "rationale": "Changed assert_called_once to assert_awaited_once in unit tests."
+  },
+  {
+    "id": 4033103786,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 3012019016,
+    "disposition": "addressed",
+    "rationale": "Restricted format field to Literal['markdown', 'bundle']."
+  },
+  {
+    "id": 3012019027,
+    "disposition": "addressed",
+    "rationale": "Added latest_version property to AgentSkillDefinition."
+  },
+  {
+    "id": 4033114406,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 3012019031,
+    "disposition": "addressed",
+    "rationale": "Added skill_slug property to SkillSetEntry."
+  },
+  {
+    "id": 3012019037,
+    "disposition": "addressed",
+    "rationale": "Swapped order of commit and refresh to avoid expired object references."
+  },
+  {
+    "id": 3012019050,
+    "disposition": "addressed",
+    "rationale": "Assigned artifact.artifact_id directly to artifact_ref."
+  },
+  {
+    "id": 3012062487,
+    "disposition": "addressed",
+    "rationale": "Removed unused build_artifact_ref import."
   }
 ]
