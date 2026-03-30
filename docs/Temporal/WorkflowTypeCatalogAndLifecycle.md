@@ -2,379 +2,463 @@
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md`](../tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md)
 
-MoonMind **Temporal-native** lifecycle contract for Temporal-managed executions. Task-shaped product surfaces may still use `task` labels; this document governs workflow types and execution semantics inside Temporal.
+MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed executions. Task-shaped product surfaces may still use `task` labels; this document governs workflow types and execution semantics inside Temporal.
 
-**Status:** Normative (Temporal application layer)
-**Owner:** MoonMind Platform
-**Last updated:** 2026-03-27
-**Audience:** backend + infra + dashboard
+**Status:** Normative (Temporal application layer)  
+**Owner:** MoonMind Platform  
+**Last updated:** 2026-03-30  
+**Audience:** backend, infra, dashboard
 
 ---
 
-## 1) Purpose
+## 1. Purpose
 
-Define the **Workflow Types** that constitute MoonMind's Temporal application layer, and specify:
+Define the **Workflow Types** that constitute MoonMind’s Temporal application layer, and specify:
 
-* the **lifecycle** of each Workflow Execution (how it starts, progresses, ends)
-* the canonical **state model** exposed to the UI (via Temporal Visibility)
-* the **Update** and **Signal** contracts (edit, cancel, webhook events, approvals)
-* lifecycle **invariants**, **timeouts**, **retry policies**, and **history management**
-* the minimal set of **Search Attributes** and **Memo** fields required for list + filtering + totals
+- the **lifecycle** of each workflow execution
+- the canonical **domain state model** exposed to the UI through Temporal Visibility
+- the **Update** and **Signal** contracts used for edits, approvals, and external events
+- lifecycle **invariants**, **timeouts**, **retry posture**, and **history management**
+- the minimal **Search Attribute** and **Memo** fields required for list, filtering, and totals
 
 This document defines the **Temporal-side contract**. Public MoonMind APIs and UI flows may still use `task` terminology where compatibility requires it; once work is represented inside Temporal, this document treats it as a **Workflow Execution**.
 
 ---
 
-## 2) Design principles
+## 2. Design principles
 
-1. **A Temporal-managed row is a Workflow Execution.**
-   For Temporal-backed list/detail views, we list and paginate executions using Temporal Visibility. Public `/tasks/*` surfaces may still remain multi-source during migration.
+1. **A Temporal-managed row is a Workflow Execution.**  
+   Temporal-backed list/detail views should come from Temporal Visibility. Task-oriented compatibility surfaces may still remain multi-source during migration.
 
-2. **Workflow Types are the only root-level categorization.**
-   We do not introduce “kind” or other parallel taxonomies.
+2. **Workflow Types are the root orchestration categories.**  
+   We do not introduce parallel top-level taxonomies for provider brand, runtime brand, or task-queue brand.
 
-3. **Workflows orchestrate; Activities do side effects.**
-   All nondeterminism lives in Activities (LLMs, network I/O, filesystem, time).
+3. **Workflows orchestrate; Activities do side effects.**  
+   All nondeterminism lives in Activities.
 
-4. **Edits are modeled as Temporal Updates.**
-   Signals are used for asynchronous events (webhooks, approvals, external notifications).
+4. **True agent execution is a child-workflow concern.**  
+   `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution.
 
-5. **Large payloads live outside workflow history.**
-   Workflows reference Artifacts by ID/URI; avoid bloating history.
+5. **Edits are modeled as Updates.**  
+   Signals are used for asynchronous events such as approvals, webhooks, and external notifications.
 
-6. **Task Queues are routing plumbing, not product semantics.**
-   We never promise FIFO ordering to users.
+6. **Large payloads live outside workflow history.**  
+   Workflows reference artifacts and compact contracts rather than inlining large content.
+
+7. **Task Queues are routing plumbing, not product semantics.**  
+   MoonMind does not promise FIFO ordering to users.
+
+8. **Canonical runtime contracts cross the workflow boundary.**  
+   Workflow code should receive canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` contracts rather than provider-shaped payloads.
 
 ---
 
-## 3) Naming conventions and identifiers
+## 3. Naming conventions and identifiers
 
-### 3.1 Workflow Type names
+## 3.1 Workflow Type names
 
 Namespace: `MoonMind.*`
+
+Current core workflow types:
+
+- `MoonMind.Run`
+- `MoonMind.ManifestIngest`
+- `MoonMind.ProviderProfileManager`
+- `MoonMind.AgentRun`
+- `MoonMind.OAuthSession`
+
+Rules:
+
+- names are stable
+- never reuse an old name for different behavior
+- prefer **few** types and add only when behavior is truly distinct
+
+## 3.2 Workflow IDs
+
+Workflow ID format should remain stable and opaque.
+
+Representative form:
+
+- `mm:<ulid-or-uuid>`
+
+Rules:
+
+- Workflow ID is the canonical Temporal identifier for a Temporal-managed execution
+- do not encode sensitive information into it
+- Continue-As-New keeps the same Workflow ID
+- public task APIs may expose `taskId` alongside `workflowId` where compatibility requires it
+
+## 3.3 Run IDs
+
+Run IDs are Temporal-generated identifiers for one concrete run of a workflow execution.
+
+Rules:
+
+- they are useful for debugging and detail views
+- they are not the primary product handle
+- UI detail views may show them, but product identity should center on Workflow ID
+
+---
+
+## 4. Workflow Type catalog
+
+## 4.1 Catalog overview
+
+| Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
+| --- | --- | --- | --- | --- |
+| `MoonMind.Run` | Execute a user-requested run: plan work, execute steps, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, final state | seconds → hours |
+| `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
+| `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
+| `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
+| `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
+
+> Note: We intentionally do **not** model “Codex workflow,” “Gemini workflow,” “Jules workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
+
+---
+
+## 5. Common lifecycle model
+
+Temporal already provides workflow close statuses:
+
+- Running
+- Completed
+- Failed
+- Canceled
+- Terminated
+- TimedOut
+- ContinuedAsNew
+
+MoonMind additionally maintains a domain state for filtering and UI messaging.
+
+## 5.1 Domain state model (`mm_state`)
+
+Define one canonical Search Attribute representing MoonMind execution state:
+
+- `mm_state` (keyword)
+
+Allowed values in v1:
+
+- `scheduled`
+- `initializing`
+- `waiting_on_dependencies`
+- `planning`
+- `awaiting_slot`
+- `executing`
+- `awaiting_external`
+- `proposals`
+- `finalizing`
+- `completed`
+- `failed`
+- `canceled`
+
+Rules:
+
+- `mm_state` must be set immediately at workflow start, usually to `initializing`
+- `scheduled` means a deferred one-time execution exists but is waiting for start time
+- `waiting_on_dependencies` means the workflow is blocked on prerequisite work outside its active loop
+- `planning` means the workflow is computing or validating a plan
+- `awaiting_slot` means the workflow is waiting on a bounded runtime resource such as a provider-profile slot
+- `executing` means active work is occurring
+- `awaiting_external` means the workflow is durably waiting on external provider/runtime progress
+- `proposals` means post-execution proposal generation/submission is active
+- `finalizing` means the workflow is producing its final outputs and terminal summary
+- terminal `mm_state` must align with Temporal close status:
+  - Temporal Completed → `completed`
+  - Temporal Failed / TimedOut / Terminated → `failed`
+  - Temporal Canceled → `canceled`
+
+`mm_state` is the only required domain-state field for list filtering.
+
+## 5.2 Optional bounded detail state
+
+A second bounded Search Attribute may be used when extra list-level detail is justified:
+
+- `mm_stage` (keyword)
+
 Examples:
 
-* `MoonMind.Run`
-* `MoonMind.ManifestIngest`
+- `phase:planning`
+- `phase:execution`
+- `agent:awaiting_feedback`
+
+Keep it bounded. Do not turn it into an unbounded event log or full provider-state mirror.
+
+## 5.3 Minimal Visibility schema
+
+### Required Search Attributes
+
+- `mm_owner_id` (keyword)
+- `mm_state` (keyword)
+- `mm_updated_at` (datetime)
+- `mm_entry` (keyword)
+
+Typical `mm_entry` values:
+
+- `run`
+- `manifest`
+- `agent_run`
+- `oauth_session`
+- `provider_profile_manager`
+
+### Optional Search Attributes
+
+Use only when product filtering requires them:
+
+- `mm_repo` (keyword)
+- `mm_integration` (keyword)
+
+### Required Memo fields
+
+- `title` (small string)
+- `summary` (small string)
+
+### Optional Memo fields
+
+- `input_ref`
+- `manifest_ref`
+- other compact safe refs
 
 Rules:
 
-* Names are stable; never reuse old names for different behavior.
-* Prefer **few** types; add only when behavior is truly distinct.
-
-### 3.2 Workflow IDs
-
-Workflow ID format:
-
-* `mm:<ulid-or-uuid>`
-
-Rules:
-
-* Workflow ID is the canonical Temporal identifier for a Temporal-managed execution.
-* Do not encode sensitive info into the ID.
-* A “re-run” or “restart” uses the same Workflow ID via **Continue-As-New** when appropriate.
-* Public MoonMind task APIs may expose `taskId` alongside `workflowId` where the compatibility bridge requires it.
-
-### 3.3 Run IDs
-
-Run IDs are Temporal-generated identifiers for each run of the execution.
-
-* The UI may show the latest Run ID on a detail page, but the primary Temporal handle is Workflow ID.
+- keep Memo small and human-readable
+- do not store large prompts, manifests, or logs in Memo
+- use artifact refs instead of inlining large content
 
 ---
 
-## 4) Workflow Type catalog
+## 6. Update and Signal contracts
 
-### 4.1 Catalog overview
+## 6.1 Updates
 
-| Workflow Type             | Primary responsibility                                                                                              | Typical inputs                                                 | Typical outputs                                 | Expected duration |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------- | ----------------- |
-| `MoonMind.Run`            | Execute a user-requested run: acquire/compute a Plan, execute Skills, integrate external actions, produce artifacts | `input_artifact_ref`, optional `plan_artifact_ref`, parameters | output artifacts, status, summary               | seconds → hours   |
-| `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a Plan (graph), orchestrate execution (inline or via child runs)   | `manifest_artifact_ref`, policy params                         | aggregated output artifact(s), per-node results | seconds → hours   |
+Updates are the primary way to support edit-like semantics because they provide request/response behavior and acceptance decisions.
 
-> Note: We intentionally do **not** model “worker/system/manifest” as a taxonomy. A workflow is a system; activities are execution steps. Manifest ingest exists as a separate Workflow Type only because it has materially different orchestration behavior (graph + aggregation).
+### Update: `UpdateInputs`
 
----
-
-## 5) Common lifecycle model (applies to all Workflow Types)
-
-Temporal already provides Workflow Execution statuses (Running/Completed/Failed/Canceled/Terminated/TimedOut/ContinuedAsNew). MoonMind additionally maintains a **domain state** for filtering and UI messaging on Temporal-managed executions.
-
-### 5.1 Domain state model (Search Attribute)
-
-Define a **single** Search Attribute representing “MoonMind state”:
-
-* `mm_state` (keyword)
-
-Allowed values (v1):
-
-* `scheduled`
-* `initializing`
-* `waiting_on_dependencies`
-* `planning`
-* `awaiting_slot`
-* `executing`
-* `proposals`
-* `awaiting_external`
-* `finalizing`
-* `completed`
-* `failed`
-* `canceled`
-
-Rules:
-
-* `mm_state` MUST be set immediately at workflow start (`initializing`).
-* `scheduled` indicates a deferred one-time execution that has been created but is waiting for its start time.
-* `waiting_on_dependencies` indicates the workflow is blocked on prerequisite work outside its own active execution loop.
-* `awaiting_slot` indicates the workflow is waiting for a bounded runtime resource such as an auth-profile slot. This is distinct from `planning` (generating a plan) and `executing` (actively running agent work).
-* `proposals` indicates the workflow is generating or submitting follow-up proposals after execution and before finalization.
-* `mm_state` MUST transition to a terminal value on completion (`completed|failed|canceled`).
-* Terminal `mm_state` must be consistent with Temporal close status:
-
-  * Temporal Completed → `completed`
-  * Temporal Failed/TimedOut/Terminated → `failed`
-  * Temporal Canceled → `canceled`
-* `mm_state` is the *only* domain state field required for list filtering.
-
-Optional second Search Attribute if you need more detail without exploding states:
-
-* `mm_stage` (keyword) — e.g., `skill:<name>` or `phase:<name>` (keep bounded!)
-
-### 5.2 Minimal Visibility schema (Search Attributes + Memo)
-
-#### Search Attributes (indexed, used for Temporal-backed list filters)
-
-Required:
-
-* `mm_owner_id` (keyword) — who initiated the execution
-* `mm_state` (keyword) — state as defined above
-* `mm_updated_at` (datetime) — last meaningful state/progress update (for sorting)
-* `mm_entry` (keyword) — `"run" | "manifest"` (optional; helps filter without relying on type name)
-
-Optional (only if product needs filtering):
-
-* `mm_repo` (keyword) — repo identifier for code-related runs
-* `mm_integration` (keyword) — e.g., `"jules"` when relevant
-
-#### Memo (non-indexed display metadata)
-
-Required:
-
-* `title` (string, small)
-* `summary` (string, small; can be updated over time)
-
-Optional:
-
-* `input_ref` (string) — artifact reference (safe, not huge)
-* `manifest_ref` (string) — for `MoonMind.ManifestIngest`
-
-Rules:
-
-* Keep Memo small and human-readable.
-* Never store large user prompts/manifests in Memo.
-* Compatibility adapters may transform these fields into task-oriented list/detail payloads without changing the Temporal source of truth.
-
----
-
-## 6) Update and Signal contracts
-
-### 6.1 Updates (request/response; used for edits)
-
-Updates are the primary way to support “edit execution” semantics. The workflow validates and returns a structured response.
-
-#### Update: `UpdateInputs`
-
-Purpose: replace or modify references to inputs/plans/parameters.
+Purpose: replace or modify references to inputs, plans, or parameters.
 
 Request:
 
-* `input_ref?` (artifact ref)
-* `plan_ref?` (artifact ref)
-* `parameters_patch?` (small JSON patch)
+- `input_ref?`
+- `plan_ref?`
+- `parameters_patch?`
 
 Response:
 
-* `accepted: bool`
-* `applied: "immediate" | "next_safe_point" | "continue_as_new"`
-* `message: string`
+- `accepted: bool`
+- `applied: "immediate" | "next_safe_point" | "continue_as_new"`
+- `message: string`
 
 Rules:
 
-* Must be idempotent (client may retry).
-* Workflow must reject updates that would violate invariants (e.g., invalid artifacts, unauthorized, terminal state).
+- must be idempotent
+- must reject invalid or unauthorized changes
+- must reject changes when the workflow is terminal or policy forbids them
 
-#### Update: `SetTitle`
+### Update: `SetTitle`
 
 Request:
 
-* `title: string`
+- `title: string`
 
 Response:
 
-* `accepted: bool`
-* `message: string`
+- `accepted: bool`
+- `message: string`
 
 Rules:
 
-* Always safe unless terminal and policy forbids post-close changes.
+- normally safe while running
+- terminal behavior depends on product policy
 
-#### Update: `RequestRerun`
+### Update: `RequestRerun`
 
 Purpose: request a clean re-execution.
+
 Request:
 
-* `input_ref?`
-* `plan_ref?`
-* `parameters_patch?`
+- `input_ref?`
+- `plan_ref?`
+- `parameters_patch?`
 
 Response:
 
-* `accepted: bool`
-* `message: string`
+- `accepted: bool`
+- `message: string`
 
 Semantics:
 
-* Prefer **Continue-As-New** to produce a clean run while preserving the same Workflow ID.
+- prefer Continue-As-New when the intent is “same durable execution identity, fresh orchestration state”
+- use a fresh Workflow ID only when product semantics explicitly call for a new execution identity
 
-> We avoid introducing custom “revision” objects. If you later need immutable audit of inputs, store the history as artifacts and reference them.
+## 6.2 Signals
 
-### 6.2 Signals (async events; no response)
+Signals are used for asynchronous external events.
 
-Signals carry external events and human actions into a running workflow.
-
-#### Signal: `ExternalEvent`
+### Signal: `ExternalEvent`
 
 Examples:
 
-* webhook from Jules
-* webhook from GitHub app
-* external system callback
+- GitHub callback
+- Jules/provider callback
+- integration completion event
+- async external status transition
 
 Payload:
 
-* `source: string` (e.g., `"jules"`)
-* `event_type: string`
-* `payload_ref?` (artifact ref if large)
-* `payload_inline?` (small JSON if tiny)
+- `source: string`
+- `event_type: string`
+- `payload_ref?`
+- `payload_inline?`
 
 Rules:
 
-* Workflow must validate event authenticity via an Activity call if needed (don’t do crypto/network verification in workflow code).
+- authenticity verification belongs in an Activity if external verification is required
+- workflows should not do cryptographic or network verification inline
 
-#### Signal: `Approve`
+### Signal: `Approve`
 
 Payload:
 
-* `approval_type: string`
-* `note?`
+- `approval_type: string`
+- `note?`
 
-#### Signal: `Pause` / `Resume`
+### Signal: `Pause` / `Resume`
 
-Only if product needs interactive control of long runs.
+Optional. Only expose if interactive long-run control is a product requirement.
+
+### Signal: provider-profile coordination signals
+
+Representative cases include:
+
+- slot assigned
+- slot released
+- cooldown reported
+
+These are internal orchestration signals and should stay compact and policy-bound.
 
 ---
 
-## 7) Cancellation and termination semantics
+## 7. Cancellation and termination semantics
 
-### 7.1 User cancel
+## 7.1 User cancel
 
-API calls Temporal cancellation for the Workflow Execution.
+User/API cancel maps to Temporal workflow cancellation.
+
 Workflow behavior:
 
-* transitions `mm_state` → `canceled`
-* attempts to cancel in-flight activities where possible
-* writes a final summary
+- transition `mm_state` to `canceled`
+- attempt best-effort cancellation of in-flight child workflows or activities where appropriate
+- write a final summary
 
-### 7.2 Forced termination (ops-only)
+## 7.2 Forced termination
 
-Used only for runaway workflows or policy violations.
+Forced termination is ops-only.
 
-* mark `mm_state` → `failed` (with reason in summary)
-* do not attempt graceful cleanup beyond minimal bookkeeping
+Behavior:
 
----
+- use only for runaway workflows or policy violations
+- mark domain outcome as failed unless a stronger product-specific rule exists
+- do not pretend graceful cleanup occurred if it did not
 
-## 8) History management and Continue-As-New
+## 7.3 Child workflow cancellation
 
-### 8.1 Why
+Important child behavior:
 
-Some executions will be long-lived (polling, large manifests, many steps). To keep replay performant and avoid excessive history growth:
-
-* Use **Continue-As-New** when:
-
-  * the number of executed plan steps exceeds a threshold
-  * the workflow has been waiting/polling beyond a threshold
-  * an Update requests a major reconfiguration best handled as a clean restart
-
-### 8.2 Policy (v1 defaults)
-
-* `MoonMind.Run`: Continue-As-New after `N` completed skill invocations (choose N based on measured history size)
-* `MoonMind.ManifestIngest`: Continue-As-New after completing each major manifest phase (parse/compile/execution batches) if manifest is large
-
-Rule:
-
-* Continue-As-New must preserve:
-
-  * Workflow ID
-  * key Search Attributes and Memo (title/owner/state)
-  * artifact references needed to proceed
+- canceling `MoonMind.Run` should propagate to in-flight `MoonMind.AgentRun` child workflows
+- `MoonMind.AgentRun` must still attempt best-effort provider/runtime cleanup inside a non-cancellable cleanup region when appropriate
+- provider-side cancel success must be reported truthfully; MoonMind workflow cancellation and provider cancellation are related but not identical concepts
 
 ---
 
-## 9) Timeouts and retry policy defaults
+## 8. History management and Continue-As-New
 
-### 9.1 Workflow-level
+## 8.1 Why
 
-* Workflow execution timeout: set generously (hours) depending on product needs
-* “Runaway protection”: use internal timers and explicit time budgets per phase
+Some workflows are long-lived:
 
-### 9.2 Activity-level defaults (by class)
+- provider polling/waiting
+- large manifests
+- managed-runtime cooldown loops
+- long execution graphs
+- repeated proposal cycles
 
-(Defined in the Activity/Worker Topology doc; referenced here)
+Continue-As-New keeps replay performant and avoids history growth problems.
 
-General rule:
+## 8.2 Policy direction
 
-* Activities must define explicit:
+Use Continue-As-New when:
 
-  * `start_to_close_timeout`
-  * `schedule_to_close_timeout` where appropriate
-  * retry policy (max attempts, backoff)
+- a workflow has executed many steps or activities
+- a polling/wait loop has grown large enough to justify a fresh run
+- an Update requests a major reconfiguration best handled as a clean restart
+- managed-runtime cooldown/orchestration loops have repeated enough times to justify a history reset
 
-### 9.3 External monitoring
+## 8.3 Preservation rules
 
-* Prefer callback-first; fall back to timer-based polling.
-* Polling loop must:
+Continue-As-New must preserve:
 
-  * use backoff
-  * periodically Continue-As-New if long-lived
-  * store external IDs in workflow state + minimal memo/search attr if needed
-
----
-
-## 10) Error taxonomy (what the UI should show)
-
-We avoid legacy error classes; use a small set of UI-facing categories derived from the workflow:
-
-* `user_error` (validation, missing inputs)
-* `integration_error` (external API failures beyond retry budget)
-* `execution_error` (sandbox/tool failure)
-* `system_error` (unexpected bugs)
-
-Implementation:
-
-* Workflow catches failures at orchestration boundaries and writes:
-
-  * `mm_state = failed`
-  * memo summary that includes `error_category` and a short human message
-  * detailed logs/artifacts for debugging (not in memo)
+- Workflow ID
+- core Search Attributes and Memo
+- refs needed to continue
+- stable business correlation identifiers
+- any durable request context needed for safe retry/resume
 
 ---
 
-## 11) Per-Workflow-Type lifecycle details
+## 9. Timeouts and retry posture
 
-### 11.1 `MoonMind.Run` lifecycle
+## 9.1 Workflow-level posture
 
-Mermaid state sketch:
+- workflow execution timeouts should be generous
+- workflows should also use internal phase budgets and timers
+- workflows should not depend solely on giant top-level execution timeouts for safety
+
+## 9.2 Activity-level posture
+
+Activity timeout/retry defaults live in the Activity/Worker Topology doc and activity catalog.
+
+General rules:
+
+- all activities should have explicit timeouts
+- side-effecting activities must be idempotent or safely keyed
+- non-retryable contract failures should be classified explicitly
+- rate-limit or slot-contention failures may require orchestration-aware retry rather than naive immediate repetition
+
+## 9.3 External waiting posture
+
+For external work:
+
+- prefer callback-first when reliable
+- use timer-based polling as fallback
+- keep polling bounded
+- Continue-As-New periodically for long-lived waits when needed
+
+---
+
+## 10. Error taxonomy and UI-facing failure categories
+
+MoonMind should keep UI-facing failure categories small and stable.
+
+Representative categories:
+
+- `user_error`
+- `integration_error`
+- `execution_error`
+- `system_error`
+
+Workflows should catch failures at orchestration boundaries and produce:
+
+- terminal `mm_state`
+- memo summary with compact error category and human-readable message
+- artifact-backed diagnostics for deeper debugging
+
+For true agent-runtime work, contract-shape failures such as unsupported provider status or malformed canonical result should be treated as boundary failures, not silently repaired in workflow code.
+
+---
+
+## 11. Per-workflow lifecycle details
+
+## 11.1 `MoonMind.Run` lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -386,12 +470,12 @@ stateDiagram-v2
   initializing --> planning : needs plan
   initializing --> executing : plan provided
   planning --> executing : plan ready
-  executing --> awaiting_slot : runtime slot required
+  executing --> awaiting_slot : child run or managed resource waits
   awaiting_slot --> executing : slot assigned
-  executing --> awaiting_external : external op started
-  awaiting_external --> executing : external op complete
-  executing --> proposals : steps complete
-  proposals --> finalizing : proposal phase complete
+  executing --> awaiting_external : external/provider wait
+  awaiting_external --> executing : external work progressed or finished
+  executing --> proposals : execution complete
+  proposals --> finalizing : proposals done
   finalizing --> completed
   scheduled --> canceled
   initializing --> failed
@@ -412,10 +496,12 @@ stateDiagram-v2
 
 Key notes:
 
-* Planning is a **skill** invoked via an Activity (not special “spec” logic).
-* Execution dispatch is activity-driven and can mix LLM and non-LLM activities in one workflow execution.
+* planning is an Activity-driven concern, not a separate orchestration substrate
+* execution may mix direct activities and child workflows
+* true agent steps dispatch to `MoonMind.AgentRun`
+* `child_state_changed`-style coordination may bubble child state to the parent domain state
 
-### 11.2 `MoonMind.ManifestIngest` lifecycle
+## 11.2 `MoonMind.ManifestIngest` lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -432,65 +518,124 @@ stateDiagram-v2
 
 Key notes:
 
-* Parsing/validation/compile are Activities.
-* Execution strategy decision:
+* parse/validate/compile belong in Activities
+* orchestration may be inline or may spawn child `MoonMind.Run` executions
+* aggregation should produce artifact-backed results
 
-  * inline orchestration (activities only), or
-  * spawn child `MoonMind.Run` executions for each node/sub-run
-* Aggregation writes an artifact reference for results.
+## 11.3 `MoonMind.AgentRun` lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> initializing
+  initializing --> awaiting_slot : managed runtime profile slot needed
+  initializing --> executing : no slot wait needed
+  awaiting_slot --> executing : slot assigned
+  executing --> awaiting_external : waiting on provider/runtime progress
+  awaiting_external --> executing : provider/runtime progressed
+  executing --> finalizing : result available
+  finalizing --> completed
+  initializing --> failed
+  awaiting_slot --> failed
+  executing --> failed
+  awaiting_external --> failed
+  finalizing --> failed
+  initializing --> canceled
+  awaiting_slot --> canceled
+  executing --> canceled
+  awaiting_external --> canceled
+```
+
+Key notes:
+
+* this workflow owns the durable lifecycle of one true agent execution
+* managed and external providers share this lifecycle shape
+* managed runs may interact with `MoonMind.ProviderProfileManager`
+* external runs may use polling or streaming-gateway orchestration branches
+* workflow code should receive canonical runtime contracts from activities, not provider-native dicts
+
+## 11.4 `MoonMind.ProviderProfileManager` lifecycle
+
+This workflow is long-lived and coordination-oriented.
+
+Representative lifecycle concerns:
+
+* initialize runtime/profile state
+* wait for slot requests
+* assign or queue requests
+* apply cooldowns
+* reconcile leases
+* continue as new periodically when needed
+
+Its UI-facing state should stay compact; it is primarily an internal coordination workflow.
+
+## 11.5 `MoonMind.OAuthSession` lifecycle
+
+Representative lifecycle:
+
+* initialize OAuth/auth terminal session
+* start auth runner
+* stream/update session status
+* verify auth outcome
+* register resulting provider/runtime profile if successful
+* fail/cleanup if not
+
+This is a support workflow, not a general task workflow.
 
 ---
 
-## 12) Authorization rules (control plane invariants)
+## 12. Authorization rules
 
-All Updates/Signals/Cancels must be authorized by the MoonMind API layer **and** optionally re-validated by workflow (defense in depth).
+All Updates, Signals, and Cancels must be authorized by the MoonMind API layer and may be revalidated by workflows or activities where defense in depth matters.
 
 Minimum requirements:
 
-* Only owners (or admins) can Update/Cancel.
-* ExternalEvent signals must include verification context; workflow may call an Activity to verify authenticity if needed.
+* only owners or admins may Update/Cancel where product policy requires
+* external event signals must include enough verification context for activity-boundary authenticity checks
+* internal workflow-to-workflow signals should not bypass domain-policy invariants
 
 ---
 
-## 13) Acceptance criteria for this document
+## 13. Acceptance criteria for this document
 
 This document is “done” when:
 
-1. Workflow Types are fixed for v1 (no open debate for initial implementation).
-2. `mm_state` values are fixed and implemented consistently.
-3. Search Attributes + Memo schema is finalized (enough to build list/filter).
-4. Update and Signal names + payload shapes are finalized.
-5. Continue-As-New policy triggers are defined (even if thresholds are placeholders).
-6. Cancellation semantics are unambiguous.
+1. workflow types are fixed for v1
+2. `mm_state` values are fixed and implemented consistently
+3. Search Attributes and Memo schema are finalized
+4. Update and Signal names and payload shapes are finalized
+5. Continue-As-New triggers are defined
+6. cancellation semantics are unambiguous
+7. `MoonMind.AgentRun` and `MoonMind.ProviderProfileManager` are reflected as first-class workflow types
+8. canonical runtime contract boundaries are reflected in workflow expectations
 
 ---
 
-## 14) Open questions (to decide now, not during coding)
+## 14. Open questions
 
-1. **Do we expose Workflow Type names directly in the UI**, or map them to user-friendly labels?
-2. Do we want a single “detail page” per Workflow ID that always points to the latest run, or show run history?
-3. For `RequestRerun`, do we always Continue-As-New, or sometimes start a fresh Workflow ID?
-4. Do we need a `Pause/Resume` capability in v1?
-5. Should `mm_updated_at` be driven by:
-
-   * “any state transition,” or
-   * “progress updates per step,” or
-   * both (but bounded)?
+1. Do we expose raw Workflow Type names directly in the UI, or map them to product-friendly labels?
+2. Does the detail page always point to the latest run, or should run history be first-class in the UI?
+3. For `RequestRerun`, when do we use Continue-As-New vs a brand-new Workflow ID?
+4. Do we need `Pause/Resume` in v1?
+5. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
+6. How much of `MoonMind.ProviderProfileManager` and `MoonMind.OAuthSession` should be directly visible in product-facing surfaces vs remaining internal/operator-facing?
 
 ---
 
-### Appendix A: Minimal field list for dashboard MVP
+## Appendix A: Minimal field list for dashboard MVP
 
-* List executions via Visibility with:
+List executions via Visibility with:
 
-  * Workflow ID
-  * Workflow Type
-  * Temporal status (running/completed/failed/canceled)
-  * `mm_state`
-  * `mm_updated_at`
-  * Memo `title`, `summary`
-* Actions:
+* Workflow ID
+* Workflow Type
+* Temporal close status
+* `mm_state`
+* `mm_updated_at`
+* Memo `title`
+* Memo `summary`
 
-  * UpdateInputs
-  * Cancel
-  * (optional) RequestRerun
+Representative actions:
+
+* `UpdateInputs`
+* `Cancel`
+* optional `RequestRerun`
+* detail queries for live current state where applicable
