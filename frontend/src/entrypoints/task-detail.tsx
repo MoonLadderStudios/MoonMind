@@ -549,6 +549,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                               <a className="button secondary" href={artifact.downloadUrl}>
                                 Download
                               </a>
+                            ) : artifact.artifactId ? (
+                              <a
+                                className="button secondary"
+                                href={`${payload.apiBase}/artifacts/${encodeURIComponent(artifact.artifactId)}/download`}
+                                title="Download artifact"
+                              >
+                                Download
+                              </a>
                             ) : (
                               '—'
                             )}
