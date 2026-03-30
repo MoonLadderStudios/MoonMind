@@ -149,19 +149,19 @@ Introduce a real managed skill catalog owned by MoonMind.
 
 ### Tasks
 
-- [ ] Define concrete backend models for `AgentSkillDefinition`
-- [ ] Define concrete backend models for `AgentSkillVersion`
-- [ ] Define concrete backend models for `SkillSet`
-- [ ] Define concrete backend models for `SkillSetEntry`
-- [ ] Define source-kind enum or equivalent contract for `built_in`, `deployment`, `repo`, and `local`
-- [ ] Define supported format enum or equivalent for markdown or future bundle formats
-- [ ] Store skill bodies in artifact/blob storage rather than directly in workflow payloads
-- [ ] Add checksums or content digests for immutable version verification
-- [ ] Add migrations for the new storage tables and indices
-- [ ] Add service-layer validation for skill-name uniqueness and version immutability
-- [ ] Add policy fields or associated settings needed to gate repo and local skill sources
-- [ ] Add basic CRUD or internal service methods for deployment-stored skills
-- [ ] Add tests for immutable version creation, source-kind handling, and validation failures
+- [x] Define concrete backend models for `AgentSkillDefinition`
+- [x] Define concrete backend models for `AgentSkillVersion`
+- [x] Define concrete backend models for `SkillSet`
+- [x] Define concrete backend models for `SkillSetEntry`
+- [x] Define source-kind enum or equivalent contract for `built_in`, `deployment`, `repo`, and `local`
+- [x] Define supported format enum or equivalent for markdown or future bundle formats
+- [x] Store skill bodies in artifact/blob storage rather than directly in workflow payloads
+- [x] Add checksums or content digests for immutable version verification
+- [x] Add migrations for the new storage tables and indices
+- [x] Add service-layer validation for skill-name uniqueness and version immutability
+- [x] Add policy fields or associated settings needed to gate repo and local skill sources
+- [x] Add basic CRUD or internal service methods for deployment-stored skills
+- [x] Add tests for immutable version creation, source-kind handling, and validation failures
 
 ### Exit criteria
 
@@ -186,8 +186,8 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 
 ### Tasks
 
-- [ ] Define concrete runtime contract for `ResolvedSkillSet`
-- [ ] Define concrete runtime contract for source provenance and resolution inputs
+- [x] Define concrete runtime contract for `ResolvedSkillSet`
+- [x] Define concrete runtime contract for source provenance and resolution inputs
 - [ ] Implement built-in skill source loader
 - [ ] Implement deployment skill source loader
 - [ ] Implement repo checked-in skill source loader
@@ -198,11 +198,11 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 - [ ] Implement explicit include, exclude, and pinned-version selectors
 - [ ] Implement `task.skills` baseline resolution
 - [ ] Implement `step.skills` override and inheritance behavior
-- [ ] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
-- [ ] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
-- [ ] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
+- [x] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
+- [x] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
+- [x] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
 - [ ] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
-- [ ] Return compact refs and metadata rather than full bodies in workflow history
+- [x] Return compact refs and metadata rather than full bodies in workflow history
 - [ ] Add tests covering:
   - [ ] source precedence
   - [ ] collisions
@@ -210,6 +210,7 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
   - [ ] policy blocks
   - [ ] step-level exclusions
   - [ ] deterministic snapshot reuse across retries
+
 
 ### Exit criteria
 
