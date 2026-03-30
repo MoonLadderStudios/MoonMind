@@ -127,6 +127,7 @@ class AgentExecutionRequest(BaseModel):
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
+    resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
     input_refs: list[str] = Field(default_factory=list, alias="inputRefs")
     expected_output_schema: dict[str, Any] = Field(
         default_factory=dict, alias="expectedOutputSchema"
@@ -165,6 +166,11 @@ class AgentExecutionRequest(BaseModel):
         if instruction_ref is not None:
             self.instruction_ref = _require_non_blank(
                 instruction_ref, field_name="instructionRef"
+            )
+        resolved_skillset_ref = self.resolved_skillset_ref
+        if resolved_skillset_ref is not None:
+            self.resolved_skillset_ref = _require_non_blank(
+                resolved_skillset_ref, field_name="resolvedSkillsetRef"
             )
         self.input_refs = [
             _require_non_blank(item, field_name="inputRefs[]") for item in self.input_refs
