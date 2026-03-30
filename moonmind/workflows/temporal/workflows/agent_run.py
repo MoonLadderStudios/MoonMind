@@ -92,7 +92,6 @@ DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
 
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
-MANAGED_429_CONTINUE_AS_NEW_PATCH_ID = "agent-run-managed-429-continue-as-new-v1"
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
@@ -104,8 +103,6 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
-_MAX_AGENT_RUN_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
-_MAX_MANAGED_429_RETRIES_BEFORE_CONTINUE_AS_NEW = 25
 _INTERNAL_REQUEST_STATE_KEY = "__moonmind_temporal_internal"
 _INTERNAL_MANAGED_429_RETRY_COUNT_KEY = "managed_429_retry_count"
 _INTERNAL_MANAGED_429_WAITING_REASON_KEY = "managed_429_waiting_reason"
@@ -357,20 +354,6 @@ class MoonMindAgentRun:
         params[_INTERNAL_REQUEST_STATE_KEY] = internal_state
         return request.model_copy(update={"parameters": params})
 
-    def _should_continue_as_new_after_managed_429(self) -> bool:
-        if not workflow.patched(MANAGED_429_CONTINUE_AS_NEW_PATCH_ID):
-            return False
-        if workflow.info().is_continue_as_new_suggested():
-            return True
-        if (
-            workflow.info().get_current_history_length()
-            >= _MAX_AGENT_RUN_EVENTS_BEFORE_CONTINUE_AS_NEW
-        ):
-            return True
-        return (
-            self._managed_429_retry_count
-            >= _MAX_MANAGED_429_RETRIES_BEFORE_CONTINUE_AS_NEW
-        )
 
 
     async def _ensure_manager_and_signal(
@@ -1339,15 +1322,6 @@ class MoonMindAgentRun:
                             _SLOT_WAIT_TIMEOUT_SECONDS,
                         )
                         self._managed_429_retry_count += 1
-                        if self._should_continue_as_new_after_managed_429():
-                            workflow.continue_as_new(
-                                self._request_with_internal_state(
-                                    request,
-                                    retry_count=self._managed_429_retry_count,
-                                    waiting_reason=waiting_reason,
-                                    slot_wait_timeout_seconds=self._slot_wait_timeout_override_seconds,
-                                )
-                            )
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
