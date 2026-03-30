@@ -2,30 +2,39 @@
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TemporalArchitecture.md`](../tmp/remaining-work/Temporal-TemporalArchitecture.md)
 
-**Status:** Draft (migration-oriented)
+**Status:** Draft (migration-oriented, but core runtime shape is now live)  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-30
+**Last updated:** 2026-03-30  
 **Audience:** backend, infra, dashboard, workflow authors
+
+---
 
 ## 1. Purpose
 
-This document defines MoonMind's **Temporal migration architecture**:
+This document defines MoonMind’s Temporal architecture at the bridge point between:
 
-- what MoonMind runs **today**
-- what MoonMind is moving **toward**
-- which design decisions are already **locked**
-- how current task and queue flows map into Temporal-native workflow execution
+- the system that still exists today
+- the system that is already implemented in core Temporal paths
+- the target state MoonMind is moving toward
 
-This is intentionally a **bridge document**. It does not pretend the current runtime is already fully Temporal-backed. It describes the new agent-skill system at the architectural level without duplicating low-level contracts.
+This document is intentionally a **bridge document**. It should describe the runtime honestly rather than pretending the migration is either unfinished everywhere or fully complete everywhere.
 
 This document explains how MoonMind’s Temporal-native architecture incorporates:
-- execution tools
+
+- executable tools
 - plans
 - artifacts
+- managed and external agent runs
+- provider profiles
 - agent skills and resolved skill snapshots
-- agent adapters
+- adapters
+- compatibility layers for task-oriented product surfaces
 
 Detailed agent-skill storage, precedence, and workspace path rules live in `docs/Tasks/AgentSkillSystem.md`.
+
+Detailed true-agent execution lifecycle rules live in `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
+
+---
 
 ## 2. Related docs
 
@@ -33,121 +42,128 @@ Detailed agent-skill storage, precedence, and workspace path rules live in `docs
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/Temporal/ErrorTaxonomy.md`
 - `docs/MoonMindArchitecture.md`
 - `docs/Tasks/AgentSkillSystem.md`
-- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+
+---
 
 ## 3. Current state and target state
 
-### 3.1 Current state
+## 3.1 Current state
 
 MoonMind currently operates with:
 
 - a FastAPI control plane
-- Postgres-backed task/run state
+- Postgres-backed app state
 - runtime-specific workers for Codex, Gemini, and Claude
-- an agent/task queue model
-- Celery + RabbitMQ automation for spec workflow paths
+- a task-oriented product surface
+- Temporal foundation services in Docker Compose
+- Temporal-backed workflow orchestration for core execution paths
+- some migration-oriented compatibility layers and older substrate history
 
-This is the current documented and implemented direction in the repository, not legacy trivia.
+This document should not flatten that reality into “fully migrated” or “not migrated.” The honest state is mixed, with the core Temporal architecture already live for major orchestration paths.
 
+## 3.2 Target state
 
-### 3.2 Target state
-
-**Architecture Precept:** *MoonMind execution is Temporal-native. MoonMind adds domain contracts above Temporal—Tool, Plan, Artifact, Agent Skill / Skill Set, Agent Adapter—but does not introduce a parallel orchestration substrate.*
-
-MoonMind is migrating to **Temporal as the primary durable workflow manager and scheduling system** for workflow-driven automation.
-
+**Architecture precept:**  
+*MoonMind execution is Temporal-native. MoonMind adds domain contracts above Temporal—Tool, Plan, Artifact, Agent Skill / Skill Set, Agent Adapter, Provider Profile—but does not introduce a parallel orchestration substrate.*
 
 In the target state:
 
 - Temporal **Workflow Executions** are the durable orchestration primitive
 - Temporal **Activities** perform all side effects
-- Temporal **Visibility** becomes the list/query/count source for Temporal-managed work
-- Temporal **Schedules** replace cron/beat-style scheduling for Temporal-managed flows
+- Temporal **Visibility** is the list/query/count source for Temporal-managed work
+- Temporal **Schedules** are the authoritative recurring-start mechanism
 - MoonMind keeps only domain concepts Temporal does not provide directly:
   - **Tool**
   - **Plan**
   - **Artifact**
   - **Agent Skill / Skill Set**
   - **Agent Adapter**
+  - **Provider Profile**
 
-### 3.2.1 Domain Concept Boundaries
+## 3.3 Non-goals
 
-To prevent ambiguity across the architecture:
-- **Tool** = executable Temporal-facing capability
-- **Agent Skill** = deployment-scoped instruction bundle for agents
-- **ResolvedSkillSet** = immutable artifact-backed run/step context
-- **Agent Adapter** = runtime/provider translation layer
+- claiming every legacy compatibility path is already retired
+- rebuilding product vocabulary entirely around raw Temporal terms
+- exposing Temporal task queues as user-visible queue ordering semantics
+- reintroducing a second MoonMind-specific orchestration layer on top of Temporal
 
-### 3.3 Non-goals
-
-- Claiming Celery or the agent queue are already gone
-- Rewriting all public APIs around Temporal terms in one step
-- Exposing Temporal task queues as a user-visible queue product with ordering guarantees
+---
 
 ## 4. Locked platform decisions
 
-The following are already locked by newer Temporal design docs and should be treated as canonical here:
+The following are already locked and should be treated as canonical here:
 
-- **Deployment mode:** self-hosted only, not Temporal Cloud
-- **Deployment runtime:** Docker Compose
+- **Deployment mode:** self-hosted
+- **Deployment runtime:** Docker Compose by default
 - **Temporal persistence + visibility:** PostgreSQL
-- **Default artifact backend:** MinIO / S3-compatible object storage
-- **Default worker versioning behavior:** Auto-Upgrade
+- **Default artifact backend:** MinIO / S3-compatible storage
 - **Task queue posture:** routing only, not product semantics
 - **Default queue set:** start small; add subqueues only when isolation or scaling demands it
+- **Managed runtime separation:** dedicated `agent_runtime` fleet is canonical
+- **Root agent execution wrapper:** `MoonMind.AgentRun` is canonical for true agent runs
+- **Canonical runtime contract rule:** agent-facing runtime activities return canonical contracts directly; workflow code should not depend on provider-shaped payloads
 
-This document should not re-open those choices.
+This document should not reopen those choices.
+
+---
 
 ## 5. Vocabulary and compatibility model
 
-### 5.1 User-facing and internal terms
+## 5.1 User-facing vs internal terms
 
-MoonMind needs two layers of vocabulary during migration:
+MoonMind still needs two layers of vocabulary during migration:
 
-- **User-facing term:** `task`
-- **Temporal term:** `workflow execution`
+- **user-facing term:** `task`
+- **Temporal/runtime term:** `workflow execution`
 
 Rationale:
 
-- MoonMind's current UI and API direction remains task-oriented
-- Temporal's runtime model is workflow-oriented
-- forcing an immediate full rename would conflict with current product contracts and migration specs
+- MoonMind’s product surface remains task-oriented
+- Temporal’s substrate is workflow-oriented
+- forcing a total rename would create unnecessary compatibility churn
 
-### 5.2 Recommended wording
+## 5.2 Recommended wording
 
-- Use **task** in current dashboard and compatibility APIs
-- Use **workflow execution** in Temporal implementation docs and internal runtime contracts
-- Use **task queue** only for Temporal plumbing, never as a user-visible ordering promise
+- use **task** in current dashboard and compatibility APIs
+- use **workflow execution** in implementation and runtime docs
+- use **task queue** only for Temporal plumbing, never as a user-visible ordering promise
 
-### 5.3 Identifier compatibility
+## 5.3 Identifier compatibility
 
-During migration, the system may expose more than one identifier:
+During migration, multiple identifiers may appear:
 
 | Identifier | Meaning | Status |
 | --- | --- | --- |
-| `taskId` | Current MoonMind task handle used by UI and compatibility APIs | Required during migration |
-| `runId` | Historical identifier in some compatibility payloads | Transitional only |
+| `taskId` | MoonMind product/compatibility handle | Required during migration |
+| `runId` | Historical compatibility identifier in some surfaces | Transitional only |
 | `workflowId` | Temporal Workflow ID | Canonical for Temporal-managed executions |
-| `temporalRunId` | Temporal run instance identifier | Detail/debug use only |
+| `temporalRunId` | Temporal run instance identifier | Detail/debug only |
 
 Rules:
 
-- Public task APIs may return both `taskId` and `workflowId` during migration
+- task-oriented APIs may return both `taskId` and `workflowId`
 - `workflowId` is the durable Temporal identity
 - `temporalRunId` is not the primary product handle
 
-### 5.4 Tool vs Agent Skill terminology
+## 5.4 Tool vs agent-skill terminology
 
-MoonMind explicitly enforces the following definitions:
-- this document uses **tool** for executable capabilities
-- this document uses **agent skill** for instruction bundles
-- `tool.type = "skill"` is an executable-tool subtype, not a general synonym for agent instruction bundles
+MoonMind explicitly uses:
+
+- **tool** for executable capabilities
+- **agent skill** for instruction bundles
+- **ResolvedSkillSet** for the immutable artifact-backed execution context produced from those skill sources
+
+This document must not blur those concepts.
+
+---
 
 ## 6. Architecture overview
 
-### 6.1 Current deployment shape
+## 6.1 Current deployment shape
 
 MoonMind currently contains:
 
@@ -155,24 +171,24 @@ MoonMind currently contains:
 - Postgres
 - Qdrant
 - runtime workers
-- Celery + RabbitMQ stack
-- Temporal foundation services in Compose
+- Temporal services in Compose
+- Temporal worker fleets
+- compatibility/product surfaces that still present task-oriented views
 
-### 6.2 Target Temporal shape
+## 6.2 Target Temporal shape
 
 For Temporal-managed flows, the architecture becomes:
 
 1. **MoonMind API**
    - authenticates callers
    - starts workflows
-   - sends updates/signals/cancel requests
+   - sends updates, signals, and cancel requests
    - issues artifact upload/download grants
-   - receives task/step skill selectors
-   - initiates skill resolution
-   - exposes task-oriented compatibility surfaces that include resolved skill metadata where appropriate
+   - accepts task/step runtime and skill selectors
+   - exposes task-oriented compatibility surfaces where needed
 
 2. **Temporal service**
-   - stores workflow state/history
+   - stores workflow state and history
    - provides visibility for list/query/count
    - owns timers, retries, schedules, child workflow orchestration
 
@@ -183,295 +199,213 @@ For Temporal-managed flows, the architecture becomes:
 
 4. **Temporal workers**
    - workflow workers run deterministic orchestration code
-   - activity workers execute side-effecting work under capability and secret boundaries
+   - activity workers execute side effects under capability and secret boundaries
 
 5. **Compatibility adapters**
-   - bridge current task APIs and UI surfaces onto Temporal-backed workflows where needed
+   - bridge task-oriented UI/API contracts onto Temporal-backed workflows where needed
 
-*Note on Agent Skill Resolution:* 
-The target architecture relies on deployment-backed agent skill storage, activity-boundary resolution of agent skills into immutable snapshots (`ResolvedSkillSet`), and adapter-owned runtime materialization.
+## 6.3 Domain concept boundaries
 
-### 6.3 Container reference
+To prevent ambiguity across the architecture:
 
-All Temporal-related containers are defined in `docker-compose.yaml`. The table below summarises every container, followed by detailed descriptions grouped by role.
+- **Tool** = executable Temporal-facing capability
+- **Plan** = MoonMind execution graph or ordered work definition
+- **Artifact** = large durable input/output outside workflow history
+- **Agent Skill** = deployment-scoped instruction bundle
+- **ResolvedSkillSet** = immutable artifact-backed run/step context
+- **Agent Adapter** = provider/runtime translation layer
+- **Provider Profile** = managed-runtime credential/concurrency/policy binding
 
-#### Quick reference
+---
 
-| Container | Image | Always on? | Purpose |
-| --- | --- | --- | --- |
-| `temporal` | `temporalio/auto-setup` | Yes | Temporal server (history, matching, frontend, internal-frontend) |
-| `temporal-namespace-init` | `temporalio/admin-tools` | Yes (run-once) | Creates/updates the configured (default: `default`) namespace and registers custom search attributes |
-| `temporal-visibility-rehearsal` | `temporalio/admin-tools` | No (`temporal-tools` profile) | Dry-runs a visibility-schema upgrade against Postgres |
-| `temporal-admin-tools` | `temporalio/admin-tools` | No (`temporal-tools` profile) | Long-running shell for ad-hoc `temporal` / `tctl` commands |
-| `temporal-ui` | `temporalio/ui` | No (`temporal-ui` profile) | Web dashboard for browsing workflows, activities, and schedules |
-| `temporal-worker-workflow` | `moonmind` (app image) | Yes | Runs deterministic workflow code on `mm.workflow` |
-| `temporal-worker-artifacts` | `moonmind` (app image) | Yes | Artifact I/O activities on `mm.activity.artifacts` |
-| `temporal-worker-llm` | `moonmind` (app image) | Yes | LLM-call activities on `mm.activity.llm` |
-| `temporal-worker-sandbox` | `moonmind` (app image) | Yes | Shell/repo/CLI activities on `mm.activity.sandbox` |
-| `temporal-worker-agent-runtime` | `moonmind` (app image) | Yes | Agent orchestration activities on `mm.activity.agent_runtime` |
-| `temporal-worker-integrations` | `moonmind` (app image) | Yes | External-service activities on `mm.activity.integrations` |
-| `postgres` | `postgres:17` | Yes | Shared database (MoonMind tables + Temporal persistence + visibility) |
-| `minio` | `minio/minio` | Yes | S3-compatible object store for workflow artifacts |
+## 7. Container reference
 
-#### 6.3.1 Core Temporal infrastructure
+All Temporal-related containers are defined in `docker-compose.yaml`.
 
-##### `temporal`
+The current Compose shape includes:
 
-The Temporal Server container, using the official `temporalio/auto-setup` image. On first start it auto-creates the Temporal and visibility databases in Postgres, then runs the server with all four internal services (history, matching, frontend, internal-frontend) in a single process.
+- `temporal`
+- `temporal-namespace-init`
+- `temporal-admin-tools`
+- `temporal-ui` (profile-gated)
+- `temporal-worker-workflow`
+- `temporal-worker-artifacts`
+- `temporal-worker-llm`
+- `temporal-worker-sandbox`
+- `temporal-worker-agent-runtime`
+- `temporal-worker-integrations`
+- `postgres`
+- `minio`
 
-Key configuration:
+The important architectural rule is not the exact container table but the separation of concerns:
 
-- **`DB=postgres12`** — selects the Postgres persistence plugin.
-- **`POSTGRES_SEEDS=postgres`** — points at the shared Postgres container via the `temporal-db` network alias.
-- **`DBNAME` / `VISIBILITY_DBNAME`** — separate logical databases (`temporal` / `temporal_visibility`) created by `init_db_scripts`.
-- **`DYNAMIC_CONFIG_FILE_PATH`** — loads `services/temporal/dynamicconfig/development-sql.yaml`, which currently enables `UpdateWorkflowExecution` and disables secondary visibility reads.
-- **`NUM_HISTORY_SHARDS=1`** — single-node development default.
-- Exposes **port 7233** (gRPC) only on the Docker network via the `temporal-internal` alias.
+- Temporal server owns durable orchestration substrate
+- worker fleets map to capability/security boundaries
+- artifact storage is separate from workflow history
+- managed runtime execution has its own dedicated fleet
 
-Dependencies: `postgres` (healthy).
+### 7.1 Worker fleet summary
 
-##### `postgres`
-
-A single Postgres 17 instance shared across MoonMind, Temporal persistence, and Temporal visibility. The `init_db_scripts/` directory contains startup SQL that creates dedicated databases and roles:
-
-| Database | Owner role | Purpose |
+| Fleet | Queue | Primary role |
 | --- | --- | --- |
-| `moonmind` | `postgres` | MoonMind API tables, migrations, Alembic history |
-| `temporal` | `temporal` | Temporal workflow persistence (history, shards, tasks) |
-| `temporal_visibility` | `temporal` | Temporal visibility store (search attributes, list/count queries) |
-| `keycloak` | `keycloak` | Keycloak IdP state (when `keycloak` profile is active) |
+| `workflow` | `mm.workflow` | deterministic orchestration code |
+| `artifacts` | `mm.activity.artifacts` | artifact lifecycle and support activities |
+| `llm` | `mm.activity.llm` | planning, validation, review, other LLM activity work |
+| `sandbox` | `mm.activity.sandbox` | repo operations, shell/test execution |
+| `agent_runtime` | `mm.activity.agent_runtime` | managed runtime launch/status/fetch/cancel/publish |
+| `integrations` | `mm.activity.integrations` | external providers, repo publish/merge, provider-specific helpers |
 
-The container exposes **5432** only on the Docker network and publishes two network aliases: `moonmind-api-db` (used by the API) and `temporal-db` (used by Temporal).
+### 7.2 Managed runtime separation
 
-##### `minio`
+The `agent_runtime` fleet is not aspirational anymore. It is part of the canonical architecture.
 
-MinIO provides the S3-compatible object store used by Temporal workflow artifacts. The `temporal-worker-artifacts` container connects to MinIO on **port 9000** for blob read/write. The MinIO Console is available on **port 9001** (mapped to host) for debugging.
+That fleet exists because managed runtimes need different privileges and operational behavior than generic sandbox or integration work, including:
 
-#### 6.3.2 Init and tooling containers
+- auth volume mounts
+- managed process/runtime supervision
+- provider-profile slot/cooldown coordination support
+- distinct result/status/cancel lifecycle behavior
 
-##### `temporal-namespace-init` (run-once)
+---
 
-Runs `services/temporal/bootstrap-namespace.sh` on startup. This script:
+## 8. Substrate evolution
 
-1. Waits for the Temporal server to become healthy (up to 90 retries).
-2. Creates the configured namespace (default `default`) if it does not exist, or updates retention if it does.
-3. Derives retention days from `TEMPORAL_RETENTION_MAX_STORAGE_GB` and `TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY` unless an explicit `TEMPORAL_NAMESPACE_RETENTION_DAYS` is set.
-4. Registers MoonMind custom search attributes (`mm_entry`, `mm_owner_id`, `mm_owner_type`, `mm_state`, `mm_updated_at`, `mm_repo`, `mm_integration`, `mm_continue_as_new_cause`).
+Execution is moving toward **Temporal as the single durable orchestration substrate** for new flows, while preserving compatibility for task-oriented product surfaces during migration.
 
-Restart policy: `no` — exits after one successful run.
+Important direction:
 
-##### `temporal-visibility-rehearsal` (profile: `temporal-tools`)
+- new durable orchestration belongs in Temporal
+- compatibility layers may continue temporarily
+- legacy substrate retirement should be driven by parity and operational confidence, not by design intent alone
 
-A one-shot container that dry-runs a Temporal visibility schema upgrade against the Postgres visibility database. Used for upgrade planning and CI validation before applying schema changes in production.
+Phase-style rollout notes remain appropriate for the tracking documents, but this document should reflect the fact that the core Temporal architecture is already the active direction and not just a paper target.
 
-Restart policy: `no`.
+---
 
-##### `temporal-admin-tools` (profile: `temporal-tools`)
+## 9. Concept mapping: MoonMind to Temporal
 
-A long-running container that sleeps indefinitely, providing a shell with `temporal` and `tctl` CLIs pre-installed. Operators can `docker exec` into it for ad-hoc namespace, schedule, search-attribute, and workflow management.
-
-##### `temporal-ui` (profile: `temporal-ui`)
-
-The official Temporal Web UI. Provides a browser dashboard for inspecting running and completed workflow executions, activity details, task queue status, and schedules. Mapped to **host port 8088** by default.
-
-#### 6.3.3 Auth and workspace init containers
-
-These lightweight Alpine containers initialise Docker volumes with correct ownership (`1000:1000`) and permissions (`0775`) so that worker containers running as a non-root user can write to them. All have restart policy `no`.
-
-| Container | Volume | Purpose |
+| MoonMind concept | Temporal-aligned concept | Notes |
 | --- | --- | --- |
-| `agent-workspaces-init` | `agent_workspaces` | `/work/agent_jobs` — per-run workspaces for agent task execution |
-| `codex-auth-init` | `codex_auth_volume` | Codex CLI auth credentials and config |
-| `claude-auth-init` | `claude_auth_volume` | Claude CLI auth credentials and config |
-| `gemini-auth-init` | `gemini_auth_volume` | Gemini CLI auth credentials and config |
+| Task | Workflow Execution plus MoonMind compatibility row | User may still see `task` |
+| Plan | Plan artifact plus workflow orchestration logic | Plan remains a MoonMind domain concept |
+| Step | Plan node executed as activity call or child workflow | Isolation boundary decides which |
+| True agent step | `MoonMind.AgentRun` child workflow | Canonical true-agent lifecycle wrapper |
+| repo/deployment/local agent skills | `ResolvedSkillSet` artifact-backed execution context | Resolved before runtime use |
+| provider profile | workflow-coordinated runtime credential/concurrency contract | Important for managed runtimes |
+| approval policy | signal/update + workflow policy evaluation | Policy remains a MoonMind concern |
+| runtime selection | activity routing + adapter/provider selection | Not a root workflow taxonomy |
+| degraded-mode state snapshot | artifact-backed and reconciliation-friendly | Not execution truth |
 
-The sandbox and agent-runtime workers depend on all four init containers completing before they start.
+## 9.1 Adapter vs workflow boundary
 
-#### 6.3.4 Worker fleet
+A strict boundary exists between adapters and workflows:
 
-All workers share the same `moonmind` application image (`ghcr.io/moonladderstudios/moonmind:latest`), use the `services/temporal/scripts/start-worker.sh` entrypoint, and differ only in the **`TEMPORAL_WORKER_FLEET`** environment variable and the task queue they poll. Each worker exposes an HTTP health endpoint at `:8080/healthz`.
+- **Adapters translate provider/runtime semantics**
+- **Workflows own lifecycle semantics**
 
-##### `temporal-worker-workflow`
+### Adapters
 
-- **Fleet:** `workflow`
-- **Task queue:** `mm.workflow`
-- **Concurrency:** 8 (default)
-- **Role:** Runs deterministic Temporal workflow code. This worker executes the orchestration logic (state machines, child workflow spawning, signal/update handling) and must never perform side-effecting I/O directly.
-- **Volumes:** Read-only `moonmind/` and `api_service/` source mounts.
+Adapters:
 
-##### `temporal-worker-artifacts`
+- normalize provider/runtime state into canonical runtime contracts
+- handle launch/start/status/fetch/cancel translation
+- expose capability descriptors
+- materialize resolved skill snapshots for target runtimes
+- preserve runtime-independent resolution semantics
 
-- **Fleet:** `artifacts`
-- **Task queue:** `mm.activity.artifacts`
-- **Concurrency:** 8 (default)
-- **Role:** Executes artifact lifecycle activities — upload, download, list, delete, and retention enforcement against MinIO.
-- **Key env:** `TEMPORAL_ARTIFACT_BACKEND=s3`, S3 endpoint/bucket/credentials pointing at the `minio` container.
-- **Depends on:** `minio` in addition to Temporal.
+### Workflows
 
-##### `temporal-worker-llm`
+Workflows:
 
-- **Fleet:** `llm`
-- **Task queue:** `mm.activity.llm`
-- **Concurrency:** 4 (default)
-- **Role:** Executes LLM API call activities. Holds API keys for OpenAI, Gemini/Google, and Anthropic.
-- **Key env:** `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`.
-- **Note:** Provider-specific sub-queues (e.g. `mm.activity.llm.codex`) are not configured by default; add them only when isolation or separate scaling is needed.
+- own phase progression
+- own waiting and polling strategy
+- own orchestration-level retries and cooldown loops
+- own HITL transitions
+- own durable lifecycle state
+- carry refs to resolved skill snapshots and artifacts
 
-##### `temporal-worker-sandbox`
+The architecture should not let workflow code become a provider payload repair layer.
 
-- **Fleet:** `sandbox`
-- **Task queue:** `mm.activity.sandbox`
-- **Concurrency:** 2 (default)
-- **Role:** Executes shell commands, repo checkouts, and agent CLI invocations (Codex, Claude, Gemini). This is the primary worker for running external code-generation agents against checked-out repositories.
-- **Volumes:** `codex_auth_volume`, `claude_auth_volume`, `gemini_auth_volume` (CLI credentials), `agent_workspaces` (per-job working directories).
-- **Depends on:** All four auth/workspace init containers plus Temporal.
+---
 
-##### `temporal-worker-agent-runtime`
+## 10. Workflow model
 
-- **Fleet:** `agent_runtime`
-- **Task queue:** `mm.activity.agent_runtime`
-- **Concurrency:** 4 (default)
-- **Role:** Executes higher-level agent orchestration activities — task dispatch, status polling, result collection — that coordinate the sandbox worker's lower-level CLI execution.
-- **Volumes:** Same auth and workspace volumes as the sandbox worker.
-- **Depends on:** Same auth and workspace init containers as the sandbox worker.
+## 10.1 Root-level workflow types
 
-##### `temporal-worker-integrations`
+MoonMind should keep **few** workflow types.
 
-- **Fleet:** `integrations`
-- **Task queue:** `mm.activity.integrations`
-- **Concurrency:** 4 (default)
-- **Role:** Executes activities for external service integrations (GitHub, Jules, webhooks).
-- **Key env:** `JULES_ENABLED`, `JULES_API_URL`, `JULES_API_KEY`.
-
-#### 6.3.5 Dependency and startup order
-
-```
-postgres (healthy)
-├── temporal (started)
-│   └── temporal-namespace-init (completed)
-│       ├── temporal-worker-workflow
-│       ├── temporal-worker-artifacts  (+ minio started)
-│       ├── temporal-worker-llm
-│       ├── temporal-worker-sandbox    (+ auth/workspace inits completed)
-│       ├── temporal-worker-agent-runtime (+ auth/workspace inits completed)
-│       ├── temporal-worker-integrations
-│       ├── temporal-ui               (profile: temporal-ui)
-│       ├── temporal-admin-tools       (profile: temporal-tools)
-│       └── temporal-visibility-rehearsal (profile: temporal-tools)
-└── init-db (completed) → api
-```
-
-#### 6.3.6 Networking
-
-All Temporal containers join the `local-network` Docker network. Internal service discovery uses container names and network aliases:
-
-| Alias | Target | Used by |
-| --- | --- | --- |
-| `temporal-internal` | `temporal` | All workers, API, namespace-init, admin tools, UI |
-| `temporal-db` | `postgres` | `temporal` (auto-setup persistence connection) |
-| `moonmind-api-db` | `postgres` | `api`, `init-db` |
-
-No Temporal ports are published to the host by default. The `temporal-ui` container optionally publishes **8088→8080**.
-
-## 7. Substrate evolution
-
-Execution moves toward **Temporal** as the durable orchestration layer for new flows, while preserving compatibility for legacy queue/system records until retired. Phase-style rollout notes and decommission criteria are tracked in [`docs/tmp/remaining-work/Temporal-TemporalArchitecture.md`](../tmp/remaining-work/Temporal-TemporalArchitecture.md) and [`docs/tmp/SingleSubstrateMigration.md`](../tmp/SingleSubstrateMigration.md).
-
-## 8. Concept mapping: current MoonMind to Temporal
-
-| Current concept | Temporal-aligned concept | Notes |
-| --- | --- | --- |
-| Queue task | Workflow Execution plus MoonMind compatibility row | User may still see `task` while runtime is a workflow |
-| `ActionPlan` | `Plan` artifact plus workflow orchestration logic | Plan stays a MoonMind domain concept |
-| Step | Plan node, activity call, or child workflow | Depends on isolation and retry boundary |
-| repo/deployment/local agent skills | `ResolvedSkillSet` artifact-backed execution context | Source precedence is resolved before runtime |
-| runtime-visible active skill path | adapter-managed workspace materialization | Adapters map canonical paths for specific agents |
-| skill selection intent | task/step execution context plus pre-launch resolution | Handled at the control plane and workflow preparation phase |
-| `prepare -> execute -> publish` | workflow phases reflected in `mm_state` and artifacts | Keep phase meaning, change substrate |
-| Approval token / Approval Policy | Signal or Update plus workflow policy check | Approval remains a product policy concept |
-| Worker runtime selection | Activity routing and worker capability binding | Not a new workflow taxonomy |
-| DB state sink snapshot | Artifact-backed fallback plus reconciliation | Relevant during migration and degraded mode |
-
-
-### 8.1 Adapter vs. Workflow Boundary
-
-A strict boundary exists between Adapters and Workflows regarding lifecycle and agent skill execution:
-- *"Adapters translate provider/runtime semantics. Workflows own lifecycle semantics."*
-- **Adapters:** 
-  - Normalize states, handle launch/start/status/fetch/cancel operations, and expose capability descriptors.
-  - Materialize resolved skill snapshots for the target runtime.
-  - Preserve runtime-independent resolution semantics and do not independently re-resolve source precedence.
-- **Workflows:** 
-  - Own phase progression, waiting, orchestration-level retries, HITL (Human-in-the-Loop) transitions, and durable lifecycle state.
-  - Carry refs to resolved skill snapshots.
-  - Orchestrate preparation and execution phases but do not re-resolve large skill source trees inline.
-
-## 9. Workflow model
-
-### 9.1 Root-level workflow types
-
-MoonMind should keep **few** workflow types and avoid rebuilding legacy taxonomies inside Temporal.
-
-Initial catalog:
+Current core catalog includes:
 
 - `MoonMind.Run`
 - `MoonMind.ManifestIngest`
+- `MoonMind.ProviderProfileManager`
+- `MoonMind.AgentRun`
+- `MoonMind.OAuthSession`
 
 `MoonMind.Run` is the general entry point and may orchestrate:
 
 - direct tool execution
 - plan-driven execution
 - external integrations
-- agent skill resolution
-- child agent-runtime execution
-- long-lived waiting and callback handling
+- managed runtime execution
+- provider-profile-aware child agent runs
+- long-lived waiting and callback/poll handling
 
-`MoonMind.ManifestIngest` exists only because manifest-driven orchestration usually introduces:
+`MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution.
 
-- graph compilation
-- fan-out / fan-in
-- result aggregation
-- explicit failure policy
+`MoonMind.ProviderProfileManager` is the durable coordinator for provider-profile slots and cooldowns.
 
-### 9.2 What not to do
+## 10.2 What not to do
 
-Do not create separate workflow type families just for:
+Do not create separate root workflow families just for:
 
 - Codex vs Gemini vs Claude
 - queue task vs Temporal workflow execution
-- worker brand or provider choice
+- provider brand
+- task queue brand
+- managed vs external root taxonomy
 
 Those are routing and execution concerns, not root orchestration categories.
 
+## 10.3 Agent execution model
 
-### 9.3 Agent Execution Model
+MoonMind sanctions two broad agent execution modes:
 
-MoonMind sanctions two agent execution modes:
-1. **Workflow-native agentic loop:** The reasoning loop lives in workflow code; each model/tool interaction is an Activity.
-2. **Delegated agent runtime:** The agent runs outside the workflow; `MoonMind.AgentRun` owns its durable lifecycle. It is expected to receive runtime inputs, artifact refs, and resolved agent skill snapshot refs.
+1. **Workflow-native agentic loop**  
+   The reasoning loop lives in workflow code and each model/tool interaction is an activity.
 
-The `MoonMind.AgentRun` contract is specifically defined as: *"The durable lifecycle wrapper for delegated cognition."*
+2. **Delegated true agent runtime**  
+   The agent runs outside the workflow and `MoonMind.AgentRun` owns the durable lifecycle.
 
-## 10. Activity model and worker topology
+For delegated true agent runs, canonical rules are:
 
-### 10.1 Core rule
+- `MoonMind.Run` dispatches one agent step to one `MoonMind.AgentRun`
+- managed and external agents share the same high-level lifecycle
+- agent-facing runtime activities return canonical contracts directly
+- large execution data stays in artifacts
+
+---
+
+## 11. Activity model and worker topology
+
+## 11.1 Core rule
 
 All side effects belong in **Activities**:
 
 - LLM calls
 - filesystem and repo operations
 - shell/sandbox execution
-- artifact IO
+- artifact I/O
 - GitHub and other integrations
 - callback verification and external polling
-- agent skill resolution
-- skill manifest creation
-- runtime skill materialization
-- prompt-index generation where applicable
+- managed runtime supervision/status/result work
+- provider-profile support operations
+- OAuth/session support operations
+- future agent skill resolution/materialization work
 
 Workflow code remains deterministic.
 
-### 10.2 Minimal task queue set
+## 11.2 Minimal queue set
 
 Start with a small queue topology:
 
@@ -480,31 +414,43 @@ Start with a small queue topology:
 - `mm.activity.llm`
 - `mm.activity.sandbox`
 - `mm.activity.integrations`
-- `mm.activity.agent_runtime` (may handle runtime-facing skill materialization)
+- `mm.activity.agent_runtime`
 
-Provider-specific queues such as `mm.activity.llm.codex` are **deferred**, not default. Add them only when operations require stronger isolation, separate scaling, or distinct secrets/egress.
+Provider-specific or heavier subqueues remain deferred unless isolation or scaling requires them.
 
-### 10.3 Routing model
+## 11.3 Routing model
 
-Routing is by capability and security boundary, not by legacy nouns. Skill resolution/materialization should run on the fleet best aligned with the secret, workspace, and runtime boundary involved:
+Routing is by capability and security boundary, not by legacy nouns.
 
-- LLM workers for model/provider activity execution
-- sandbox workers for command and repo operations
-- integration workers for GitHub/Jules/webhook interactions
-- artifact workers for object-store lifecycle work
+Typical routing examples:
 
-## 11. Payloads and artifacts
+- planning/validation/review → `llm`
+- shell and repo commands → `sandbox`
+- external provider APIs → `integrations`
+- artifact lifecycle and support work → `artifacts`
+- managed runtime launch/status/fetch/cancel/publish → `agent_runtime`
 
-### 11.1 Payload discipline
+### Workflow helper exception
 
-Temporal payloads and history should remain small.
+The workflow fleet may host a narrow helper activity exception, such as adapter metadata resolution, when needed to preserve deterministic orchestration without growing unnecessary routing indirection.
+
+That exception should remain small and intentional.
+
+---
+
+## 12. Payloads and artifacts
+
+## 12.1 Payload discipline
+
+Temporal payloads and workflow history should remain small.
 
 Use:
 
 - `ArtifactRef` values for large inputs/outputs
-- small JSON for workflow parameters, patches, and summaries
+- compact JSON for workflow parameters and summaries
+- canonical runtime contracts for agent execution boundaries
 
-Do not put these into workflow history:
+Do **not** put these into workflow history:
 
 - prompts
 - manifests
@@ -514,203 +460,221 @@ Do not put these into workflow history:
 - large command output
 - agent skill bodies
 - resolved skill manifests
-- runtime skill bundles
-- prompt indexes derived from resolved skill snapshots
+- runtime materialization bundles
+- prompt indexes
+- raw provider snapshots
+- long managed runtime logs
 
-### 11.2 Artifact system baseline
+## 12.2 Artifact system baseline
 
-The default MoonMind artifact path for Temporal-managed work is:
+The default artifact path for Temporal-managed work is:
 
-- MinIO / S3-compatible blob storage for bytes
+- MinIO / S3-compatible storage for bytes
 - Postgres metadata/index for artifact records and execution linkage
 
-Artifact-backed storage is also the default path for resolved skill snapshots, materialization manifests, and prompt-index artifacts. `ResolvedSkillSet` is strictly an artifact-backed execution input, not a workflow-history blob.
+This is also the correct path for:
 
-### 11.3 Manifest processing best practice
+- resolved skill snapshots
+- managed runtime diagnostics
+- provider result snapshots
+- terminal execution summaries when they are too large for workflow payloads
 
-Manifest workflows should exchange **refs**, not blobs:
+## 12.3 Manifest processing best practice
 
-1. `artifact.read(manifest_ref)` only inside an activity boundary
-2. `manifest.parse(manifest_ref) -> parsed_ref`
-3. `manifest.validate(parsed_ref) -> validated_ref`
-4. `manifest.compile_to_plan(validated_ref) -> plan_ref`
-5. execute inline or spawn child workflows using `plan_ref`
+Manifest-heavy flows should exchange refs, not blobs:
 
-That keeps workflow state small and makes retries safer.
+1. read artifact only inside an activity boundary
+2. parse into an artifact-backed intermediate form
+3. validate into an artifact-backed validated form
+4. compile into a plan artifact
+5. execute from refs
 
-## 12. Visibility and UI model
+That keeps workflow state small and retry behavior safer.
 
-### 12.1 Current product reality
+---
 
-MoonMind's product surface is still task-oriented. Near-term list/detail experiences may need to unify:
+## 13. Visibility and UI model
 
-- queue-backed tasks
+## 13.1 Current product reality
+
+MoonMind’s product surface is still task-oriented. Near-term experiences may unify:
+
+- task-style product rows
 - Temporal-backed workflow executions
+- compatibility detail surfaces
 
-### 12.2 Target Temporal model
+## 13.2 Target Temporal model
 
 For Temporal-managed work, Temporal Visibility is the list/query/count source of truth.
 
-Canonical search attributes and memo fields should align with the newer workflow lifecycle doc:
-
-**Search Attributes**
+Canonical Search Attributes include bounded fields such as:
 
 - `mm_owner_id`
 - `mm_state`
 - `mm_updated_at`
 - `mm_entry`
-- optional bounded fields such as `mm_repo` or `mm_integration`
+- optional bounded context like `mm_repo` or `mm_integration`
 
-**Memo**
+Memo should carry compact presentation metadata such as:
 
-- `title`
-- `summary`
-- optional input or manifest refs when safe
+- title
+- summary
+- selected safe refs or compact metadata
 
-Execution detail interfaces may expose resolved skill snapshot metadata, but visibility/search attributes should remain bounded and should not attempt to index full skill sets. Detail surfaces should use memo, queries, and artifact-backed metadata rather than overloading search attributes.
+Search attributes should remain bounded. Detail surfaces should use memo, queries, and artifacts rather than overloading visibility.
 
-### 12.3 UI contract during migration
+## 13.3 Query vs visibility split
 
-- Keep `/tasks/*` user flows where required by active product work
-- allow a task row to map to a Temporal workflow execution behind the scenes
-- avoid inventing queue-order semantics for list sorting or status interpretation
-- use Temporal page tokens and count semantics only for Temporal-backed queries
+Maintain a strict separation:
 
+- **Visibility + projections** → lists, counts, filtering, history, dashboards
+- **Queries** → live execution detail, current progress, awaiting reason, active step, intervention point
 
-### 12.4 Query vs. Visibility Split
+## 13.4 Read models are never execution truth
 
-To maintain strict boundaries between execution state and read models:
-- **Visibility + projections:** Used for list pages, counts, filtering, history, and dashboards.
-- **Queries:** Used for live execution detail, current progress, awaiting reason, active step, and intervention point.
+Execution truth remains:
 
-### 12.5 Read Models Are Never Execution Truth
+- workflow state and history
+- child workflow state
+- artifacts
 
-- **Execution Truth:** Workflow state/history + artifacts = execution truth.
-- **Query Plane:** Visibility = indexed execution query plane.
-- **Read Optimization:** Projections = UI/read optimization.
-- **Strict Rule:** Projections must **never** be read by workflows to decide what to do next.
+Read models and projections exist for UI optimization only. Workflows must not depend on them to decide what to do next.
 
-## 13. Public API posture
+---
 
-### 13.1 During migration
+## 14. Public API posture
 
-Public APIs should remain compatible with current task contracts where active product specs require that compatibility.
+## 14.1 During migration
+
+Public APIs may remain task-oriented where product compatibility still requires it.
 
 That includes:
 
-- `/tasks/*` list/detail flows
+- `/tasks/*` style list/detail flows
+- submission APIs that start Temporal-backed workflows under the hood
 
-During migration (and in the target state), public task submission may include task/step skill selectors. The backend resolves those into immutable runtime context before or during workflow start. APIs should expose compact metadata, not full skill bodies inline.
+## 14.2 Temporal-backed operations
 
-### 13.2 Temporal-backed operations
+When a task is backed by Temporal, public actions map to Temporal-native controls:
 
-When a task is backed by Temporal, MoonMind should map public actions to Temporal-native controls:
+- create/start → start workflow execution
+- edit → update
+- approval or external event → signal or update depending on semantics
+- cancel → workflow cancellation
+- rerun → explicit new execution or continue-as-new depending on the intended behavior
 
-- create/start -> start workflow execution
-- edit -> update
-- approval or webhook event -> signal or update, depending on response needs
-- cancel -> workflow cancellation
-- rerun -> continue-as-new or explicit new workflow start, depending on semantics
+## 14.3 Internal vs external API
 
-### 13.3 Internal versus external API
+If MoonMind later adds a direct `/executions` API surface, treat it as:
 
-If MoonMind later adds a direct `/executions` API surface, it should be treated as either:
+- internal first, or
+- future public surface after compatibility needs are intentionally retired
 
-- an internal adapter API first, or
-- a future public API after compatibility needs are retired
+This document does not assume `/executions` is already the primary product API.
 
-This document does not assume that `/executions` is already the primary public product surface.
+---
 
-## 14. Edits, approvals, and external events
+## 15. Edits, approvals, and external events
 
-### 14.1 Updates
+## 15.1 Updates
 
-Preferred workflow updates include:
+Use Updates when the caller needs request/response semantics and acceptance decisions, for example:
 
-- `UpdateInputs`
-- `SetTitle`
-- `RequestRerun`
+- input changes
+- title updates
+- rerun requests
 
-Use Updates when the caller needs a request/response result and acceptance decision.
-
-### 14.2 Signals
+## 15.2 Signals
 
 Use Signals for asynchronous events such as:
 
 - approval arrival
-- GitHub/Jules/webhook callbacks
+- GitHub/Jules/provider callbacks
 - pause/resume requests
 - external completion notifications
+- provider-profile slot assignment/release coordination
 
-### 14.3 Approval policy
+## 15.3 Approval policy
 
-Approval remains a MoonMind policy concern, not a Temporal-native concept. Temporal provides the transport and durability; MoonMind workflows still enforce:
+Approval remains a MoonMind policy concern, not a Temporal-native concept. Temporal supplies transport and durability; MoonMind workflows enforce policy semantics.
 
-- who may approve
-- when approval is required
-- what happens on expiry or rejection
+---
 
-## 15. Scheduling and long-lived monitoring
+## 16. Scheduling and long-lived monitoring
 
 For Temporal-managed flows:
 
 - use Temporal Timers for deterministic waiting
 - use Temporal Schedules for recurring starts
-- prefer callback-first integration patterns
-- use timer-based polling only as a fallback when callbacks are unavailable
+- prefer callback-first integration patterns where reliable
+- use polling only as a bounded fallback when callbacks are absent or untrusted
 
-The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules and Timers are now the authoritative mechanism for all recurring and time-based workflow starts.
+The old scheduler substrate is no longer the authoritative design direction for recurring Temporal-managed starts.
 
-## 16. Reliability and security
+---
 
-### 16.1 Reliability rules
+## 17. Reliability and security
 
-- activity retries are the default recovery mechanism
+## 17.1 Reliability rules
+
+- activity retries are the default low-level recovery mechanism
 - side-effecting activities must be idempotent or keyed for safe retry
 - use Continue-As-New to control workflow history growth
-- keep large payloads out of workflow history
-- skill resolution and materialization activities must be idempotent or safe under retry
+- keep large payloads out of history
+- skill resolution/materialization work must be idempotent or safe under retry
 - retries must not silently drift to “latest” skill versions
-- reruns should reuse the original resolved skill snapshot by default
+- true agent-runtime activities must return canonical runtime contracts directly
+- provider rate limits and slot contention may require orchestration-aware retries, not just ordinary activity-level retries
 
-### 16.2 Security and isolation
+## 17.2 Security and isolation
 
-- Temporal is self-hosted and private-network only
+- Temporal is self-hosted and private-network oriented
 - worker fleets are segmented by capability and secret boundary
-- sandbox execution is isolated separately from LLM and integration workers
+- sandbox execution is isolated separately from LLM and integrations work
+- managed runtime execution has its own stronger boundary
 - artifact access is mediated through MoonMind authorization and short-lived grants
 - repo and local agent-skill sources are potentially untrusted inputs
-- worker boundaries should preserve separation between runtime secrets and skill content
-- materialized skill snapshots should avoid leaking sensitive content through logs or debug dumps
-- policy gates may restrict repo/local skill ingestion per deployment
+- materialized skill snapshots and runtime outputs must avoid secret leakage through logs or dumps
 
-## 17. Decommission criteria for legacy systems
+---
 
-Do not remove Celery or the agent queue just because a Temporal design exists on paper.
+## 18. Decommission criteria for legacy systems
 
-Retirement should require all of the following for a given flow:
+Do not remove compatibility layers or older substrate dependencies merely because a Temporal design exists.
+
+Retirement for any flow should require:
 
 1. Temporal implementation is production-ready
-2. Observability, retries, artifacts, and approvals have parity
-3. UI and API compatibility behavior is preserved or intentionally retired
-4. Degraded-mode and rollback behavior are verified
-5. Migration of in-flight and historical records is either complete or intentionally scoped out
+2. observability, retries, artifacts, and approvals have parity
+3. UI/API compatibility is preserved or intentionally retired
+4. degraded-mode and rollback behavior are verified
+5. migration of in-flight/historical behavior is intentionally handled
 
-## 18. Open decisions to lock next
+---
 
-1. Which MoonMind flows migrate to Temporal first after the foundation work
-2. Whether task list/detail stays a unified multi-source surface through the full transition or gains Temporal-first views earlier
-3. Which approval paths should use Updates versus Signals
-4. When child workflows are preferred over inline orchestration for manifest fan-out
+## 19. Open decisions to lock next
+
+1. Which remaining non-Temporal-facing flows migrate next
+2. Whether task list/detail remains a unified multi-source surface through the whole transition
+3. Which approval paths should use Updates vs Signals
+4. When child workflows are preferred over inline orchestration for larger fan-out cases
 5. When, if ever, provider-specific LLM task queues become operationally necessary
-6. When, if ever, does MoonMind need a separate dedicated activity queue exclusively for heavy skill resolution operations versus piggybacking on existing runtime-capable fleets?
+6. When, if ever, a separate heavy-duty skill-resolution fleet is justified beyond existing capability fleets
 
-## 19. Summary
+---
 
-MoonMind is not yet a purely Temporal product, but it is intentionally moving in that direction. The correct architecture stance is:
+## 20. Summary
 
-- acknowledge the current task and queue runtime honestly
-- adopt Temporal-native workflow, activity, visibility, and schedule concepts where they are now the target
-- keep public compatibility layers explicit during migration
-- avoid reintroducing MoonMind-specific abstractions where Temporal already provides the right primitive
-- MoonMind treats agent skills as a first-class domain concept above Temporal, resolves them into immutable artifact-backed snapshots, and lets runtime adapters materialize them appropriately.
+MoonMind is not pretending migration is either unfinished everywhere or complete everywhere. The correct architecture stance is:
+
+- Temporal is the durable orchestration substrate
+- `MoonMind.Run` is the general root execution workflow
+- `MoonMind.AgentRun` is the durable lifecycle wrapper for true agent runs
+- `MoonMind.ProviderProfileManager` is the durable coordinator for managed-runtime provider-profile slots and cooldowns
+- activity fleets are split by capability and secret boundary
+- the dedicated `agent_runtime` fleet is canonical
+- artifacts keep large data out of workflow history
+- task-oriented product surfaces may remain during migration
+- workflow code should not depend on provider-shaped runtime payloads; canonical runtime contracts belong at the adapter/activity boundary
+
+MoonMind’s job is to add domain contracts above Temporal without rebuilding a second orchestration substrate beside it.

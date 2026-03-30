@@ -38,26 +38,27 @@ MoonMind supports three scheduling patterns for workflow execution:
 
 This section describes the canonical scheduling mechanisms for Temporal-managed workflows. These are the preferred paths for all new scheduling work.
 
-### 4.1 One-Time Deferred Execution (`start_delay`)
+### 4.1 One-Time Deferred Execution (workflow-level delay)
 
-The preferred mechanism for one-time deferred execution is Temporal's `start_delay` parameter on `client.start_workflow()`.
+Conceptually, Temporal's `start_delay` parameter on `client.start_workflow()` is the canonical way to implement one-time deferred execution. **MoonMind's current implementation does not use `start_delay`** for `MoonMind.Run` workflows. Instead, it starts the workflow immediately and passes the scheduled time into the workflow, which then waits internally until that time before doing any work.
 
-When `start_delay` is set:
+When a deferred one-time execution is created:
 
-- Temporal creates the workflow execution record immediately
-- The workflow is visible in Temporal Visibility and Mission Control immediately
-- The workflow is not dispatched to the task queue until the delay elapses
-- Cancellation works — the user can cancel the workflow before it starts
-- The detail page shows a "Scheduled to run at {time}" banner
+- Temporal creates the workflow execution record immediately.
+- The workflow is dispatched to the task queue as soon as a worker is available (there is no server-side `start_delay` deferring dispatch).
+- The workflow code acquires a worker slot and then waits/sleeps until the `scheduledFor` time before executing any business logic.
+- The workflow is visible in Temporal Visibility and Mission Control immediately.
+- Cancellation before the scheduled time stops further work, but the Temporal execution has already been started (and may appear as `RUNNING` while idle).
+- The detail page should show a "Scheduled to run at {time}" banner even though the underlying execution is already started and waiting.
 
 #### Backend behavior
 
 1. API validates `scheduledFor` is a valid future UTC timestamp.
-2. API computes `start_delay = scheduledFor - now`.
-3. API calls `TemporalClientAdapter.start_workflow()` with the `start_delay` parameter.
-4. The execution record shows `mm_state=scheduled` until the start time.
-5. In Visibility, the execution is immediately queryable with `state=scheduled`.
-6. In Mission Control, it appears in the task list with `dashboardStatus=queued`.
+2. API includes `scheduledFor` in the workflow input/payload (e.g., as part of the `MoonMind.Run` options).
+3. API calls `TemporalClientAdapter.start_workflow()` **without** the `start_delay` parameter.
+4. The workflow implementation's first step is to wait/sleep until `scheduledFor` before performing any activities or emitting user-visible side effects.
+5. The execution record can expose `mm_state=scheduled` until the start time for UI purposes, even though Temporal sees the execution as started and idle.
+6. In Mission Control, it appears in the task list with `dashboardStatus=queued` / "Scheduled" until `scheduledFor`, then transitions to the appropriate running/completed status.
 
 #### Response
 
@@ -131,11 +132,13 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
   "cron": "0 2 * * *",
   "timezone": "America/Los_Angeles",
   "scopeType": "personal",
-  "workflowType": "MoonMind.Run",
-  "initialParameters": {
-    "runtime": "gemini_cli",
-    "model": "gemini-2.5-pro",
-    "repository": "MoonLadderStudios/MoonMind"
+  "target": {
+    "workflowType": "MoonMind.Run",
+    "initialParameters": {
+      "runtime": "gemini_cli",
+      "model": "gemini-2.5-pro",
+      "repository": "MoonLadderStudios/MoonMind"
+    }
   },
   "policy": {
     "overlap": "skip",
@@ -155,8 +158,9 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 | `cron` | `string` | Yes | Standard 5-field cron expression |
 | `timezone` | `string` | No (default: `UTC`) | IANA timezone name |
 | `scopeType` | `"personal"` or `"global"` | No (default: `"personal"`) | Scope — personal requires owner, global requires operator |
-| `workflowType` | `string` | Yes | Workflow type to start (e.g., `MoonMind.Run`) |
-| `initialParameters` | `object` | No | Runtime, model, effort, repository, publish mode |
+| `target` | `object` | Yes | Target configuration |
+| `target.workflowType` | `string` | Yes | Workflow type to start (e.g., `MoonMind.Run`) |
+| `target.initialParameters` | `object` | No | Runtime, model, effort, repository, publish mode |
 | `policy` | `object` | No | Overlap, catchup, jitter policies |
 
 #### Response
@@ -235,8 +239,8 @@ POST /api/executions
 
 1. **API service** receives the request, authenticates the caller, and validates the payload.
 2. **If `schedule` is absent or null**, the execution starts immediately:
-   - **`TemporalExecutionService.create_execution()`** generates a workflow ID (`mm:<ulid>`), persists a `TemporalExecutionRecord` in Postgres, and calls `TemporalClientAdapter.start_workflow()`.
-   - **`TemporalClientAdapter.start_workflow()`** calls the Temporal SDK's `client.start_workflow()` with the workflow type, ID, task queue (`mm.workflow`), memo (title, summary), and search attributes (`mm_owner_id`, `mm_state`, `mm_entry`, `mm_updated_at`).
+   - **`TemporalExecutionService.create_execution()`** generates a workflow ID (`mm:<uuid>`), persists a `TemporalExecutionRecord` in Postgres, and calls `TemporalClientAdapter.start_workflow()`.
+   - **`TemporalClientAdapter.start_workflow()`** calls the Temporal SDK's `client.start_workflow()` with the workflow type, ID, task queue (`mm.workflow`), memo (title, summary), and search attributes (`mm_owner_id`, `mm_owner_type`, `mm_state`, `mm_entry`, `mm_updated_at`).
    - The **workflow worker** picks up the execution and drives it through the lifecycle: `initializing → planning → executing → proposals → finalizing → completed/failed`.
 3. **If `schedule` is present**, the API routes to the scheduling path instead (see Section 4).
 
