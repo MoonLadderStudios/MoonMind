@@ -1,7 +1,7 @@
 .git
 .gitignore
 .github
-__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -10,12 +10,12 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
-node_modules/
-dist/
-build/
+**/node_modules/
+**/dist/
+**/build/
 coverage/
-.env
-.env.*
+**/.env
+**/.env.*
 *.log
 *.log*
 var/

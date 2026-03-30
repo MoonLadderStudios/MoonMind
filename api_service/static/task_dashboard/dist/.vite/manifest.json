@@ -54,7 +54,7 @@
     ]
   },
   "entrypoints/settings.tsx": {
-    "file": "assets/settings-mpwNtiwD.js",
+    "file": "assets/settings-DfmHJk63.js",
     "name": "settings",
     "src": "entrypoints/settings.tsx",
     "isEntry": true,
@@ -63,7 +63,7 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-8ijvJJa1.js",
+    "file": "assets/task-detail-BT1AVjjV.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
