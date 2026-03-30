@@ -262,11 +262,11 @@ export function ProviderProfilesManager({
   });
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 md:flex-row md:items-end md:justify-between">
+    <section className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 dark:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:bg-slate-100 p-6 shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
-          <h3 className="text-lg font-semibold text-slate-900">Provider Profiles</h3>
-          <p className="max-w-3xl text-sm text-slate-600">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white dark:text-slate-900">Provider Profiles</h3>
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
             Configure the runtime and provider launch contract here. Use managed
             secret refs such as <code>db://OPENAI_API_KEY</code> in the secret refs
             JSON field.
@@ -274,7 +274,7 @@ export function ProviderProfilesManager({
         </div>
         <button
           type="button"
-          className="inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+          className="inline-flex items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white dark:text-slate-900 dark:text-white dark:text-slate-900"
           onClick={() => {
             setEditingProfileId(null);
             setForm(defaultFormState());
@@ -286,22 +286,22 @@ export function ProviderProfilesManager({
       </div>
 
       <div className="mt-6 overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-          <thead className="bg-slate-50">
+        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left dark:divide-slate-800 text-sm">
+          <thead className="bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50">
             <tr>
-              <th className="px-3 py-3 font-medium text-slate-600">Profile</th>
-              <th className="px-3 py-3 font-medium text-slate-600">Runtime</th>
-              <th className="px-3 py-3 font-medium text-slate-600">Provider</th>
-              <th className="px-3 py-3 font-medium text-slate-600">Credential</th>
-              <th className="px-3 py-3 font-medium text-slate-600">Secret refs</th>
-              <th className="px-3 py-3 font-medium text-slate-600">Status</th>
-              <th className="px-3 py-3 font-medium text-slate-600">Actions</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Profile</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Runtime</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Provider</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Credential</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Secret refs</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Status</th>
+              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-200 bg-white">
+          <tbody className="divide-y divide-slate-200 dark:divide-slate-800 bg-white dark:bg-slate-900 dark:bg-slate-100 dark:divide-slate-800 dark:bg-slate-900 dark:bg-slate-100">
             {profiles.length === 0 ? (
               <tr>
-                <td className="px-3 py-6 text-slate-500" colSpan={7}>
+                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7}>
                   No provider profiles configured yet.
                 </td>
               </tr>
@@ -309,35 +309,35 @@ export function ProviderProfilesManager({
               profiles.map((profile) => (
                 <tr key={profile.profile_id}>
                   <td className="px-3 py-4">
-                    <div className="font-medium text-slate-900">{profile.profile_id}</div>
+                    <div className="font-medium text-slate-900 dark:text-white dark:text-slate-900">{profile.profile_id}</div>
                     {profile.default_model ? (
-                      <div className="text-xs text-slate-500">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
                         Default model: {profile.default_model}
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-4 text-slate-700">{profile.runtime_id}</td>
+                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300">{profile.runtime_id}</td>
                   <td className="px-3 py-4">
-                    <div className="text-slate-700">{profile.provider_id}</div>
+                    <div className="text-slate-700 dark:text-slate-300">{profile.provider_id}</div>
                     {profile.provider_label ? (
-                      <div className="text-xs text-slate-500">{profile.provider_label}</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-4 text-slate-700">
+                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300">
                     <div>{profile.credential_source}</div>
-                    <div className="text-xs text-slate-500">
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
                       {profile.runtime_materialization_mode}
                     </div>
                   </td>
-                  <td className="px-3 py-4 font-mono text-xs text-slate-600">
+                  <td className="px-3 py-4 font-mono text-xs text-slate-600 dark:text-slate-400">
                     {summarizeSecretRefs(profile.secret_refs)}
                   </td>
                   <td className="px-3 py-4">
                     <span
                       className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
                         profile.enabled
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-slate-200 text-slate-700'
+                          ? 'bg-emerald-100 text-emerald-700 dark:text-emerald-400 dark:bg-emerald-900/30 dark:text-emerald-400'
+                          : 'bg-slate-200 text-slate-700 dark:text-slate-300'
                       }`}
                     >
                       {profile.enabled ? 'Enabled' : 'Disabled'}
@@ -347,7 +347,7 @@ export function ProviderProfilesManager({
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                        className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white dark:text-slate-900 dark:text-white dark:text-slate-900"
                         onClick={() => {
                           setEditingProfileId(profile.profile_id);
                           setForm(toFormState(profile));
@@ -358,7 +358,7 @@ export function ProviderProfilesManager({
                       </button>
                       <button
                         type="button"
-                        className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+                        className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white dark:text-slate-900 dark:text-white dark:text-slate-900"
                         onClick={() =>
                           toggleMutation.mutate({
                             profileId: profile.profile_id,
@@ -370,7 +370,7 @@ export function ProviderProfilesManager({
                       </button>
                       <button
                         type="button"
-                        className="rounded-full border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:border-rose-400 hover:text-rose-900"
+                        className="rounded-full border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 dark:text-rose-400 transition hover:border-rose-400 hover:text-rose-900"
                         onClick={() => {
                           if (
                             window.confirm(
@@ -392,18 +392,18 @@ export function ProviderProfilesManager({
         </table>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+      <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 dark:border-sky-900/50 dark:bg-sky-900/20 dark:text-sky-300">
         <div className="font-medium">Available managed secret slugs</div>
         <div className="mt-2 flex flex-wrap gap-2">
           {secretSlugs.length === 0 ? (
-            <span className="text-sky-800">
+            <span className="text-sky-800 dark:text-sky-400">
               No managed secrets yet. Create them in the Managed Secrets section below.
             </span>
           ) : (
             secretSlugs.map((slug) => (
               <code
                 key={slug}
-                className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-xs"
+                className="rounded-full border border-sky-200 bg-white dark:bg-slate-900 dark:bg-slate-100 px-2.5 dark:border-sky-800 dark:bg-slate-800 dark:bg-slate-200/50 dark:text-slate-300 py-1 text-xs"
               >
                 db://{slug}
               </code>
@@ -414,10 +414,10 @@ export function ProviderProfilesManager({
 
       <form className="mt-6 space-y-6" onSubmit={(event) => saveMutation.mutate(event)}>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Profile ID</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.profileId}
               onChange={(event) =>
                 setForm((current) => ({ ...current, profileId: event.target.value }))
@@ -426,10 +426,10 @@ export function ProviderProfilesManager({
               required
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Runtime ID</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.runtimeId}
               onChange={(event) =>
                 setForm((current) => ({ ...current, runtimeId: event.target.value }))
@@ -439,10 +439,10 @@ export function ProviderProfilesManager({
               required
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Provider ID</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.providerId}
               onChange={(event) =>
                 setForm((current) => ({ ...current, providerId: event.target.value }))
@@ -451,10 +451,10 @@ export function ProviderProfilesManager({
               required
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Provider label</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.providerLabel}
               onChange={(event) =>
                 setForm((current) => ({ ...current, providerLabel: event.target.value }))
@@ -462,10 +462,10 @@ export function ProviderProfilesManager({
               placeholder="OpenAI"
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Credential source</span>
             <select
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.credentialSource}
               onChange={(event) =>
                 setForm((current) => ({
@@ -479,10 +479,10 @@ export function ProviderProfilesManager({
               <option value="none">none</option>
             </select>
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Materialization mode</span>
             <select
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.runtimeMaterializationMode}
               onChange={(event) =>
                 setForm((current) => ({
@@ -498,10 +498,10 @@ export function ProviderProfilesManager({
               <option value="oauth_home">oauth_home</option>
             </select>
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Default model</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.defaultModel}
               onChange={(event) =>
                 setForm((current) => ({ ...current, defaultModel: event.target.value }))
@@ -509,7 +509,7 @@ export function ProviderProfilesManager({
               placeholder="gpt-5.4"
             />
           </label>
-          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 dark:bg-slate-200/50 dark:border-slate-800 dark:bg-slate-800 dark:bg-slate-200/50 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"
               checked={form.enabled}
@@ -522,20 +522,20 @@ export function ProviderProfilesManager({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Volume ref</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.volumeRef}
               onChange={(event) =>
                 setForm((current) => ({ ...current, volumeRef: event.target.value }))
               }
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Volume mount path</span>
             <input
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.volumeMountPath}
               onChange={(event) =>
                 setForm((current) => ({
@@ -545,12 +545,12 @@ export function ProviderProfilesManager({
               }
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Max parallel runs</span>
             <input
               type="number"
               min="1"
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.maxParallelRuns}
               onChange={(event) =>
                 setForm((current) => ({
@@ -560,12 +560,12 @@ export function ProviderProfilesManager({
               }
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Cooldown after 429 (seconds)</span>
             <input
               type="number"
               min="0"
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.cooldownAfter429Seconds}
               onChange={(event) =>
                 setForm((current) => ({
@@ -578,11 +578,11 @@ export function ProviderProfilesManager({
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,240px)]">
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Secret refs (JSON object of string refs)</span>
             <textarea
               rows={8}
-              className="w-full rounded-2xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-2xl border border-slate-300 dark:border-slate-700 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.secretRefsText}
               onChange={(event) =>
                 setForm((current) => ({
@@ -592,10 +592,10 @@ export function ProviderProfilesManager({
               }
             />
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Rate limit policy</span>
             <select
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 px-3 py-2 text-sm text-slate-900 dark:text-white dark:text-slate-900 shadow-sm"
               value={form.rateLimitPolicy}
               onChange={(event) =>
                 setForm((current) => ({
@@ -614,7 +614,7 @@ export function ProviderProfilesManager({
         <div className="flex flex-wrap gap-3">
           <button
             type="submit"
-            className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+            className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200 dark:bg-slate-200 dark:hover:bg-slate-200"
             disabled={saveMutation.isPending}
           >
             {saveMutation.isPending
@@ -626,7 +626,7 @@ export function ProviderProfilesManager({
           {isEditing ? (
             <button
               type="button"
-              className="inline-flex items-center justify-center rounded-full border border-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900"
+              className="inline-flex items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white dark:text-slate-900 dark:text-white dark:text-slate-900"
               onClick={() => {
                 setEditingProfileId(null);
                 setForm(defaultFormState());

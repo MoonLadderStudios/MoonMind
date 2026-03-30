@@ -161,19 +161,19 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   };
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="border-b border-slate-200 pb-4">
-        <h3 className="text-lg font-semibold text-slate-900">Managed Secrets</h3>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600">
+    <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 dark:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:bg-slate-100 p-6 shadow-sm">
+      <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
+        <h3 className="text-lg font-semibold text-slate-900 dark:text-white dark:text-slate-900">Managed Secrets</h3>
+        <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
           Store encrypted secret values in MoonMind and reference them from provider
           profiles with values such as <code>db://OPENAI_API_KEY</code>.
         </p>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-        <section className="rounded-3xl border border-slate-200">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <h4 className="text-base font-semibold text-slate-900">Stored secrets</h4>
+        <section className="rounded-3xl border border-slate-200 dark:border-slate-800">
+          <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
+            <h4 className="text-base font-semibold text-slate-900 dark:text-white dark:text-slate-900">Stored secrets</h4>
           </div>
           <div className="overflow-x-auto px-5 py-4">
             <table
@@ -265,9 +265,9 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
           </div>
         </section>
 
-        <section className="rounded-3xl border border-slate-200">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <h4 className="text-base font-semibold text-slate-900">
+        <section className="rounded-3xl border border-slate-200 dark:border-slate-800">
+          <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
+            <h4 className="text-base font-semibold text-slate-900 dark:text-white dark:text-slate-900">
               {isEditing ? 'Update secret value' : 'Add new secret'}
             </h4>
           </div>
