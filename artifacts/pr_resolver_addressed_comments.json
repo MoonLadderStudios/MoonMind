@@ -1,0 +1,17 @@
+[
+  {
+    "id": 3012286515,
+    "disposition": "addressed",
+    "rationale": "Made node_modules, build, __pycache__, and .env patterns recursive by adding **/ prefixes."
+  },
+  {
+    "id": 4033396041,
+    "disposition": "not-applicable",
+    "rationale": "High-level summary of the code review suggestions."
+  },
+  {
+    "id": 4033400379,
+    "disposition": "not-applicable",
+    "rationale": "Copilot contextual summary of the PR."
+  }
+]
