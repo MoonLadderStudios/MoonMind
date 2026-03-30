@@ -168,6 +168,56 @@ class TestClaudeCodeBuildCommand:
         assert "claude-sonnet-4-6" in cmd
 
 
+# ---------------------------------------------------------------------------
+# ClaudeCodeStrategy.prepare_workspace
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeCodePrepareWorkspace:
+    @pytest.mark.asyncio
+    async def test_creates_claude_md_when_absent(self, tmp_path) -> None:
+        """When CLAUDE.md does not exist, it is created with the instruction ref."""
+        s = ClaudeCodeStrategy()
+        request = _make_request(instruction_ref="Do the task")
+        await s.prepare_workspace(tmp_path, request)
+        claude_md = tmp_path / "CLAUDE.md"
+        assert claude_md.is_file() and not claude_md.is_symlink()
+        assert claude_md.read_text() == "Do the task"
+
+    @pytest.mark.asyncio
+    async def test_does_not_overwrite_existing_regular_file(self, tmp_path) -> None:
+        """When CLAUDE.md already exists as a regular file, it is left unchanged."""
+        s = ClaudeCodeStrategy()
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("existing project context")
+        request = _make_request(instruction_ref="New task instructions")
+        await s.prepare_workspace(tmp_path, request)
+        assert claude_md.read_text() == "existing project context"
+
+    @pytest.mark.asyncio
+    async def test_does_not_follow_symlink_to_agents_md(self, tmp_path) -> None:
+        """When CLAUDE.md is a symlink (e.g. -> AGENTS.md), it must not be followed.
+        AGENTS.md must remain intact after prepare_workspace runs."""
+        s = ClaudeCodeStrategy()
+        agents_md = tmp_path / "AGENTS.md"
+        agents_md.write_text("# Agent coding standards\n\nDo not break me.")
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.symlink_to("AGENTS.md")
+        request = _make_request(instruction_ref="Task instructions")
+        await s.prepare_workspace(tmp_path, request)
+        # AGENTS.md must be untouched
+        assert agents_md.read_text() == "# Agent coding standards\n\nDo not break me."
+        # CLAUDE.md symlink must still point to AGENTS.md
+        assert claude_md.is_symlink()
+
+    @pytest.mark.asyncio
+    async def test_no_op_without_instruction_ref(self, tmp_path) -> None:
+        """When instruction_ref is absent, nothing is written."""
+        s = ClaudeCodeStrategy()
+        request = _make_request()
+        await s.prepare_workspace(tmp_path, request)
+        assert not (tmp_path / "CLAUDE.md").exists()
+
 
 # ---------------------------------------------------------------------------
 # CodexCliStrategy

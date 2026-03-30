@@ -64,9 +64,20 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         workspace_path: Path,
         request: Any,
     ) -> None:
-        """Write CLAUDE.md in the workspace."""
+        """Write CLAUDE.md in the workspace.
+
+        If CLAUDE.md already exists as a symlink (e.g. CLAUDE.md -> AGENTS.md),
+        skip writing — following the symlink would overwrite AGENTS.md and destroy
+        the project's coding standards.  Instructions are already passed via ``-p``
+        so CLAUDE.md can continue to provide project context through the symlink.
+
+        Only write CLAUDE.md when it does not yet exist, ensuring repos that have
+        no CLAUDE.md still receive task instructions as project context.
+        """
         if not getattr(request, "instruction_ref", None):
             return
 
         instruction_path = workspace_path / "CLAUDE.md"
+        if instruction_path.exists() or instruction_path.is_symlink():
+            return
         instruction_path.write_text(request.instruction_ref, encoding="utf-8")
