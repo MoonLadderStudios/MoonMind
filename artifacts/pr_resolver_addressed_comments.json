@@ -1,137 +1,57 @@
 [
   {
-    "id": 3012386264,
+    "id": 4033499887,
     "disposition": "not-applicable",
-    "rationale": "Whitelist enforcement and collision detection are scheduled for a later implementation phase."
+    "rationale": "High level PR overview, no action needed."
   },
   {
-    "id": 3012386271,
+    "id": 3012388615,
     "disposition": "addressed",
-    "rationale": "Added source_trace to ResolvedSkillSet."
+    "rationale": "Fixed status initialization logic."
   },
   {
-    "id": 3012386275,
+    "id": 3012388626,
     "disposition": "addressed",
-    "rationale": "Changed ResolvedSkillSet and ResolvedSkillEntry extra fields to forbid."
+    "rationale": "Updated syncUrl to properly set status when it differs from 'open'."
   },
   {
-    "id": 4033497556,
+    "id": 3012388630,
+    "disposition": "addressed",
+    "rationale": "Added pagination label logic using exactPageKnown."
+  },
+  {
+    "id": 3012388634,
+    "disposition": "addressed",
+    "rationale": "Debounced repository search by 300ms using a useEffect hook."
+  },
+  {
+    "id": 3012391279,
+    "disposition": "addressed",
+    "rationale": "Made taskPreview.repository nullable and optional in Zod schema."
+  },
+  {
+    "id": 3012391297,
+    "disposition": "addressed",
+    "rationale": "Added status validation."
+  },
+  {
+    "id": 3012391310,
+    "disposition": "addressed",
+    "rationale": "Applied status validation inside onChange handler."
+  },
+  {
+    "id": 3012391319,
+    "disposition": "addressed",
+    "rationale": "Applied status validation."
+  },
+  {
+    "id": 3012391326,
+    "disposition": "addressed",
+    "rationale": "Removed unnecessary useMemo on sortedItems."
+  },
+  {
+    "id": 4033502908,
     "disposition": "not-applicable",
-    "rationale": "Summary comment."
-  },
-  {
-    "id": 3012389317,
-    "disposition": "addressed",
-    "rationale": "Removed duplicate activities assignment."
-  },
-  {
-    "id": 3012389323,
-    "disposition": "addressed",
-    "rationale": "Removed duplicate activities assignment."
-  },
-  {
-    "id": 3012389327,
-    "disposition": "addressed",
-    "rationale": "Removed unused env variable."
-  },
-  {
-    "id": 3012389329,
-    "disposition": "addressed",
-    "rationale": "Removed unused json import."
-  },
-  {
-    "id": 3012389336,
-    "disposition": "addressed",
-    "rationale": "Removed unused UTC import."
-  },
-  {
-    "id": 3012389338,
-    "disposition": "addressed",
-    "rationale": "Removed unused Any import."
-  },
-  {
-    "id": 3012389346,
-    "disposition": "addressed",
-    "rationale": "Removed unused AgentSkillFormat import."
-  },
-  {
-    "id": 3012389352,
-    "disposition": "addressed",
-    "rationale": "Removed unused ArtifactWriteCompleteInput import."
-  },
-  {
-    "id": 3012389356,
-    "disposition": "addressed",
-    "rationale": "Removed unused Any import from skill_resolution.py."
-  },
-  {
-    "id": 3012389362,
-    "disposition": "addressed",
-    "rationale": "Removed unused imports from skill_resolution.py."
-  },
-  {
-    "id": 3012393271,
-    "disposition": "not-applicable",
-    "rationale": "Addressed via duplicate GitHub Code Quality comments above."
-  },
-  {
-    "id": 3012393301,
-    "disposition": "not-applicable",
-    "rationale": "Addressed via duplicate GitHub Code Quality comments above."
-  },
-  {
-    "id": 3012393313,
-    "disposition": "addressed",
-    "rationale": "Changed snapshot_id to be deterministic based on context."
-  },
-  {
-    "id": 3012393324,
-    "disposition": "not-applicable",
-    "rationale": "Addressed via duplicate QA comments."
-  },
-  {
-    "id": 3012393338,
-    "disposition": "addressed",
-    "rationale": "Removed unused local imports in DeploymentSkillLoader."
-  },
-  {
-    "id": 3012393360,
-    "disposition": "not-applicable",
-    "rationale": "Unit tests were already fixed and pushed in prior commits."
-  },
-  {
-    "id": 3012393370,
-    "disposition": "not-applicable",
-    "rationale": "Unit tests were already fixed and pushed in prior commits."
-  },
-  {
-    "id": 3012393389,
-    "disposition": "not-applicable",
-    "rationale": "Imports were fixed and cleaned up in prior commits."
-  },
-  {
-    "id": 3012393417,
-    "disposition": "addressed",
-    "rationale": "Unchecked stub loader boxes in the plan checklist."
-  },
-  {
-    "id": 4033505378,
-    "disposition": "not-applicable",
-    "rationale": "Overview comment"
-  },
-  {
-    "id": 3012286515,
-    "disposition": "addressed",
-    "rationale": "Made node_modules, build, __pycache__, and .env patterns recursive by adding **/ prefixes."
-  },
-  {
-    "id": 4033396041,
-    "disposition": "not-applicable",
-    "rationale": "High-level summary of the code review suggestions."
-  },
-  {
-    "id": 4033400379,
-    "disposition": "not-applicable",
-    "rationale": "Copilot contextual summary of the PR."
+    "rationale": "Automatic overview bot comment."
   }
 ]
