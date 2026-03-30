@@ -9,7 +9,7 @@ Related: [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
 ## 1. Objective and Document Boundary
 
 Define a formalized, unified execution model in Temporal for delegating work to **true agent runtimes**.
-This execution-plane document explicitly acknowledges that true agent execution now includes **resolved agent skill context** as part of the runtime envelope.
+This execution-plane document explicitly acknowledges that the true agent execution **target state** now includes **resolved agent skill context** as part of the runtime envelope.
 
 This document covers:
 * agent runtime lifecycle
@@ -474,8 +474,6 @@ This prevents collisions on shared auth homes and allows provider-specific throt
 ## 8. Artifact and Log Discipline
 
 Large data must remain out of workflow history.
-
-The following should be stored as artifacts or artifact-backed blobs rather than workflow payloads:
 
 The following should be stored as artifacts or artifact-backed blobs rather than workflow payloads:
 

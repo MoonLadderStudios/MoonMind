@@ -136,14 +136,14 @@ Note: The `mm.activity.agent_runtime` queue handles runtime preparation, delegat
 Activity Type names use dotted namespaces:
 
 * `artifact.*` for artifact store operations
-* `plan.*` for plan creation/validation (planning is a Skill that returns a Plan)
+* `plan.*` for plan creation/validation (planning is an executable tool that returns a Plan)
 * `mm.skill.execute` for the default registry-dispatched skill executor
 * `sandbox.*` for OS/process execution and repo operations
 * `integration.<provider>.*` for external systems
 * `agent_skill.*` for resolution/materialization logic tied to the Agent Skill System
 * `system.*` for housekeeping / reconciliation (rare; prefer Schedules + workflows)
 
-Curated exceptions may bind a skill directly to an explicit Activity Type when the boundary needs stronger isolation, specialized credentials, or clearer routing. This follows the hybrid dispatcher model in `docs/Skills/SkillAndPlanContracts.md`.
+Curated exceptions may bind an executable tool directly to an explicit Activity Type when the boundary needs stronger isolation, specialized credentials, or clearer routing. This follows the hybrid dispatcher model in `docs/Tasks/SkillAndPlanContracts.md`.
 
 **Examples**
 

@@ -566,7 +566,7 @@ The submit form at `/tasks/new` includes a **"When to run"** schedule panel that
 
 ```json
 {
-  "featureFlags": {
+  "features": {
     "temporalDashboard": {
       "submitScheduleEnabled": false
     }

@@ -28,9 +28,9 @@ Therefore, workflows and activities must pass **artifact references** (pointers)
 1. **Reference-based IO:** Workflows/activities exchange `ArtifactRef` values, not large bytes.
 2. **Reproducible execution context:** Artifact-backed refs should capture large immutable inputs such as plans, manifests, and resolved skill snapshots so retries and reruns do not silently drift.
 3. **Immutable artifacts:** Artifacts are write-once, read-many; “updates” create new artifacts.
-3. **Secure access:** Strong authorization, short-lived access grants, auditability.
-4. **Operational clarity:** Retention policies, lifecycle deletion, and predictable storage costs.
-5. **Execution linkage:** First-class linkage between artifacts and a Temporal **Workflow Execution** (workflow_id + run_id), including “latest output”.
+4. **Secure access:** Strong authorization, short-lived access grants, auditability.
+5. **Operational clarity:** Retention policies, lifecycle deletion, and predictable storage costs.
+6. **Execution linkage:** First-class linkage between artifacts and a Temporal **Workflow Execution** (workflow_id + run_id), including “latest output”.
 
 ---
 
