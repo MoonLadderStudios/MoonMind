@@ -64,27 +64,17 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
 
     _configure_workflow_runtime(monkeypatch)
 
-    async def fake_execute_activity(
-        activity: object,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> Any:
-        if activity == agent_run_module.resolve_external_adapter:
-            return "jules"
-        if activity == agent_run_module.external_adapter_execution_style:
-            return "polling"
-        raise AssertionError(f"Unexpected workflow.execute_activity call: {activity!r}")
-
     async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
         raise asyncio.TimeoutError()
 
-    async def fake_execute_activity_with_routing(
+    async def fake_execute_routed_activity(
         activity_name: str,
         payload: Any,
-        *_args: Any,
         **_kwargs: Any,
     ) -> Any:
         routed_calls.append((activity_name, payload))
+        if activity_name == "integration.resolve_adapter_metadata":
+            return {"agent_id": payload, "execution_style": "polling"}
         if activity_name == "integration.jules.start":
             return {"external_id": "new-session-1", "status": "queued"}
         if activity_name == "integration.jules.status":
@@ -95,23 +85,8 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
 
-    monkeypatch.setattr(agent_run_module.workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
-    monkeypatch.setattr(run, "_execute_activity_with_routing", fake_execute_activity_with_routing)
-    monkeypatch.setattr(
-        run,
-        "_get_route_info",
-        lambda *_args, **_kwargs: asyncio.sleep(
-            0,
-            result=(
-                "test-queue",
-                timedelta(seconds=30),
-                timedelta(seconds=30),
-                None,
-                None,
-            ),
-        ),
-    )
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
 
     result = await run.run(
         _request(
@@ -122,7 +97,8 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
         )
     )
 
-    assert routed_calls[0][0] == "integration.jules.start"
+    assert routed_calls[0][0] == "integration.resolve_adapter_metadata"
+    assert routed_calls[1][0] == "integration.jules.start"
     assert all(name != "integration.jules.send_message" for name, _ in routed_calls)
     assert run.run_id == "new-session-1"
     assert result.failure_class is None
@@ -136,27 +112,17 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
 
     _configure_workflow_runtime(monkeypatch)
 
-    async def fake_execute_activity(
-        activity: object,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> Any:
-        if activity == agent_run_module.resolve_external_adapter:
-            return "jules"
-        if activity == agent_run_module.external_adapter_execution_style:
-            return "polling"
-        raise AssertionError(f"Unexpected workflow.execute_activity call: {activity!r}")
-
     async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
         raise asyncio.TimeoutError()
 
-    async def fake_execute_activity_with_routing(
+    async def fake_execute_routed_activity(
         activity_name: str,
         payload: Any,
-        *_args: Any,
         **_kwargs: Any,
     ) -> Any:
         routed_calls.append((activity_name, payload))
+        if activity_name == "integration.resolve_adapter_metadata":
+            return {"agent_id": payload, "execution_style": "polling"}
         if activity_name == "integration.jules.start":
             return {"external_id": "session-1", "status": "queued"}
         if activity_name == "integration.jules.status":
@@ -174,23 +140,8 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
 
-    monkeypatch.setattr(agent_run_module.workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
-    monkeypatch.setattr(run, "_execute_activity_with_routing", fake_execute_activity_with_routing)
-    monkeypatch.setattr(
-        run,
-        "_get_route_info",
-        lambda *_args, **_kwargs: asyncio.sleep(
-            0,
-            result=(
-                "test-queue",
-                timedelta(seconds=30),
-                timedelta(seconds=30),
-                None,
-                None,
-            ),
-        ),
-    )
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
 
     result = await run.run(
         _request(
