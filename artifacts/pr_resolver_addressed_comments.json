@@ -88,5 +88,40 @@
     "id": 4032367139,
     "disposition": "not-applicable",
     "rationale": "General PR overview comment."
+  },
+  {
+    "id": 4156149245,
+    "disposition": "not-applicable",
+    "rationale": "Informational codex limits from bot."
+  },
+  {
+    "id": 4031640153,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot."
+  },
+  {
+    "id": 3010747905,
+    "disposition": "addressed",
+    "rationale": "Updated runtime count to three in documentation."
+  },
+  {
+    "id": 3010747938,
+    "disposition": "addressed",
+    "rationale": "Removed cursor_cli from default_auth_mode docstring."
+  },
+  {
+    "id": 3010747958,
+    "disposition": "addressed",
+    "rationale": "Removed cursor-cli specs 090, 091, 092."
+  },
+  {
+    "id": 3010747978,
+    "disposition": "addressed",
+    "rationale": "Removed Cursor mentions from base.py docstrings."
+  },
+  {
+    "id": 4031658470,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from copilot bot."
   }
 ]

@@ -35,7 +35,6 @@ def shape_agent_environment(
             "OPENAI_API_KEY",
             "GEMINI_API_KEY",
             "GOOGLE_API_KEY",
-            "CURSOR_API_KEY",
         ]
         
         for key in oauth_scrubbable_keys:
@@ -75,7 +74,5 @@ def resolve_volume_mount_env(
         shaped_env["CLAUDE_HOME"] = volume_mount_path
     elif runtime_id == "codex_cli":
         shaped_env["CODEX_HOME"] = volume_mount_path
-    elif runtime_id == "cursor_cli":
-        shaped_env["CURSOR_CONFIG_DIR"] = volume_mount_path
         
     return shaped_env

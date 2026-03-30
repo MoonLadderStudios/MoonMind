@@ -1,6 +1,6 @@
 """Abstract base class for managed runtime strategies.
 
-Each managed CLI runtime (Gemini CLI, Codex CLI, Cursor CLI, Claude Code)
+Each managed CLI runtime (Gemini CLI, Codex CLI, Claude Code)
 implements this interface to encapsulate its runtime-specific behavior.
 The launcher and adapter delegate to registered strategies instead of
 using if/elif branching on ``runtime_id``.
@@ -62,7 +62,7 @@ class ManagedRuntimeStrategy(ABC):
         Must align with the ``OAuthProviderSpec`` entries defined in
         ``docs/ManagedAgents/UniversalTmateOAuth.md``.  Both registries
         share the ``runtime_id`` namespace (``codex_cli``, ``gemini_cli``,
-        ``claude_code``, ``cursor_cli``).
+        ``claude_code``).
         """
         return "api_key"
 
@@ -122,7 +122,6 @@ class ManagedRuntimeStrategy(ABC):
         """Pre-launch workspace setup (no-op by default).
 
         Override for runtimes that need workspace files:
-        - Cursor: ``.cursor/rules/``, ``.cursor/cli.json``
         - Claude: ``CLAUDE.md``
         """
 
@@ -165,7 +164,7 @@ class ManagedRuntimeStrategy(ABC):
         """Factory for the runtime's stream parser.
 
         Returns ``PlainTextOutputParser`` by default.  Override for structured output
-        formats like Cursor NDJSON (``--output-format stream-json``).
+        formats like NDJSON (``--output-format stream-json``).
 
         See :class:`~moonmind.workflows.temporal.runtime.output_parser.RuntimeOutputParser`.
         """
