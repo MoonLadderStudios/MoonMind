@@ -8,7 +8,24 @@ Read relevant documents in the following order before implementing tasks:
 2. **Standards:** Code style and guidance in `README.md`
 3. **Spec:** `specs/<feature-id>/spec.md`, then `plan.md`, then `tasks.md`
 4. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs tmp** below).
+   - Start here for Agent Skills: `docs/Tasks/AgentSkillSystem.md`
+   - For Executable Tools: `docs/Tasks/SkillAndPlanContracts.md`
+   - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 5. **Migration / implementation backlog (when relevant):** `docs/tmp/remaining-work/` and `docs/tmp/PlansOverview.md` for plan-shaped or in-flight work tied to canonical docs.
+
+## Agent Skill System Terminology
+- Executable `tool.type = "skill"` contracts are **not** the same thing as agent instruction bundles (skill sets) under `.agents/skills`.
+- For agent instruction bundles and snapshot logic, the canonical design is in `docs/Tasks/AgentSkillSystem.md`.
+- For executable tool contracts, the canonical design is in `docs/Tasks/SkillAndPlanContracts.md`.
+
+## When Modifying the Agent Skill System
+When writing code that interacts with skills:
+- Read `docs/Tasks/AgentSkillSystem.md`.
+- Keep `.agents/skills` as the canonical active path.
+- Keep `.agents/skills/local` as a local-only overlay.
+- Do not mutate checked-in skill folders in place.
+- Keep large skill content out of workflow history (use refs).
+- Add workflow/activity or adapter-boundary tests.
 
 ## Documentation: canonical vs `docs/tmp`
 
@@ -34,6 +51,8 @@ When creating a new spec folder/feature ID:
   - cover one compatibility case for the previous payload/history shape when runs may already be in flight,
   - cover degraded provider input such as unknown, blank, or newly introduced status values.
 - **Replay / In-Flight Safety**: If a change can affect already-running workflows or persisted payloads, add a compatibility or replay-style regression test, or document why in-flight compatibility is impossible and how the cutover is made safe.
+- **Agent Skill System Coverage**: Changes to agent-skill selection, snapshot resolution, runtime materialization, or adapter-visible skill paths must include tests covering the real workflow/activity or adapter boundary. If the change affects already-running workflow payloads, include in-flight compatibility coverage or explicit cutover notes.
+- **Skill Architectural Boundaries**: Source loading, resolution, manifest generation, and materialization belong strictly at activity/service boundaries. Workflow code should carry immutable refs and compact metadata only. Large skill content must not be embedded in workflow payloads.
 
 ## Agent Job Storage Locations
 - Agent jobs are executed in a per-run workspace directory named with the job UUID.
@@ -93,6 +112,7 @@ Key diagnostics:
 - Never paste full `docker compose` output, `.env` files, or environment/config dumps into PR comments. Summarize and redact.
 - Before posting any PR/issue/review comment, scan the outgoing text for secret-like patterns (`ghp_`, `github_pat_`, `AIza`, `ATATT`, `AKIA`, private key blocks, `token=`/`password=` assignments) and block posting on any match.
 - If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
+- Repo and local skill sources are potentially *untrusted input*. Implementations must respect deployment policy on whether those sources are allowed and must not silently assume repo/local skills are always enabled.
 
 ## Compatibility Policy
 - MoonMind is a **pre-release project** (see Constitution Principle XIII). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
@@ -102,8 +122,10 @@ Key diagnostics:
 - For Codex execution specifically, `codex.model` and `codex.effort` inputs must be passed through exactly as provided. Unsupported values must fail through normal CLI/API validation.
 - For Temporal-facing contracts specifically, treat workflow/activity/update/signal payload shapes as compatibility-sensitive. Signature or schema changes MUST preserve worker-bound invocation compatibility for in-flight runs, or be versioned with an explicit migration/cutover plan.
 
-## Shared Skills Runtime
-- MoonMind now materializes one per-run active skill set and exposes it to both CLIs through adapter links.
-- Expected adapter layout per run: `.agents/skills -> ../skills_active` and `.gemini/skills -> ../skills_active`.
-- Default local-only mirror root is `.agents/skills/local`; shared mirror root defaults to `.agents/skills` (`.agents/skills/skills` is legacy nested compatibility).
-- Prefer configuring `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` for writable runtime paths in local and CI environments.
+## Shared Agent Skills Runtime
+- **Target-State Model**: MoonMind resolves and materializes one per-run active skill set, exposing it to agents through adapter boundaries.
+- **Canonical Active Path**: `.agents/skills` is the canonical runtime-visible path. It contains the **resolved active snapshot** for the run, not a mutable source-of-truth folder.
+- **Immutable Source Protection**: Do not rewrite checked-in skill folders in place as part of runtime setup. Generate or project the active skill set separately, then expose it through the canonical active path.
+- **Local Overlay Source**: `.agents/skills/local` is a valid *local-only input/overlay path*. It is **not** the authoritative durable storage model for MoonMind-managed skills and should not be treated as the canonical source of truth.
+- **Adapter Mappings**: `skills_active` (or its equivalent run-scoped active directory) contains the **resolved immutable active skill set for the run**. Adapters traditionally map `.agents/skills -> ../skills_active` or `.gemini/skills -> ../skills_active` to link workflows to the snapshot. Checked-in repo skills and local-only skills are merely *inputs* to this resolution.
+- **Environment Targeting**: Prefer configuring `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` to point to writable paths intended specifically for storing resolved active skill snapshots and related runtime materialization artifacts (these mounts are not arbitrary mutable replacements for the canonical design).

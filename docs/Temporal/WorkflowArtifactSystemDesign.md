@@ -1,9 +1,13 @@
 # Workflow Artifact System Design
 Status: Draft
 Owners: MoonMind Platform
-Last updated: 2026-03-12
+Last updated: 2026-03-30
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md)
+
+## Related Docs
+- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
 ## 1. Context
 
@@ -15,17 +19,18 @@ MoonMind is being redesigned around **Temporal**.
 
 Public MoonMind surfaces may still describe these executions as `tasks` during migration. This document defines the artifact contract at the Temporal/runtime layer.
 
-Therefore, workflows and activities must pass **artifact references** (pointers) rather than large payloads. This document defines a complete artifact system: storage, identity, ACLs, APIs, and retention.
+Therefore, workflows and activities must pass **artifact references** (pointers) rather than large payloads. This ensures large immutable inputs like plans, manifests, patches, logs, **resolved skill snapshots, skill manifests, prompt indexes, and runtime materialization bundles** are safely carried outside workflow history. This document defines a complete artifact system: storage, identity, ACLs, APIs, and retention.
 
 ---
 
 ## 2. Goals
 
 1. **Reference-based IO:** Workflows/activities exchange `ArtifactRef` values, not large bytes.
-2. **Immutable artifacts:** Artifacts are write-once, read-many; “updates” create new artifacts.
-3. **Secure access:** Strong authorization, short-lived access grants, auditability.
-4. **Operational clarity:** Retention policies, lifecycle deletion, and predictable storage costs.
-5. **Execution linkage:** First-class linkage between artifacts and a Temporal **Workflow Execution** (workflow_id + run_id), including “latest output”.
+2. **Reproducible execution context:** Artifact-backed refs should capture large immutable inputs such as plans, manifests, and resolved skill snapshots so retries and reruns do not silently drift.
+3. **Immutable artifacts:** Artifacts are write-once, read-many; “updates” create new artifacts.
+4. **Secure access:** Strong authorization, short-lived access grants, auditability.
+5. **Operational clarity:** Retention policies, lifecycle deletion, and predictable storage costs.
+6. **Execution linkage:** First-class linkage between artifacts and a Temporal **Workflow Execution** (workflow_id + run_id), including “latest output”.
 
 ---
 
@@ -57,6 +62,12 @@ A minimal reference to a Temporal **Workflow Execution**:
 
 (Temporal terms; MoonMind does not introduce new umbrella nouns.)
 
+### 4.4 ResolvedSkillSet Artifact
+An artifact-backed immutable manifest describing the exact agent skills selected for a run or step.
+
+### 4.5 Materialization Artifact
+An artifact generated from a `ResolvedSkillSet` to support runtime delivery, such as a prompt index, rendered bundle, or compatibility manifest.
+
 ---
 
 ## 5. Architecture Overview
@@ -79,7 +90,7 @@ A minimal reference to a Temporal **Workflow Execution**:
      - Lifecycle management (deletion)
 
 4. **Artifact Activities**
-   - Activities used by workflows to read/write artifacts in a deterministic way:
+   - Activities used by workflows to read/write artifacts in a deterministic way (e.g. resolved skill snapshot writes, prompt-index creation, materialization bundle writes):
      - `artifact.create`
      - `artifact.read`
      - `artifact.write_complete`
@@ -99,6 +110,7 @@ A minimal reference to a Temporal **Workflow Execution**:
 1) Activity receives `ArtifactRef`
 2) Activity fetches bytes using internal credentials (or presigned download)
 3) Activity returns small results (new `ArtifactRef`s, summaries, statuses) to workflow
+   - Examples of read subjects: plan artifacts, manifest artifacts, resolved skill manifests, runtime delivery bundles.
 
 Compatibility APIs may resolve those artifacts back into task-oriented detail payloads, but the artifact linkage remains execution-centric at the Temporal layer.
 
@@ -107,6 +119,7 @@ Compatibility APIs may resolve those artifacts back into task-oriented detail pa
 Artifact operations are not "general worker" calls. They are a dedicated Activity family with a dedicated queue boundary.
 
 - All `artifact.*` Activities, including `artifact.read`, must execute on the artifacts fleet and task queue: `mm.activity.artifacts`.
+  - This absolutely encompasses skill-related artifact IO (e.g., reading a resolved skill snapshot manifest, writing a prompt index, or linking materialization bundles to an execution).
 - Workflows must not hardcode `mm.activity.llm` or any other non-artifact queue when scheduling `artifact.*` Activities.
 - Queue selection for artifact operations should come from the Temporal activity catalog / worker topology configuration, not duplicated queue constants inside workflow logic.
 
@@ -238,10 +251,14 @@ Relates artifacts to workflow executions and gives them meaning.
 - `input.instructions`
 - `input.manifest`
 - `input.plan`
+- `input.skill_snapshot`
+- `input.prompt_index`
 - `output.primary`
 - `output.patch`
 - `output.logs`
 - `output.summary`
+- `runtime.skill_materialization`
+- `debug.skill_resolution_trace`
 - `debug.trace`
 
 #### `artifact_pins` (optional)
@@ -257,6 +274,8 @@ Explicit pinning beyond retention class.
 - For “latest for a workflow across runs”, define the UI rule explicitly:
   - **Option A:** latest by `created_at` across all runs
   - **Option B:** only the latest run_id (if your UI groups by workflow_id)
+
+Note: Not all artifact link types are intended as "outputs". Types such as `input.skill_snapshot` or `runtime.skill_materialization` represent immutable execution inputs or runtime-preparation contexts, not logs or user outputs.
 
 This is intentionally a read-model behavior, not an execution primitive.
 
@@ -277,6 +296,7 @@ Authorization is derived from:
 
 **Policy:**
 - Read/write artifact metadata requires the caller can “view” the linked workflow execution, OR the caller is the owner of the artifact, OR the caller has an explicit grant.
+  - Resolved skill snapshots may typically be viewable with the linked execution, but raw skill materialization bundles or debug traces may need tighter access depending on content thresholds. Prompt indexes or previews are the naturally preferred UI-facing surfaces over raw bundles.
 - Direct blob access (presigned URLs) is only issued if the metadata check passes.
 
 ### 9.3 Grants and service access
@@ -339,7 +359,8 @@ For local deployment where app auth is disabled:
 
 ### 11.1 Linking
 Every artifact *may* be linked to an ExecutionRef using `artifact_links`.
-- Not all artifacts must be linked (e.g., shared skill resources), but most execution IO should be.
+- Most execution-specific agent-skill artifacts **should** be linked to an execution (e.g., the resolved skill snapshot, prompt index, and runtime materialization bundle used by a run). 
+- Cross-execution deployment-shared skill artifacts may remain unlinked or use broader sharing rules.
 
 ### 11.2 Naming and indexing conventions
 Use `link_type` for stable machine meaning and `label` for UI clarity:
@@ -374,6 +395,7 @@ Artifacts may contain:
 - secrets (tokens, keys)
 - PII
 - sensitive customer data
+- skill-related datasets demanding content previews or redaction-aware layouts (e.g., prompt indexes, skill resolution traces, and runtime materialization manifests)
 
 Design:
 1) Store the **raw artifact** as produced.
@@ -396,9 +418,10 @@ Design:
 - `pinned`: no automatic deletion
 
 ### 13.2 Default mapping by link_type (example)
-- `output.logs`, `debug.trace` → ephemeral
-- `input.instructions`, `input.plan`, `input.manifest` → standard (or long for manifests if required)
-- `output.primary`, `output.patch`, `output.summary` → standard or long
+- `output.logs`, `debug.trace`, `debug.skill_resolution_trace` → ephemeral
+- `input.instructions`, `input.plan`, `input.manifest`, `input.prompt_index` → standard (or long for manifests if required)
+- `output.primary`, `output.patch`, `output.summary`, `input.skill_snapshot` → standard or long
+- `runtime.skill_materialization` → standard or ephemeral depending on reproducibility needs
 - Any artifact explicitly pinned → pinned
 
 ### 13.3 Lifecycle manager
@@ -449,7 +472,7 @@ Request:
 * `retention_class` (optional; default derived)
 * `link` (optional):
 
-  * `namespace`, `workflow_id`, `run_id`, `link_type`, `label`
+  * `namespace`, `workflow_id`, `run_id`, `link_type` (e.g., `input.skill_snapshot`), `label`
 
 Response:
 
@@ -499,7 +522,7 @@ Request:
 
 #### List artifacts for an execution
 
-`GET /executions/{namespace}/{workflow_id}/{run_id}/artifacts?link_type=...`
+`GET /executions/{namespace}/{workflow_id}/{run_id}/artifacts?link_type=input.skill_snapshot`
 Response:
 
 * list of artifact metadata + refs
@@ -535,19 +558,20 @@ Presign responses should include:
 Workflows must only store and pass:
 
 * `ArtifactRef`
-* small structured values (skill inputs/outputs that are JSON-small)
+* compact metadata or selectors for skill-related execution context
 
 Workflows must never:
 
 * embed bytes for large files
+* embed full agent skill bodies, manifests, prompt indexes, or runtime bundles (these must remain safely stored inside the artifact system)
 * embed presigned URLs
 
 ### 15.2 Activity rule
 
 All artifact IO happens in activities:
 
-* read bytes
-* write bytes
+* read bytes (including reading skill-related artifacts)
+* write bytes (including generating skill-related artifacts)
 * generate previews
 * link artifacts to execution
 
@@ -555,13 +579,13 @@ All artifact IO happens in activities:
 
 ## 16. Contract completion
 
-The artifact platform should expose a **stable HTTP contract** (create / presign / complete / get / list / link / pin / delete) with auth, audit, and multipart rules; a **versioned `ArtifactRef` JSON schema** (artifact_id, sha256, size_bytes, content_type; no presigned URLs in workflow state); and **retention classes** with per-`link_type` defaults and an idempotent lifecycle manager. Delivery status and gaps are tracked in [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md).
+The artifact platform should expose a **stable HTTP contract** (create / presign / complete / get / list / link / pin / delete) with auth, audit, and multipart rules; a **versioned `ArtifactRef` JSON schema** (artifact_id, sha256, size_bytes, content_type; no presigned URLs in workflow state); and **retention classes** with per-`link_type` defaults (including skill snapshot and materialization classes, with coordinated preview/redaction behaviors) alongside an idempotent lifecycle manager. Delivery status and gaps are tracked in [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md).
 
 ---
 
 ## 17. Open questions
 
-1. Do we need cross-execution shared artifacts (e.g., shared plan templates), and how should ACLs work for them?
+1. Should deployment-shared skill artifacts use execution linkage only when materialized for a run, or do we also need a first-class cross-execution/shared artifact authorization model for managed skill catalogs?
 2. What is the desired default retention for manifests and plans in regulated environments?
 3. Do we require legal hold / WORM retention modes?
 4. Should we implement server-side checksum enforcement for all uploads, or allow “best effort” for very large multipart uploads?

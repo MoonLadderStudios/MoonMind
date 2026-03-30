@@ -2,8 +2,8 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`  
+Last Updated: 2026-03-30
+Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
 Implementation tracking: `docs/tmp/TaskProposalSystemPlan.md`
 
 ---
@@ -17,11 +17,14 @@ starting new executions.
 Each proposal:
 
 1. Stores a canonical `taskCreateRequest` that is valid for later promotion.
+   - Proposal payloads may specifically carry runtime selection, publish behavior, executable tool selection, and agent skill selection or inherited skill intent.
 2. Remains a control-plane review object until a human explicitly promotes it.
 3. Promotes into a new `MoonMind.Run` execution through the same Temporal-backed
    create path used by `/api/executions`.
 4. Preserves repository-aware deduplication, review priority, notification, and
    origin metadata.
+
+*Note: Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document only defines how proposals preserve and promote task-facing skill intent.*
 
 The canonical architecture is Temporal-native:
 
@@ -51,6 +54,8 @@ These rules are fixed:
    by `/api/executions`.
 8. Proposal origin metadata must identify the durable workflow that produced the
    proposal.
+9. When a proposal depends on agent skill context, that context must be preserved explicitly in the stored `taskCreateRequest` or preserved through documented inheritance semantics.
+10. Proposal promotion must not silently drift to unrelated skill defaults when the original proposal logic depended on explicit skill selection.
 
 ---
 
@@ -62,9 +67,11 @@ Task-shaped submit requests may include:
 
 1. `task.proposeTasks`
 2. `task.proposalPolicy`
+3. `task.skills`
+4. `step.skills`
 
 These values are part of the durable run contract and must be preserved in
-`initialParameters` for the run.
+`initialParameters` for the run. These fields directly impact downstream proposal generation and promotion.
 
 The canonical direction is:
 
@@ -117,6 +124,7 @@ Generators analyze:
 2. plan-step outcomes
 3. normalized `AgentRunResult` data from managed and external agents
 4. finish-summary signals and execution diagnostics
+5. resolved skill snapshot metadata and skill-related execution context, specifically observing if a specific skill set or context contributed to the detected follow-up work (using artifact-backed skill metadata where needed rather than treating the runtime workspace as the sole source of truth)
 
 Generators must:
 
@@ -124,16 +132,18 @@ Generators must:
 2. use artifact-backed references for large context
 3. avoid side effects such as commits, pushes, or task creation
 4. redact or exclude secrets and unsafe command output
+5. **Preserve Skill Selectors:** Only emit explicit skill selectors when they materially affect the correctness or expected behavior of the follow-up work. Generic project follow-up proposals do not need to redundantly stamp all inherited defaults if doing so adds noise without preserving important intent. When the originating task explicitly selected non-default skill sets, proposals should preserve that intent unless documented otherwise.
 
 ### 3.5 Proposal submission
 
 Proposal submission is a separate side-effecting activity that:
 
-1. validates candidate entries
+1. validates candidate entries (including any `task.skills` or `step.skills` selectors)
 2. resolves proposal policy
 3. normalizes origin metadata
 4. enforces repository and run-quality routing rules
-5. creates proposal records through `/api/proposals`
+5. preserves explicit skill-selection intent when present, rejecting or normalizing malformed skill-selection fields before storage
+6. creates proposal records through `/api/proposals`
 
 Submission creates proposals only. It never promotes them.
 
@@ -154,6 +164,8 @@ At minimum it records:
 ## 4. Proposal Policy
 
 Proposal routing follows global defaults plus optional per-task overrides.
+
+*Note: `proposalPolicy` does **not** independently redefine agent skill precedence. Skill selection is strictly preserved from the candidate payload or inherited from canonical system semantics, not recomputed by the proposal policy itself.*
 
 ### 4.1 Global controls
 
@@ -229,10 +241,10 @@ That means:
 
 1. `taskCreateRequest` stores a normal task payload
 2. `task.runtime.mode` selects the runtime
-3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit
-   shape
-4. `task.tool.type` must be `skill` when a tool selector is provided
+3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit shape
+4. `task.tool.type` must be `skill` when a tool selector is provided (representing an executable tool, not an agent instruction bundle)
 5. proposal payloads do not use `tool.type = "agent_runtime"`
+6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tasks/AgentSkillSystem.md`.
 
 ### 5.2 Candidate example
 
@@ -259,6 +271,12 @@ That means:
             "name": "auto",
             "version": "1.0"
           },
+          "skills": {
+            "sets": ["deployment-default", "temporal-runtime-quality"],
+            "include": [
+              { "name": "moonmind-doc-writer", "version": "2.3.0" }
+            ]
+          },
           "runtime": {
             "mode": "codex"
           },
@@ -283,6 +301,8 @@ That means:
    dumps.
 5. Promotion-time overrides must also validate against the same canonical task
    contract before execution starts.
+6. If `task.skills` or `step.skills` are present, they must validate against the canonical agent-skill contract. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.
+7. Proposals should preserve execution intent, not raw runtime materialization state. Proposal payloads must **not** store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.
 
 ---
 
@@ -333,17 +353,26 @@ Promotion must follow this algorithm:
 2. verify the proposal is still `open`
 3. merge `taskCreateRequestOverride` into the stored `taskCreateRequest`
 4. apply shortcut `runtimeMode` only by constructing that override
-5. validate the merged payload against the canonical task contract
-6. submit the merged task through the same Temporal-backed create path used by
+5. validate the merged payload against the canonical task contract, including verification of any agent-skill selectors
+6. preserve explicit skill-selection intent from the stored proposal unless the operator intentionally overrides it, ensuring promotion-time overrides do not silently drop or corrupt skill fields
+7. submit the merged task through the same Temporal-backed create path used by
    `/api/executions`
-7. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
-8. store the promoted workflow or execution identifier on the proposal record
-9. return both the updated proposal and the new execution metadata
+8. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
+9. store the promoted workflow or execution identifier on the proposal record
+10. return both the updated proposal and the new execution metadata
 
 Promotion is therefore a control-plane-to-Temporal bridge, not a proposal-local
 mutation only.
 
-### 7.2 Runtime selection
+### 7.2 Skill preservation and inheritance
+
+Proposal promotion preserves agent skill intent from the original execution.
+
+* **Defaults vs Explicit:** When the original task relied only on deployment/default inheritance, proposal payloads may omit redundant explicit skill selectors. When the original task included explicit non-default skill selection that materially affects execution behavior, proposals should preserve that selection explicitly.
+* **Promotion Overrides:** Operators may override runtime at promotion time. Agent skill selectors are preserved by default. Changing the runtime does not automatically erase or rewrite agent skill intent.
+* **Incompatibilities:** If a selected skill set is incompatible with the chosen runtime, promotion must fail validation or require an explicit override path. Proposal promotion does not re-resolve skill-source precedence as an undocumented side effect.
+
+### 7.3 Runtime selection
 
 Proposal promotion supports operator runtime selection.
 
@@ -356,7 +385,7 @@ Rules:
    proposal payload
 4. disabled runtimes must fail validation before a workflow is created
 
-### 7.3 Response contract
+### 7.4 Response contract
 
 The promote API response must include:
 
@@ -388,6 +417,7 @@ The system must surface:
 2. proposal counts and errors in finish summary data
 3. links from execution detail to proposals filtered by
    `originSource=workflow` and `originId=<workflow_id>`
+4. **Proposal-Review Visibility:** Proposal detail or promotion UI may need to present a compact summary of execution context showing whether the proposal carries explicit skill selectors or inherits deployment defaults, alongside runtime, repository, and publish settings.
 
 ### 8.3 Failure handling
 
@@ -397,6 +427,7 @@ Rules:
 
 1. a successful run may still report proposal-stage errors
 2. malformed candidates are skipped, not promoted
+   - Specifically, malformed or incompatible skill selectors in generated candidates should be skipped with a visible validation error and not silently dropped in a way that changes execution meaning.
 3. submission retries must be bounded and idempotent
 4. partial success must be visible through generated and submitted counts
 
@@ -415,6 +446,8 @@ Queue placement is:
 
 Generation and submission are intentionally separate concerns. LLM-facing work and
 control-plane writes must not share an undifferentiated activity boundary.
+
+* **Constraint:** Proposal generation may inspect resolved skill snapshot metadata or related execution artifacts, while proposal submission strictly validates skill-selection payload fields but avoids materializing runtime skill context.
 
 ---
 
@@ -451,3 +484,6 @@ This feature is partially implemented. Phase tracking lives in
 3. `proposalPolicy.defaultRuntime` as a fully modeled end-to-end contract field
 4. fully standardized origin naming and metadata shape across workflow, storage,
    API, and UI
+5. proposal payloads do not yet model `task.skills` / `step.skills` end-to-end
+6. proposal UI does not yet expose skill-related execution context clearly
+7. end-to-end preservation and validation of explicit agent-skill selection through proposal storage and promotion

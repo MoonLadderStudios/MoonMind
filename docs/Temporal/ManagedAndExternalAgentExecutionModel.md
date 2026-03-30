@@ -2,14 +2,36 @@
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md`](../tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md)
 
-## 1. Objective
+Status: **Implemented** (contracts active, runtime live)
+Last updated: 2026-03-30
+Related: [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+
+## 1. Objective and Document Boundary
 
 Define a formalized, unified execution model in Temporal for delegating work to **true agent runtimes**.
+This execution-plane document explicitly acknowledges that the true agent execution **target state** now includes **resolved agent skill context** as part of the runtime envelope.
 
-This document covers two categories of agent execution:
+This document covers:
+* agent runtime lifecycle
+* adapter boundaries
+* managed vs external execution
+* how resolved agent skill snapshots are delivered to runtimes
 
-1. **External agents**: MoonMind delegates work to an external agent system that MoonMind does not run.
-2. **MoonMind-managed agents**: MoonMind launches and supervises a managed agent runtime such as Gemini CLI, Claude Code, or Codex CLI.
+**Use this doc for:**
+* `MoonMind.AgentRun`
+* `AgentExecutionRequest`
+* adapter responsibilities
+* runtime preparation and materialization boundaries
+
+**Use [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md) for:**
+* `AgentSkillDefinition`
+* `SkillSet`
+* `ResolvedSkillSet`
+* `.agents/skills` path policy
+* source precedence
+* versioning and snapshot rules
+
+This document does **not** define the storage model for agent skills, source precedence across built-in, deployment, repo, and local skills, or the canonical `AgentSkillDefinition` / `SkillSet` contracts. 
 
 This model explicitly separates long-lived, stateful agent execution from plain, one-shot LLM model API calls. Agent execution is treated as a first-class lifecycle built around child workflows, asynchronous supervision, structured auth profiles, and artifact-based input/output exchange.
 
@@ -39,10 +61,10 @@ This hierarchy enables a single task to involve multiple agents (one per step) a
 Both external and managed agents follow the same high-level lifecycle:
 
 1. **Prepare Context**
-   Materialize workspace inputs and runtime context from artifact refs.
+   Materialize workspace inputs, execution/runtime parameters, and resolved agent skill snapshots.
 
-   * For external agents, this usually means generating presigned URLs or equivalent temporary artifact-access mechanisms.
-   * For managed agents, this usually means hydrating a local workspace or runtime directory.
+   * For external agents, this usually means generating presigned URLs or equivalent temporary artifact-access mechanisms for the repository context and the resolved agent skill context.
+   * For managed agents, this usually means hydrating a local workspace or runtime directory with repository inputs, and materializing the resolved agent skill snapshot (generating a prompt-index when needed).
 
 2. **Start Run**
    Launch the agent asynchronously and receive an `AgentRunHandle`.
@@ -71,12 +93,23 @@ Both external and managed agents follow the same high-level lifecycle:
 
 Agent dispatch happens **per step**, not per task. The plan execution loop in `MoonMind.Run._run_execution_stage()` iterates ordered plan nodes and determines the dispatch mechanism for each step:
 
-- **Agent step** — the node's tool/skill type or an explicit `execution_mode` field indicates an agent runtime is required. `MoonMind.Run` starts `MoonMind.AgentRun` as a **child workflow**, constructing an `AgentExecutionRequest` from the node inputs.
+- **Agent step** — the node's tool/skill type or an explicit `execution_mode` field indicates an agent runtime is required. `MoonMind.Run` starts `MoonMind.AgentRun` as a **child workflow**, constructing an `AgentExecutionRequest` from the node inputs. For agent-runtime steps, `MoonMind.Run` may also pass a `resolved_skillset_ref`, materialization preferences, and skill-related execution metadata.
 - **Activity step** — the node dispatches to a standard Temporal activity (`sandbox.run_command`, `sandbox.run_tests`, integration activities, etc.) via the existing `workflow.execute_activity()` path.
+
+Note that tool execution and agent-skill resolution are separate concerns. The parent workflow should resolve the applicable skill snapshot before or as part of agent-run preparation. The child workflow should not infer skill state ad hoc from the workspace alone.
 
 This keeps the plan mechanism intact for multi-step tasks while allowing each step to use the appropriate execution strategy. A task can mix agent steps and non-agent steps freely, and can involve different agents in different steps.
 
 Cancellation propagates automatically through Temporal's child workflow mechanism. When `MoonMind.Run` is cancelled, any in-flight `MoonMind.AgentRun` child workflow receives a `CancelledError`, which triggers its non-cancellable cleanup path for adapter-level cancel operations.
+
+### Temporal Boundary and Re-runs
+
+Source precedence and agent instruction snapshot construction belong to resolution activities or upstream control-plane preparation. `MoonMind.AgentRun` consumes immutable refs. Adapters materialize those refs; they do not redefine resolution semantics.
+
+Agent execution interaction with retries and reruns behave as follows:
+* Activity retries and agent-run retries reuse the same resolved skill snapshot.
+* A rerun reuses the original resolved snapshot by default.
+* Explicit re-resolution is a separate action, not an implicit side effect of retry or rerun.
 
 ---
 
@@ -99,6 +132,11 @@ Suggested fields:
 * `input_refs[]`: input artifact refs
 * `expected_output_schema`
 * `workspace_spec`: repository/worktree/branch/checkout instructions
+* `resolved_skillset_ref`: reference to the resolved agent skill snapshot
+* `skill_materialization_mode`: e.g. prompt_bundled, workspace_mounted, hybrid
+* `skill_prompt_index_ref`: optional reference to a generated prompt index
+* `skill_manifest_ref`: optional reference to the snapshot's manifest
+* `skill_policy_summary`: optional summary of skill execution constraints
 * `parameters`
 
   * `model`
@@ -110,6 +148,13 @@ Suggested fields:
 * `retry_policy`
 * `approval_policy`
 * `callback_policy`
+
+### `ResolvedSkillSet`
+
+A true agent-runtime execution may carry a `ResolvedSkillSet` reference. 
+* The snapshot is defined by `docs/Tasks/AgentSkillSystem.md`.
+* The execution model treats it as immutable per run/step.
+* Adapters consume it; they do not re-resolve source precedence independently. This forms the key bridge from the control-plane design into runtime execution.
 
 ### `AgentRunHandle`
 
@@ -185,8 +230,11 @@ Common responsibilities:
 * `status(run_id) -> AgentRunStatus`
 * `fetch_result(run_id) -> AgentRunResult`
 * `cancel(run_id)`
+* consume resolved agent skill snapshot inputs
+* materialize or translate them for the target runtime
+* preserve runtime-independent resolution while allowing runtime-specific delivery
 
-Additional optional operations may be added for intervention, log collection, or resume semantics, but the four operations above should define the common minimum contract.
+Additional optional operations may be added for intervention, log collection, or resume semantics, but the core operations above should define the common minimum contract.
 
 ### `ExternalAgentAdapter`
 
@@ -202,6 +250,9 @@ Responsibilities:
 
 * translate `AgentExecutionRequest` into provider-specific REST/RPC payloads
 * provision external-access artifact exchange mechanisms such as presigned URLs
+* bundle or translate the resolved agent skill snapshot into prompt content, presigned bundles, or provider-compatible artifacts
+* avoid assuming filesystem-based skill consumption
+* preserve provenance where feasible
 * pass callback metadata or webhook endpoints
 * interpret external run states and normalize them into `AgentRunStatus`
 * fetch final outputs and diagnostics
@@ -221,6 +272,10 @@ Responsibilities:
 
 * resolve runtime profile and auth profile
 * prepare local workspace/runtime context
+* materialize the resolved active skill set into the managed runtime workspace
+* expose the active set through the canonical path (`.agents/skills`)
+* generate any compact prompt index or prelude used by the runtime
+* avoid mutating checked-in skill folders directly
 * launch the managed runtime asynchronously
 * normalize runtime states into `AgentRunStatus`
 * fetch final outputs, logs, and diagnostics
@@ -240,6 +295,16 @@ This separation keeps the adapter layer agent-oriented while allowing the lower 
 ## 5. External Agents
 
 External agents are delegated to through provider-specific adapters, but MoonMind remains the top-level system.
+
+### Skill Delivery for External Agents
+
+External agents receive resolved skill context through mechanisms appropriate for their provider environment:
+* compact prompt bundle
+* provider-uploaded bundle artifact
+* presigned URLs to skill manifest or bundle
+* provider-specific translation where filesystem access is unavailable
+
+External adapters should **not** independently re-resolve skill sources. They must faithfully deliver the immutable resolved skill snapshot provided by `MoonMind.AgentRun`.
 
 ### Execution Model
 
@@ -343,6 +408,24 @@ For managed runtimes, `status(...)` should remain a short, fast activity that re
 
 The detached managed runtime itself should not be represented as a long-lived heartbeating Temporal activity. Heartbeats belong to activities that are themselves doing long-running work. In this design, the supervisor owns long-running runtime state, and `status(...)` simply exposes that state to the workflow when needed.
 
+### Managed Runtime Workspace Rules
+
+Target-state managed runtime skill behavior explicitly dictates:
+* `.agents/skills` is the canonical workspace-facing path for the active skill set.
+* `.agents/skills/local` remains the local-only overlay input path.
+* The runtime-visible active set is a resolved snapshot, not a mutable in-place merge into author-authored folders.
+* Managed runtimes should consume the active snapshot through the canonical path plus any adapter-specific prompt index.
+
+### Skill Materialization Modes
+
+The execution context supports several delivery modes for resolved agent skills:
+* `prompt_bundled`
+* `workspace_mounted`
+* `hybrid` 
+* optional future retrieval mode
+
+Managed runtimes default to the `hybrid` mode where the workspace receives the mounted canonical path and a compact prompt index is supplied to the runtime via prompt injection.
+
 ---
 
 ## 7. First-Class Provider Profiles
@@ -395,6 +478,9 @@ Large data must remain out of workflow history.
 The following should be stored as artifacts or artifact-backed blobs rather than workflow payloads:
 
 * prompts and instruction bundles
+* resolved skill manifests
+* prompt indexes
+* runtime materialization bundles
 * hydrated context bundles
 * stdout/stderr streams
 * transcripts
@@ -436,6 +522,9 @@ This target-state queue/fleet is justified because managed agent runtimes have d
 * longer-lived execution
 * richer logging and intervention flows
 * stronger secrets and isolation boundaries
+* skill snapshot materialization
+* active manifest creation
+* adapter-side runtime context shaping
 
 ### Target fleet layout
 
@@ -491,6 +580,13 @@ Implementation should include a non-cancellable cleanup path, using the appropri
 
 **Ongoing work:** Normalized metrics, dashboards, intervention surfaces, callback verification, failure classification, and operator tooling for edge cases are tracked in the file linked at the top of this document.
 
+Also pending implementations:
+* resolved skill snapshot propagation into `AgentExecutionRequest`
+* active skill materialization into managed runtime workspaces
+* `.agents/skills` canonical active-path behavior
+* prompt index generation for hybrid mode
+* external-agent bundle delivery for resolved skill context
+
 ---
 
 ## 12. Summary
@@ -505,6 +601,7 @@ The correct unifying model is:
 * `ExternalAgentAdapter` handles external delegated agents
 * `ManagedAgentAdapter` handles MoonMind-managed agent runtimes
 * both paths share the same lifecycle shape: start, wait, fetch result, publish outputs, cancel/intervene
+* managed and external agent execution consumes immutable resolved skill snapshots, with runtime adapters responsible for materializing them appropriately
 * managed runtimes rely on asynchronous supervision, durable run tracking, structured auth profiles, and artifact-backed logs
 * queue/fleet isolation should eventually reflect the distinct operational needs of managed runtimes
 

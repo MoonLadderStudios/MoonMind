@@ -119,7 +119,11 @@ Make the architecture unambiguous before deeper implementation begins.
 - [ ] Update `docs/Temporal/TemporalArchitecture.md` to include agent skills as a first-class MoonMind domain concept
 - [ ] Update `docs/Tasks/TaskArchitecture.md` to reflect task/step skill selection and control-plane resolution
 - [ ] Update `docs/UI/MissionControlArchitecture.md` to reflect submit/detail visibility for skill selection and resolved snapshots
+- [ ] Update `docs/Temporal/WorkflowArtifactSystemDesign.md` to make skill-related artifacts first-class
+- [ ] Update `docs/Temporal/ActivityCatalogAndWorkerTopology.md` to define `agent_skill.*` activities and fleet routing
+- [ ] Update `docs/Tasks/TaskProposalSystem.md` to preserve explicit agent skill intent upon promotion
 - [ ] Update `AGENTS.md` so the existing shared-skills runtime notes match the canonical design
+- [ ] Optional: Update `docs/Temporal/WorkflowSchedulingGuide.md` and `docs/Temporal/TaskExecutionCompatibilityModel.md` to fully close the architecture loop
 - [ ] Remove or rewrite ambiguous doc language that uses “skill” interchangeably for tools and instruction bundles without qualification
 
 ### Exit criteria
@@ -194,8 +198,11 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 - [ ] Implement explicit include, exclude, and pinned-version selectors
 - [ ] Implement `task.skills` baseline resolution
 - [ ] Implement `step.skills` override and inheritance behavior
-- [ ] Write resolved manifest artifacts for runs and, where needed, for steps
-- [ ] Return compact refs and metadata rather than full bodies
+- [ ] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
+- [ ] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
+- [ ] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
+- [ ] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
+- [ ] Return compact refs and metadata rather than full bodies in workflow history
 - [ ] Add tests covering:
   - [ ] source precedence
   - [ ] collisions
@@ -231,8 +238,10 @@ Make managed runtimes consume resolved skill snapshots consistently.
 - [ ] Implement materialization of a compact prompt index or summary for hybrid mode
 - [ ] Implement the active manifest/index written alongside the active skill view
 - [ ] Materialize the active run snapshot into a run-scoped location rather than mutating checked-in skill folders
-- [ ] Expose the active set through `.agents/skills`
-- [ ] Preserve `.agents/skills/local` as a local-only overlay input path rather than the active authoritative output
+- [ ] Expose the active set through `.agents/skills` as the immutable, canonical runtime-visible active path
+- [ ] Preserve `.agents/skills/local` explicitly as a local-only overlay input path, not an active output
+- [ ] Enforce the "do not mutate checked-in skill folders in place" constraint at the materialization boundary
+- [ ] Produce adapter compatibility links (`skills_active` fallback) and prompt-index generations where historically required
 - [ ] Update managed runtime adapters to accept `resolved_skillset_ref` or equivalent input
 - [ ] Update managed runtime launch flows to consume the resolved active set and prompt index
 - [ ] Ensure any runtime-specific compatibility links still preserve `.agents/skills` as the canonical path
@@ -268,8 +277,9 @@ Make agent skills part of the real execution contract.
 - [ ] Add canonical `step.skills` handling to plan-node or step execution models
 - [ ] Ensure `step.skills` correctly inherits from and overrides `task.skills`
 - [ ] Add validation for invalid skill selectors during task submit or plan validation
-- [ ] Add activity boundary for skill resolution before runtime launch
-- [ ] Add activity boundary for runtime materialization before managed runtime execution
+- [ ] Add explicit `agent_skill.*` activity family for resolution vs materialization
+- [ ] Route `agent_skill.materialize` and related preparation activities to `mm.activity.agent_runtime` or a capable preparation fleet
+- [ ] Ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries
 - [ ] Pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path
 - [ ] Ensure workflow payloads carry refs and metadata only
 - [ ] Ensure retries and continuation paths reuse the same resolved snapshot
@@ -301,15 +311,11 @@ Expose the system clearly to operators.
 
 ### Tasks
 
-- [ ] Add submit-form support for selecting named skill sets
-- [ ] Add submit-form support for direct include and exclude controls, where appropriate
-- [ ] Add submit-form support for materialization preference when exposed by policy
-- [ ] Add task detail surface for resolved skill snapshot ID
-- [ ] Add task detail surface for selected skill versions
-- [ ] Add task detail surface for per-skill source provenance
-- [ ] Add task detail surface for materialization mode
-- [ ] Add task detail surface for canonical runtime-visible path summary
-- [ ] Add advanced/debug view for manifest refs and source-trace details
+- [ ] Add submit-time layout/UX for agent skill selection (sets, includes, explicit excludes) without overloading default tabular data
+- [ ] Add task detail surface for resolved skill snapshot visibility (provenance, snapshot ID, selected versions, source precedence)
+- [ ] Implement compact provenance display for skill origins (e.g., distinguishing repo from built-in or default deployment scopes)
+- [ ] Add proposal-review visibility showing either explicit skill selectors or explicit "inherited defaults" status
+- [ ] Apply strict debug visibility rules for raw manifests, prompt indexes, and materialization refs
 - [ ] Add API fields needed for the above surfaces
 - [ ] Add redaction and access checks for debug metadata
 - [ ] Add end-to-end tests for submit/detail rendering of skill data
@@ -337,11 +343,12 @@ Close the remaining semantic gaps and remove older ambiguity.
 
 ### Tasks
 
-- [ ] Define whether generated proposals persist explicit `task.skills` selectors or inherit deployment defaults at promotion time
-- [ ] Update proposal payload generation to preserve skill intent where required
-- [ ] Define scheduled-execution behavior for skill resolution clearly in backend contracts
-- [ ] Ensure scheduled runs preserve their intended skill-selection semantics
-- [ ] Ensure reruns reuse the original `ResolvedSkillSet` by default
+- [ ] Update proposal payload components to store and preserve `task.skills` and `step.skills` intent
+- [ ] Add promotion-time verification/validation ensuring promotion does not silently drop or drift incompatible skill selectors
+- [ ] Harden scheduled-run semantics matching tasks (i.e. strictly preserving selectors vs blindly resolving default states)
+- [ ] Define Task Execution Compatibility Model updates reflecting how skill-selector payloads traverse versions
+- [ ] Clean up all ambiguous "skill" terminology across older system interfaces, proposal schemas, and related legacy queues
+- [ ] Ensure reruns reuse the original `ResolvedSkillSet` by default, skipping explicit re-resolution
 - [ ] Add explicit re-resolution path only where intentionally supported
 - [ ] Harden policy enforcement around repo and local source usage
 - [ ] Add admin or operator controls for enabling or disabling repo/local skill sources
@@ -353,6 +360,12 @@ Close the remaining semantic gaps and remove older ambiguity.
   - [ ] rerun default snapshot reuse
   - [ ] source-policy enforcement
   - [ ] in-flight safety for any changed Temporal-facing payloads
+
+### Final Polish
+
+- [ ] Update `README.md` with targeted public-facing descriptions of the Agent Skill System mechanics
+- [ ] Ensure `AGENTS.md` and related contributor instructions remain 100% synchronized with the finalized architectural capabilities
+- [ ] Verify overall cohesiveness between canonical specs, temporary tracker plans, and external documentation before release
 
 ### Exit criteria
 

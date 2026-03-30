@@ -3,8 +3,13 @@
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md)
 
 Status: **Draft**
-Last updated: **2026-03-05**
-Scope: Defines **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing MoonMind's Skills and integrations on Temporal.
+Last updated: **2026-03-30**
+Scope: Defines **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing MoonMind's executable tools, integrations, and agent skill resolution/materialization on Temporal.
+
+## Related Docs
+* `docs/Tasks/AgentSkillSystem.md`
+* `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+* `docs/Temporal/WorkflowArtifactSystemDesign.md`
 
 ---
 
@@ -16,13 +21,17 @@ MoonMind uses Temporal's abstractions directly:
 * **Activities** perform all side-effecting work (LLM calls, sandbox execution, artifact I/O, integrations).
 * **Task Queues** are treated strictly as **routing plumbing** for worker fleets. They are **not** a product-level "queue," and MoonMind makes no user-facing promises about FIFO ordering.
 
-This document standardizes:
+This document standardizes activity families for:
 
-* the **Activity catalog** (names, responsibilities, IO patterns)
-* the **worker topology** (fleets, isolation boundaries, secrets)
-* routing rules (which Activity runs where)
-* reliability (timeouts, retries, heartbeats, idempotency)
-* observability expectations
+* executable tool execution
+* artifact lifecycle
+* planning
+* external integrations
+* **agent skill resolution**
+* **agent skill materialization**
+* **runtime preparation for delegated agent execution**
+
+*Note: References to the generic term "skills" should distinguish between executable tools and agent instruction bundles based on the boundary contexts.*
 
 This doc covers the **Temporal-managed worker model**. Current queue workers and system workers may continue to exist during migration, but they should converge toward these activity boundaries rather than invent parallel long-term runtime abstractions.
 
@@ -37,7 +46,8 @@ This doc covers the **Temporal-managed worker model**. Current queue workers and
    * Skill execution (LLM and non-LLM)
    * Artifact lifecycle (create, upload, link, read, pin, sweep)
    * External integrations (e.g., Jules, GitHub)
-   * Planning-as-skill (Plan generation is an Activity)
+   * Planning (Plan generation is an executable Activity tool)
+   * Provide stable activity boundaries for resolving agent skills into immutable snapshots and materializing them for target runtimes
 2. Define worker fleets with **clear security and resource boundaries**.
 3. Ensure Activities are:
 
@@ -85,7 +95,7 @@ This subsystem's design maps to the following constitutional principles:
 | **I — One-Click Deployment** | All worker fleets are provisionable as Docker Compose services with only documented prerequisites and minimal secrets. |
 | **II — Avoid Vendor Lock-In** | Artifact storage uses the `TemporalArtifactStore` adapter interface with MinIO/S3-compatible backends by default and explicit override paths for alternates. Integration activities sit behind provider adapter interfaces. |
 | **III — Own Your Data** | Large execution inputs/outputs remain portable, inspectable artifacts under MoonMind-managed storage rather than provider-specific opaque payloads. |
-| **IV — Skills Are First-Class** | Skill activities must declare inputs, outputs, external dependencies, and failure modes via `SkillDefinition` and `SkillPolicies`. |
+| **IV — Skills Are First-Class** | Distinguishes between executable tools (`ToolDefinition`) and agent skills (deployment-scoped instruction bundles). The activity topology supports both the execution of tools and the preparation/materialization of agent skill context. |
 | **V — Bittersweet Lesson** | Activity Type names are the stable contracts; implementations are replaceable. Design for deletion. |
 | **VI — Powerful Runtime Configurability** | Queue routing, backend selection, retention policy, and worker capability bindings are configuration-driven and must remain observable in run metadata/logging. |
 | **VII — Modular Architecture** | Fleet segmentation enforces clear module boundaries. Core orchestration depends on stable Activity Type interfaces, not vendor specifics. |
@@ -111,10 +121,11 @@ Temporal requires Task Queues for Workers to poll. MoonMind uses Task Queues as 
 * `mm.activity.llm`
 * `mm.activity.sandbox`
 * `mm.activity.integrations`
+* `mm.activity.agent_runtime`
 
 > **Decided:** Start with a single `mm.activity.llm` queue. Provider-specific subqueues (`mm.activity.llm.codex`, etc.) are deferred until operational isolation or independent scaling demands them. Internal routing by provider is handled within the LLM activity worker, not via separate task queues.
 
-> Rule of thumb: Subdivide only when you need isolation, scaling, or different secrets/egress.
+Note: The `mm.activity.agent_runtime` queue handles runtime preparation, delegated runtime launch, and skill materialization for managed runtimes. Rule of thumb: Subdivide only when you need isolation, scaling, or different secrets/egress.
 
 ---
 
@@ -125,13 +136,14 @@ Temporal requires Task Queues for Workers to poll. MoonMind uses Task Queues as 
 Activity Type names use dotted namespaces:
 
 * `artifact.*` for artifact store operations
-* `plan.*` for plan creation/validation (planning is a Skill that returns a Plan)
+* `plan.*` for plan creation/validation (planning is an executable tool that returns a Plan)
 * `mm.skill.execute` for the default registry-dispatched skill executor
 * `sandbox.*` for OS/process execution and repo operations
 * `integration.<provider>.*` for external systems
+* `agent_skill.*` for resolution/materialization logic tied to the Agent Skill System
 * `system.*` for housekeeping / reconciliation (rare; prefer Schedules + workflows)
 
-Curated exceptions may bind a skill directly to an explicit Activity Type when the boundary needs stronger isolation, specialized credentials, or clearer routing. This follows the hybrid dispatcher model in `docs/Skills/SkillAndPlanContracts.md`.
+Curated exceptions may bind an executable tool directly to an explicit Activity Type when the boundary needs stronger isolation, specialized credentials, or clearer routing. This follows the hybrid dispatcher model in `docs/Tasks/SkillAndPlanContracts.md`.
 
 **Examples**
 
@@ -142,6 +154,9 @@ Curated exceptions may bind a skill directly to an explicit Activity Type when t
 * `plan.generate`
 * `plan.validate`
 * `mm.skill.execute`
+* `agent_skill.resolve`
+* `agent_skill.materialize`
+* `agent_skill.build_prompt_index`
 * `sandbox.run_command`
 * `integration.jules.start`
 * `integration.jules.status`
@@ -156,11 +171,17 @@ Activity contracts should stay small and business-focused. Use explicit request 
 * `correlation_id` (MoonMind-provided; stable across Continue-As-New boundaries)
 * `idempotency_key` (required for side-effecting calls)
 * `input_refs[]` (artifact references as `ArtifactRef`)
+* `resolved_skillset_ref` (optional; for materialization operations)
+* `selector_refs` (optional; policy/config selectors where relevant)
+* `materialization_mode` (optional)
 * `parameters` (small JSON)
 
 **Response common fields**
 
 * `output_refs[]` (artifact references as `ArtifactRef`)
+* `resolved_skillset_ref` (optional)
+* `materialization_ref` (optional)
+* `prompt_index_ref` (optional)
 * `summary` (small JSON)
 * `metrics` (optional small JSON, e.g., token counts)
 * `diagnostics_ref` (artifact reference for logs if large)
@@ -190,6 +211,8 @@ Activities operating on byte payloads, base64 data, or deeply nested parameter m
 | `artifact.read` | `ArtifactReadInput` | Fetches an artifact safely encoding byte outputs securely. |
 | `artifact.write_complete` | `ArtifactWriteCompleteInput`| Marshals base64 encoded streams into the backend without buffer drops. |
 | `plan.generate` | `PlanGenerateInput` | Generates a complex nested Plan validating payload consistency. |
+| `agent_skill.resolve` | `AgentSkillResolveInput` | Strongly-typed enforcement of skill catalog selectors and fallback policies. |
+| `agent_skill.materialize`| `AgentSkillMaterializeInput` | Defines bounds for materialization bundles pointing to a ResolvedSkillSet. |
 
 *(Reference `moonmind/schemas/temporal_activity_models.py` for exact model implementations).*
 
@@ -249,14 +272,14 @@ Key constraints:
 
 ### 6.2 Plan activities (`plan.*`)
 
-**Purpose:** Generate and validate Plans. "Planning" is a capability, not a system layer.
+**Purpose:** Generate and validate Plans. Planning is an executable capability / tool, not a system layer.
 
 Core Activities:
 
 * `plan.generate(inputs_ref, parameters) -> plan_ref`
 * `plan.validate(plan_ref, registry_snapshot_ref) -> validated_plan_ref | SkillFailure`
 
-The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/skill_plan_contracts.py`): a DAG of `SkillInvocation` nodes connected by `PlanEdge` dependencies. Each node references a `SkillDefinition` with declared inputs, outputs, and `SkillPolicies` (retries, timeouts, failure modes).
+The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/skill_plan_contracts.py`): a DAG of `SkillInvocation` nodes connected by `PlanEdge` dependencies. Each node references a `ToolDefinition` (with declared inputs, outputs, and `SkillPolicies` for retries, timeouts, failure modes).
 
 Worker queue: typically `mm.activity.llm` for LLM planners, but non-LLM planners may run on `mm.activity.sandbox` or `mm.activity.integrations` depending on implementation.
 
@@ -268,11 +291,12 @@ Key constraints:
 
 ---
 
-### 6.3 Skill execution activities (`mm.skill.execute` + curated explicit types)
+### 6.3 Tool execution activities (`mm.tool.execute` / `mm.skill.execute` + curated explicit types)
 
-**Purpose:** Execute a specific skill; this is the core unit of "doing work" in MoonMind.
+**Purpose:** Execute a specific executable tool; this is the core unit of "doing work" in MoonMind. 
+*(Note: This section does **not** describe agent instruction bundle resolution/materialization. See the `agent_skill.*` family for the Agent Skill System).*
 
-Skills must declare inputs, outputs, external dependencies, and failure modes (Constitution IV). The Skill Registry maps each skill to its Activity Type, capability class, and default policies.
+Executable tools must declare inputs, outputs, external dependencies, and failure modes (Constitution IV). The Registry maps each tool to its Activity Type, capability class, and default policies.
 
 MoonMind uses a **hybrid activity binding model**:
 
@@ -312,7 +336,26 @@ Key constraints:
 
 ---
 
-### 6.4 Sandbox activities (`sandbox.*`)
+### 6.4 Agent skill activities (`agent_skill.*`)
+
+**Purpose:** Resolve and prepare agent instruction bundles and snapshot logic.
+* resolve built-in, deployment, repo, and local sources
+* apply precedence and policy
+* generate immutable `ResolvedSkillSet` manifests
+* materialize runtime-visible skill bundles or prompt indexes
+
+Core Activities:
+* `agent_skill.resolve(selectors, context) -> resolved_skillset_ref`
+* `agent_skill.materialize(resolved_skillset_ref, runtime_id, mode) -> materialization_ref`
+* `agent_skill.build_prompt_index(resolved_skillset_ref, runtime_id) -> prompt_index_ref`
+
+These are **not** executable plan tools by default. They are runtime-preparation / control-plane support activities. They must keep large content in artifacts (passing refs) and not inline skill definitions into workflow history.
+
+Worker queue: `mm.activity.agent_runtime` or a dynamically selected preparation-capable fleet based on workspace presence.
+
+---
+
+### 6.5 Sandbox activities (`sandbox.*`)
 
 **Purpose:** Execute untrusted or resource-heavy operations (commands, tests, repo actions).
 
@@ -330,6 +373,7 @@ Isolation requirements:
 * Strong container isolation (seccomp/apparmor), limited FS, controlled egress
 * Explicit resource limits (CPU/mem/time)
 * No access to unrelated secrets by default
+* **Sandbox activities use prepared workspace/runtime context** (often the output of `agent_skill.materialize`). They do not independently decide which agent skills are active.
 
 Reliability:
 
@@ -340,7 +384,7 @@ Reliability:
 
 ---
 
-### 6.5 Integration activities (`integration.<provider>.*`)
+### 6.6 Integration activities (`integration.<provider>.*`)
 
 **Purpose:** External API calls, long-lived external work, event bridging. Each provider's integration sits behind an adapter interface so that alternative providers can be substituted without changing Activity Type contracts (Constitution II).
 
@@ -362,6 +406,10 @@ Security:
 * Integration workers hold provider secrets; sandbox workers do not.
 * Egress allowlists per provider.
 
+**Integrations and Agent Skills:**
+* Integration adapters may consume `resolved_skillset_ref`-derived artifacts.
+* External-provider activities do not independently resolve built-in/deployment/repo/local sources. Any provider-specific skill bundle translation still begins from the shared resolved snapshot.
+
 ---
 
 ## 7) Routing rules (how workflows choose task queues)
@@ -379,6 +427,8 @@ Skill Registry (or equivalent config) must map each Skill to:
   * `sandbox`
   * `integration:<provider>`
   * `artifacts`
+  * `agent_skill_resolution`
+  * `agent_runtime`
 * Default Task Queue for that capability class
 * Timeouts/retries defaults
 
@@ -391,6 +441,12 @@ Examples:
 * `plan.generate` routes to `mm.activity.llm`; provider selection (Codex, Gemini, Claude) is handled within the activity worker based on parameters
 * `sandbox.run_tests` always routes to `mm.activity.sandbox`
 * `integration.jules.start` routes to `mm.activity.integrations`
+
+Agent skill routing limits source-precedence fragmentation:
+* `agent_skill.resolve` routes to a fleet capable of accessing policy/config/catalog sources and artifact services.
+* `agent_skill.materialize` routes to `mm.activity.agent_runtime` for managed runtime preparation.
+* `agent_skill.build_prompt_index` routes to `mm.activity.agent_runtime`, `mm.activity.llm`, or a generic preparation fleet.
+* **Crucially:** source precedence and policy resolution must **not** be reimplemented independently in multiple fleets. Materialization can vary by runtime/fleet, but resolution semantics must remain centralized.
 
 ### 7.3 Priority lanes — deferred
 
@@ -446,6 +502,13 @@ All fleets are provisioned as Docker Compose services (Constitution I — One-Cl
 * Privileges: provider tokens; webhook verification secrets
 * Scaling: depends on provider; protect with rate limiting and circuit breakers
 
+**Fleet: Agent Runtime**
+
+* Queues: `mm.activity.agent_runtime`
+* Privileges: workspace access, runtime provisioning permissions
+* Scaling: Moderate CPU, scales with concurrent delegated agent runs
+* Role: Owns delegated runtime launch/supervision support, managed runtime preparation, agent skill materialization into workspace-visible active sets, and prompt-index generation.
+
 ### 8.3 Multi-language support — deferred
 
 Multi-language workers are a valid Temporal capability but are deferred. The current codebase is Python-only. If a future activity fleet is best implemented in another language, the Activity Type contract remains stable — only the worker implementation changes. This is an implementation choice to be revisited if a concrete need arises.
@@ -493,6 +556,8 @@ Rules:
 * All side-effecting activities must accept `idempotency_key`.
 * Artifact writes use sha256 content verification and two-phase upload (`create` + `write_complete`) which is naturally retry-safe.
 * External starts (e.g., `integration.jules.start`) must store and reuse `external_id` for the same key.
+* `agent_skill.resolve` must be deterministic with respect to its inputs and safe under retry. Retries must not silently re-resolve to different versions when the invocation expects a pinned result.
+* `agent_skill.materialize` must be idempotent or keyed so it does not create conflicting workspace state on retry. Materialization activities must never mutate checked-in skill sources in place.
 
 ---
 
@@ -509,6 +574,7 @@ Rules:
 
    * Use a secret manager; short-lived tokens where possible.
    * Secrets never appear in artifact content, workflow history, or logs (Constitution operational constraint).
+   * Note: Repo and local skill sources are potentially untrusted inputs. Fleets handling resolution/materialization must respect policy gates on those sources. Materialized skill bundles and prompt indexes must avoid leaking sensitive content through logs. Runtime materialization must not accidentally widen secret exposure between fleets.
 4. **Data handling**
 
    * Large content stored as artifacts; workflows pass references.
@@ -535,6 +601,8 @@ Every activity log line must include:
 Large logs must be written as artifacts (link type `output.logs` or `debug.trace`) and referenced by ID.
 
 Activity completion should also emit a structured summary that lets operators answer "what happened?" without reading raw worker internals.
+
+For `agent_skill.*` activities, observability summaries should additionally log/emit: selected source kinds, resolved snapshot ID, materialization mode, runtime target, artifact refs for manifests/prompt indexes, and explicit failure reasons for policy or collision errors.
 
 ### 11.2 Metrics
 
@@ -574,7 +642,13 @@ If using OpenTelemetry:
    * external provider timeouts
    * artifact store outages
    * worker restarts mid-activity (heartbeat behavior)
-5. **Traceability gate**
+5. **Agent Skill boundaries**
+
+   * source precedence enforcement at the activity boundary
+   * retry safety of `agent_skill.resolve` and idempotency of `agent_skill.materialize`
+   * correct fleet routing for the new activity types
+   * compatibility handling if workflow/activity payloads change
+6. **Traceability gate**
 
    * activity catalog changes stay aligned with specs/contracts/runtime tests
    * new explicit activity types document migration/compatibility impact before rollout
@@ -583,7 +657,7 @@ If using OpenTelemetry:
 
 ## 13) Fleet and activity layering
 
-Worker topology is organized into **workflow**, **artifacts**, **LLM/planning**, **sandbox**, **integrations**, and **agent_runtime** fleets, with activities registered per `activity_catalog.py` and `workers.py`. New activity types must document compatibility impact before rollout. Historical sequencing notes are archived in [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md).
+Worker topology is organized into **workflow**, **artifacts**, **LLM/planning**, **sandbox**, **integrations**, **agent_runtime** fleets, and the activity families required for **agent skill resolution/materialization**. Activities are registered per `activity_catalog.py` and `workers.py`. New activity types must document compatibility impact before rollout. Historical sequencing notes are archived in [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md).
 
 ---
 
@@ -614,6 +688,12 @@ These were previously open questions; decisions are now recorded:
 
 * `plan.generate`
 * `plan.validate`
+
+**Agent Skill Context**
+
+* `agent_skill.resolve`
+* `agent_skill.materialize`
+* `agent_skill.build_prompt_index`
 
 **Skills**
 

@@ -2,16 +2,17 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27  
+Last Updated: 2026-03-30  
 
 ## 1. Purpose
 
 This document defines the **high-level control plane architecture** of MoonMind's task system and Mission Control dashboard. 
 
-It maps how user intentions in the Mission Control UI are translated into the durable execution system backed by Temporal. 
+It maps how the control plane translates user intentions in the Mission Control UI—specifically task instructions, artifacts, runtime choices, and **agent skill selection intent**—into the durable execution system backed by Temporal. 
 
 Detailed UI behavior, route-level contracts, payload examples, and page interaction rules are documented natively in `docs/UI/MissionControlArchitecture.md`.
-Detailed backend workflow execution logic (how the workers execute code safely) is defined in `docs/Temporal/TemporalArchitecture.md` and `docs/Tasks/SkillAndPlanContracts.md`.
+Detailed backend workflow execution logic is defined in `docs/Temporal/TemporalArchitecture.md` and `docs/Tasks/SkillAndPlanContracts.md`.
+Detailed agent-skill storage, precedence, and workspace path rules live in `docs/Tasks/AgentSkillSystem.md`.
 
 ---
 
@@ -25,6 +26,7 @@ The current dashboard and backend API support:
 - Visual Task Proposals which can be reviewed by humans before formal promotion into new Temporal executions.
 - Shared task preset/template catalogs for rapid workflow authoring.
 - Operator actions (Pause, Resume, Cancel, Approve) dispatched via API as Temporal Signals/Updates.
+- **Agent Skill Systems:** MoonMind is moving toward a deployment-backed Agent Skill System where tasks will be able to carry explicit skill-selection intent, and the control plane resolves that intent into a run-scoped immutable skill context before execution.
 
 ---
 
@@ -41,10 +43,11 @@ flowchart LR
         A --> P[Task Proposal APIs]
         A --> T[Task Template Catalog APIs]
         A --> C[Artifact Metadata API]
+        A --> S[Agent Skill Catalog / Resolution API]
     end
 
     subgraph Execution Plane (Temporal Foundation)
-        A -.->|Start/Signal/Query| WF[Temporal Workflow: MoonMind.Run]
+        A -.->|Start/Signal/Query+Refs| WF[Temporal Workflow: MoonMind.Run]
         WF --> Q[mm.activity.* Task Queues]
         Q --> W_LLM[LLM Activity Fleet]
         Q --> W_SB[Sandbox Activity Fleet]
@@ -60,7 +63,7 @@ flowchart LR
 ### Key layers
 
 - **UI Layer (Mission Control)**: Presents "Tasks" to the user, allowing for creation, monitoring, and interaction (e.g., approval gates, pausing work).
-- **Control Plane API**: Maps UI requests to Temporal commands (Start Workflow, Send Signal) and manages domain concepts outside Temporal's scope (Proposals, Templates, Auth).
+- **Control Plane API**: Maps UI requests to Temporal commands (Start Workflow, Send Signal) and manages domain concepts outside Temporal's scope (Proposals, Templates, Auth). This now heavily features agent skill selection, skill snapshot preparation, and passing only refs into execution.
 - **Execution Plane (Temporal)**: Owns durable states and schedules Activities under role-based fleets (e.g. LLM routing, Sandbox commands, Artifact fetching).
 - **Blob Storage (Artifacts)**: Heavy data is stored out-of-band in an S3-compatible backend (MinIO). The UI and the Workflow exchange lightweight `ArtifactRef`s.
 
@@ -69,11 +72,30 @@ flowchart LR
 ## 4. Control Plane Responsibilities
 
 The Mission Control provides one place to:
-- **Submit Work**: Send instructions or pre-approved plans into the API, which starts a new `MoonMind.Run` Temporal Workflow Execution.
+- **Submit Work**: Send instructions, artifacts, runtime choices, and explicit skill-selection intent into the API, which starts a new `MoonMind.Run` Temporal Workflow Execution.
+- **Resolve Agent Skills**: Accept task/step skill selectors, merge built-in/deployment/repo/local sources under policy, and produce an immutable resolved skill snapshot for execution.
 - **Provide Files**: Upload images/context to the Artifact Store (`POST /artifacts`) and pass the generated `ArtifactRef` into the task input.
 - **Review Pre-Execution Plans**: Triage "Task Proposals" built by workers before they are promoted into full task runs.
 - **Monitor State**: Surface Temporal Visibility metrics, workflow statuses, and `mm_state` progression fields in a user-friendly table.
 - **Command & Control**: Pause, Resume, and Cancel executing runs by issuing commands to the API, sending Temporal Signals to the workflow.
+
+### 4.1 Agent Skill Resolution Boundary
+
+The core control-plane resolution flow operates as follows:
+1. The user submits workflow intent inside Mission Control, potentially including `task.skills` and `step.skills`.
+2. The control plane resolves built-in, deployment, repo, and local skill sources using canonical precedence rules.
+3. The control plane produces a `ResolvedSkillSet` artifact.
+4. Only refs and compact metadata linking to the snapshot are passed into the execution-plane workflow/runtime path.
+
+**Explicit Boundary Rule:** The *control plane* owns task-facing selection, policy, and resolution intent. The *execution plane* consumes immutable resolved refs. The *runtime adapters* materialize the snapshot for the target runtime.
+
+### 4.2 Task Payload and Mission Control Implications
+
+Task-shaped payloads and UI surfaces now encapsulate skill-selection logic. 
+* The control plane API expects payloads including `task.skills`, `step.skills`, skill-set names, include/exclude selectors, and potentially materialization preferences.
+* The Mission Control UI provides selection mechanisms for skill sets at submit time, displays resolved skill snapshots inside task detail views, and exposes compact provenance metadata for user review.
+
+*(Note on Scheduling/Reruns: When a task is rerun, the control plane reuses the original resolved skill snapshot by default. Conversely, scheduled tasks preserve the explicit skill-selection intent and resolve it according to the canonical policy at their scheduled execution time.)*
 
 ---
 
@@ -83,13 +105,14 @@ From the perspective of the Dashboard and the user, workloads are represented as
 
 ### 5.1 Workflow Executions (Tasks)
 These represent actively running automation. The dashboard groups these under the "Tasks" list.
-- **`MoonMind.Run`**: The standard execution container for text-instructions or direct skill invocations (e.g. `pr-resolver`).
+- **`MoonMind.Run`**: The standard execution container for text instructions, direct executable tool invocations, plan-driven work, and agent-runtime work that may carry resolved agent skill context.
 - **`MoonMind.ManifestIngest`**: Complex ingest jobs utilizing fan-out/fan-in aggregation.
 - The UI surfaces these by querying Temporal Visibility indices filtered securely by the user's API credentials.
 
 ### 5.2 Task Proposals
 - **Control-plane only objects**. These are recommendations generated by agents or by the `proposals` stage of a `MoonMind.Run`, awaiting human review.
 - Proposals do not execute on their own. Promotion creates a new `MoonMind.Run` through the same Temporal-backed create path used by `/api/executions`; the legacy queue backend is not part of the target design.
+- Proposal payloads may need to persist explicit skill-selection intent so that promoted executions preserve the intended execution context.
 
 ---
 
@@ -101,13 +124,19 @@ The following invariants define how the UI interacts with the execution backend:
    The UI will not post large text blobs or multipart image attachments directly into a task execution payload. It uses `POST /artifacts` to receive short-lived `ArtifactRef` pointers, passing only those refs down to Temporal. 
 
 2. **Decoupled execution capability**  
-   The UI determines **what** the intent is (Target Repository, Required Skill, Artifacts). The API and Temporal ensure the job is routed to the exact fleet (`mm.activity.sandbox` vs `mm.activity.llm`) equipped to fulfill that specific capability.
+   The UI determines **what** the intent is (Target Repository, required executable tool or runtime, selected agent skills / skill sets, Artifacts). The API and Temporal ensure the job is routed to the exact fleet (`mm.activity.sandbox` vs `mm.activity.llm`) equipped to fulfill that specific capability.
 
 3. **Status Polling & Observability**  
    The UI reads state by polling the API, which interrogates Temporal's Visibility and the Postgres Artifact Index. The source of truth for execution state lives in Temporal. The source of truth for file outputs lives in the Artifact Index.
 
 4. **Approval Routing via Signals**  
    When a workflow asks for human permission (e.g. "Can I push to `main`?"), the workflow enters a paused state. The UI displays the approval button, and submitting the form delegates a Temporal `Update` or `Signal` through the Control Plane API to seamlessly unpause the execution block.
+
+5. **Skill Selection, Then Snapshot Resolution**  
+   The UI and API exchange skill-selection intent, not raw mutable runtime skill state. The control plane resolves that intent into an immutable skill snapshot before or as part of execution preparation.
+
+6. **Resolved Skill Context Uses Refs**  
+   The control plane must not embed full instruction bundles or skill bodies directly in task payloads when artifact-backed refs are the correct execution boundary.
 
 ---
 
@@ -116,7 +145,8 @@ The following invariants define how the UI interacts with the execution backend:
 Use this document to understand the "Big Picture" view of the Mission Control UI operating over the Execution Plane.
 
 For implementation-level specs, see:
+- `docs/Tasks/AgentSkillSystem.md`: Canonical storage, precedence, versioning, path conventions, and `ResolvedSkillSet` semantics for agent skills.
 - `docs/UI/MissionControlArchitecture.md`: Dashboard API routes, endpoint mappings, layout structures, and live UX component behavior.
-- `docs/Tasks/SkillAndPlanContracts.md`: How commands generated in the control plane resolve to literal executions in the execution plane.
+- `docs/Tasks/SkillAndPlanContracts.md`: How executable tools and plans generated in the control plane resolve to literal executions in the execution plane.
 - `docs/Temporal/TemporalArchitecture.md`: Pure Temporal execution philosophy, queue logic, visibility tables, and worker fleet design.
 - `docs/Tasks/ImageSystem.md`: The specific flow of image processing from UI `ArtifactRef` generation into LLM context chunks.

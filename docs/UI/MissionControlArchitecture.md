@@ -2,25 +2,34 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-28
+Last Updated: 2026-03-30
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlArchitecture.md`](../tmp/remaining-work/UI-MissionControlArchitecture.md)
 
 ## 1. Purpose
 
-Define the concrete architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, and artifact flows.
+Define the concrete architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, agent skill selection, and artifact flows.
 
 The dashboard integrates over the Control Plane API and presents Mission Control primarily as a Temporal-native task console. Legacy source distinctions may still exist in backend/runtime config, but the operator-facing list/detail experience should center workflow executions surfaced as tasks.
 
+Crucially, the UI architecture now includes **agent skill selection and visibility**:
+- submit-time skill selection surfaces
+- detail-page visibility into resolved skill snapshots
+- runtime-independent presentation of agent skill intent
+
+Detailed storage and resolution rules for these agent skills live in `docs/Tasks/AgentSkillSystem.md`.
+
 ## 2. Related Docs
 
+- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Tasks/TaskArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/TaskArchitecture.md`
 - `docs/UI/MissionControlStyleGuide.md`
 
 ## 3. Implementation Snapshot
@@ -117,9 +126,9 @@ If HTML structure is present but grids, spacing, and borders disappear on a Vite
 | Route | Purpose |
 | --- | --- |
 | `/tasks/list` | Unified task list viewing workflow executions (Temporal Visibility) |
-| `/tasks/new` | Unified submit page / Workflow form wizard |
+| `/tasks/new` | Unified submit page (covers task instructions, runtime, agent skill selection, artifacts, schedule) |
 | `/tasks/queue/new` | Alias to `/tasks/new`; prefill mode uses `?editJobId=<jobId>` |
-| `/tasks/:taskId` | Unified task detail shell resolving workflow history |
+| `/tasks/:taskId` | Unified task detail shell (resolves history and displays resolved skill snapshot context, materialization mode, and provenance) |
 | `/tasks/proposals` | Proposal queue list and triage actions |
 | `/tasks/proposals/:proposalId` | Proposal detail, promote/dismiss/priority/snooze actions |
 
@@ -145,6 +154,13 @@ Ownership rules:
 - Standard user task pages should be implicitly scoped to the authenticated principal.
 - The default end-user UI should not expose an arbitrary owner picker.
 - `ownerType` / `ownerId` filters are operator/admin controls.
+
+### 4.2 Query and State Guidance for Agent Skills
+
+Skill-selection UI state should be persisted largely in form or cache state rather than explicitly pushed into the URL:
+- Do **not** expose detailed skill selection intent as a massive query-string surface on `/tasks/new`.
+- Allow form prefilling via saved presets or task templates instead.
+- Keep the URL clean unless there is a specific, compelling preset/debug reason to serialize selectors.
 
 ## 5. Source Model
 
@@ -173,14 +189,16 @@ Rules:
 - Keep any `source` routing/query state as an implementation detail, debug affordance, or temporary compatibility layer.
 - Do not spend primary UI space on a `Source` filter or a constant `Type = Temporal` column when Temporal is the only live task source.
 
-### 5.3 Temporal Is Not a Worker Runtime
+### 5.3 Temporal and Agent Skills Are Not Worker Runtimes
 
-Temporal is an orchestration substrate, not a replacement for `codex`, `gemini_cli`, `claude`, or `jules` runtime choices.
+Temporal is an orchestration substrate, not a replacement for `codex`, `gemini_cli`, `claude`, or `jules` runtime choices. Likewise, agent skills are content instructions, not executable runtimes.
 
 Rules:
 
 - Do **not** add `temporal` as a worker runtime option.
-- Do **not** overload the existing runtime picker to mean "execution engine."
+- Do **not** overload the existing runtime picker to mean "execution engine" or "agent skill configuration."
+- Do **not** present skill sets as workflow source types.
+- Keep runtime choice and agent skill choice as completely separate UX concepts.
 - Prefer invisible backend routing: the user submits a task-shaped request, and the backend decides whether the execution is queue-backed, system-backed, or Temporal-backed.
 
 ### 5.4 Task-Oriented Product Surface
@@ -260,7 +278,7 @@ Notes:
 - The dashboard must preserve `rawState`, `temporalStatus`, and `closeStatus` even when it renders a broader `dashboardStatus`.
 - `awaiting_external` does not automatically mean the current user must act; pair the compatibility status with `waitingReason` and `attentionRequired` so the UI does not mislead operators.
 
-### 6.3 Feature Flags
+### 6.3 Feature Flags and Capabilities
 
 ```json
 {
@@ -272,12 +290,22 @@ Notes:
       "actionsEnabled": false,
       "submitEnabled": false,
       "debugFieldsEnabled": false
+    },
+    "agentSkills": {
+      "skillSelectionEnabled": true,
+      "skillDetailEnabled": true,
+      "skillDebugFieldsEnabled": false,
+      "materializationModeSelectable": false,
+      "submitSkillSelectionEnabled": false,
+      "detailSkillSnapshotEnabled": false,
+      "detailSkillDebugEnabled": false
     }
   }
 }
 ```
 
 Suggested **enablement order** for `temporalDashboard` flags: list/detail read-only, then actions, then submit flows, then optional debug metadata (see tracker for feature-flag work).
+The feature flag enablement for `agentSkills` follows the same read-first pattern: displaying detail-view snapshots first before unlocking submit-time interactivity.
 
 ## 7. Detail View Lifecycle
 
@@ -315,9 +343,9 @@ Recommendation:
 
 Minimum fetch sequence for Temporal-backed detail:
 
-1. `GET /api/executions/{workflowId}`
+1. `GET /api/executions/{workflowId}` (which natively contains, or links to, compact resolved-skill metadata)
 2. `GET /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts`
-3. Optional per-artifact metadata/download calls when the user expands or downloads an artifact.
+3. Optional per-artifact metadata/download calls when the user expands or downloads an artifact (including resolved skill artifacts if requested by the detail model).
 
 Important rule:
 
@@ -330,16 +358,14 @@ Temporal-backed detail should render a clearer information hierarchy than the li
 
 - A primary summary header: title, normalized status badge, concise summary, and allowed actions.
 - A compact execution facts row: workflow label, runtime, model/effort when applicable, started time, updated time or duration, and latest run state.
-- A metadata rail or secondary facts panel: workflow ID, latest `temporalRunId`, namespace, repository, integration, owner, and terminal timestamps.
+- A metadata rail or secondary facts panel: workflow ID, latest `temporalRunId`, namespace, repository, integration, owner, terminal timestamps, **resolved skill snapshot ID**, **skill-set summary**, and **materialization mode**.
 - A durable evidence section: artifacts, outcome summaries, and timeline state transitions.
 
 Advanced/debug fields may optionally show:
 
-- raw `temporalStatus`
-- raw `rawState`
-- raw `closeStatus`
-- `waitingReason`
-- `attentionRequired`
+- raw `temporalStatus`, `rawState`, `closeStatus`
+- `waitingReason` and `attentionRequired`
+- skill provenance summary and debug paths (when allowed by policy)
 
 ### 7.5 Timeline / Event Model
 
@@ -347,6 +373,7 @@ Desired detail behavior for Temporal-backed work:
 
 - Show a summary/timeline panel synthesized from execution fields and known state transitions.
 - Surface `waitingReason` and `attentionRequired` when the execution is blocked externally.
+- Optionally log agent skill resolution progress (e.g. `skill snapshot prepared`, `runtime context materialized`, `agent skill bundle mounted`).
 - Show artifacts as the main durable evidence surface.
 - Show update/signal/cancel actions when enabled.
 - Keep low-scan-value fields off the main list when they are already available in detail.
@@ -387,6 +414,7 @@ Rules:
 - Keep `entry` as an internal/debug compatibility field unless a future workflow class makes it independently meaningful.
 - Treat page size as pagination/view state. Place it with pagination controls or a compact display menu, not in the primary filter bar.
 - If column-local filtering is added, use header popovers or funnel affordances for selected columns while preserving click-to-sort on the header itself.
+- Do not add full skill-set columns to the default list table. Resolved-skill metadata must live primarily in detail or row-expansion views. Only add compact skill badges to the list if user-evidence proves they tangibly improve scanability.
 
 ### 8.3 Layout and Density
 
@@ -424,12 +452,14 @@ The list page should use a two-width layout strategy:
 | `workflowId` | `workflowId` |
 | `temporalRunId` | latest Temporal run instance ID |
 
+*Note: Further detail-level attributes such as the `resolved skill snapshot ID`, `skill-set summary`, and `materialization mode` exist behind the row-model but explicitly remain excluded from the standard table structure.*
+
 Recommended desktop table priorities:
 
 - Primary column: `title`
 - Strong supporting columns: `status`, `workflowType` (labeled **Workflow**), `runtime`, `startedAt`, `duration` or `updatedAt`
 - Compact secondary column: `id` / `taskId`
-- Move `entry`, namespace, run ID, repository, integration, owner, and exact finished time into detail or row expansion surfaces
+- Move `entry`, namespace, run ID, repository, integration, owner, exact finished time, and agent skill context into detail or row expansion surfaces
 - Remove `source` / `sourceLabel` / constant type columns from the normal operator-facing table
 
 Compact rendering rules:
@@ -503,20 +533,21 @@ Phased order:
 
 ### 10.2 Submit UX Rule
 
-- Do not add a visible "Temporal runtime" option to the standard runtime picker.
+- Skill selection is a distinct submit concern from runtime selection.
+- The UI should not overload the runtime picker to represent skill sets.
+- The UI should not expose raw source precedence logic (local vs repository) directly to ordinary users.
 - Keep submit flows organized around current task product shapes.
 - Let the backend decide whether the request starts a Temporal execution.
 
 ### 10.3 Backend Mapping for Temporal-Backed Submit
 
-The dashboard submits task-shaped requests and artifact references. The backend compatibility layer maps those onto Temporal workflow starts.
+The dashboard submits task-shaped requests along with task-level intent (e.g., artifact pointers and skill-set selections). The backend compatibility layer evaluates and translates these requests into immutable Temporal workflow contexts.
 
 Initial expected mappings:
 
 - Run-shaped submit flows may start `MoonMind.Run`.
 - Manifest-oriented submit flows may start `MoonMind.ManifestIngest`.
-- Submit payloads should use `task.tool` / `step.tool` as canonical execution shape; `task.skill` / `step.skill` may be accepted only as compatibility aliases.
-- Skills are a tool subtype (`tool.type = "skill"`), not a sibling to tools.
+- Submit payloads are expected to encapsulate *selection intent*, including `task.skills`, `step.skills`, include/exclude arrays, or `materialization preference`. The dashboard explicitly does *not* pack and submit full, mutable skill bodies inline. Target the control plane for pre-workflow snapshot resolution.
 - `workflowType`, `idempotencyKey`, `failurePolicy`, and `initialParameters` are backend/API contract details, not primary user-facing dashboard concepts.
 
 ### 10.4 Redirect After Create
@@ -535,7 +566,7 @@ The submit form at `/tasks/new` includes a **"When to run"** schedule panel that
 
 ```json
 {
-  "featureFlags": {
+  "features": {
     "temporalDashboard": {
       "submitScheduleEnabled": false
     }
@@ -550,6 +581,11 @@ When `submitScheduleEnabled` is `false`, the schedule panel is hidden and all su
 The panel appears below the task fields (instructions, runtime, model, repo) and above the submit button:
 
 ```
+┌─────────────────────────────────────────┐
+│  Agent Skills (when enabled)            │
+│  [ Selected Skill Sets ▾ ]              │
+│  Summary: Uses deployment defaults      │
+└─────────────────────────────────────────┘
 ┌─────────────────────────────────────────┐
 │  When to run                            │
 │                                         │
@@ -569,6 +605,15 @@ The panel appears below the task fields (instructions, runtime, model, repo) and
 └─────────────────────────────────────────┘
 │ [ Submit ]  or  [ Schedule ]            │
 ```
+
+### 10.6 Agent Skills Submit UX
+
+The design philosophy for the skill-selection interface prioritizes succinct declaration of agent focus:
+- Prefer predefined, **named skill sets** over overwhelming users with granular list checkboxes. 
+- Concisely display inherited deployment/defaults to inform what executes out-of-the-box.
+- Hide source-precedence matrix complexity.
+- Enable an advanced drawer/panel containing `include/exclude` controls and the `materialization mode` selector for power-users, *only if* backend deployment policies authorize configurable modes.
+- Present this space as task-oriented context, avoiding bloated configuration editor properties.
 
 #### Mode Behaviors
 
@@ -659,7 +704,7 @@ The dashboard should support:
 - Render artifact metadata and labels from execution linkage when available.
 - Prefer preview flows when `preview_artifact_ref` exists.
 - Respect `raw_access_allowed` and `default_read_ref`.
-- Do not assume all artifacts are safe for inline display.
+- Do not assume all artifacts are safe for inline display. (For instance, resolved skill manifests, generated prompt indexes, and materialization bundles surfaced by an agent.)
 - Treat artifacts as immutable references; editing an input means producing a new artifact and updating references.
 
 ### 11.4 Run Scoping
@@ -674,6 +719,8 @@ Default to showing artifacts for the **latest run**. If prior-run artifact brows
 
 - User-facing primary term: **task**
 - Advanced/debug term: **workflow execution**
+- Maintain Agent terminology: Use **agent skill** or **skill set** exclusively for instruction bundles. Use **executable tool** or **runtime** where those execution mechanisms are intended.
+- Never use a bare "skill" in UI copy when it is conceptually ambiguous.
 - Never present Temporal Task Queues as the UI meaning of "queue"
 
 ### 12.2 Identifier Policy
@@ -703,3 +750,6 @@ Rules:
 2. Is the current `awaiting_action` compatibility grouping sufficient once `waitingReason` and `attentionRequired` are exposed, or do we eventually want a sharper dashboard distinction for approval versus external wait states?
 3. Should direct Temporal-backed create be hidden entirely behind backend routing, or exposed as a feature-flagged advanced submit path during rollout?
 4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common?
+5. Should the submit page show deployment-default skill sets as read-only chips unless the user actively expands into the advanced skill options drawer?
+6. When, if ever, is the task list appropriate for showing a compact agent skill-set badge (i.e. resolving list-view scanability)?
+7. Should resolved skill snapshot details live natively inside the default Execution facts column or tucked within an expandable "Execution Context Constraints" metadata drawer?

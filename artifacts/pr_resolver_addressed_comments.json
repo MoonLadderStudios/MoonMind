@@ -1,5 +1,45 @@
 [
   {
+    "id": 4157563183,
+    "disposition": "not-applicable",
+    "rationale": "Informational limit warning."
+  },
+  {
+    "id": 3011757793,
+    "disposition": "addressed",
+    "rationale": "Removed duplicate sentence in docs/Temporal/ManagedAndExternalAgentExecutionModel.md."
+  },
+  {
+    "id": 3011757838,
+    "disposition": "addressed",
+    "rationale": "Clarified target-state vs current state in docs/Temporal/ManagedAndExternalAgentExecutionModel.md."
+  },
+  {
+    "id": 3011757850,
+    "disposition": "addressed",
+    "rationale": "Aligned featureFlags in docs/UI/MissionControlArchitecture.md."
+  },
+  {
+    "id": 3011757875,
+    "disposition": "addressed",
+    "rationale": "Fixed numbering sequence in docs/Temporal/WorkflowArtifactSystemDesign.md."
+  },
+  {
+    "id": 3011757896,
+    "disposition": "addressed",
+    "rationale": "Corrected file path reference to docs/Tasks/SkillAndPlanContracts.md."
+  },
+  {
+    "id": 3011757915,
+    "disposition": "addressed",
+    "rationale": "Changed planning is a skill to executable tool terminology."
+  },
+  {
+    "id": 4032825917,
+    "disposition": "not-applicable",
+    "rationale": "PR review summary, no action needed."
+  },
+  {
     "id": 4156996442,
     "disposition": "not-applicable",
     "rationale": "Informational message about Codex usage limits."
