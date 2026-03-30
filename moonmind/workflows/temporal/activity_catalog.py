@@ -808,6 +808,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
+            activity_type="agent_skill.materialize",
+            family="agent_skill",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="step.review",
             family="review",
             capability_class="llm",

@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
@@ -14,10 +15,11 @@ logger = logging.getLogger(__name__)
 class AgentSkillMaterializer:
     """Materializes a ResolvedSkillSet into a run-scoped directory."""
 
-    def __init__(self, workspace_root: str) -> None:
+    def __init__(self, workspace_root: str, artifact_service: Any | None = None) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
         self.workspace_root = Path(workspace_root).resolve()
+        self._artifact_service = artifact_service
 
     async def materialize(
         self,
@@ -59,12 +61,21 @@ class AgentSkillMaterializer:
                 manifest_path.write_text(json.dumps(manifest_content, indent=2), encoding="utf-8")
                 result.workspace_paths.append(str(active_dir))
             except OSError as ex:
-                logger.warning("AgentSkillMaterializer failed to write active_manifest.json: %s", ex)
+                raise RuntimeError(f"AgentSkillMaterializer failed to write active_manifest.json: {ex}") from ex
             
             for skill in resolved_skillset.skills:
-                # If we had artifact fetching, we would download content_ref to active_dir / skill.skill_name / ...
-                # For this Phase 4, laying the boundary for this output directory avoids mutating checked-in sources.
-                pass
+                if skill.content_ref and self._artifact_service:
+                    try:
+                        _artifact, payload = await self._artifact_service.read(
+                            artifact_id=skill.content_ref,
+                            principal="system",
+                            allow_restricted_raw=True,
+                        )
+                        skill_dir = active_dir / skill.skill_name
+                        skill_dir.mkdir(parents=True, exist_ok=True)
+                        (skill_dir / "SKILL.md").write_bytes(payload)
+                    except Exception as ex:
+                        logger.warning("Failed to materialize content for skill %s: %s", skill.skill_name, ex)
 
         # Ensure compatibility paths or index refs are filled depending on mode.
         if mode in (RuntimeMaterializationMode.PROMPT_BUNDLED, RuntimeMaterializationMode.HYBRID):

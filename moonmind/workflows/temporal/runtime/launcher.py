@@ -491,13 +491,16 @@ class ManagedRuntimeLauncher:
             if active_skills_dir.exists():
                 target_skills_dir = Path(resolved_workspace_path) / ".agents" / "skills"
                 try:
-                    if target_skills_dir.exists() and not target_skills_dir.is_symlink():
-                        # We must expose active_skills_dir as .agents/skills without overwriting the checked-in files.
-                        # Renaming the existing folder allows symlinking.
-                        target_skills_dir.rename(Path(resolved_workspace_path) / ".agents" / "skills_repo_source")
+                    if target_skills_dir.lexists():
+                        if target_skills_dir.is_symlink():
+                            target_skills_dir.unlink()
+                        else:
+                            # We must expose active_skills_dir as .agents/skills without overwriting the checked-in files.
+                            # Renaming the existing folder allows symlinking.
+                            target_skills_dir.rename(Path(resolved_workspace_path) / ".agents" / "skills_repo_source")
                     if not target_skills_dir.parent.exists():
                         target_skills_dir.parent.mkdir(parents=True)
-                    if not target_skills_dir.exists():
+                    if not target_skills_dir.lexists():
                         target_skills_dir.symlink_to(active_skills_dir, target_is_directory=True)
                 except OSError as ex:
                     logger.warning("Failed to link active skills directory: %s", ex)

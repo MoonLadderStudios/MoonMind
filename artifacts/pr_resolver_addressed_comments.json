@@ -1,137 +1,32 @@
 [
   {
-    "id": 3012386264,
+    "id": 3012659557,
+    "disposition": "addressed",
+    "rationale": "Added agent_skill.materialize to activity catalog."
+  },
+  {
+    "id": 3012659565,
+    "disposition": "addressed",
+    "rationale": "Added agent_skill.materialize to TemporalActivityBinding."
+  },
+  {
+    "id": 3012659568,
+    "disposition": "addressed",
+    "rationale": "Added content fetching using TemporalArtifactService to the materialization loop."
+  },
+  {
+    "id": 3012659573,
+    "disposition": "addressed",
+    "rationale": "Changed OSError handling to raise RuntimeError on active_manifest.json write failure."
+  },
+  {
+    "id": 3012659578,
+    "disposition": "addressed",
+    "rationale": "Updated symlink handling to use lexists and unlink for correct idempotency."
+  },
+  {
+    "id": 4033783314,
     "disposition": "not-applicable",
-    "rationale": "Whitelist enforcement and collision detection are scheduled for a later implementation phase."
-  },
-  {
-    "id": 3012386271,
-    "disposition": "addressed",
-    "rationale": "Added source_trace to ResolvedSkillSet."
-  },
-  {
-    "id": 3012386275,
-    "disposition": "addressed",
-    "rationale": "Changed ResolvedSkillSet and ResolvedSkillEntry extra fields to forbid."
-  },
-  {
-    "id": 4033497556,
-    "disposition": "not-applicable",
-    "rationale": "Summary comment."
-  },
-  {
-    "id": 3012389317,
-    "disposition": "addressed",
-    "rationale": "Removed duplicate activities assignment."
-  },
-  {
-    "id": 3012389323,
-    "disposition": "addressed",
-    "rationale": "Removed duplicate activities assignment."
-  },
-  {
-    "id": 3012389327,
-    "disposition": "addressed",
-    "rationale": "Removed unused env variable."
-  },
-  {
-    "id": 3012389329,
-    "disposition": "addressed",
-    "rationale": "Removed unused json import."
-  },
-  {
-    "id": 3012389336,
-    "disposition": "addressed",
-    "rationale": "Removed unused UTC import."
-  },
-  {
-    "id": 3012389338,
-    "disposition": "addressed",
-    "rationale": "Removed unused Any import."
-  },
-  {
-    "id": 3012389346,
-    "disposition": "addressed",
-    "rationale": "Removed unused AgentSkillFormat import."
-  },
-  {
-    "id": 3012389352,
-    "disposition": "addressed",
-    "rationale": "Removed unused ArtifactWriteCompleteInput import."
-  },
-  {
-    "id": 3012389356,
-    "disposition": "addressed",
-    "rationale": "Removed unused Any import from skill_resolution.py."
-  },
-  {
-    "id": 3012389362,
-    "disposition": "addressed",
-    "rationale": "Removed unused imports from skill_resolution.py."
-  },
-  {
-    "id": 3012393271,
-    "disposition": "not-applicable",
-    "rationale": "Addressed via duplicate GitHub Code Quality comments above."
-  },
-  {
-    "id": 3012393301,
-    "disposition": "not-applicable",
-    "rationale": "Addressed via duplicate GitHub Code Quality comments above."
-  },
-  {
-    "id": 3012393313,
-    "disposition": "addressed",
-    "rationale": "Changed snapshot_id to be deterministic based on context."
-  },
-  {
-    "id": 3012393324,
-    "disposition": "not-applicable",
-    "rationale": "Addressed via duplicate QA comments."
-  },
-  {
-    "id": 3012393338,
-    "disposition": "addressed",
-    "rationale": "Removed unused local imports in DeploymentSkillLoader."
-  },
-  {
-    "id": 3012393360,
-    "disposition": "not-applicable",
-    "rationale": "Unit tests were already fixed and pushed in prior commits."
-  },
-  {
-    "id": 3012393370,
-    "disposition": "not-applicable",
-    "rationale": "Unit tests were already fixed and pushed in prior commits."
-  },
-  {
-    "id": 3012393389,
-    "disposition": "not-applicable",
-    "rationale": "Imports were fixed and cleaned up in prior commits."
-  },
-  {
-    "id": 3012393417,
-    "disposition": "addressed",
-    "rationale": "Unchecked stub loader boxes in the plan checklist."
-  },
-  {
-    "id": 4033505378,
-    "disposition": "not-applicable",
-    "rationale": "Overview comment"
-  },
-  {
-    "id": 3012286515,
-    "disposition": "addressed",
-    "rationale": "Made node_modules, build, __pycache__, and .env patterns recursive by adding **/ prefixes."
-  },
-  {
-    "id": 4033396041,
-    "disposition": "not-applicable",
-    "rationale": "High-level summary of the code review suggestions."
-  },
-  {
-    "id": 4033400379,
-    "disposition": "not-applicable",
-    "rationale": "Copilot contextual summary of the PR."
+    "rationale": "Pull request review summary message; no direct action required."
   }
 ]
