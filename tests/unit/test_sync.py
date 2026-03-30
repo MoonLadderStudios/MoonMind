@@ -6,6 +6,7 @@ from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionSta
 
 from api_service.core.sync import (
     map_temporal_state_to_projection,
+    merged_memo_for_projection,
     merged_parameters_for_projection,
 )
 from api_service.db.models import (
@@ -164,3 +165,61 @@ def test_merged_parameters_for_projection_combines_canonical_with_memo_payload()
 def test_merged_parameters_for_projection_without_canonical_returns_memo_only():
     payload = {"parameters": {"targetRuntime": "jules"}}
     assert merged_parameters_for_projection(payload, None) == {"targetRuntime": "jules"}
+
+
+# --- merged_memo_for_projection tests ---
+
+def test_merged_memo_preserves_db_only_keys_absent_from_temporal_memo():
+    """DB-written keys like taskRunId survive projection sync even though
+    Temporal's memo is immutable and will never contain them."""
+    from types import SimpleNamespace
+
+    canonical = SimpleNamespace()
+    canonical.memo = {
+        "title": "My Task",
+        "summary": "Running",
+        "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+    }
+    # Temporal's memo is a subset — taskRunId is absent (it's immutable after start)
+    temporal_payload = {"memo": {"title": "My Task", "summary": "Executing step 3"}}
+
+    merged = merged_memo_for_projection(temporal_payload, canonical)
+
+    # DB-only key survives
+    assert merged["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    # Temporal's value wins for keys present in both
+    assert merged["summary"] == "Executing step 3"
+    assert merged["title"] == "My Task"
+
+
+def test_merged_memo_temporal_wins_for_overlapping_keys():
+    """Temporal is authoritative for any key it supplies."""
+    from types import SimpleNamespace
+
+    canonical = SimpleNamespace()
+    canonical.memo = {"summary": "Old summary", "taskRunId": "abc-123"}
+    temporal_payload = {"memo": {"summary": "New summary from Temporal"}}
+
+    merged = merged_memo_for_projection(temporal_payload, canonical)
+
+    assert merged["summary"] == "New summary from Temporal"
+    assert merged["taskRunId"] == "abc-123"
+
+
+def test_merged_memo_without_canonical_returns_temporal_memo_only():
+    payload = {"memo": {"title": "task", "summary": "done"}}
+    merged = merged_memo_for_projection(payload, None)
+    assert merged == {"title": "task", "summary": "done"}
+
+
+def test_merged_memo_with_empty_temporal_memo_returns_canonical_memo():
+    """When Temporal provides no memo (rare), the canonical DB memo is used."""
+    from types import SimpleNamespace
+
+    canonical = SimpleNamespace()
+    canonical.memo = {"taskRunId": "abc", "title": "task"}
+    payload: dict = {"memo": {}}
+
+    merged = merged_memo_for_projection(payload, canonical)
+    assert merged["taskRunId"] == "abc"
+    assert merged["title"] == "task"
