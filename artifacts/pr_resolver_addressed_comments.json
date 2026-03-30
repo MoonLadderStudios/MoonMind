@@ -1,5 +1,25 @@
 [
   {
+    "id": 3011898909,
+    "disposition": "addressed",
+    "rationale": "Simplified download link condition to a 2-way branch in task-detail.tsx since artifactId is guaranteed by schema."
+  },
+  {
+    "id": 3011898939,
+    "disposition": "addressed",
+    "rationale": "Added unit tests to assert the correct href renders for both fallback artifactId-based and explicit downloadUrl-based download links."
+  },
+  {
+    "id": 4032980388,
+    "disposition": "not-applicable",
+    "rationale": "Automated pull request summary from copilot bot; no action needed."
+  },
+  {
+    "id": 4032995897,
+    "disposition": "not-applicable",
+    "rationale": "Automated code review summary from gemini-code-assist bot indicating no feedback; no action needed."
+  },
+  {
     "id": 3012003016,
     "disposition": "addressed",
     "rationale": "Removed unused 'Any' import."
