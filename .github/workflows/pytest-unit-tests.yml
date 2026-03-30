@@ -101,7 +101,7 @@ jobs:
         npm run ui:verify-manifest
         npm run api:types:check
     - name: Upload Mission Control dist artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: mission-control-dist
         path: api_service/static/task_dashboard/dist/
