@@ -2,715 +2,743 @@
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md)
 
-Status: **Draft**
+Status: **Implemented in core runtime** (catalog live; some target-state families still pending)
 Last updated: **2026-03-30**
-Scope: Defines **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing MoonMind's executable tools, integrations, and agent skill resolution/materialization on Temporal.
+Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
 
-## Related Docs
-* `docs/Tasks/AgentSkillSystem.md`
-* `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-* `docs/Temporal/WorkflowArtifactSystemDesign.md`
+## Related docs
 
----
-
-## 1) Purpose
-
-MoonMind uses Temporal's abstractions directly:
-
-* **Workflow Executions** orchestrate.
-* **Activities** perform all side-effecting work (LLM calls, sandbox execution, artifact I/O, integrations).
-* **Task Queues** are treated strictly as **routing plumbing** for worker fleets. They are **not** a product-level "queue," and MoonMind makes no user-facing promises about FIFO ordering.
-
-This document standardizes activity families for:
-
-* executable tool execution
-* artifact lifecycle
-* planning
-* external integrations
-* **agent skill resolution**
-* **agent skill materialization**
-* **runtime preparation for delegated agent execution**
-
-*Note: References to the generic term "skills" should distinguish between executable tools and agent instruction bundles based on the boundary contexts.*
-
-This doc covers the **Temporal-managed worker model**. Current queue workers and system workers may continue to exist during migration, but they should converge toward these activity boundaries rather than invent parallel long-term runtime abstractions.
+- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
+- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Temporal/WorkflowArtifactSystemDesign.md`](./WorkflowArtifactSystemDesign.md)
+- [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
+- [`docs/Temporal/ErrorTaxonomy.md`](./ErrorTaxonomy.md)
 
 ---
 
-## 2) Goals and non-goals
+## 1. Purpose
 
-### Goals
+MoonMind uses Temporal’s abstractions directly:
 
-1. Provide a **stable Activity Type taxonomy** that supports:
+- **Workflow Executions** orchestrate.
+- **Activities** perform all side-effecting work.
+- **Task Queues** are internal routing labels for worker fleets. They are **not** a product-level queue abstraction, and MoonMind makes no FIFO guarantees to users.
 
-   * Skill execution (LLM and non-LLM)
-   * Artifact lifecycle (create, upload, link, read, pin, sweep)
-   * External integrations (e.g., Jules, GitHub)
-   * Planning (Plan generation is an executable Activity tool)
-   * Provide stable activity boundaries for resolving agent skills into immutable snapshots and materializing them for target runtimes
-2. Define worker fleets with **clear security and resource boundaries**.
-3. Ensure Activities are:
+This document standardizes:
 
-   * retryable and safe (idempotent where possible)
-   * cancelable and observable (heartbeats/logging)
-4. Keep Task Queue usage **minimal**, using them for routing only.
+- activity families and naming
+- which worker fleet owns which activity family
+- the routing and timeout/retry model for those activities
+- the contract boundary between workflow code and activity implementations
+- the current implemented catalog and the target-state additions that are still pending
 
-### Non-goals
-
-* Designing Workflow Types or lifecycle semantics (covered in `WorkflowTypeCatalogAndLifecycle.md`).
-* Modeling a product-level "queue order" or "priority queue." (If priority lanes exist, they are throughput controls, not ordering guarantees.)
-* Embedding "spec" concepts into runtime naming or execution code.
+This document covers the **Temporal-managed worker model** only.
 
 ---
 
-## 3) Principles
+## 2. Goals and non-goals
 
-1. **Determinism boundary**
-   Workflow code must be deterministic. Any non-determinism (LLMs, network calls, filesystem, clocks, random, external state) must be placed in Activities.
+## 2.1 Goals
 
-2. **Stable public surface**
-   Activity Type names are long-lived contracts. Prefer adding new Activity Types over changing semantics in-place. Implementations behind those names are designed for replaceability (Constitution V — Bittersweet Lesson).
+1. Provide a stable activity taxonomy for:
+   - artifact lifecycle
+   - planning
+   - executable tool execution
+   - external integrations
+   - managed runtime supervision
+   - provider-profile coordination support
+   - proposal/review support
+   - future agent skill resolution and materialization
 
-3. **Routing by capability, not by domain nouns**
-   Workers are split by what they can safely do (secrets, sandboxing, egress), not by legacy concepts.
+2. Define worker fleets with clear:
+   - capability boundaries
+   - security boundaries
+   - scaling expectations
 
-4. **Payload discipline**
-   Large inputs/outputs live in the **Artifact Store**. Workflow and Activity payloads should pass **references** (`ArtifactRef`), not blobs.
+3. Ensure activity contracts are:
+   - retry-safe
+   - observable
+   - cancel-aware where needed
+   - payload-disciplined
 
-5. **Idempotency by design**
-   Activities must tolerate retries. Either be naturally idempotent or implement idempotency keys (Constitution VIII — Self-Healing).
+4. Keep Task Queue usage minimal and operational.
 
-6. **Continue-As-New awareness**
-   Workflows may Continue-As-New after N skill invocations or long wait thresholds (see `WorkflowTypeCatalogAndLifecycle.md`). Activities must not assume a stable `run_id` across a workflow's full lifetime. The `correlation_id` is the stable identifier that survives Continue-As-New. Artifact links use both `workflow_id` and `run_id` via `ExecutionRef`.
+5. Make canonical contract boundaries explicit so workflow code does not perform provider-specific coercion.
 
-7. **Search Attribute ownership**
-   Activities do **not** upsert Search Attributes or Memo fields directly. They return results to the calling workflow, which owns all visibility updates (`mm_state`, `mm_owner_id`, `mm_updated_at`, etc.). This preserves the determinism boundary.
+## 2.2 Non-goals
 
-### 3.1 Constitution alignment
+This document does **not** define:
 
-This subsystem's design maps to the following constitutional principles:
-
-| Constitution Principle | Expression in this subsystem |
-|---|---|
-| **I — One-Click Deployment** | All worker fleets are provisionable as Docker Compose services with only documented prerequisites and minimal secrets. |
-| **II — Avoid Vendor Lock-In** | Artifact storage uses the `TemporalArtifactStore` adapter interface with MinIO/S3-compatible backends by default and explicit override paths for alternates. Integration activities sit behind provider adapter interfaces. |
-| **III — Own Your Data** | Large execution inputs/outputs remain portable, inspectable artifacts under MoonMind-managed storage rather than provider-specific opaque payloads. |
-| **IV — Skills Are First-Class** | Distinguishes between executable tools (`ToolDefinition`) and agent skills (deployment-scoped instruction bundles). The activity topology supports both the execution of tools and the preparation/materialization of agent skill context. |
-| **V — Bittersweet Lesson** | Activity Type names are the stable contracts; implementations are replaceable. Design for deletion. |
-| **VI — Powerful Runtime Configurability** | Queue routing, backend selection, retention policy, and worker capability bindings are configuration-driven and must remain observable in run metadata/logging. |
-| **VII — Modular Architecture** | Fleet segmentation enforces clear module boundaries. Core orchestration depends on stable Activity Type interfaces, not vendor specifics. |
-| **VIII — Self-Healing** | All side effects are retry-safe. Idempotency keys, heartbeats, and explicit terminal states ensure resumability. |
-| **IX — Facilitate Continuous Improvement** | Activities emit structured summaries, diagnostics references, and retry/failure signals so operators can see what happened and feed recurring issues into follow-up improvements. |
-| **X — Spec-Driven Development** | New activity families and routing changes must stay traceable to spec/contracts/tests so the catalog does not drift from implementation reality. |
+- workflow lifecycle semantics
+- product-level queue ordering or priority semantics
+- source-precedence rules for agent skill resolution
+- provider-specific business logic beyond what is needed to define activity boundaries
 
 ---
 
-## 4) Task Queues (routing only)
+## 3. Core principles
 
-Temporal requires Task Queues for Workers to poll. MoonMind uses Task Queues as *internal routing labels*.
+### 3.1 Determinism boundary
 
-### 4.1 Minimal Task Queue set
+Workflow code must remain deterministic. Any nondeterminism belongs in Activities, including:
 
-**Workflow task queue**
+- network calls
+- filesystem access
+- subprocesses
+- clocks and random values
+- external provider inspection
+- mutable runtime state reads
 
-* `mm.workflow`
+### 3.2 Stable public surface
 
-**Activity task queues**
+Activity Type names are long-lived contracts. Prefer adding new activity types over changing semantics in place.
 
-* `mm.activity.artifacts`
-* `mm.activity.llm`
-* `mm.activity.sandbox`
-* `mm.activity.integrations`
-* `mm.activity.agent_runtime`
+### 3.3 Routing by capability
 
-> **Decided:** Start with a single `mm.activity.llm` queue. Provider-specific subqueues (`mm.activity.llm.codex`, etc.) are deferred until operational isolation or independent scaling demands them. Internal routing by provider is handled within the LLM activity worker, not via separate task queues.
+Workers are split by what they can safely do:
 
-Note: The `mm.activity.agent_runtime` queue handles runtime preparation, delegated runtime launch, and skill materialization for managed runtimes. Rule of thumb: Subdivide only when you need isolation, scaling, or different secrets/egress.
+- artifact I/O
+- LLM access
+- sandbox execution
+- provider integration access
+- managed runtime execution
 
----
+They are not split by legacy product nouns.
 
-## 5) Activity catalog
+### 3.4 Payload discipline
 
-### 5.1 Naming conventions
+Large inputs and outputs belong in the artifact system. Activity payloads should contain refs and compact metadata, not blobs.
 
-Activity Type names use dotted namespaces:
+### 3.5 Canonical return-shape rule
 
-* `artifact.*` for artifact store operations
-* `plan.*` for plan creation/validation (planning is an executable tool that returns a Plan)
-* `mm.skill.execute` for the default registry-dispatched skill executor
-* `sandbox.*` for OS/process execution and repo operations
-* `integration.<provider>.*` for external systems
-* `agent_skill.*` for resolution/materialization logic tied to the Agent Skill System
-* `system.*` for housekeeping / reconciliation (rare; prefer Schedules + workflows)
+For true agent-runtime execution, activities must return canonical runtime contracts directly.
 
-Curated exceptions may bind an executable tool directly to an explicit Activity Type when the boundary needs stronger isolation, specialized credentials, or clearer routing. This follows the hybrid dispatcher model in `docs/Tasks/SkillAndPlanContracts.md`.
+That means:
 
-**Examples**
+- `integration.<provider>.start` returns `AgentRunHandle`
+- `integration.<provider>.status` returns `AgentRunStatus`
+- `integration.<provider>.fetch_result` returns `AgentRunResult`
+- `integration.<provider>.cancel` returns `AgentRunStatus`
+- `agent_runtime.status` returns `AgentRunStatus`
+- `agent_runtime.fetch_result` returns `AgentRunResult`
 
-* `artifact.create`
-* `artifact.write_complete`
-* `artifact.read`
-* `artifact.link`
-* `plan.generate`
-* `plan.validate`
-* `mm.skill.execute`
-* `agent_skill.resolve`
-* `agent_skill.materialize`
-* `agent_skill.build_prompt_index`
-* `sandbox.run_command`
-* `integration.jules.start`
-* `integration.jules.status`
-* `integration.jules.fetch_result`
+Workflow code should not reconstruct canonical contracts from provider-shaped payloads.
 
-### 5.2 Shared request/response envelope
+### 3.6 Search Attribute ownership
 
-Activity contracts should stay small and business-focused. Use explicit request fields for business inputs, artifact references, and idempotency; derive Temporal execution metadata from activity context/logging rather than duplicating it into every payload.
+Activities do **not** upsert Search Attributes or workflow memo state directly. They return results to workflows, and workflows own visibility updates.
 
-**Common business request fields**
+### 3.7 Continue-As-New awareness
 
-* `correlation_id` (MoonMind-provided; stable across Continue-As-New boundaries)
-* `idempotency_key` (required for side-effecting calls)
-* `input_refs[]` (artifact references as `ArtifactRef`)
-* `resolved_skillset_ref` (optional; for materialization operations)
-* `selector_refs` (optional; policy/config selectors where relevant)
-* `materialization_mode` (optional)
-* `parameters` (small JSON)
-
-**Response common fields**
-
-* `output_refs[]` (artifact references as `ArtifactRef`)
-* `resolved_skillset_ref` (optional)
-* `materialization_ref` (optional)
-* `prompt_index_ref` (optional)
-* `summary` (small JSON)
-* `metrics` (optional small JSON, e.g., token counts)
-* `diagnostics_ref` (artifact reference for logs if large)
-
-**Context-derived metadata**
-
-* `workflow_id`
-* `run_id`
-* `activity_id`
-* `attempt`
-
-These values should come from the Temporal runtime/activity context for logging, metrics, and tracing. Do not require them as duplicated business payload fields unless a specific external contract truly needs them.
-
-**Canonical contract references:**
-
-* `ArtifactRef` — see `moonmind/workflows/temporal/artifacts.py` (`artifact_ref_v`, `artifact_id`, `sha256`, `size_bytes`, `content_type`, `encryption`)
-* `ExecutionRef` — see `moonmind/workflows/temporal/artifacts.py` (`namespace`, `workflow_id`, `run_id`, `link_type`, `label`, `created_by_activity_type`, `created_by_worker`)
-* `StageExecutionDecision` / `StageExecutionOutcome` — see `moonmind/workflows/skills/contracts.py`
-* `PlanDefinition`, `SkillDefinition`, `SkillPolicies` — see `moonmind/workflows/skills/skill_plan_contracts.py`
-
-### 5.3 High-Risk Activity Contract Schema (Type Safety)
-
-Activities operating on byte payloads, base64 data, or deeply nested parameter matrices are strictly mapped to `Pydantic` schema layouts to ensure standard serialization without corruption on the wire (such as the JSON codec dropping `bytes` into `list[int]`).
-
-| Activity Name | Input Model Schema | Purpose |
-|---------------|----------------------|-----------|
-| `artifact.read` | `ArtifactReadInput` | Fetches an artifact safely encoding byte outputs securely. |
-| `artifact.write_complete` | `ArtifactWriteCompleteInput`| Marshals base64 encoded streams into the backend without buffer drops. |
-| `plan.generate` | `PlanGenerateInput` | Generates a complex nested Plan validating payload consistency. |
-| `agent_skill.resolve` | `AgentSkillResolveInput` | Strongly-typed enforcement of skill catalog selectors and fallback policies. |
-| `agent_skill.materialize`| `AgentSkillMaterializeInput` | Defines bounds for materialization bundles pointing to a ResolvedSkillSet. |
-
-*(Reference `moonmind/schemas/temporal_activity_models.py` for exact model implementations).*
+Activities must not assume a stable Temporal `run_id` across the entire logical lifetime of a workflow. `correlation_id` is the durable business identifier across Continue-As-New boundaries.
 
 ---
 
-## 6) Activity families (canonical set)
+## 4. Task queues (routing only)
 
-### 6.1 Artifact activities (`artifact.*`)
+Temporal requires Task Queues so Workers can poll. MoonMind uses them strictly as internal routing plumbing.
 
-**Purpose:** Manage the full artifact lifecycle — create, upload, link to executions, read, list, preview, pin, and sweep expired artifacts.
+## 4.1 Current queue set
 
-The artifact system uses a two-phase upload model: `create` registers metadata and returns an upload descriptor for API/client flows, then `write_complete` finalizes the upload with integrity verification. Activity-side worker flows may also stream bytes directly through the artifact service facade. Artifacts are identified by `art_<ULID>` IDs and referenced via `ArtifactRef` values. Storage is backed by the `TemporalArtifactStore` adapter interface with **MinIO/S3-compatible storage as the default local/dev and Docker Compose backend**; `local_fs` remains an explicit fallback only when selected by configuration.
+### Workflow task queue
 
-Core Activities:
+- `mm.workflow`
 
-| Activity | Description |
-|---|---|
-| `artifact.create(execution_ref, metadata) -> ArtifactRef + upload_descriptor` | Register artifact metadata, derive retention class from link type, return upload details for API/client flows or a writable handle for worker-side flows |
-| `artifact.write_complete(artifact_id, upload_proof_or_payload_metadata) -> ArtifactRef` | Finalize uploaded or streamed content, verify integrity, transition status to COMPLETE |
-| `artifact.read(artifact_ref) -> bytes or readable stream handle` | Activity-side read of artifact content using internal credentials; presigned download URLs are an API-layer concern, not workflow state |
-| `artifact.list_for_execution(namespace, workflow_id, run_id, link_type?, latest_only?) -> ArtifactRef[]` | List artifacts linked to one execution, with deterministic latest-output selection when requested |
-| `artifact.compute_preview(artifact_ref, policy?) -> ArtifactRef` | Produce or retrieve a redacted preview artifact for restricted UI-safe reads |
-| `artifact.link(artifact_id, execution_ref) -> link_id` | Bind an existing artifact to a workflow execution via `ExecutionRef` and link type |
-| `artifact.pin(artifact_id, reason) -> pin_id` | Override retention to prevent lifecycle deletion |
-| `artifact.unpin(artifact_id)` | Remove pin; artifact resumes normal retention lifecycle |
-| `artifact.lifecycle_sweep() -> LifecycleSweepSummary` | Expire artifacts past retention, soft-delete, then hard-delete blobs older than cutoff (scheduled via Temporal Schedule, not per-request) |
+### Activity task queues
 
-**Retention classes** (derived from link type):
+- `mm.activity.artifacts`
+- `mm.activity.llm`
+- `mm.activity.sandbox`
+- `mm.activity.integrations`
+- `mm.activity.agent_runtime`
 
-* `ephemeral` — 7 days (debug traces, intermediate outputs)
-* `standard` — 30 days (normal workflow outputs)
-* `long` — 180 days (plans, important results)
-* `pinned` — no automatic deletion
+## 4.2 Queue policy
 
-**Link types** (connect artifacts to executions):
+MoonMind starts with a minimal queue set.
 
-* `input.instructions`, `input.manifest`, `input.plan`
-* `output.primary`, `output.patch`, `output.logs`, `output.summary`
-* `debug.trace`
+Examples of deliberate non-decisions:
 
-**Redaction levels:**
+- no provider-specific LLM subqueues by default
+- no priority lanes by default
+- no queue-per-tool explosion
+- no queue-per-provider unless isolation or scaling truly demands it
 
-* `none` — full access
-* `preview_only` — a truncated (16 KB) redacted preview artifact is auto-generated
-* `restricted` — only owner or service principals get raw access
+Rule of thumb: subdivide only when you need different secrets, different egress, different scaling behavior, or materially different isolation.
+
+---
+
+## 5. Worker fleets
+
+The activity catalog maps activity types onto the following fleets.
+
+| Fleet | Queue(s) | Primary capabilities | Primary privileges |
+|---|---|---|---|
+| `workflow` | `mm.workflow` | workflow execution, limited helper activities | Temporal only |
+| `artifacts` | `mm.activity.artifacts` | artifact lifecycle, provider-profile support, OAuth session support | artifact storage, DB-backed support services |
+| `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
+| `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
+| `integrations` | `mm.activity.integrations` | external provider APIs and repo operations | provider tokens, egress to provider APIs |
+| `agent_runtime` | `mm.activity.agent_runtime` | managed runtime launch, supervision, status, result fetch, cancellation | isolated runtime execution, auth volume mounts |
+
+## 5.1 Workflow fleet exception rule
+
+The workflow fleet is primarily for workflow code. It may also host **small helper activities** when needed to preserve deterministic workflow behavior without creating unnecessary routing complexity.
+
+Current example:
+
+- `integration.resolve_adapter_metadata`
+
+This is a narrow exception, not a second general-purpose activity plane.
+
+---
+
+## 6. Naming conventions
+
+Activity Type names use dotted namespaces.
+
+### 6.1 Canonical namespaces
+
+- `artifact.*` — artifact lifecycle
+- `plan.*` — planning and plan validation
+- `mm.skill.execute` — default registry-dispatched executable tool path
+- `sandbox.*` — shell, repo, and workspace actions
+- `integration.<provider>.*` — provider-specific external integrations
+- `repo.*` — provider-backed repo operations exposed as general-purpose activities
+- `provider_profile.*` — provider-profile coordination support
+- `oauth_session.*` — OAuth session lifecycle support
+- `agent_runtime.*` — managed runtime launch/supervision/result/cancel operations
+- `proposal.*` — task proposal generation/submission
+- `step.review` — review gate execution
+
+### 6.2 Target-state namespace not yet fully implemented
+
+- `agent_skill.*` — future skill resolution/materialization family
+
+This family is still part of the target-state architecture but is not yet a core live catalog family in the current implementation.
+
+---
+
+## 7. Contract model
+
+Activity contracts should be small, business-focused, and explicit.
+
+## 7.1 General request shape guidelines
+
+Common business fields include:
+
+- `correlation_id`
+- `idempotency_key`
+- `input_refs[]`
+- `parameters`
+- compact selector/config fields
+
+Do not duplicate Temporal execution metadata into every payload unless an external contract truly requires it.
+
+## 7.2 Canonical agent contract references
+
+For true agent-runtime activities, the canonical schema source of truth is:
+
+- `AgentExecutionRequest`
+- `AgentRunHandle`
+- `AgentRunStatus`
+- `AgentRunResult`
+
+as defined in `moonmind/schemas/agent_runtime_models.py`.
+
+## 7.3 Where provider-specific data belongs
+
+Provider-specific details belong in canonical `metadata` fields, not alternate top-level response shapes.
+
+Examples of acceptable metadata:
+
+- provider URLs
+- normalized provider status labels
+- callback support flags
+- PR URLs
+- merge outcomes
+- tracking refs
+
+Examples of unacceptable workflow-facing top-level variants:
+
+- ad hoc `{external_id, tracking_ref}` instead of `AgentRunHandle`
+- raw provider status blobs instead of `AgentRunStatus`
+- custom provider result payloads instead of `AgentRunResult`
+
+---
+
+## 8. Current implemented activity catalog
+
+This section describes the current implemented families and their role.
+
+## 8.1 Artifact activities (`artifact.*`)
+
+Purpose: artifact lifecycle management.
+
+Current implemented activities include:
+
+- `artifact.create`
+- `artifact.write_complete`
+- `artifact.read`
+- `artifact.list_for_execution`
+- `artifact.compute_preview`
+- `artifact.link`
+- `artifact.pin`
+- `artifact.unpin`
+- `artifact.lifecycle_sweep`
 
 Worker queue: `mm.activity.artifacts`
 
-Key constraints:
+Key rules:
 
-* Must be **idempotent** for retries (content-addressing via sha256; `write_complete` is safe to retry).
-* Large payloads use presigned URLs or multipart upload on API/client paths and streamed reads/writes on worker paths. Never pass blob content or presigned URLs through workflow history.
-* Artifacts flow through the `TemporalArtifactStore` adapter interface — vendor-neutral by design (Constitution II).
-* Default local one-click behavior keeps MinIO private on the internal Docker network; `AUTH_PROVIDER=disabled` is an API auth-mode choice, not a public-bucket/storage exposure model.
+- large content stays in artifact storage
+- writes must be retry-safe
+- artifact references are the durable interface used by workflows and other activities
 
----
+## 8.2 Plan activities (`plan.*`)
 
-### 6.2 Plan activities (`plan.*`)
+Purpose: plan generation and validation.
 
-**Purpose:** Generate and validate Plans. Planning is an executable capability / tool, not a system layer.
+Current implemented activities:
 
-Core Activities:
+- `plan.generate`
+- `plan.validate`
 
-* `plan.generate(inputs_ref, parameters) -> plan_ref`
-* `plan.validate(plan_ref, registry_snapshot_ref) -> validated_plan_ref | SkillFailure`
+Worker queue: typically `mm.activity.llm`
 
-The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/skill_plan_contracts.py`): a DAG of `SkillInvocation` nodes connected by `PlanEdge` dependencies. Each node references a `ToolDefinition` (with declared inputs, outputs, and `SkillPolicies` for retries, timeouts, failure modes).
+Key rules:
 
-Worker queue: typically `mm.activity.llm` for LLM planners, but non-LLM planners may run on `mm.activity.sandbox` or `mm.activity.integrations` depending on implementation.
+- planning is always nondeterministic, therefore always an activity
+- plan outputs are stored as artifacts, not placed directly into workflow history
 
-Key constraints:
+## 8.3 Tool execution (`mm.skill.execute`)
 
-* Treat plan generation as nondeterministic: always an Activity.
-* Deep plan validation should complete before execution begins; workflows may do lightweight structural checks, but `plan.validate` is the authoritative pre-execution gate.
-* Output must be stored as an artifact reference (`plan_ref`), not inlined in workflow history.
+Purpose: execute a registry-defined executable tool through the default dispatcher path.
 
----
+Current implemented activity:
 
-### 6.3 Tool execution activities (`mm.tool.execute` / `mm.skill.execute` + curated explicit types)
+- `mm.skill.execute`
 
-**Purpose:** Execute a specific executable tool; this is the core unit of "doing work" in MoonMind. 
-*(Note: This section does **not** describe agent instruction bundle resolution/materialization. See the `agent_skill.*` family for the Agent Skill System).*
+Routing is determined by registry metadata and capability class.
 
-Executable tools must declare inputs, outputs, external dependencies, and failure modes (Constitution IV). The Registry maps each tool to its Activity Type, capability class, and default policies.
+Key rules:
 
-MoonMind uses a **hybrid activity binding model**:
+- tool execution remains separate from true agent-runtime execution
+- the pinned registry snapshot is the source of truth for routing and policies
 
-**Default path: registry-dispatched executor**
+## 8.4 Sandbox activities (`sandbox.*`)
 
-* `mm.skill.execute(invocation_payload) -> SkillResult`
+Purpose: isolated repo and process execution.
 
-Pros:
+Current implemented activities:
 
-* Low-ceremony skill addition
-* Keeps the catalog small
-* Makes skill registration the source of truth for routing/binding
-
-Cons:
-
-* Per-skill observability relies on registry metadata and emitted result fields rather than unique activity names
-
-**Curated explicit activity types**
-
-Examples:
-
-* `artifact.*`
-* `sandbox.*`
-* `integration.jules.*`
-* other explicit types declared by the Skill Registry when stronger isolation, least-privilege, or specialized worker code is required
-
-**Recommendation:** Default to `mm.skill.execute`; bind a skill directly to an explicit Activity Type only when the registry declares a concrete operational reason.
-
-Worker queue: depends on skill capability mapping (see routing rules below).
-
-Key constraints:
-
-* Must accept `idempotency_key` and return references for large output.
-* Must be cancel-aware (check cancellation frequently for long work).
-* Must declare failure modes via `SkillPolicies` (`FAIL_FAST` or `CONTINUE`).
-* The workflow/interpreter does not guess bindings. Activity Type selection comes from the pinned registry snapshot.
-
----
-
-### 6.4 Agent skill activities (`agent_skill.*`)
-
-**Purpose:** Resolve and prepare agent instruction bundles and snapshot logic.
-* resolve built-in, deployment, repo, and local sources
-* apply precedence and policy
-* generate immutable `ResolvedSkillSet` manifests
-* materialize runtime-visible skill bundles or prompt indexes
-
-Core Activities:
-* `agent_skill.resolve(selectors, context) -> resolved_skillset_ref`
-* `agent_skill.materialize(resolved_skillset_ref, runtime_id, mode) -> materialization_ref`
-* `agent_skill.build_prompt_index(resolved_skillset_ref, runtime_id) -> prompt_index_ref`
-
-These are **not** executable plan tools by default. They are runtime-preparation / control-plane support activities. They must keep large content in artifacts (passing refs) and not inline skill definitions into workflow history.
-
-Worker queue: `mm.activity.agent_runtime` or a dynamically selected preparation-capable fleet based on workspace presence.
-
----
-
-### 6.5 Sandbox activities (`sandbox.*`)
-
-**Purpose:** Execute untrusted or resource-heavy operations (commands, tests, repo actions).
-
-Core Activities:
-
-* `sandbox.checkout_repo(repo_ref) -> workspace_ref`
-* `sandbox.run_command(workspace_ref, cmd, env) -> result_ref`
-* `sandbox.apply_patch(workspace_ref, patch_ref) -> workspace_ref`
-* `sandbox.run_tests(workspace_ref, parameters) -> report_ref`
+- `sandbox.checkout_repo`
+- `sandbox.apply_patch`
+- `sandbox.run_command`
+- `sandbox.run_tests`
 
 Worker queue: `mm.activity.sandbox`
 
-Isolation requirements:
+Key rules:
 
-* Strong container isolation (seccomp/apparmor), limited FS, controlled egress
-* Explicit resource limits (CPU/mem/time)
-* No access to unrelated secrets by default
-* **Sandbox activities use prepared workspace/runtime context** (often the output of `agent_skill.materialize`). They do not independently decide which agent skills are active.
+- strong isolation
+- explicit concurrency limits
+- heartbeat support for long-running operations
+- careful retry handling to avoid duplicate side effects
 
-Reliability:
+## 8.5 Provider-profile support activities (`provider_profile.*`)
 
-* Use **heartbeats** for long-running commands with progress metadata.
-* Activities must handle retries carefully to avoid duplicating side effects:
+Purpose: support the managed-runtime provider-profile lifecycle.
 
-  * workspace naming must be idempotent or keyed by idempotency key
+Current implemented activities:
 
----
+- `provider_profile.list`
+- `provider_profile.ensure_manager`
+- `provider_profile.reset_manager`
+- `provider_profile.verify_lease_holders`
+- `provider_profile.sync_slot_leases`
 
-### 6.6 Integration activities (`integration.<provider>.*`)
+Worker queue: `mm.activity.artifacts`
 
-**Purpose:** External API calls, long-lived external work, event bridging. Each provider's integration sits behind an adapter interface so that alternative providers can be substituted without changing Activity Type contracts (Constitution II).
+These are support activities used by workflow and manager orchestration. They are not part of the end-user skill or agent contract surface.
 
-Example: Jules
+## 8.6 OAuth session activities (`oauth_session.*`)
 
-* `integration.jules.start(inputs_ref, parameters) -> {external_id, tracking_ref}`
-* `integration.jules.status(external_id) -> status`
-* `integration.jules.fetch_result(external_id) -> output_refs[]`
+Purpose: OAuth session preparation, update, verification, and cleanup.
 
-Worker queue: `mm.activity.integrations` (or `mm.activity.integrations.jules`)
+Current implemented activities:
 
-Patterns supported:
+- `oauth_session.ensure_volume`
+- `oauth_session.start_auth_runner`
+- `oauth_session.stop_auth_runner`
+- `oauth_session.update_terminal_session`
+- `oauth_session.update_status`
+- `oauth_session.verify_volume`
+- `oauth_session.verify_cli_fingerprint`
+- `oauth_session.register_profile`
+- `oauth_session.mark_failed`
+- `oauth_session.cleanup_stale`
 
-* **Callback-first (preferred):** external event triggers API → Signal/Update workflow
-* **Polling fallback:** workflow uses Timers + `integration.*.status` Activities
+Worker queue: `mm.activity.artifacts`
 
-Security:
+## 8.7 Integration activities (`integration.<provider>.*`)
 
-* Integration workers hold provider secrets; sandbox workers do not.
-* Egress allowlists per provider.
+Purpose: external provider interaction and delegated agent execution.
 
-**Integrations and Agent Skills:**
-* Integration adapters may consume `resolved_skillset_ref`-derived artifacts.
-* External-provider activities do not independently resolve built-in/deployment/repo/local sources. Any provider-specific skill bundle translation still begins from the shared resolved snapshot.
+### Current implemented provider families
 
----
+- `integration.jules.*`
+- `integration.codex_cloud.*`
+- `integration.openclaw.execute`
 
-## 7) Routing rules (how workflows choose task queues)
+### Jules and Codex Cloud contract pattern
 
-Workflows select Activity routing via **Activity Options**.
+Current canonical pattern:
 
-### 7.1 Capability mapping
+- `integration.jules.start(...) -> AgentRunHandle`
+- `integration.jules.status(...) -> AgentRunStatus`
+- `integration.jules.fetch_result(...) -> AgentRunResult`
+- `integration.jules.cancel(...) -> AgentRunStatus`
 
-Skill Registry (or equivalent config) must map each Skill to:
+and likewise for `integration.codex_cloud.*`
 
-* Activity Type (`mm.skill.execute` by default, or a curated explicit type)
-* Required capability class:
+### OpenClaw streaming-gateway contract pattern
 
-  * `llm`
-  * `sandbox`
-  * `integration:<provider>`
-  * `artifacts`
-  * `agent_skill_resolution`
-  * `agent_runtime`
-* Default Task Queue for that capability class
-* Timeouts/retries defaults
+`integration.openclaw.execute(...)` is a special-case single-call external execution path for providers using the streaming-gateway execution style.
 
-### 7.2 LLM vs non-LLM selection
+Contract:
 
-Selection is made **per Activity invocation**, not per Workflow Type.
+- `integration.openclaw.execute(...) -> AgentRunResult`
 
-Examples:
+Worker queue: `mm.activity.integrations`
 
-* `plan.generate` routes to `mm.activity.llm`; provider selection (Codex, Gemini, Claude) is handled within the activity worker based on parameters
-* `sandbox.run_tests` always routes to `mm.activity.sandbox`
-* `integration.jules.start` routes to `mm.activity.integrations`
+### Integration helper activity
 
-Agent skill routing limits source-precedence fragmentation:
-* `agent_skill.resolve` routes to a fleet capable of accessing policy/config/catalog sources and artifact services.
-* `agent_skill.materialize` routes to `mm.activity.agent_runtime` for managed runtime preparation.
-* `agent_skill.build_prompt_index` routes to `mm.activity.agent_runtime`, `mm.activity.llm`, or a generic preparation fleet.
-* **Crucially:** source precedence and policy resolution must **not** be reimplemented independently in multiple fleets. Materialization can vary by runtime/fleet, but resolution semantics must remain centralized.
+Current helper activity:
 
-### 7.3 Priority lanes — deferred
+- `integration.resolve_adapter_metadata`
 
-**Decided:** Priority lanes are deferred for v1. Throughput control relies on concurrency limits and rate limiting per fleet. If priority lanes are introduced later, they will use suffix queues (e.g., `mm.activity.sandbox.high|normal|low`) with more worker capacity on higher lanes — never a strict ordering guarantee.
+Contract:
 
----
+- validate adapter registration
+- return adapter metadata such as execution style
+- keep env inspection and dynamic provider registration reads out of deterministic workflow code
 
-## 8) Worker topology
+This activity is intentionally small and is not part of the true agent-run status/result contract family.
 
-### 8.1 Worker roles
+## 8.8 Repo activities (`repo.*`)
 
-1. **Workflow Workers**
+Purpose: provider-backed repository operations used by workflow or runtime flows.
 
-   * Poll: `mm.workflow`
-   * Execute: Workflow code only (no heavy lifting)
+Current implemented activities:
 
-2. **Activity Workers**
+- `repo.create_pr`
+- `repo.merge_pr`
 
-   * Poll: one or more activity task queues
-   * Execute: side effects (LLM, sandbox, integrations, artifacts)
+Worker queue: `mm.activity.integrations`
 
-### 8.2 Fleet segmentation (recommended)
+## 8.9 Managed runtime activities (`agent_runtime.*`)
 
-All fleets are provisioned as Docker Compose services (Constitution I — One-Click Deployment).
+Purpose: managed runtime launch, supervision support, result collection, artifact publication, and cancellation.
 
-**Fleet: Workflow**
+Current implemented activities:
 
-* Queues: `mm.workflow`
-* Privileges: minimal (Temporal credentials only)
-* Scaling: modest CPU; scale by workflow task backlog
+- `agent_runtime.launch`
+- `agent_runtime.publish_artifacts`
+- `agent_runtime.status`
+- `agent_runtime.fetch_result`
+- `agent_runtime.cancel`
 
-**Fleet: Artifacts**
+Worker queue: `mm.activity.agent_runtime`
 
-* Queues: `mm.activity.artifacts`
-* Privileges: access to MinIO/S3-compatible object storage; no repo tokens; limited egress
-* Scaling: IO-bound; autoscale on throughput/latency
+### Contract expectations
 
-**Fleet: LLM**
+- `agent_runtime.status(...) -> AgentRunStatus`
+- `agent_runtime.fetch_result(...) -> AgentRunResult`
+- `agent_runtime.cancel(...) -> AgentRunStatus`
 
-* Queues: `mm.activity.llm`
-* Privileges: LLM API keys; no sandbox execution
-* Scaling: rate-limited by provider quotas; autoscale with QPS control
+`agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
 
-**Fleet: Sandbox**
+`agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
 
-* Queues: `mm.activity.sandbox`
-* Privileges: minimal secrets; ability to run commands in isolated containers
-* Scaling: CPU/mem heavy; strict concurrency caps; queue depth monitoring
+## 8.10 Proposal and review activities
 
-**Fleet: Integrations**
+Current implemented activities:
 
-* Queues: `mm.activity.integrations` (and optionally per provider)
-* Privileges: provider tokens; webhook verification secrets
-* Scaling: depends on provider; protect with rate limiting and circuit breakers
+- `proposal.generate`
+- `proposal.submit`
+- `step.review`
 
-**Fleet: Agent Runtime**
+Queues:
 
-* Queues: `mm.activity.agent_runtime`
-* Privileges: workspace access, runtime provisioning permissions
-* Scaling: Moderate CPU, scales with concurrent delegated agent runs
-* Role: Owns delegated runtime launch/supervision support, managed runtime preparation, agent skill materialization into workspace-visible active sets, and prompt-index generation.
+- `proposal.generate` → `mm.activity.llm`
+- `proposal.submit` → `mm.activity.artifacts`
+- `step.review` → `mm.activity.llm`
 
-### 8.3 Multi-language support — deferred
-
-Multi-language workers are a valid Temporal capability but are deferred. The current codebase is Python-only. If a future activity fleet is best implemented in another language, the Activity Type contract remains stable — only the worker implementation changes. This is an implementation choice to be revisited if a concrete need arises.
+These are support families, not agent-runtime families.
 
 ---
 
-## 9) Reliability contracts
+## 9. Target-state additions not yet fully implemented
 
-### 9.1 Timeouts (defaults by activity family)
+MoonMind’s broader design still includes a future `agent_skill.*` family.
 
-You should standardize timeouts by family:
+Target-state activities:
 
-* `artifact.*`: short start-to-close (e.g., 30s–2m), retries ok
-* `plan.generate` (LLM): moderate (e.g., 2–10m), retries with backoff
-* `skill.*.execute`: depends on skill; default moderate with overrides via `SkillPolicies`
-* `sandbox.*`: longer (e.g., 10–60m), **heartbeat required**
-* `integration.*`: short per API call; long-running external work should be modeled as:
+- `agent_skill.resolve`
+- `agent_skill.materialize`
+- `agent_skill.build_prompt_index`
 
-  * start activity + polling activities + timers, or
-  * async completion
+Purpose:
 
-### 9.2 Retry policies
+- resolve active instruction bundles into immutable snapshots
+- materialize those snapshots for runtime consumption
+- build prompt indexes or other compact runtime-ready skill representations
 
-* Use exponential backoff with max interval caps for integrations.
-* For sandbox commands, retries should be carefully bounded (avoid "rerun destructive command" surprises).
-* For LLM calls, retries must account for idempotency (see below) and cost.
+Important rule:
 
-### 9.3 Heartbeats
+- resolution semantics must remain centralized
+- materialization may vary by runtime
+- workflows should consume refs, not inline skill content
 
-Required for:
+This family should be documented as target-state until it is actually added to the live catalog.
 
-* `sandbox.run_command`
-* long-running integration polling loops (if modeled as a long activity—which is generally *not* recommended)
+---
 
-Heartbeats should include:
+## 10. Routing rules
 
-* progress phase
-* last log offset / artifact ref
-* estimated remaining time if possible
+Workflows choose activities through Activity Options and catalog-derived routing metadata.
 
-### 9.4 Idempotency
+## 10.1 Capability mapping
+
+Each activity family maps to one capability class and one fleet.
+
+Representative capability classes include:
+
+- `artifacts`
+- `llm`
+- `sandbox`
+- `integration:<provider>`
+- `agent_runtime`
+- `workflow` (for narrow helper activity exceptions)
+
+## 10.2 Selection examples
+
+- `plan.generate` routes to `mm.activity.llm`
+- `sandbox.run_tests` routes to `mm.activity.sandbox`
+- `integration.jules.start` routes to `mm.activity.integrations`
+- `agent_runtime.fetch_result` routes to `mm.activity.agent_runtime`
+- `provider_profile.list` routes to `mm.activity.artifacts`
+- `integration.resolve_adapter_metadata` routes to `mm.workflow`
+
+## 10.3 No workflow-side route probing
+
+Workflow code should use the live catalog as the routing source of truth. The system should not grow additional ad hoc workflow-side probing or provider-specific routing heuristics when the catalog can express the routing directly.
+
+---
+
+## 11. Reliability contracts
+
+## 11.1 Timeout defaults by family
+
+Typical defaults by family:
+
+- `artifact.*` — short
+- `plan.*` — moderate
+- `sandbox.*` — longer, often heartbeat-required
+- `integration.*` — short per request; long-running external work should be modeled as start/status/fetch or async completion
+- `agent_runtime.*` — moderate, with short status reads and bounded launch/fetch/cancel windows
+
+## 11.2 Retry policy rules
+
+- use bounded exponential backoff
+- prefer non-retryable classification for invalid inputs or unsupported contract states
+- avoid retries that duplicate destructive sandbox side effects
+- ensure external starts are idempotent
+- ensure canonical contract normalization failures are treated as contract errors, not silently tolerated
+
+## 11.3 Heartbeats
+
+Heartbeat-required activities should be explicitly marked in the catalog.
+
+Representative heartbeat-required cases include:
+
+- long-running sandbox operations
+- long-running streaming gateway operations
+- managed runtime launch/publish operations where progress visibility is required
+
+Short status reads should remain short and should not become long-running heartbeat loops.
+
+## 11.4 Idempotency
 
 Rules:
 
-* All side-effecting activities must accept `idempotency_key`.
-* Artifact writes use sha256 content verification and two-phase upload (`create` + `write_complete`) which is naturally retry-safe.
-* External starts (e.g., `integration.jules.start`) must store and reuse `external_id` for the same key.
-* `agent_skill.resolve` must be deterministic with respect to its inputs and safe under retry. Retries must not silently re-resolve to different versions when the invocation expects a pinned result.
-* `agent_skill.materialize` must be idempotent or keyed so it does not create conflicting workspace state on retry. Materialization activities must never mutate checked-in skill sources in place.
+- side-effecting activities accept or derive stable idempotency keys
+- artifact writes remain naturally retry-safe through integrity checks
+- external starts must not create duplicate jobs on retry
+- managed launches must not create duplicate runtime executions on retry
+- any future `agent_skill.materialize` activity must be safe under retry and must not mutate checked-in source trees in place
 
 ---
 
-## 10) Security model
+## 12. Security model
 
-1. **Least privilege per fleet**
+### 12.1 Least privilege per fleet
 
-   * Sandbox fleet never holds provider API keys.
-   * Integration fleet never runs arbitrary shell commands.
-2. **Network controls**
+- sandbox workers do not hold provider API keys by default
+- integration workers do not run arbitrary shell commands
+- artifact workers do not need sandbox execution privileges
+- agent runtime workers have stronger execution privileges but a narrower responsibility set
 
-   * LLM fleet can reach model endpoints; sandbox fleet has restricted egress.
-3. **Secret distribution**
+### 12.2 Network controls
 
-   * Use a secret manager; short-lived tokens where possible.
-   * Secrets never appear in artifact content, workflow history, or logs (Constitution operational constraint).
-   * Note: Repo and local skill sources are potentially untrusted inputs. Fleets handling resolution/materialization must respect policy gates on those sources. Materialized skill bundles and prompt indexes must avoid leaking sensitive content through logs. Runtime materialization must not accidentally widen secret exposure between fleets.
-4. **Data handling**
+- LLM fleet can reach model endpoints
+- integrations fleet can reach provider APIs
+- sandbox fleet should have restricted egress
+- agent runtime fleet should only have the runtime/proxy/network access it actually needs
 
-   * Large content stored as artifacts; workflows pass references.
-   * Redaction policy for logs and workflow memos.
-   * RESTRICTED artifacts are access-controlled: only owner or service principals get raw content; a redacted preview (16 KB, token/password/secret patterns scrubbed) is auto-generated for UI display.
-5. **Default local/dev posture**
+### 12.3 Secret handling
 
-   * `AUTH_PROVIDER=disabled` may allow user-facing artifact metadata/presign APIs without end-user auth in the one-click profile.
-   * This does **not** make artifact storage public; MinIO/object storage remains on the internal network with service credentials.
+- use secret managers or controlled durable auth volumes where appropriate
+- do not place raw credentials into workflow payloads, artifacts, or logs
+- do not leak provider tokens through metadata or diagnostics artifacts
+
+### 12.4 Data handling
+
+- large content stays in artifacts
+- workflow history carries only refs and compact metadata
+- previews and redaction are handled through artifact-layer controls, not by bloating workflow payloads
 
 ---
 
-## 11) Observability requirements
+## 13. Observability requirements
 
-### 11.1 Logging
+## 13.1 Logging
 
-Every activity log line must include:
+Every activity log line should include enough context to answer:
 
-* `workflow_id`, `run_id`
-* `activity_type`, `activity_id`, `attempt`
-* `correlation_id`
-* `idempotency_key` (or a hash of it)
+- which workflow/run initiated the activity
+- which activity type ran
+- which attempt this is
+- which correlation ID and idempotency key were involved
 
-Large logs must be written as artifacts (link type `output.logs` or `debug.trace`) and referenced by ID.
+At minimum:
 
-Activity completion should also emit a structured summary that lets operators answer "what happened?" without reading raw worker internals.
+- `workflow_id`
+- `run_id`
+- `activity_type`
+- `activity_id`
+- `attempt`
+- `correlation_id`
+- `idempotency_key` or a hash of it
 
-For `agent_skill.*` activities, observability summaries should additionally log/emit: selected source kinds, resolved snapshot ID, materialization mode, runtime target, artifact refs for manifests/prompt indexes, and explicit failure reasons for policy or collision errors.
+Large logs belong in artifacts.
 
-### 11.2 Metrics
+## 13.2 Metrics
 
-Per fleet:
+Per fleet, track:
 
-* task queue lag / backlog
-* activity execution latency distributions
-* retry counts and failure reasons
-* sandbox resource usage (CPU/mem), command duration
-* LLM token usage/cost metrics (where available)
-* repeated retry/time-out patterns that should feed operator review or follow-up improvement work
+- queue backlog and lag
+- execution latency
+- retry counts
+- failure reasons
+- resource usage where relevant
+- repeated timeout/retry patterns worth operator attention
 
-### 11.3 Tracing
+For agent-runtime and integration activities, metric dimensions should align with canonical contract states rather than provider-specific raw states.
+
+## 13.3 Tracing
 
 If using OpenTelemetry:
 
-* propagate correlation IDs through activities
-* annotate spans with workflow/run identifiers
+- propagate correlation IDs through activities
+- annotate spans with workflow/run identifiers
+- keep provider-specific noise out of top-level span naming where possible
 
 ---
 
-## 12) Testing strategy
+## 14. Testing strategy
 
 1. **Activity contract tests**
+   - validate canonical request and response schemas
+   - ensure provider activities return canonical contracts
 
-   * validate schemas
-   * idempotency behavior under retry
 2. **Worker fleet integration tests**
+   - verify activity-to-fleet routing
+   - verify helper activities remain narrow and intentional
 
-   * can the right fleet execute the right activity type?
 3. **Load tests**
+   - sandbox concurrency and isolation
+   - LLM rate limiting correctness
+   - managed runtime queue behavior
 
-   * sandbox concurrency and isolation
-   * LLM rate limiting correctness
 4. **Failure injection**
+   - provider outages
+   - artifact store outages
+   - worker restarts mid-activity
+   - manager restart and lease recovery paths
 
-   * external provider timeouts
-   * artifact store outages
-   * worker restarts mid-activity (heartbeat behavior)
-5. **Agent Skill boundaries**
+5. **Canonical contract enforcement**
+   - reject unknown provider statuses at the adapter/activity boundary
+   - ensure workflows do not depend on provider-shaped payloads
+   - ensure metadata carries provider-specific details without breaking canonical top-level schemas
 
-   * source precedence enforcement at the activity boundary
-   * retry safety of `agent_skill.resolve` and idempotency of `agent_skill.materialize`
-   * correct fleet routing for the new activity types
-   * compatibility handling if workflow/activity payloads change
 6. **Traceability gate**
-
-   * activity catalog changes stay aligned with specs/contracts/runtime tests
-   * new explicit activity types document migration/compatibility impact before rollout
+   - catalog changes must stay aligned with runtime code, docs, and tests
 
 ---
 
-## 13) Fleet and activity layering
+## 15. Decided questions
 
-Worker topology is organized into **workflow**, **artifacts**, **LLM/planning**, **sandbox**, **integrations**, **agent_runtime** fleets, and the activity families required for **agent skill resolution/materialization**. Activities are registered per `activity_catalog.py` and `workers.py`. New activity types must document compatibility impact before rollout. Historical sequencing notes are archived in [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md).
+### 15.1 Provider-specific LLM task queues
+
+Deferred. Start with one `mm.activity.llm` queue. Split only when operational isolation or scaling demands it.
+
+### 15.2 Priority lanes
+
+Deferred for v1. Throughput control comes from concurrency and rate limiting, not queue ordering guarantees.
+
+### 15.3 Search Attributes from activities
+
+Disallowed. Workflows own visibility state.
+
+### 15.4 Workflow fleet helper activities
+
+Allowed only as a narrow exception. Current example: `integration.resolve_adapter_metadata`.
+
+### 15.5 Canonical runtime contract enforcement
+
+Decided. The activity boundary, not workflow code, owns normalization into `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`.
 
 ---
 
-## 14) Decided questions
+## 16. Summary
 
-These were previously open questions; decisions are now recorded:
+MoonMind’s Temporal activity topology is organized around a small number of capability-based fleets:
 
-1. **Provider-specific LLM task queues:** Start with a single `mm.activity.llm` queue. Provider selection is handled internally within the LLM activity worker based on request parameters. Subdivide into per-provider queues only when operational isolation or independent scaling demands it.
+- workflow
+- artifacts
+- llm
+- sandbox
+- integrations
+- agent_runtime
 
-2. **Priority lanes:** Deferred for v1. Rely on concurrency limits and rate limiting per fleet. If introduced later, priority lanes will allocate more worker capacity to higher lanes without guaranteeing strict ordering.
+The catalog is already live for:
 
-3. **Search Attributes from Activities:** Activities do **not** upsert Search Attributes or Memo fields. Workflows own all visibility updates. Activities return results to the calling workflow, which updates `mm_state`, `mm_owner_id`, `mm_updated_at`, etc. This preserves the determinism boundary and keeps visibility logic in one place.
+- artifact lifecycle
+- planning
+- executable tool dispatch
+- sandbox work
+- provider integrations
+- provider-profile support
+- OAuth session support
+- managed runtime supervision
+- proposals and review
 
----
+The key architectural rule for current and future work is:
 
-## Appendix A: Suggested initial Activity Type list (MVP)
+- **Activities own side effects**
+- **The catalog owns routing**
+- **Canonical runtime contracts cross the workflow boundary**
+- **Workflow code should not perform provider-specific coercion**
 
-**Artifacts** *(service implemented; activity wrappers next)*
-
-* `artifact.create`
-* `artifact.write_complete`
-* `artifact.read`
-* `artifact.list_for_execution`
-* `artifact.compute_preview`
-* `artifact.link`
-
-**Planning**
-
-* `plan.generate`
-* `plan.validate`
-
-**Agent Skill Context**
-
-* `agent_skill.resolve`
-* `agent_skill.materialize`
-* `agent_skill.build_prompt_index`
-
-**Skills**
-
-* `mm.skill.execute`
-
-**Sandbox** *(phase 4)*
-
-* `sandbox.run_command`
-
-**Integrations** *(phase 5)*
-
-* `integration.jules.start`
-* `integration.jules.status`
-* `integration.jules.fetch_result`
-
-**Lifecycle** *(phase 6)*
-
-* `artifact.lifecycle_sweep`
-* `artifact.pin`
-* `artifact.unpin`
+That keeps MoonMind’s Temporal model easier to reason about, easier to test, and safer to evolve.
