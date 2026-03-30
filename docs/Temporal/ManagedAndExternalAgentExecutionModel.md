@@ -483,7 +483,7 @@ Implementation should include a non-cancellable cleanup path, using the appropri
 
 **Adapters:** `JulesAgentAdapter` (external) and `ManagedAgentAdapter` (managed runtime) implement the protocol.
 
-**Managed runtime layer:** `ManagedRuntimeLauncher`, `ManagedRunStore`, `ManagedRunSupervisor`, and `LogStreamer` under `moonmind/workflows/temporal/runtime/`. Legacy skill-dispatch paths were removed from `worker_runtime.py`; agent execution goes through `MoonMind.AgentRun`.
+**Managed runtime layer:** `ManagedRuntimeLauncher`, `ManagedRunStore`, `ManagedRunSupervisor`, and `LogStreamer` under `moonmind/workflows/temporal/runtime/`. Legacy skill-dispatch paths and multi-step custom routing blocks were removed; agent execution and adapter validation (via `resolve_adapter_metadata`) go through deterministic local catalog routing in `MoonMind.AgentRun`.
 
 **Auth and fleet:** `MoonMindProviderProfileManagerWorkflow` integrates with `MoonMind.AgentRun` for profile slots and 429 handling. The `agent_runtime` fleet exposes `agent_runtime.publish_artifacts` and `agent_runtime.cancel` (`workers.py`, `activity_catalog.py`, `activity_runtime.py`).
 
