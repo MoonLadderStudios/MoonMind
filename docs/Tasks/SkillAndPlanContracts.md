@@ -1,15 +1,16 @@
-# Tool and Plan Contracts (Skills as a Tool Subtype)
+# Execution Tool and Plan Contracts
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md)
 
 MoonMind system design (Temporal-first)
 
 Status: **Implemented** (contracts active, runtime live)
-Last updated: 2026-03-20
+Last updated: 2026-03-30
+Related: [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md)
 
 ---
 
-## 1) Purpose
+## 1) Document boundary and Purpose
 
 Define what **execution** means in MoonMind using **Temporal’s** core model:
 
@@ -20,15 +21,34 @@ Define what **execution** means in MoonMind using **Temporal’s** core model:
   * **Tool** (capability contract)
   * **Plan** (structured sequence/graph of tool invocations)
   * **Artifact** (large inputs/outputs stored outside workflow history)
+  * **Agent Skill / Skill Set** (instruction bundles)
 
-This document establishes:
+This document explicitly covers executable MoonMind tools, plan structure, plan execution semantics, artifact-backed execution context, and deterministic workflow orchestration. 
+It establishes:
 
 * Tool interface: schemas, validation, error model
 * Plan format: DAG-first, concurrency, dependency semantics
-* Plan production: planning is “just a tool”; plans are artifacts
+* Plan production: planning is expressed as an executable tool; plans are artifacts
 * Determinism boundaries: orchestration in workflow, execution in activities
 * Progress & intermediate outputs conventions
-* Deliverables: tool registry spec, plan schema/examples/validation, execution semantics (plan -> activity invocations)
+* Deliverables: executable tool registry spec, plan schema/examples/validation, execution semantics (plan -> activity invocations)
+
+**Use this document for:**
+* `ToolDefinition`
+* tool invocation
+* plan DAG contracts
+* execution semantics
+* progress contracts
+
+**Use [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md) for:**
+* `AgentSkillDefinition`
+* `SkillSet`
+* `ResolvedSkillSet`
+* `.agents/skills`
+* `.agents/skills/local`
+* runtime materialization of instruction bundles
+
+This document does **not** define deployment-stored agent instruction bundles, skill-set resolution, or runtime materialization of agent skills.
 
 ### 1.1 Terminology policy (Temporal era)
 
@@ -40,13 +60,14 @@ Canonical terminology for execution payloads is:
 
 There are two tool subtypes:
 
-* `tool.type = "skill"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the registry snapshot.
+* `tool.type = "skill"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the tool registry snapshot.
 * `tool.type = "agent_runtime"` — dispatched as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
 
-> **Note:** The term **"Skill"** in `.agents/skills/` directories and `SKILL.md` files
-> refers to **agent instruction bundles** — markdown files that AI agents read for
-> guidance. These are a separate concept from the Temporal contract `ToolDefinition`
-> objects described in this document.
+> **Important:** Executable tool skills and agent instruction skills are separate systems.
+> The term **"Agent Skill"** (in `.agents/skills/` directories and `SKILL.md` files)
+> refers to reusable instruction bundles that AI agents read for guidance as defined in
+> [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md).
+> This document only governs the executable **tool** side.
 
 Canonical Python class names:
 
@@ -60,9 +81,9 @@ Canonical Python class names:
 
 Compatibility rule:
 
-* Legacy `Skill*` aliases are re-exported for backward compatibility
-* New code should import canonical `Tool*` names
-* Legacy `skill` payload fields are accepted during migration
+* Legacy `Skill*` aliases are re-exported for backward compatibility during migration.
+* New code should import canonical `Tool*` names.
+* Legacy `skill` payload fields are accepted during migration, but should not be reused indefinitely.
 
 ---
 
@@ -130,12 +151,14 @@ A **Tool** is a named capability defined by:
 * capability requirements (what worker fleet can run it)
 
 A Tool is not a workflow. Workflows interpret Plans and invoke Tools as Activities (or child workflows for `agent_runtime`).
+A `ToolDefinition` is **not** an `AgentSkillDefinition`. Executable tool execution and agent-skill materialization are adjacent but separate concerns.
+Note: An agent-runtime step may simultaneously receive a `resolved_skillset_ref` or equivalent execution context from the Agent Skill System, but that is resolved separately.
 
 Two tool subtypes are currently in use:
 
 | `tool.type` | Dispatch mechanism | Contract |
 |---|---|---|
-| `skill` | Temporal Activity (`mm.tool.execute`) | `ToolDefinition` from registry snapshot |
+| `skill` | Temporal Activity (`mm.tool.execute`) | `ToolDefinition` from tool registry snapshot |
 | `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
 ---
@@ -199,7 +222,8 @@ security:
 
 ### 4.3 ToolInvocation schema
 
-A Plan node references a Tool with pinned version and inputs.
+A Plan node (step) references an executable Tool with pinned version and inputs.
+Note: Step-level agent skill selectors are defined in `docs/Tasks/AgentSkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
 
 ```json
 {
@@ -217,7 +241,7 @@ A Plan node references a Tool with pinned version and inputs.
 }
 ```
 
-Legacy compatibility form (accepted during migration):
+Legacy compatibility form (accepted only during migration):
 
 ```json
 {
@@ -233,7 +257,7 @@ Legacy compatibility form (accepted during migration):
 #### Rules
 
 * `id` unique within Plan.
-* Tool must exist in the pinned registry snapshot (see §8).
+* Tool must exist in the pinned tool registry snapshot (see §8).
 * Inputs must validate against the tool input schema.
 * Overrides are optional and must be within safety limits.
 
@@ -305,20 +329,20 @@ All failures normalize to:
 
 ---
 
-## 5) Skill registry spec
+## 5) Executable tool registry spec
 
 ### 5.1 Declaration format
 
-* Repository-hosted registry files (YAML/JSON).
-* Each entry is validated at build time and worker startup.
+* Repository-hosted tool registry files (YAML/JSON).
+* Each executable tool definition is validated at build time and worker startup.
 
 ### 5.2 Discovery model (v1: static)
 
-**Static registry snapshot** is the v1 requirement:
+**Static tool registry snapshot** is the v1 requirement:
 
-* Skills are bundled with worker deployments and API deployment.
-* Registry has an immutable build identifier/digest (see §8).
-* Deploying a new skill means deploying workers that can execute it.
+* Executable tools are bundled with worker deployments and API deployment.
+* The tool registry has an immutable build identifier/digest (see §12).
+* Deploying a new tool means deploying workers that can execute it.
 
 ### 5.3 Worker capability model
 
@@ -352,12 +376,12 @@ A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and p
   "nodes": [
     {
       "id": "n1",
-      "skill": { "name": "repo.run_tests", "version": "1.2.0" },
+      "tool": { "type": "skill", "name": "repo.run_tests", "version": "1.2.0" },
       "inputs": { "repo_ref": "git:org/repo#branch" }
     },
     {
       "id": "n2",
-      "skill": { "name": "plan.generate", "version": "1.0.0" },
+      "tool": { "type": "skill", "name": "plan.generate", "version": "1.0.0" },
       "inputs": { "context_artifact": "art:sha256:…" }
     }
   ],
@@ -405,13 +429,13 @@ Rules:
 
 ## 7) Plan production
 
-### 7.1 “Planning is a skill”
+### 7.1 Planning is expressed as an executable tool
 
-Planning is expressed as one or more skills (e.g., `plan.generate`) executed as Activities. A planner may be LLM-driven or not, but it is always an Activity.
+Planning is expressed as one or more tools (e.g., `plan.generate`) executed as Activities. A planner may be LLM-driven or not, but it is always invoked as an executable Tool.
 
 ### 7.2 Plans are artifacts
 
-* The planner skill writes the Plan as an artifact and returns `plan_artifact`.
+* The planner tool writes the Plan as an artifact and returns `plan_artifact`.
 * Workflows pass only the reference.
 
 ---
@@ -428,9 +452,11 @@ Planning is expressed as one or more skills (e.g., `plan.generate`) executed as 
 
 ### 8.2 Activity responsibilities (nondeterministic allowed)
 
-* execute a skill invocation (LLM calls, shell, git, integrations)
+* execute a tool invocation (LLM calls, shell, git, integrations)
 * read/write artifacts
 * transform data
+
+(Note: separate activities may also resolve and materialize agent instruction skill snapshots, but those are defined by the Agent Skill System and are not executable plan tools by default).
 
 ---
 
@@ -464,7 +490,8 @@ Planning is expressed as one or more skills (e.g., `plan.generate`) executed as 
 
 **Resolution**
 
-* Resolve `ToolDefinition` from snapshot.
+* Resolve `ToolDefinition` from the pinned tool registry snapshot.
+* Any agent instruction skill snapshot used by an agent-runtime step is resolved separately and passed as execution context, not looked up in the executable tool registry.
 * Derive Activity Type and routing target (task queue) from ToolDefinition + worker capabilities.
 
 **Invocation payload**
@@ -518,7 +545,7 @@ Progress is represented as a small structured object:
 
 ## 11) Validation rules (authoritative)
 
-### 11.1 Tool registry validation
+### 11.1 Executable tool registry validation
 
 * unique `(name, version)`
 * valid JSON Schemas
@@ -534,8 +561,8 @@ Structural checks:
 * node IDs unique
 * edges reference existing nodes
 * acyclic graph required
-* referenced skills exist in pinned registry snapshot
-* node inputs validate against skill input schema
+* referenced tools exist in the pinned tool registry snapshot
+* node inputs validate against the tool input schema
 * data references point to valid nodes + output pointers
 
 ---
@@ -544,14 +571,14 @@ Structural checks:
 
 This section **locks decisions** for implementation.
 
-### Q1) Do we pin Plans to a registry snapshot or resolve “latest” skills at runtime?
+### Q1) Do we pin Plans to a tool registry snapshot or resolve “latest” tools at runtime?
 
-**Decision (recommended): Pin to a registry snapshot.**
+**Decision (recommended): Pin to a tool registry snapshot.**
 
 **Why**
 
-* Reproducibility: the same plan re-runs the same skill contracts.
-* Debuggability: you can answer “what code/schema was used?”
+* Reproducibility: the same plan re-runs the same tool contracts.
+* Debuggability: you can answer “what tool code/schema was used?”
 * Safety: avoids surprise changes from concurrent deployments.
 
 **How**
@@ -559,11 +586,11 @@ This section **locks decisions** for implementation.
 * Every plan includes `metadata.registry_snapshot` with:
 
   * `digest` (immutable identifier)
-  * `artifact_ref` to the snapshot content (the registry file(s) used)
+  * `artifact_ref` to the snapshot content (the tool registry file(s) used)
 
 **Validation rule**
 
-* Interpreter must resolve skill definitions from the plan’s snapshot, not from “latest.”
+* Interpreter must resolve tool definitions from the plan’s snapshot, not from “latest.”
 
 ---
 
@@ -580,7 +607,7 @@ This section **locks decisions** for implementation.
 Reserve fields without enabling them:
 
 * `edges[].condition` (optional, ignored/invalid in v1)
-* introduce explicit **condition nodes** later (`skill:decision.evaluate`) that gate downstream nodes by producing a boolean output and generating a new plan segment (or triggering Continue-As-New).
+* introduce explicit **condition nodes** later (`tool:decision.evaluate`) that gate downstream nodes by producing a boolean output and generating a new plan segment (or triggering Continue-As-New).
 
 **v1 rule**
 
@@ -593,12 +620,12 @@ Reserve fields without enabling them:
 **Decision (recommended): Split validation.**
 
 * **Workflow does lightweight structural checks** (acyclic, IDs, edges reference nodes).
-* **Activity performs deep validation** (JSON Schema validation against pinned registry snapshot, reference resolution checks).
+* **Activity performs deep validation** (JSON Schema validation against pinned tool registry snapshot, reference resolution checks).
 
 **Why**
 
 * Keeps workflow deterministic and small.
-* Produces consistent validation errors (same error model as other skills).
+* Produces consistent validation errors (same error model as other tools).
 * Allows updating validators without touching workflow determinism concerns (still must version safely, but it’s easier).
 
 **Activity**
@@ -606,7 +633,7 @@ Reserve fields without enabling them:
 * `plan.validate(plan_artifact_ref, registry_snapshot_ref)` → returns either:
 
   * `validated_plan_ref` (could be the same ref) or
-  * a `SkillFailure` error.
+  * a `ToolFailure` error.
 
 **v1 rule**
 
@@ -614,13 +641,13 @@ Reserve fields without enabling them:
 
 ---
 
-### Q4) Should `mm.skill.execute` be the only Activity Type, or should there be per-skill activity types?
+### Q4) Should `mm.tool.execute` / `mm.skill.execute` be the only Activity Type, or should there be per-tool activity types?
 
 **Decision (recommended): Hybrid model (dispatcher + curated activity types).**
 
 **Why**
 
-* A single dispatcher Activity Type (`mm.skill.execute`) is flexible and keeps catalogs small.
+* A single dispatcher Activity Type (`mm.tool.execute` / `mm.skill.execute`) is flexible and keeps catalogs small.
 * But some boundaries benefit from explicit types for routing/isolation/least-privilege:
 
   * `artifact.read/write`
@@ -630,12 +657,12 @@ Reserve fields without enabling them:
 
 **Implementation**
 
-* Default: Skills bind to `mm.skill.execute`.
-* Exception: Skills may bind directly to a curated Activity Type if they require special worker isolation or credentials.
+* Default: Tools bind to `mm.tool.execute`.
+* Exception: Tools may bind directly to a curated Activity Type if they require special worker isolation or credentials.
 
 **Rule**
 
-* The Skill registry must declare the activity type; the interpreter does not guess.
+* The executable tool registry must declare the activity type; the interpreter does not guess.
 
 ---
 
@@ -661,7 +688,7 @@ Reserve fields without enabling them:
 ### C) Execution semantics
 
 * Plan Executor algorithm (deterministic orchestration)
-* Node → activity invocation mapping (registry snapshot resolution)
+* Node → activity invocation mapping (tool registry snapshot resolution)
 * Concurrency rules and failure modes
 * Progress and intermediate output contracts
 
@@ -669,4 +696,6 @@ Reserve fields without enabling them:
 
 ## 14) Engineering backlog
 
-Minimum components: tool registry format + loader + validator; registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / skill dispatch activity; progress query and optional progress artifact. Status is tracked in [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md).
+Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked in [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md).
+
+Deployment-backed agent instruction skill work is tracked separately in [`docs/tmp/004-AgentSkillSystemPlan.md`](../tmp/004-AgentSkillSystemPlan.md).
