@@ -2,7 +2,7 @@
 ARG CODEX_CLI_VERSION=0.104.0
 ARG AGENT_KIT_VERSION=0.4.0
 ARG CLAUDE_CLI_VERSION=2.1.50
-# Build the shared runtime image with Codex/Spec Kit/Gemini/Claude/Cursor CLIs
+# Build the shared runtime image with Codex/Spec Kit/Gemini/Claude CLIs
 # by default so the API and Temporal workers can run from the
 # same image tag. Disable selectively in test-only or constrained builds.
 ARG INSTALL_CODEX_CLI=true
@@ -11,7 +11,6 @@ ARG INSTALL_CLAUDE_CLI=true
 ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
-# Cursor's `cursor-agent` launcher runs `node --use-system-ca`; that flag exists on Node 22+.
 FROM node:22-bookworm AS tooling-builder
 
 # Ensure all RUN commands in this stage use bash with pipefail and fail fast on

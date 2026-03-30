@@ -470,7 +470,7 @@ class ManagedRuntimeLauncher:
         cmd = self.build_command(profile, request, strategy=strategy)
         
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
-        # injection for Codex, .cursor/ config files for Cursor CLI).
+        # injection for Codex).
         if resolved_workspace_path is not None and strategy is not None:
             try:
                 await strategy.prepare_workspace(

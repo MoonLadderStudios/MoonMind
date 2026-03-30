@@ -62,7 +62,7 @@ class ManagedRuntimeStrategy(ABC):
         Must align with the ``OAuthProviderSpec`` entries defined in
         ``docs/ManagedAgents/UniversalTmateOAuth.md``.  Both registries
         share the ``runtime_id`` namespace (``codex_cli``, ``gemini_cli``,
-        ``claude_code``, ``cursor_cli``).
+        ``claude_code``).
         """
         return "api_key"
 
@@ -122,7 +122,6 @@ class ManagedRuntimeStrategy(ABC):
         """Pre-launch workspace setup (no-op by default).
 
         Override for runtimes that need workspace files:
-        - Cursor: ``.cursor/rules/``, ``.cursor/cli.json``
         - Claude: ``CLAUDE.md``
         """
 

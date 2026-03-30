@@ -4,11 +4,11 @@
 
 ## Current State
 
-We have Managed Agents support for four runtimes: Gemini CLI, Codex CLI, Cursor CLI, and Claude Code. **Command construction** for all four is implemented via `ManagedRuntimeStrategy` subclasses and `RUNTIME_STRATEGIES` (`moonmind/workflows/temporal/runtime/strategies/`). **`build_command()`** in `ManagedRuntimeLauncher` delegates to the registry when `profile.runtime_id` is registered, then falls through to a **generic** template path (model/effort/prompt flags) for unknown runtimes — the old per-runtime `if/elif` block is gone. **Environment shaping** and **workspace preparation** are both wired through the launcher to strategies.
+We have Managed Agents support for three runtimes: Gemini CLI, Codex CLI, and Claude Code. **Command construction** for all three is implemented via `ManagedRuntimeStrategy` subclasses and `RUNTIME_STRATEGIES` (`moonmind/workflows/temporal/runtime/strategies/`). **`build_command()`** in `ManagedRuntimeLauncher` delegates to the registry when `profile.runtime_id` is registered, then falls through to a **generic** template path (model/effort/prompt flags) for unknown runtimes — the old per-runtime `if/elif` block is gone. **Environment shaping** and **workspace preparation** are both wired through the launcher to strategies.
 
 ### Workflow Adapters
 
-`ManagedAgentAdapter` (`moonmind/workflows/adapters/managed_agent_adapter.py`) provides a common execution interface: auth profile resolution, environment shaping (`_shape_environment_for_oauth`, `_shape_environment_for_api_key`), slot leasing, and launcher triggering. **Default** `command_template` and `auth_mode` are taken from the matching strategy when registered; **fallbacks** remain for unregistered `runtime_id` values (auth: `cursor_cli` → oauth else api_key; template: `[runtime_id]`).
+`ManagedAgentAdapter` (`moonmind/workflows/adapters/managed_agent_adapter.py`) provides a common execution interface: auth profile resolution, environment shaping (`_shape_environment_for_oauth`, `_shape_environment_for_api_key`), slot leasing, and launcher triggering. **Default** `command_template` and `auth_mode` are taken from the matching strategy when registered; **fallbacks** remain for unregistered `runtime_id` values (auth: api_key; template: `[runtime_id]`).
 
 There are also `JulesAgentAdapter`, `CodexCloudAgentAdapter`, and `OpenClawAgentAdapter` which subclass `BaseExternalAgentAdapter`.
 
@@ -32,10 +32,6 @@ The profile object also supports `passthrough_env_keys` for additional pass-thro
 > [!NOTE]
 > `settings.py` still has `agent_runtime_env_keys` as a configuration option (lines 715, 1234). This may be dead config — it is not used by the launcher, which now delegates entirely to strategies. Should be verified and cleaned up.
 
-### Cursor CLI Workspace Prep (Wired)
-
-`cursor_rules.py` provides `write_task_rule_file()` and `cursor_config.py` provides `write_cursor_cli_json()` for generating `.cursor/rules/` and `.cursor/cli.json` files. **`CursorCliStrategy` overrides `prepare_workspace()`** and invokes both helpers. The launcher calls `strategy.prepare_workspace()` on registered strategies when a workspace path exists.
-
 ### Gemini / Claude Workspace Prep (Not Implemented)
 
 No workspace preparation code exists yet for Gemini CLI (e.g. `GEMINI_INSTRUCTIONS` or `.gemini/` instruction files) or Claude Code (e.g. `CLAUDE.md`) inside the strategies. **`prepare_workspace()`** is a no-op on the base class for those runtimes.
@@ -46,13 +42,13 @@ No workspace preparation code exists yet for Gemini CLI (e.g. `GEMINI_INSTRUCTIO
 
 ### Exit Classification (Strategy-Delegated)
 
-`ManagedRunSupervisor._classify_exit()` now delegates to `strategy.classify_exit()` with `exit_code`, `stdout`, and `stderr` context when a strategy is registered for the `runtime_id`. Timeout is handled before strategy delegation. `CursorCliStrategy.classify_exit()` uses NDJSON-aware parsing and 429 detection.
+`ManagedRunSupervisor._classify_exit()` now delegates to `strategy.classify_exit()` with `exit_code`, `stdout`, and `stderr` context when a strategy is registered for the `runtime_id`. Timeout is handled before strategy delegation.
 
 ### Output Parsing
 
-`moonmind/workflows/temporal/runtime/output_parser.py` defines **`NdjsonOutputParser`** and **`PlainTextOutputParser`** implementing **`RuntimeOutputParser`**. `CursorCliStrategy.create_output_parser()` returns `NdjsonOutputParser`. The base class `create_output_parser()` returns `PlainTextOutputParser`.
+`moonmind/workflows/temporal/runtime/output_parser.py` defines **`NdjsonOutputParser`** and **`PlainTextOutputParser`** implementing **`RuntimeOutputParser`**. The base class `create_output_parser()` returns `PlainTextOutputParser`.
 
-**Output parsers are NOT integrated into the log streaming pipeline** — `RuntimeLogStreamer.stream_to_artifact()` streams raw bytes without parsing. The parsers are currently only consumed by `classify_exit()` in the Cursor strategy.
+**Output parsers are NOT integrated into the log streaming pipeline** — `RuntimeLogStreamer.stream_to_artifact()` streams raw bytes without parsing.
 
 ### Codex Worker (Parallel Execution Path)
 
@@ -76,7 +72,7 @@ Most **command-line construction** is encapsulated in strategies. Remaining cros
 |---|---|---|
 | `launcher.py` `build_command()` | registry → generic fallback | Registered runtimes use strategy; unknown `runtime_id` uses generic model/effort/prompt extension |
 | `adapter.py` command_template default | strategy → fallback | If no profile template: use `default_command_template`, else `[runtime_id]` |
-| `adapter.py` auth_mode default | strategy → fallback | If strategy missing: `cursor_cli` → oauth, else api_key |
+| `adapter.py` auth_mode default | strategy → fallback | If strategy missing: api_key |
 | `log_streamer.py` `stream_to_artifact()` | raw bytes only | Does not use output parsers — streaming is format-agnostic |
 
 > [!NOTE]
@@ -110,7 +106,7 @@ class ManagedRuntimeStrategy(ABC):
         Must align with the OAuthProviderSpec entries defined in
         docs/ManagedAgents/TmateArchitecture.md.  Both registries
         share the runtime_id namespace (codex_cli, gemini_cli,
-        claude_code, cursor_cli).
+        claude_code).
         """
         return "api_key"
 
@@ -148,7 +144,6 @@ class ManagedRuntimeStrategy(ABC):
         """Pre-launch workspace setup.
 
         Examples:
-         - Cursor: write .cursor/rules/moonmind-task.mdc, .cursor/cli.json
          - Gemini: write GEMINI_INSTRUCTIONS or .gemini/ instruction files
          - Claude: write CLAUDE.md
         """
@@ -181,7 +176,6 @@ class ManagedRuntimeStrategy(ABC):
 
 Output parsing is available per-strategy but **not yet integrated into log streaming**. Different runtimes stream differently:
 
-- **Cursor CLI**: NDJSON (`--output-format stream-json`) — parsed by `NdjsonOutputParser`; used in `CursorCliStrategy.classify_exit()`
 - **Gemini CLI**: plain text stdout — `PlainTextOutputParser` (base default)
 - **Claude Code**: JSON output mode available but not currently enforced — `PlainTextOutputParser`
 - **Codex CLI**: plain text stdout — `PlainTextOutputParser`
@@ -194,7 +188,6 @@ Output parsing is available per-strategy but **not yet integrated into log strea
 RUNTIME_STRATEGIES: dict[str, ManagedRuntimeStrategy] = {
     "claude_code": ClaudeCodeStrategy(),
     "codex_cli": CodexCliStrategy(),
-    "cursor_cli": CursorCliStrategy(),
     "gemini_cli": GeminiCliStrategy(),
 }
 ```
@@ -265,7 +258,7 @@ The codebase has adopted a **Strategy Pattern-based Registry** (`ManagedRuntimeS
 |---|---|---|
 | Command construction | ✅ Done | Launcher delegates to `strategy.build_command()` |
 | Environment shaping | ✅ Done | Launcher calls `strategy.shape_environment()` |
-| Workspace preparation | ✅ Hook wired | Launcher calls `strategy.prepare_workspace()`; content exists for Cursor and Codex only |
+| Workspace preparation | ✅ Hook wired | Launcher calls `strategy.prepare_workspace()`; content exists for Codex only |
 | Exit classification | ✅ Done | Supervisor delegates to `strategy.classify_exit()` |
 | Output parsing | ✅ Done | Integrated via `RuntimeLogStreamer.stream_and_parse()`; supervisor wires strategy parser |
 | Auth mode defaults | ✅ Done | Adapter reads from strategy |
@@ -307,16 +300,10 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 
 ---
 
-### Phase 2 — Remaining Strategies: Cursor, Claude, Codex
+### Phase 2 — Remaining Strategies: Claude, Codex
 
 **Goal**: Eliminate all `if/elif` branching in `build_command()`.
 
-- [x] Implement `CursorCliStrategy`
-  - [x] `build_command`: former `cursor_cli` launcher branch
-  - [x] `shape_environment`: completed (base class default — Cursor CLI has no special env needs)
-  - [x] `default_auth_mode`: `"oauth"`
-  - [x] `prepare_workspace`: wired `write_task_rule_file()` and `write_cursor_cli_json()`
-  - [x] `create_output_parser` / rate limits: `NdjsonOutputParser` in `output_parser.py` + `classify_exit()` on the strategy
 - [x] Implement `ClaudeCodeStrategy`
   - [x] `build_command`: former generic / `claude_code` path
   - [x] `prepare_workspace`: no-op (stub until workspace prep content is needed)
@@ -358,8 +345,6 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 **Goal**: Per-runtime correctness for exit codes and structured output.
 
 - [x] Move `_classify_exit` in `supervisor.py` to call `strategy.classify_exit()` with stdout/stderr context
-- [x] Implement `CursorCliStrategy.classify_exit()` — NDJSON-aware / 429 detection
-- [x] Implement `CursorCliStrategy.create_output_parser()` — returns `NdjsonOutputParser`
 - [x] Implement `PlainTextOutputParser` in `output_parser.py`
 - [x] Base class `create_output_parser()` returns `PlainTextOutputParser` by default
 - [x] Add unit tests for output parsers and related behavior (`test_output_parser.py`, strategy tests)
@@ -375,7 +360,6 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 
 - [x] Implement `GeminiCliStrategy.prepare_workspace()` — write `.gemini/` instruction files or `GEMINI_INSTRUCTIONS`
 - [x] Implement `ClaudeCodeStrategy.prepare_workspace()` — write `CLAUDE.md` with task context
-- [x] Implement and verify `CursorCliStrategy.prepare_workspace()` — write `.cursor/rules/` and `.cursor/cli.json` via existing helpers
 - [x] Add workspace prep call in `launcher.py:launch()` after workspace resolution, before subprocess spawn *(calls `await strategy.prepare_workspace(...)`)*
 - [x] Wire launcher subprocess env through `strategy.shape_environment()` (launcher line 419)
 - [x] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per TmateArchitecture.md alignment)
