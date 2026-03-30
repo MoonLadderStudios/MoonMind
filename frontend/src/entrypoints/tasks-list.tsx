@@ -44,7 +44,7 @@ const TABLE_COLUMNS = [
   ['startedAt', 'Started'],
   ['closedAt', 'Finished'],
 ] as const;
-const VALID_TABLE_SORT_FIELDS = new Set<string>(TABLE_COLUMNS.map((column) => column[0]));
+const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
 
 const ExecutionRowSchema = z
   .object({
@@ -158,7 +158,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [temporalState, setTemporalState] = useState(() => (initial.get('state') || '').toLowerCase());
   const [entry, setEntry] = useState(() => (initial.get('entry') || '').toLowerCase());
   const [repository, setRepository] = useState(() => initial.get('repo') || '');
-  const [integration, setIntegration] = useState(() => initial.get('integration') || '');
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
   const [listCursor, setListCursor] = useState<string | null>(() => initial.get('nextPageToken')?.trim() || null);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
@@ -168,7 +167,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     () => (initial.get('sortDir') === 'asc' ? 'asc' : 'desc'),
   );
   const normalizedRepository = repository.trim();
-  const normalizedIntegration = integration.trim();
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
@@ -176,7 +174,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (temporalState) params.set('state', temporalState);
     if (entry) params.set('entry', entry);
     if (normalizedRepository) params.set('repo', normalizedRepository);
-    if (normalizedIntegration) params.set('integration', normalizedIntegration);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
     if (sortField !== 'createdAt' || sortDir !== 'desc') {
@@ -189,7 +186,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     temporalState,
     entry,
     normalizedRepository,
-    normalizedIntegration,
     pageSize,
     listCursor,
     sortField,
@@ -208,7 +204,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     temporalState,
     entry,
     normalizedRepository,
-    normalizedIntegration,
     listCursor,
   ] as const;
 
@@ -224,7 +219,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       if (temporalState) params.set('state', temporalState);
       if (entry) params.set('entry', entry);
       if (normalizedRepository) params.set('repo', normalizedRepository);
-      if (normalizedIntegration) params.set('integration', normalizedIntegration);
       const response = await fetch(`${payload.apiBase}/executions?${params}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
@@ -426,19 +420,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           </label>
         </div>
         <div className="grid-2">
-          <label>
-            Integration
-            <input
-              type="text"
-              value={integration}
-              disabled={!listEnabled}
-              placeholder="github, jira, ..."
-              onChange={(event) => {
-                setIntegration(event.target.value);
-                resetToFirstPage();
-              }}
-            />
-          </label>
           <div className="card">
             <strong>Status:</strong>{' '}
             {countSummary
