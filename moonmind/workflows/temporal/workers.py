@@ -250,6 +250,7 @@ def build_worker_activity_bindings(
     agent_runtime_activities: Any | None = None,
     proposal_activities: Any | None = None,
     review_activities: Any | None = None,
+    agent_skills_activities: Any | None = None,
 ) -> tuple[TemporalActivityBinding, ...]:
     """Resolve activity handlers for exactly one activity fleet."""
 
@@ -268,6 +269,7 @@ def build_worker_activity_bindings(
         agent_runtime_activities=agent_runtime_activities,
         proposal_activities=proposal_activities,
         review_activities=review_activities,
+        agent_skills_activities=agent_skills_activities,
         fleets=(normalized,),
     )
 

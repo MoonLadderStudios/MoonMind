@@ -288,6 +288,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
+    "agent_skill.resolve": ("agent_skills", "resolve_skills"),
+    "agent_skill.build_prompt_index": ("agent_skills", "build_prompt_index"),
 }
 
 
@@ -3719,6 +3721,7 @@ def build_activity_bindings(
     agent_runtime_activities: Any | None = None,
     proposal_activities: Any | None = None,
     review_activities: Any | None = None,
+    agent_skills_activities: Any | None = None,
     fleets: Sequence[str] | None = None,
 ) -> tuple[TemporalActivityBinding, ...]:
     """Bind catalog activity types to concrete runtime handlers."""
@@ -3733,6 +3736,7 @@ def build_activity_bindings(
         "agent_runtime": agent_runtime_activities,
         "proposals": proposal_activities,
         "reviews": review_activities,
+        "agent_skills": agent_skills_activities,
     }
     bindings: list[TemporalActivityBinding] = []
     bound_keys: set[tuple[str, str]] = set()

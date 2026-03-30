@@ -45,6 +45,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     build_compact_activity_result,
     build_observability_summary,
 )
+from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
@@ -237,6 +238,7 @@ async def test_artifact_create_binding_accepts_legacy_name_payload(
                     catalog,
                     artifact_activities=activities,
                     proposal_activities=TemporalProposalActivities(artifact_service=service),
+                    agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
                 )
             }
@@ -1154,6 +1156,7 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                     client_factory=_FakeJulesClient,
                 ),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
+                agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
             )
 
@@ -1194,6 +1197,7 @@ async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
+                agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
             )
             artifact_read_handler = next(
@@ -1236,6 +1240,7 @@ async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapp
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
+                agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
             )
             artifact_read_handler = next(
@@ -1289,6 +1294,7 @@ async def test_build_activity_bindings_injected_skill_handler_uses_request_mappi
                 artifact_activities=TemporalArtifactActivities(service),
                 skill_activities=_KeywordOnlySkillActivities(),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
+                agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
             )
             skill_handler = next(
