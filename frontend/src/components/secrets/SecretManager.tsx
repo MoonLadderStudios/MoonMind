@@ -161,7 +161,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   };
 
   return (
-    <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
+    <div className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
       <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Managed Secrets</h3>
         <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
@@ -239,7 +239,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                                 deleteOp.mutate(secret.slug);
                               }
                             }}
-                            className="btn btn-sm btn-error"
+                            className="queue-action queue-action-danger px-3 py-1 text-xs"
                           >
                             Delete
                           </button>
@@ -321,7 +321,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
 
       {rotatePromptOpen ? (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[1000]">
-          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full mx-4">
+          <div className="bg-mm-panel/90 p-6 rounded-3xl shadow-2xl border border-mm-border/80 max-w-md w-full mx-4">
             <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Rotate Secret: {rotatePromptSlug}</h3>
             <form
               onSubmit={(event) => {

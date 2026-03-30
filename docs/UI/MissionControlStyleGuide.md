@@ -358,8 +358,9 @@ Set the theme class before CSS paints by adding a tiny inline script in `<head>`
 
 ### 8.4 Styling Strategy
 
-- Prefer token swaps and semantic classes.
-- Avoid scattering many `dark:*` utility variants in JS-generated markup.
+- Prefer token swaps and semantic classes (e.g., `.panel`, `.card`, `.button`) where possible.
+- For React/Vite components where semantic classes aren't wrapping everything, use Tailwind utilities explicitly mapped to the `mm-*` design tokens (e.g., `bg-mm-panel/75`, `border-mm-border/80`) rather than hardcoded opaque colors.
+- Avoid scattering many `dark:*` utility variants in JS-generated or JSX markup (e.g., do not use `bg-white dark:bg-slate-900`; prefer `bg-mm-panel/75` which adapts automatically).
 - Keep focus indicators highly visible in both themes.
 
 ## 9. Component Recipes (Modern + Glass + Purple)
