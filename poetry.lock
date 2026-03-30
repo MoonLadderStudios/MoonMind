@@ -2611,14 +2611,14 @@ pydrive = ">=1.3.1,<2"
 
 [[package]]
 name = "llama-index-readers-jira"
-version = "0.5.1"
+version = "0.6.0"
 description = "llama-index readers jira integration"
 optional = false
-python-versions = "<4.0,>=3.9"
+python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_readers_jira-0.5.1-py3-none-any.whl", hash = "sha256:77666251f64fddec34b5ad11c7af9518955361d268a295786d07f16e67d393e2"},
-    {file = "llama_index_readers_jira-0.5.1.tar.gz", hash = "sha256:2b048cd8e02fedfca85ebffa06ab124f861db879b410c2ad00fb762b8453ba9a"},
+    {file = "llama_index_readers_jira-0.6.0-py3-none-any.whl", hash = "sha256:0ce47abcd41beedce7b19bcb2f153566a4521af223104c0e0b7c0a9e3fb2e612"},
+    {file = "llama_index_readers_jira-0.6.0.tar.gz", hash = "sha256:48f7f421e98790b5a5080a57bb444f5a6ea177f9f1bd9f7e26f6cca5e2e4cf09"},
 ]
 
 [package.dependencies]
@@ -6355,4 +6355,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "82991ac6287e9a6812f8dc322e6e65dc1a58aceaa93bd3618dba049d8c4b94ad"
+content-hash = "09b9c2eeae4ba02631944fc9d2d4cadc811c236ae8782110ce0a4b37664bc5c1"
