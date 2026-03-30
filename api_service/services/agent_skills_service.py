@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from typing import Any
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -17,7 +15,6 @@ from api_service.db.models import (
     AgentSkillFormat,
     AgentSkillVersion,
     SkillSet,
-    SkillSetEntry,
 )
 from moonmind.workflows.temporal import (
     TemporalArtifactService,
@@ -90,8 +87,8 @@ class AgentSkillsService:
             await self._session.rollback()
             raise AgentSkillDuplicateError(f"Agent skill slug '{slug}' already exists.") from exc
 
-        await self._session.refresh(skill)
         await self._session.commit()
+        await self._session.refresh(skill)
         return skill
 
     async def create_version(
@@ -122,6 +119,11 @@ class AgentSkillsService:
                 f"Version '{version_string}' already exists for skill '{skill_slug}'."
             )
 
+        try:
+            parsed_format = AgentSkillFormat(format_str)
+        except ValueError as exc:
+            raise ValueError(f"Invalid format processing skill version '{version_string}': {exc}") from exc
+        
         # Store content in artifact storage
         artifact, _upload = await self._artifact_service.create(
             principal=principal,
@@ -140,9 +142,7 @@ class AgentSkillsService:
             payload=payload_bytes,
             content_type="text/markdown" if format_str == "markdown" else "application/octet-stream",
         )
-        artifact_ref = build_artifact_ref(artifact).artifact_id
-
-        parsed_format = AgentSkillFormat(format_str)
+        artifact_ref = artifact.artifact_id
 
         version = AgentSkillVersion(
             skill_id=skill.id,

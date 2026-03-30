@@ -2164,6 +2164,11 @@ class AgentSkillDefinition(Base):
         order_by="AgentSkillVersion.created_at",
     )
 
+    @property
+    def latest_version(self) -> str | None:
+        """Return the version string of the most recently created version."""
+        return self.versions[-1].version_string if self.versions else None
+
 
 class AgentSkillVersion(Base):
     """Immutable version release pointing to blob contents in artifact storage."""
@@ -2259,6 +2264,11 @@ class SkillSetEntry(Base):
     skill: Mapped[AgentSkillDefinition] = relationship(
         "AgentSkillDefinition"
     )
+
+    @property
+    def skill_slug(self) -> str:
+        """Return the slug of the associated skill."""
+        return self.skill.slug
 
 
 def _register_workflow_model_dependencies() -> None:

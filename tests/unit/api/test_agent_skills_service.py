@@ -108,9 +108,9 @@ async def test_create_version_success(tmp_path, mock_artifact_service: AsyncMock
             assert version.artifact_ref == "test-artifact-id"
             assert version.content_digest.startswith("sha256:")
 
-            # Verify that the artifact service was called
-            mock_artifact_service.create.assert_called_once()
-            mock_artifact_service.write_complete.assert_called_once()
+            # Verify that the artifact service was awaited
+            mock_artifact_service.create.assert_awaited_once()
+            mock_artifact_service.write_complete.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -606,7 +606,7 @@ class AgentSkillVersionCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     version_string: str = Field(..., alias="versionString")
-    format: Optional[str] = Field("markdown")
+    format: Optional[Literal["markdown", "bundle"]] = Field("markdown")
     content: str = Field(..., description="The raw skill content to base the version on")
 
 

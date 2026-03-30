@@ -66,8 +66,8 @@ def upgrade() -> None:
     sa.UniqueConstraint('skill_set_id', 'skill_id', name='uq_skill_set_entry')
     )
     op.create_index('ix_skill_set_entries_set', 'skill_set_entries', ['skill_set_id'], unique=False)
-    op.add_column('user_profile', sa.Column('agent_skill_repo_sources_enabled', sa.Boolean(), nullable=False, server_default='true'))
-    op.add_column('user_profile', sa.Column('agent_skill_local_sources_enabled', sa.Boolean(), nullable=False, server_default='false'))
+    op.add_column('user_profile', sa.Column('agent_skill_repo_sources_enabled', sa.Boolean(), nullable=False, server_default=sa.true()))
+    op.add_column('user_profile', sa.Column('agent_skill_local_sources_enabled', sa.Boolean(), nullable=False, server_default=sa.false()))
     # ### end Alembic commands ###
 
 
