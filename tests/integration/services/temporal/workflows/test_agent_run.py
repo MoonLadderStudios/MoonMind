@@ -26,39 +26,6 @@ async def mock_cancel(request: dict) -> None:
     pass
 
 
-@_activity.defn(name="integration.get_activity_route")
-async def mock_get_activity_route(activity_name: str) -> dict:
-    """Return a hardcoded catalog route so the workflow can resolve task queues."""
-    # Map activity names to their expected task queues, matching production routing.
-    queue_map = {
-        "provider_profile.list": "agent-run-task-queue",
-        "provider_profile.ensure_manager": "agent-run-task-queue",
-        "provider_profile.reset_manager": "agent-run-task-queue",
-        "agent_runtime.launch": "agent-run-task-queue",
-        "agent_runtime.publish_artifacts": "agent-run-task-queue",
-        "agent_runtime.cancel": "agent-run-task-queue",
-        "agent_runtime.status": "agent-run-task-queue",
-        "agent_runtime.fetch_result": "agent-run-task-queue",
-        "integration.resolve_external_adapter": "mm.workflow",
-        "integration.external_adapter_execution_style": "mm.workflow",
-        "integration.jules.start": "mm.activity.integrations",
-        "integration.jules.status": "mm.activity.integrations",
-        "integration.jules.fetch_result": "mm.activity.integrations",
-        "integration.jules.cancel": "mm.activity.integrations",
-    }
-    return {
-        "task_queue": queue_map.get(activity_name, "agent-run-task-queue"),
-        "timeouts": {
-            "start_to_close_seconds": 30,
-            "schedule_to_close_seconds": 60,
-            "heartbeat_timeout_seconds": None,
-        },
-        "retries": {
-            "max_attempts": 3,
-            "max_interval_seconds": 10,
-            "non_retryable_error_codes": [],
-        },
-    }
 
 
 @_activity.defn(name="provider_profile.list")
@@ -141,10 +108,7 @@ _COMMON_AGENT_RUN_ACTIVITIES.extend([
     mock_agent_runtime_fetch_result,
 ])
 
-# Activities that route to the workflow task queue (mm.workflow in production).
-_WORKFLOW_QUEUE_ACTIVITIES = [
-    mock_get_activity_route,
-]
+
 
 
 @workflow.defn(name="MoonMind.ProviderProfileManager")
@@ -271,20 +235,14 @@ async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
 @pytest.mark.asyncio
 async def test_agent_run_workflow():
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        # Worker on mm.workflow queue for catalog route lookups.
+        # Main agent-run worker.
         async with Worker(
             env.client,
-            task_queue="mm.workflow",
-            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockProviderProfileManager],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            # Main agent-run worker.
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="test-agent",
@@ -327,16 +285,11 @@ async def test_agent_run_workflow_cancellation():
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
-            task_queue="mm.workflow",
-            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockProviderProfileManager],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="test-agent",
@@ -383,16 +336,11 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
-            task_queue="mm.workflow",
-            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="gemini_cli",
@@ -465,16 +413,11 @@ async def test_agent_run_managed_429_can_continue_as_new_after_retry_threshold()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
-            task_queue="mm.workflow",
-            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="gemini_cli",
@@ -569,16 +512,13 @@ async def test_agent_run_managed_429_can_continue_as_new_after_retry_threshold()
 _external_activity_calls: list[str] = []
 
 
-@_activity.defn(name="integration.resolve_external_adapter")
-async def mock_resolve_external_adapter(agent_id: str) -> str:
-    _external_activity_calls.append(f"resolve:{agent_id}")
-    return agent_id
+@_activity.defn(name="integration.resolve_adapter_metadata")
+async def mock_resolve_adapter_metadata(agent_id: str) -> dict:
+    _external_activity_calls.append(f"resolve_metadata:{agent_id}")
+    return {"agent_id": agent_id, "execution_style": "polling"}
 
 
-@_activity.defn(name="integration.external_adapter_execution_style")
-async def mock_external_adapter_execution_style(agent_id: str) -> str:
-    _external_activity_calls.append(f"style:{agent_id}")
-    return "polling"
+
 
 
 @_activity.defn(name="integration.jules.start")
@@ -672,36 +612,26 @@ async def test_agent_run_external_agent_workflow():
     _external_activity_calls.clear()
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        # Workflow-queue activities (resolve + execution style + catalog routing).
+        # Workflow worker: hosts the workflow + resolve_adapter_metadata + agent_runtime activities.
         async with Worker(
             env.client,
-            task_queue="mm.workflow",
-            activities=[
-                mock_get_activity_route,
-                mock_resolve_external_adapter,
-                mock_external_adapter_execution_style,
-            ],
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES + [mock_resolve_adapter_metadata],
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            # Workflow worker: hosts the workflow + agent_runtime activities.
+            # Integrations worker: hosts integration.* activities on
+            # mm.activity.integrations, matching production fleet separation.
             async with Worker(
                 env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
-                workflow_runner=UnsandboxedWorkflowRunner(),
+                task_queue="mm.activity.integrations",
+                activities=[
+                    mock_jules_start,
+                    mock_jules_status,
+                    mock_jules_fetch_result,
+                    mock_jules_cancel,
+                ],
             ):
-                # Integrations worker: hosts integration.* activities on
-                # mm.activity.integrations, matching production fleet separation.
-                async with Worker(
-                    env.client,
-                    task_queue="mm.activity.integrations",
-                    activities=[
-                        mock_jules_start,
-                        mock_jules_status,
-                        mock_jules_fetch_result,
-                        mock_jules_cancel,
-                    ],
-                ):
                     request = AgentExecutionRequest(
                         agent_kind="external",
                         agent_id="jules",
@@ -728,12 +658,15 @@ async def test_agent_run_external_agent_workflow():
                     assert "jules-task-001" in result.summary
 
                     # Verify activities were called in the correct order.
-                    resolve_idx = _external_activity_calls.index("resolve:jules")
-                    style_idx = _external_activity_calls.index("style:jules")
+                    # Only the resolve_metadata (1 hop) path is used now.
+                    assert "resolve_metadata:jules" in _external_activity_calls, (
+                        f"Expected resolve_metadata:jules in {_external_activity_calls}"
+                    )
+                    meta_idx = _external_activity_calls.index("resolve_metadata:jules")
                     start_idx = _external_activity_calls.index("start")
                     fetch_idx = _external_activity_calls.index("fetch_result")
-                    assert resolve_idx < style_idx < start_idx < fetch_idx, (
-                        f"Expected resolve < style < start < fetch_result, got {_external_activity_calls}"
+                    assert meta_idx < start_idx < fetch_idx, (
+                        f"Expected resolve_metadata < start < fetch_result, got {_external_activity_calls}"
                     )
                     # At least one status poll should have happened between start and fetch_result.
                     assert any(
@@ -775,16 +708,11 @@ async def test_cancellation_releases_provider_profile_slot():
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
-            task_queue="mm.workflow",
-            activities=_WORKFLOW_QUEUE_ACTIVITIES,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockProviderProfileManager],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=_COMMON_AGENT_RUN_ACTIVITIES,
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="test-agent",
