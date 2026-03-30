@@ -568,6 +568,75 @@ class SecretListResponse(BaseModel):
     items: list[SecretMetadataResponse] = Field(default_factory=list)
 
 
+class AgentSkillSummaryResponse(BaseModel):
+    """List item representing an agent skill definition."""
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+    author: Optional[str] = None
+    latest_version: Optional[str] = Field(None, alias="latestVersion")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+
+class AgentSkillVersionResponse(BaseModel):
+    """Detail response for a specific skill version."""
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    version_string: str = Field(..., alias="versionString")
+    format: str
+    artifact_ref: str = Field(..., alias="artifactRef")
+    content_digest: str = Field(..., alias="contentDigest")
+    created_at: datetime = Field(..., alias="createdAt")
+
+
+class AgentSkillCreateRequest(BaseModel):
+    """Request payload for creating a new agent skill definition."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+    author: Optional[str] = None
+
+
+class AgentSkillVersionCreateRequest(BaseModel):
+    """Request payload for pushing a new immutable version to an agent skill."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    version_string: str = Field(..., alias="versionString")
+    format: Optional[str] = Field("markdown")
+    content: str = Field(..., description="The raw skill content to base the version on")
+
+
+class SkillSetEntryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    skill_slug: str = Field(..., alias="skillSlug")
+    version_constraint: Optional[str] = Field(None, alias="versionConstraint")
+
+
+class SkillSetSummaryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+
+
+class SkillSetDetailResponse(SkillSetSummaryResponse):
+    entries: list[SkillSetEntryResponse] = Field(default_factory=list)
+
+
+class SkillSetCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+
+
 __all__ = [
     "UserProfileBaseSchema",
     "UserProfileRead",
@@ -594,4 +663,12 @@ __all__ = [
     "SecretStatusUpdateRequest",
     "SecretMetadataResponse",
     "SecretListResponse",
+    "AgentSkillSummaryResponse",
+    "AgentSkillVersionResponse",
+    "AgentSkillCreateRequest",
+    "AgentSkillVersionCreateRequest",
+    "SkillSetEntryResponse",
+    "SkillSetSummaryResponse",
+    "SkillSetDetailResponse",
+    "SkillSetCreateRequest",
 ]
