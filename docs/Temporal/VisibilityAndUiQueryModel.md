@@ -273,13 +273,13 @@ Rules:
 
 ### `mm_entry`
 
-Allowed values for v1:
+Allowed values for v1 (currently normalized by the executions API):
 
 - `run`
 - `manifest`
-- `agent_run`
-- `provider_profile_manager`
-- `oauth_session`
+- `provider_profile`
+
+*(Note: additional workflow types like `agent_run` and `oauth_session` are planned or used internally but are not currently normalized for top-level list filtering by the primary executions API.)*
 
 Rules:
 

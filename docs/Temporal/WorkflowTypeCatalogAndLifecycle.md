@@ -79,7 +79,8 @@ Workflow ID format should remain stable and opaque.
 
 Representative form:
 
-- `mm:<ulid-or-uuid>`
+- `mm:<uuid>` for standard task executions
+- `[prefix]:<id>` for singleton/session workflows (e.g., `oauth-session:<session_id>`)
 
 Rules:
 
@@ -188,17 +189,18 @@ Keep it bounded. Do not turn it into an unbounded event log or full provider-sta
 ### Required Search Attributes
 
 - `mm_owner_id` (keyword)
+- `mm_owner_type` (keyword)
 - `mm_state` (keyword)
 - `mm_updated_at` (datetime)
 - `mm_entry` (keyword)
 
-Typical `mm_entry` values:
+Typical `mm_entry` values (currently normalized by the executions API):
 
 - `run`
 - `manifest`
-- `agent_run`
-- `oauth_session`
-- `provider_profile_manager`
+- `provider_profile`
+
+*(Note: additional internally-used workflow types like `agent_run` and `oauth_session` are not currently normalized for top-level list filtering by the primary executions API.)*
 
 ### Optional Search Attributes
 
