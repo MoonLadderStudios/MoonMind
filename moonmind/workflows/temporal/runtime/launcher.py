@@ -484,6 +484,41 @@ class ManagedRuntimeLauncher:
                     exc_info=True,
                 )
 
+        # Expose active skills projection if present
+        if resolved_workspace_path is not None:
+            run_root = (self._workspace_root() / run_id).resolve()
+            active_skills_dir = run_root / ".agents" / "skills_active"
+            if active_skills_dir.exists():
+                workspace_agents_dir = Path(resolved_workspace_path) / ".agents"
+                target_skills_dir = workspace_agents_dir / "skills"
+                active_link = target_skills_dir / "active"
+                try:
+                    if target_skills_dir.exists():
+                        if target_skills_dir.is_symlink():
+                            logger.warning(
+                                "Expected .agents/skills to be a directory, but found a symlink at %s; "
+                                "skipping active skills linkage.",
+                                target_skills_dir,
+                            )
+                            raise OSError("Cannot link active skills into symlinked .agents/skills")
+                    else:
+                        target_skills_dir.mkdir(parents=True)
+
+                    if active_link.lexists():
+                        if not active_link.is_symlink():
+                            logger.warning(
+                                "Expected .agents/skills/active to be a symlink, but found %s; "
+                                "leaving it unchanged.",
+                                active_link,
+                            )
+                        else:
+                            active_link.unlink()
+                    
+                    if not active_link.lexists():
+                        active_link.symlink_to(active_skills_dir, target_is_directory=True)
+                except OSError as ex:
+                    logger.warning("Failed to link active skills directory: %s", ex)
+
         if strategy is not None:
             env_overrides = strategy.shape_environment(env_overrides, profile)
 

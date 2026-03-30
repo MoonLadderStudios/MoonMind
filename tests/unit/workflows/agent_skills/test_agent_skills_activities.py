@@ -1,13 +1,16 @@
-import pytest
-from unittest.mock import patch
 from datetime import datetime
-from moonmind.schemas.agent_skill_models import AgentSkillSourceKind, AgentSkillProvenance, ResolvedSkillEntry
+from unittest.mock import patch
+
+import pytest
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.schemas.agent_skill_models import (
-    SkillSelector,
+    AgentSkillProvenance,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
     ResolvedSkillSet,
+    SkillSelector,
 )
-from temporalio.testing import ActivityEnvironment
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 
 pytestmark = [pytest.mark.asyncio]
@@ -57,3 +60,31 @@ async def test_build_prompt_index_activity_returns_bundle():
     result = await activities.build_prompt_index(snapshot)
     
     assert "Snapshot: snap-temp" in result
+
+
+async def test_materialize_activity_returns_materialization():
+    from moonmind.schemas.agent_skill_models import RuntimeMaterializationMode
+    import tempfile
+    
+    activities = AgentSkillsActivities()
+    env = ActivityEnvironment()
+    
+    snapshot = ResolvedSkillSet(
+        snapshot_id="snap-materialize",
+        resolved_at="2024-01-01T00:00:00Z",
+        skills=[]
+    )
+    
+    with tempfile.TemporaryDirectory() as tempdir:
+        result = await env.run(
+            activities.materialize,
+            snapshot,
+            "test_runtime",
+            RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+            tempdir
+        )
+        
+        assert result.metadata == {}
+        assert result.runtime_id == "test_runtime"
+        assert result.materialization_mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
+        assert len(result.workspace_paths) == 1

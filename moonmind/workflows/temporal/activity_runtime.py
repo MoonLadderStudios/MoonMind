@@ -290,6 +290,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "step.review": ("reviews", "step_review"),
     "agent_skill.resolve": ("agent_skills", "resolve_skills"),
     "agent_skill.build_prompt_index": ("agent_skills", "build_prompt_index"),
+    "agent_skill.materialize": ("agent_skills", "materialize"),
 }
 
 
