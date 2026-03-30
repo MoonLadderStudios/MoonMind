@@ -101,7 +101,7 @@ class ManagedRuntimeStrategy(ABC):
 
     @property
     def default_auth_mode(self) -> str:
-        """Override for runtimes using oauth (e.g. cursor_cli).
+        """Override for runtimes using oauth.
 
         Must align with the OAuthProviderSpec entries defined in
         docs/ManagedAgents/TmateArchitecture.md.  Both registries
@@ -268,7 +268,6 @@ The codebase has adopted a **Strategy Pattern-based Registry** (`ManagedRuntimeS
 - **Gemini/Claude** workspace prep content (no-op stubs)
 
 - **Shared env-shaping module** (`moonmind/auth/env_shaping.py`) to unify strategies and OAuth session orchestrator
-- **Adapter auth-mode fallback** still has legacy `cursor_cli → oauth` branch for unregistered runtimes
 - **`agent_runtime_env_keys` in `settings.py`** may be dead config — verify and clean up
 - **codex_worker** unification: self-heal, metrics, and secret refs not yet factored into shared services
 

@@ -1,6 +1,6 @@
 """Abstract base class for managed runtime strategies.
 
-Each managed CLI runtime (Gemini CLI, Codex CLI, Cursor CLI, Claude Code)
+Each managed CLI runtime (Gemini CLI, Codex CLI, Claude Code)
 implements this interface to encapsulate its runtime-specific behavior.
 The launcher and adapter delegate to registered strategies instead of
 using if/elif branching on ``runtime_id``.
@@ -164,7 +164,7 @@ class ManagedRuntimeStrategy(ABC):
         """Factory for the runtime's stream parser.
 
         Returns ``PlainTextOutputParser`` by default.  Override for structured output
-        formats like Cursor NDJSON (``--output-format stream-json``).
+        formats like NDJSON (``--output-format stream-json``).
 
         See :class:`~moonmind.workflows.temporal.runtime.output_parser.RuntimeOutputParser`.
         """
