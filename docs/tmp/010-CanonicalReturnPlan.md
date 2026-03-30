@@ -37,28 +37,30 @@ Freeze the implementation boundary and decide what compatibility code must stay 
 
 ### Tasks
 
-* [ ] Treat the updated declarative docs as normative for this implementation pass.
-* [ ] Inventory all remaining workflow-side normalization points:
+* [x] Treat the updated declarative docs as normative for this implementation pass.
+* [x] Inventory all remaining workflow-side normalization points:
 
-  * [ ] `MoonMind.AgentRun._coerce_external_status_payload`
-  * [ ] `MoonMind.AgentRun._coerce_external_start_status`
-  * [ ] `MoonMind.AgentRun._coerce_managed_status_payload`
-  * [ ] `MoonMind.AgentRun` special-case handling for non-canonical external start dicts
-  * [ ] `MoonMind.Run._map_agent_run_result`
-* [ ] Inventory all provider/runtime activity handlers that currently emit non-canonical or mixed-shape payloads.
-* [ ] Decide in-flight cutover strategy (per Temporal Compatibility Policy):
+  * [x] `MoonMind.AgentRun._coerce_external_status_payload`
+  * [x] `MoonMind.AgentRun._coerce_external_start_status`
+  * [x] `MoonMind.AgentRun._coerce_managed_status_payload`
+  * [x] `MoonMind.AgentRun` special-case handling for non-canonical external start dicts
+  * [x] `MoonMind.Run._map_agent_run_result`
+* [x] Inventory all provider/runtime activity handlers that currently emit non-canonical or mixed-shape payloads.
+* [x] Decide in-flight cutover strategy (per Temporal Compatibility Policy):
 
-  * [ ] determine if `workflow.patched` is required for in-flight executions crossing this deployment
-  * [ ] do NOT introduce translation aliases or soft wrap-arounds; superseded patterns must be entirely removed from active logic or guarded by explicit Temporal patching constraints.
-* [ ] Define a single implementation rule:
+  * [x] determine if `workflow.patched` is required for in-flight executions crossing this deployment
+  * [x] do NOT introduce translation aliases or soft wrap-arounds; superseded patterns must be entirely removed from active logic or guarded by explicit Temporal patching constraints.
+* [x] Define a single implementation rule:
 
-  * [ ] all new histories and new activity executions must emit canonical Pydantic-compatible shapes only
+  * [x] all new histories and new activity executions must emit canonical Pydantic-compatible shapes only
 
 ### Deliverables
 
-* implementation inventory
-* compatibility matrix
-* explicit “new-history only” vs “replay compatibility” decisions
+* [x] implementation inventory
+* [x] compatibility matrix
+* [x] explicit “new-history only” vs “replay compatibility” decisions
+
+> **Phase 0 Deliverables completed**: See `specs/118-canonical-return-phase0/plan.md` for the full inventory and compatibility cutover strategy.
 
 ---
 
