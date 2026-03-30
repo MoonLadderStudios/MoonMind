@@ -6,14 +6,14 @@ Bridge contract between MoonMind's **task-oriented product surfaces** and **Temp
 
 **Status:** Normative (evolves with the compatibility layer)
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-30
 **Audience:** backend, dashboard, API, workflow authors
 
 ---
 
 ## 1. Purpose
 
-This document defines the compatibility model that lets MoonMind keep a **task-first UI and API posture** while moving execution onto Temporal.
+This document defines the compatibility model that lets MoonMind keep a **task-first UI and API posture** while running execution on Temporal.
 
 It answers four concrete questions:
 
@@ -31,9 +31,10 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/TaskArchitecture.md`
+- `docs/Tasks/TaskArchitecture.md`
 - `docs/UI/MissionControlArchitecture.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
 ---
 
@@ -47,6 +48,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 - status mapping from Temporal domain/runtime state into current dashboard task states
 - action mapping from task operations into Temporal create/update/signal/cancel calls
 - pagination and count behavior for Temporal-only and mixed-source task lists
+- waiting metadata for blocked executions
 
 ### 3.2 Out of scope
 
@@ -98,13 +100,16 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 7. **Skill is a tool subtype, not a competing top-level noun.**
    Task/step payload contracts should standardize on `task.tool` and `step.tool` with `tool.type="skill"` for current implementations.
 
+8. **Compatibility adapters must not reconstruct canonical runtime contracts from provider-specific payloads.**
+   If a workflow activity returns a canonical `AgentRunResult`, compatibility layers must use that result directly. They must not parse provider-native response shapes and rebuild a result contract from raw provider data.
+
 ---
 
 ## 6. Source model
 
-### 6.1 Execution sources for the Mission Control
+### 6.1 Execution sources for Mission Control
 
-For task list/detail purposes, the execution sources are:
+For task list/detail purposes, the execution source is:
 
 - `temporal`
 
@@ -121,12 +126,16 @@ For Temporal-backed work, the **source** remains `temporal`, while the execution
 
 - `entry = "run"` for `MoonMind.Run`
 - `entry = "manifest"` for `MoonMind.ManifestIngest`
+- `entry = "agent_run"` for `MoonMind.AgentRun`
+- `entry = "provider_profile_manager"` for `MoonMind.ProviderProfileManager`
+- `entry = "oauth_session"` for `MoonMind.OAuthSession`
 
 Rules:
 
-- do **not** create a separate dashboard execution source called `manifest` for Temporal-backed work
+- do **not** create a separate dashboard execution source for each workflow type
 - manifest pages may later become filtered task views over `source=temporal` + `entry=manifest`
 - source answers **where the execution lives**; entry answers **what kind of product flow it represents**
+- not every entry value needs to be first-class in the normal user-facing task list, but the compatibility model must account for all entries so that operator views and API queries can reach them
 
 ---
 
@@ -149,7 +158,7 @@ Rules:
 
 ### 7.3 Rules
 
-- For `source=temporal`, **`taskId == workflowId`**.
+- For Temporal-backed work, **`taskId == workflowId`** everywhere — not just detail routing, but list rows, API responses, cache keys, and adapter lookups.
 - `workflowId` is the durable handle that survives Continue-As-New.
 - `temporalRunId` may change during rerun or Continue-As-New and must never be used as the primary task route key.
 - Clients must treat all IDs as opaque strings.
@@ -191,13 +200,15 @@ This section defines the **task-compatible shape** that adapters should material
 | `entry` | string | Product entry shape | `searchAttributes.mm_entry` or derived from `workflowType` |
 | `title` | string | Primary human label | `memo.title` |
 | `summary` | string \| null | Secondary status text | `memo.summary` |
-| `status` | string | Dashboard-normalized status | mapped from Temporal state model |
-| `rawState` | string | Raw MoonMind workflow state | execution `state` |
+| `state` | string | Exact MoonMind lifecycle state | `mm_state` |
+| `dashboardStatus` | string | Compatibility grouped status | mapped from `mm_state` (see Section 9) |
 | `temporalStatus` | string | Raw Temporal close/runtime status | execution `temporalStatus` |
 | `workflowId` | string | Durable Temporal identity | execution `workflowId` |
 | `workflowType` | string | Root workflow type | execution `workflowType` |
 | `ownerType` | string | Owner class for auth and filtering | `searchAttributes.mm_owner_type` |
 | `ownerId` | string \| null | Owning principal identifier | `searchAttributes.mm_owner_id` or projection owner |
+| `waitingReason` | string \| null | Reason for blocked/waiting state | bounded waiting reason |
+| `attentionRequired` | boolean \| null | Whether human/operator action is needed | derived from state and waiting context |
 | `createdAt` | datetime | Start time for task row sorting/display | execution `startedAt` |
 | `updatedAt` | datetime | Most recent meaningful change | execution `updatedAt` |
 | `closedAt` | datetime \| null | Terminal close time | execution `closedAt` |
@@ -208,9 +219,10 @@ Rules:
 
 - `title` should always be present for Temporal-backed rows. If not explicitly set, the execution layer must provide a safe default.
 - `summary` is allowed to be short and operational rather than user-marketing copy.
-- `status` is the **dashboard display/filter status**. It does not replace `rawState` or `temporalStatus`.
+- `state` is the exact `mm_state` value. `dashboardStatus` is the compatibility grouping. Neither replaces `temporalStatus`.
 - `createdAt` uses `startedAt` for Temporal-backed compatibility rows.
 - `ownerType` and `ownerId` should be populated together from canonical execution metadata.
+- `waitingReason` and `attentionRequired` should be populated whenever the execution is in a blocked or waiting state where the reason is knowable.
 - compatibility payloads must keep Search Attributes and Memo bounded and secret-safe; do not surface raw secrets, large prompts, or unreviewed free-text blobs.
 
 ### 8.2 Task detail payload (normalized)
@@ -225,16 +237,18 @@ Recommended required fields:
 | `source` | `temporal` |
 | `workflowId` | Canonical Temporal durable ID |
 | `temporalRunId` | Current/latest run ID |
-| `workflowType` | `MoonMind.Run` or `MoonMind.ManifestIngest` |
-| `entry` | `run` or `manifest` |
+| `workflowType` | Any cataloged workflow type |
+| `entry` | `run`, `manifest`, `agent_run`, `provider_profile_manager`, or `oauth_session` |
 | `title` | Display title |
 | `summary` | Human-readable execution summary |
-| `status` | Dashboard-normalized state |
-| `rawState` | MoonMind execution state |
+| `state` | Exact MoonMind lifecycle state |
+| `dashboardStatus` | Compatibility grouped status |
 | `temporalStatus` | Temporal runtime/close view |
 | `closeStatus` | Raw Temporal close status when present |
 | `ownerType` | Owning principal class (`user`, `system`, or `service`) |
 | `ownerId` | Owning principal identifier |
+| `waitingReason` | Reason for blocked/waiting state when applicable |
+| `attentionRequired` | Whether human/operator action is needed |
 | `createdAt` | Start time |
 | `updatedAt` | Last meaningful update |
 | `closedAt` | Close time when terminal |
@@ -266,13 +280,15 @@ Rules:
   "entry": "run",
   "title": "Repo update run",
   "summary": "Execution resumed.",
-  "status": "running",
-  "rawState": "executing",
+  "state": "executing",
+  "dashboardStatus": "running",
   "temporalStatus": "running",
   "workflowId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
   "workflowType": "MoonMind.Run",
   "ownerType": "user",
   "ownerId": "0f2d5802-0bd2-4d31-a618-6f7d3b0f09da",
+  "waitingReason": null,
+  "attentionRequired": false,
   "createdAt": "2026-03-06T08:15:21Z",
   "updatedAt": "2026-03-06T08:18:04Z",
   "closedAt": null,
@@ -285,28 +301,29 @@ Rules:
 
 ## 9. Status compatibility model
 
-### 9.1 Dashboard-normalized task statuses
+### 9.1 Exact vs compatibility fields
 
-The current dashboard status family remains:
+Temporal-backed rows expose three layers of status:
 
-- `running`
-- `awaiting_action`
-- `succeeded`
-- `failed`
-- `cancelled`
+- **Exact fields:** `state` (exact `mm_state`), `temporalStatus`, `closeStatus`
+- **Compatibility field:** `dashboardStatus`
 
 ### 9.2 MoonMind domain state to dashboard status mapping
 
-| `mm_state` value | Normalized task status | Notes |
+| `mm_state` value | `dashboardStatus` | Notes |
 | --- | --- | --- |
-| `initializing` | `running` | Workflow exists but has not reached meaningful work yet |
-| `planning` | `running` | Active execution work |
+| `scheduled` | `queued` | Waiting for deferred start |
+| `initializing` | `queued` | Not yet materially executing user work |
+| `waiting_on_dependencies` | `waiting` | Blocked on prerequisite work |
+| `planning` | `running` | Active pre-execution work |
+| `awaiting_slot` | `queued` | Waiting for a bounded runtime resource |
 | `executing` | `running` | Active execution |
-| `awaiting_external` | `awaiting_action` | Compatibility collapse for approval/pause/external wait |
-| `finalizing` | `running` | Still active until close |
-| `succeeded` | `succeeded` | Terminal success |
+| `awaiting_external` | `awaiting_action` | Compatibility grouping only |
+| `proposals` | `running` | Still active, post-execution proposal phase |
+| `finalizing` | `running` | Still in-flight |
+| `completed` | `completed` | Terminal success |
 | `failed` | `failed` | Terminal failure |
-| `canceled` | `cancelled` | UI spelling remains `cancelled` |
+| `canceled` | `canceled` | Terminal cancellation |
 
 ### 9.3 Temporal runtime and close status semantics
 
@@ -319,7 +336,7 @@ For Temporal-backed rows, adapters must preserve raw Temporal lifecycle informat
 
 Rules:
 
-- `temporalStatus` and `closeStatus` must not be collapsed into `status` and discarded
+- `temporalStatus` and `closeStatus` must not be collapsed into `dashboardStatus` and discarded
 - `TimedOut` and `Terminated` close outcomes normalize to dashboard `failed`
 - `ContinuedAsNew` is not a user-facing terminal success/failure state; it should be treated as run-history/debug information while the stable task remains active on the same `workflowId`
 
@@ -327,22 +344,45 @@ Rules:
 
 The adapter must preserve:
 
-- `rawState` = MoonMind workflow state (`initializing`, `planning`, etc.)
+- `state` = exact MoonMind workflow state
 - `temporalStatus` = `running`, `completed`, `failed`, or `canceled`
 - `closeStatus` when present
 
-### 9.5 Important compatibility note
+### 9.5 Important compatibility note on `awaiting_external`
 
 `awaiting_external` is broader than human approval.
 
-For the current dashboard contract, it is acceptable to normalize this to `awaiting_action`, but the detail page should retain enough context in summary/debug fields to distinguish:
+For the current dashboard contract, it normalizes to `awaiting_action`, but the detail page should retain enough context through `waitingReason` and `attentionRequired` to distinguish:
 
-- waiting on approval
-- paused by operator
-- waiting on external callback
-- waiting on integration completion
+- approval required (`attentionRequired = true`)
+- paused by operator (`attentionRequired = true`)
+- waiting on external callback (`attentionRequired = false`)
+- waiting on integration completion (`attentionRequired = false`)
+- retry backoff (`attentionRequired = false`)
 
-If the UI needs sharper distinction later, add an explicit `waitKind` field rather than overloading `status`.
+### 9.6 Waiting metadata
+
+Temporal-backed rows in blocked states should expose:
+
+- `waitingReason`
+- `attentionRequired`
+
+Allowed `waitingReason` values for v1:
+
+- `approval_required`
+- `external_callback`
+- `external_completion`
+- `operator_paused`
+- `retry_backoff`
+- `dependency_wait`
+- `provider_profile_slot`
+- `unknown_external`
+
+Rules:
+
+- `waitingReason` should be set whenever the execution is in a blocked or waiting state where the reason is knowable
+- `attentionRequired = true` only when progress is blocked on human/operator action exposed by the current product surface
+- compatibility dashboards may continue using broad grouped statuses, but they must not imply user action is required when `attentionRequired = false`
 
 ---
 
@@ -468,7 +508,7 @@ Rules:
 
 ### 13.1 Dashboard source addition
 
-The dashboard runtime source model should gain a `temporal` execution source for task list/detail behavior.
+The dashboard runtime source model should treat `temporal` as the primary execution source for task list/detail behavior.
 
 This does **not** require proposal or schedule pages to join the same source taxonomy.
 
@@ -539,7 +579,7 @@ Public naming can lag runtime naming while compatibility remains explicit.
 
 ## 15. Compatibility maturity
 
-The bridge is **in force** when Temporal-backed executions participate honestly in task-shaped list/detail/edit/cancel/rerun flows: **`taskId == workflowId`**, stable routes across Continue-As-New, documented payload shapes, normalized dashboard status, and explicit handling of raw Temporal identifiers in operator views. Sequencing, phase-style checkpoints, and retirement decisions for compatibility surfaces are tracked in [`docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`](../tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md).
+The bridge is **in force** when Temporal-backed executions participate honestly in task-shaped list/detail/edit/cancel/rerun flows: **`taskId == workflowId`**, stable routes across Continue-As-New, documented payload shapes, normalized dashboard status, waiting metadata, and explicit handling of raw Temporal identifiers in operator views. Sequencing, phase-style checkpoints, and retirement decisions for compatibility surfaces are tracked in [`docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`](../tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md).
 
 ---
 
@@ -551,16 +591,19 @@ This document is considered successfully implemented for a Temporal-backed flow 
 2. task edit and rerun controls surface `accepted/applied/message` semantics honestly
 3. dashboard filters and sorting can include Temporal-backed rows without leaking raw Temporal cursor semantics
 4. operators can see raw execution identifiers and status data when needed
+5. `waitingReason` and `attentionRequired` are populated for blocked states
+6. `taskId == workflowId` is enforced everywhere, not just detail routing
+7. `entry` reflects the full workflow catalog, not just `run` and `manifest`
 
 ---
 
 ## 17. Open decisions to lock next
 
 1. Whether the Mission Control should eventually expose run history for a single `workflowId` or only the latest run by default
-2. Whether `awaiting_external` needs a first-class `waitKind` field sooner rather than later
-3. Whether Temporal-backed manifest views become simple task filters or keep a distinct route shell longer
-4. When `/api/executions` should graduate from adapter-first surface to a more openly documented public API
-5. How much execution debug metadata should be shown by default versus behind an operator panel
+2. Whether Temporal-backed manifest views become simple task filters or keep a distinct route shell longer
+3. When `/api/executions` should graduate from adapter-first surface to a more openly documented public API
+4. How much execution debug metadata should be shown by default versus behind an operator panel
+5. Whether any additional `mm_entry` values are needed beyond the current workflow catalog
 
 ---
 
@@ -572,14 +615,16 @@ The core rule is simple:
 
 - the **product** can continue to speak in terms of **tasks**
 - the **runtime** can move to **Temporal workflow executions**
-- the bridge between them must keep identifiers, status mapping, action mapping, and pagination semantics explicit
+- the bridge between them must keep identifiers, status mapping, action mapping, waiting metadata, and pagination semantics explicit
 
 For Temporal-backed work during migration:
 
-- `taskId == workflowId`
+- `taskId == workflowId` everywhere
 - `temporalRunId` is detail/debug only
 - `source=temporal`
-- `entry` distinguishes `run` vs `manifest`
+- `entry` distinguishes `run`, `manifest`, `agent_run`, `provider_profile_manager`, and `oauth_session`
+- exact state in `state`, compatibility grouping in `dashboardStatus`
+- `waitingReason` and `attentionRequired` for blocked executions
 - task actions map to Temporal start/update/signal/cancel primitives through compatibility adapters
 
 That is the compatibility model that lets MoonMind evolve the execution substrate without forcing a premature product-language rewrite.
