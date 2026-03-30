@@ -13,6 +13,9 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_runtime_activities,
     main_async,
     resolve_adapter_metadata,
+    get_activity_route,
+    resolve_external_adapter,
+    external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
 
@@ -448,6 +451,9 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     ]
     assert kwargs["activities"] == [
         resolve_adapter_metadata,
+        get_activity_route,
+        resolve_external_adapter,
+        external_adapter_execution_style,
     ]
     assert kwargs["max_concurrent_workflow_tasks"] == 7
     assert "max_concurrent_activities" not in kwargs
@@ -553,6 +559,9 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     assert handlers == [
         "artifact_handler",
         resolve_adapter_metadata,
+        get_activity_route,
+        resolve_external_adapter,
+        external_adapter_execution_style,
     ]
     mock_artifact_activities_cls.assert_called_once_with(ANY)
     mock_plan_activities_cls.assert_called_once_with(
