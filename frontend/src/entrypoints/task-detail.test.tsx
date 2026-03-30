@@ -22,7 +22,7 @@ class MockEventSource {
   private listeners = new Map<string, LogChunkListener[]>();
   closed = false;
 
-  constructor(public url: string) {
+  constructor(public url: string, public options?: EventSourceInit) {
     MockEventSource.instances.push(this);
   }
 
