@@ -113,18 +113,18 @@ Make the architecture unambiguous before deeper implementation begins.
 
 ### Tasks
 
-- [ ] Create `docs/Tasks/AgentSkillSystem.md` as the canonical design doc
-- [ ] Update `docs/Tasks/SkillAndPlanContracts.md` to explicitly distinguish `ToolDefinition` from `AgentSkillDefinition`
-- [ ] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference resolved skill snapshots and adapter-owned materialization
-- [ ] Update `docs/Temporal/TemporalArchitecture.md` to include agent skills as a first-class MoonMind domain concept
-- [ ] Update `docs/Tasks/TaskArchitecture.md` to reflect task/step skill selection and control-plane resolution
-- [ ] Update `docs/UI/MissionControlArchitecture.md` to reflect submit/detail visibility for skill selection and resolved snapshots
-- [ ] Update `docs/Temporal/WorkflowArtifactSystemDesign.md` to make skill-related artifacts first-class
-- [ ] Update `docs/Temporal/ActivityCatalogAndWorkerTopology.md` to define `agent_skill.*` activities and fleet routing
-- [ ] Update `docs/Tasks/TaskProposalSystem.md` to preserve explicit agent skill intent upon promotion
-- [ ] Update `AGENTS.md` so the existing shared-skills runtime notes match the canonical design
-- [ ] Optional: Update `docs/Temporal/WorkflowSchedulingGuide.md` and `docs/Temporal/TaskExecutionCompatibilityModel.md` to fully close the architecture loop
-- [ ] Remove or rewrite ambiguous doc language that uses “skill” interchangeably for tools and instruction bundles without qualification
+- [x] Create `docs/Tasks/AgentSkillSystem.md` as the canonical design doc
+- [x] Update `docs/Tasks/SkillAndPlanContracts.md` to explicitly distinguish `ToolDefinition` from `AgentSkillDefinition`
+- [x] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference resolved skill snapshots and adapter-owned materialization
+- [x] Update `docs/Temporal/TemporalArchitecture.md` to include agent skills as a first-class MoonMind domain concept
+- [x] Update `docs/Tasks/TaskArchitecture.md` to reflect task/step skill selection and control-plane resolution
+- [x] Update `docs/UI/MissionControlArchitecture.md` to reflect submit/detail visibility for skill selection and resolved snapshots
+- [x] Update `docs/Temporal/WorkflowArtifactSystemDesign.md` to make skill-related artifacts first-class
+- [x] Update `docs/Temporal/ActivityCatalogAndWorkerTopology.md` to define `agent_skill.*` activities and fleet routing
+- [x] Update `docs/Tasks/TaskProposalSystem.md` to preserve explicit agent skill intent upon promotion
+- [x] Update `AGENTS.md` so the existing shared-skills runtime notes match the canonical design
+- [x] Optional: Update `docs/Temporal/WorkflowSchedulingGuide.md` and `docs/Temporal/TaskExecutionCompatibilityModel.md` to fully close the architecture loop
+- [x] Remove or rewrite ambiguous doc language that uses “skill” interchangeably for tools and instruction bundles without qualification
 
 ### Exit criteria
 
