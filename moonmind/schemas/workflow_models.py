@@ -11,6 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api_service.db.models import WorkflowTaskName
+from moonmind.schemas.agent_skill_models import SkillSelector
 from moonmind.workflows.automation import models
 
 _REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -152,6 +153,7 @@ class CreateWorkflowRunRequest(BaseModel):
     )
     created_by: Optional[UUID] = Field(None, alias="createdBy")
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
+    skills: Optional[SkillSelector] = Field(None, alias="skills")
 
     @field_validator("repository")
     @classmethod

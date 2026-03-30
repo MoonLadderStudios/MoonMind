@@ -1,14 +1,17 @@
 {
-  "_DataTable-BdOvTdxG.js": {
-    "file": "assets/DataTable-BdOvTdxG.js",
+  "_DataTable-D5g_KAGX.js": {
+    "file": "assets/DataTable-D5g_KAGX.js",
     "name": "DataTable",
     "imports": [
       "_mountPage-C2pxuJYj.js"
     ]
   },
-  "_executionStatusPillClasses-CxjYAfBR.js": {
-    "file": "assets/executionStatusPillClasses-CxjYAfBR.js",
-    "name": "executionStatusPillClasses"
+  "_executionStatusPillClasses-BGDpw-qN.js": {
+    "file": "assets/executionStatusPillClasses-BGDpw-qN.js",
+    "name": "executionStatusPillClasses",
+    "imports": [
+      "_mountPage-C2pxuJYj.js"
+    ]
   },
   "_mountPage-C2pxuJYj.js": {
     "file": "assets/mountPage-C2pxuJYj.js",
@@ -24,33 +27,33 @@
     ]
   },
   "entrypoints/manifests.tsx": {
-    "file": "assets/manifests-Us9h3UDY.js",
+    "file": "assets/manifests-DF-eBQh7.js",
     "name": "manifests",
     "src": "entrypoints/manifests.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_DataTable-BdOvTdxG.js"
+      "_DataTable-D5g_KAGX.js"
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-KvXTnnK3.js",
+    "file": "assets/proposals-xbfSAlks.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_DataTable-BdOvTdxG.js"
+      "_executionStatusPillClasses-BGDpw-qN.js"
     ]
   },
   "entrypoints/schedules.tsx": {
-    "file": "assets/schedules-BP1w2Aht.js",
+    "file": "assets/schedules-D7d6hMGY.js",
     "name": "schedules",
     "src": "entrypoints/schedules.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_DataTable-BdOvTdxG.js"
+      "_DataTable-D5g_KAGX.js"
     ]
   },
   "entrypoints/settings.tsx": {
@@ -63,13 +66,13 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-BT1AVjjV.js",
+    "file": "assets/task-detail-CERk8TnK.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_executionStatusPillClasses-CxjYAfBR.js"
+      "_executionStatusPillClasses-BGDpw-qN.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
@@ -82,13 +85,13 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-D1L41vIK.js",
+    "file": "assets/tasks-list-CiovgtgE.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_executionStatusPillClasses-CxjYAfBR.js"
+      "_executionStatusPillClasses-BGDpw-qN.js"
     ]
   }
 }
