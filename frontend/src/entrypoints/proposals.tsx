@@ -12,7 +12,7 @@ const PROPOSAL_STATUSES = ['open', 'promoted', 'dismissed'] as const;
 
 const TaskPreviewSchema = z
   .object({
-    repository: z.string(),
+    repository: z.string().nullable().optional(),
     runtimeMode: z.string().nullable().optional(),
     skillId: z.string().nullable().optional(),
   })
@@ -62,17 +62,30 @@ function replaceUrlQuery(params: URLSearchParams) {
 function ProposalsPage({ payload }: { payload: BootPayload }) {
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
-  const [status, setStatus] = useState(() => initial.get('status') || 'open');
+  const [status, setStatus] = useState(() => {
+    const fromUrl = initial.get('status');
+    if (fromUrl === null) return 'open';
+    const normalized = fromUrl.toLowerCase();
+    return normalized === '' || PROPOSAL_STATUSES.includes(normalized as (typeof PROPOSAL_STATUSES)[number]) ? normalized : 'open';
+  });
   const [repository, setRepository] = useState(() => initial.get('repository') || '');
+  const [debouncedRepository, setDebouncedRepository] = useState(repository);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
   const [listCursor, setListCursor] = useState<string | null>(() => initial.get('cursor')?.trim() || null);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   
-  const normalizedRepository = repository.trim();
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedRepository(repository);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [repository]);
+
+  const normalizedRepository = debouncedRepository.trim();
 
   const syncUrl = useCallback(() => {
     const params = new URLSearchParams();
-    if (status) params.set('status', status);
+    if (status !== 'open') params.set('status', status);
     if (normalizedRepository) params.set('repository', normalizedRepository);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('cursor', listCursor);
@@ -101,10 +114,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
     },
   });
 
-  const sortedItems = useMemo(() => {
-    const items = data?.items || [];
-    return items; // Already sorted by created_at desc from API
-  }, [data?.items]);
+  const sortedItems = data?.items || [];
 
   const pageIndex = cursorStack.length;
   const pageStart = sortedItems.length > 0 ? pageIndex * pageSize + 1 : 0;
@@ -131,8 +141,10 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
     setListCursor(previousCursor === undefined || previousCursor === '' ? null : previousCursor);
   };
 
+  const exactPageKnown = cursorStack.length > 0 || !initial.get('cursor');
+
   const pageSummary = [
-    `Page ${pageIndex + 1}`,
+    exactPageKnown ? `Page ${pageIndex + 1}` : 'Continuing Page',
     pageEnd > 0 ? `${pageStart}-${pageEnd}` : null,
   ]
     .filter(Boolean)
@@ -173,7 +185,9 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
             <select
               value={status}
               onChange={(event) => {
-                setStatus(event.target.value.toLowerCase());
+                const raw = event.target.value;
+                const nextStatus = raw === '' || PROPOSAL_STATUSES.includes(raw as (typeof PROPOSAL_STATUSES)[number]) ? raw : '';
+                setStatus(nextStatus);
                 resetToFirstPage();
               }}
             >
