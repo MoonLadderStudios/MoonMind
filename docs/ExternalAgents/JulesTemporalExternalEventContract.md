@@ -2,125 +2,147 @@
 
 **Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesTemporalExternalEventContract.md`](../tmp/remaining-work/ExternalAgents-JulesTemporalExternalEventContract.md)
 
-Status: Draft  
-Owner: MoonMind Platform  
-Last updated: 2026-03-06  
+Status: **Implemented core contract; callback ingress remains future-facing**
+Owner: MoonMind Platform
+Last updated: 2026-03-30
 Audience: backend, workflow, API, worker, and dashboard implementers
 
-## 1) Purpose
+---
 
-This document defines the **Jules-specific implementation contract** for integrating Jules with MoonMind's Temporal-first external monitoring model.
+## 1. Purpose
 
-It exists to translate the provider-neutral rules in `docs/Temporal/IntegrationsMonitoringDesign.md` into a concrete Jules profile without polluting the shared design with provider-specific details.
+Define the **Jules-specific Temporal integration contract** for MoonMind.
+
+This document exists to translate MoonMind’s provider-neutral external-agent rules into a concrete Jules profile without polluting the shared design with provider-specific details.
 
 This document covers:
 
 - how MoonMind identifies and correlates Jules operations
-- the current non-Temporal Jules adapter surface that already exists in the repo
-- the target Temporal activity contract for Jules-backed work
+- the Jules adapter and Temporal activity surface
+- the canonical runtime contract boundary for Jules
 - how polling, callbacks, artifacts, and status normalization should behave for Jules
-- what is locked today vs what remains intentionally provisional
+- what is implemented now vs what remains future-facing
+
+This document does **not** define a separate Jules-only execution model. Shared external-agent architecture lives in:
+
+- `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+
+If this document conflicts with those shared docs, the shared docs win unless this file explicitly narrows Jules behavior.
 
 ---
 
-## 2) Related docs
+## 2. Related docs
 
 This document builds on and must stay consistent with:
 
-- `docs/Temporal/IntegrationsMonitoringDesign.md`
-- `docs/Temporal/TemporalArchitecture.md`
-- `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/Temporal/ArtifactPresentationContract.md`
-- `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`
 - `docs/ExternalAgents/JulesAdapter.md`
-
-If this document conflicts with the provider-neutral Temporal docs or the unified execution model, the shared docs win unless this file explicitly narrows behavior for Jules.
+- `docs/ExternalAgents/AddingExternalProvider.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
+- `docs/Temporal/ErrorTaxonomy.md`
+- `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 ---
 
-## 3) Scope / Non-goals
+## 3. Scope and non-goals
 
-### In scope
+## 3.1 In scope
 
 - Jules provider naming and identifier mapping
-- current Jules adapter request/response shapes
-- current runtime gating requirements for Jules execution
+- Jules runtime gating requirements
 - the Jules-specific Temporal activity contract
-- polling/callback posture for Jules
-- recommended artifact and correlation behavior for Jules operations
+- canonical runtime contract rules for Jules
+- Jules polling posture and future callback posture
+- artifact and correlation behavior for Jules operations
+- how Jules-specific events map into MoonMind-owned lifecycle state
 
-### Out of scope
+## 3.2 Out of scope
 
-- redesigning the generic integrations model
-- locking a broad MoonMind-wide status taxonomy beyond what Jules needs
-- defining the full UI presentation contract for external integrations
-- claiming that Jules is already fully Temporal-backed everywhere in the repo
+- redesigning MoonMind’s generic external integrations model
+- redefining the full MoonMind status taxonomy outside Jules narrowing
+- defining the entire dashboard presentation contract
+- claiming Jules callback ingress is already fully implemented end to end
 
 ---
 
-## 4) Current repo baseline
+## 4. Current repo baseline
 
 MoonMind contains the following Jules integration components:
 
-- **Configuration**: typed Jules settings in `moonmind/config/jules_settings.py`
-- **Schemas**: typed request/response models in `moonmind/schemas/jules_models.py`, including `normalize_jules_status()`
-- **HTTP client**: async adapter in `moonmind/workflows/adapters/jules_client.py`
-- **Agent adapter**: `JulesAgentAdapter` implementing the `AgentAdapter` protocol in `moonmind/workflows/adapters/jules_agent_adapter.py`
-- **MCP tooling**: `JulesToolRegistry` in `moonmind/mcp/jules_tool_registry.py`
-- **Runtime gating**: gating helpers in `moonmind/jules/runtime.py`
-- **Temporal activities**: `integration.jules.start`, `.status`, and `.fetch_result` registered in `moonmind/workflows/temporal/activity_catalog.py` on the `mm.activity.integrations` queue
-- **Worker fleet**: `integration:jules` capability in the integrations fleet (`moonmind/workflows/temporal/workers.py`)
+- **Configuration:** typed Jules settings in `moonmind/config/jules_settings.py`
+- **Schemas:** typed request/response models in `moonmind/schemas/jules_models.py`, including `normalize_jules_status()`
+- **HTTP client:** async client in `moonmind/workflows/adapters/jules_client.py`
+- **Agent adapter:** `JulesAgentAdapter` in `moonmind/workflows/adapters/jules_agent_adapter.py`
+- **MCP tooling:** `JulesToolRegistry` in `moonmind/mcp/jules_tool_registry.py`
+- **Runtime gating:** helpers in `moonmind/jules/runtime.py`
+- **Temporal activities:** Jules integration activities registered in `moonmind/workflows/temporal/activity_catalog.py`
+- **Worker fleet:** Jules capability on the integrations fleet
 
-All agent execution (both managed and external) now flows through the `MoonMind.AgentRun` child workflow, dispatched per plan step from `MoonMind.Run._run_execution_stage()` when `tool.type == "agent_runtime"`. Legacy non-Temporal execution paths have been removed (see Phase 4.5 in `ManagedAndExternalAgentExecutionModel.md`).
+All true agent execution now flows through `MoonMind.AgentRun`, dispatched per plan step from `MoonMind.Run` when `tool.type == "agent_runtime"`.
 
-### Implementation stance
+### Current execution stance
 
-For Jules, MoonMind uses the following posture:
+For Jules, MoonMind uses this posture:
 
-- **today:** `JulesAgentAdapter` exists but external adapter instantiation in `MoonMind.AgentRun` is not yet wired (Phase C migration pending)
-- **integration activities:** `integration.jules.start/status/fetch_result` are used for the integration polling stage in `MoonMind.Run._run_integration_stage()`
-- **default posture:** callback-first **when Jules supports it reliably**, with polling fallback
-- **current safe assumption:** polling is required unless a verified Jules callback path is explicitly implemented
+- Jules is a **poll-oriented external provider**
+- agent execution runs through `MoonMind.AgentRun`
+- normal multi-step workflow progression should prefer **one-shot bundled execution briefs**
+- `sendMessage` is reserved for clarification/intervention exception flows
+- polling is required today
+- callback ingress is future-facing and optional, not required for correctness
 
 ---
 
-## 5) Canonical Jules provider identity
+## 5. Canonical Jules provider identity
 
-### 5.1 Provider name
+## 5.1 Provider name
 
-The canonical integration name is:
+The canonical provider name is:
 
 - `jules`
 
-This value should be used anywhere MoonMind stores provider identity in workflow state, correlation records, artifacts, or bounded visibility attributes.
+This value should be used anywhere MoonMind stores provider identity in:
 
-### 5.2 External operation handle
+- workflow state
+- artifacts
+- bounded visibility attributes
+- provider metadata
+- API compatibility layers
 
-For Jules, the provider handle is:
+## 5.2 External operation handle
 
-- `external_operation_id = taskId`
+For Jules, the provider-side durable handle is:
 
-This is the Jules-side identifier returned by the current adapter response model.
+- `external_operation_id = taskId` or Jules-equivalent session ID from the provider response
 
-### 5.3 Additional provider fields
+MoonMind must preserve the distinction between:
 
-The current Jules response shape only guarantees a compact provider response:
+- **MoonMind workflow identity** — the durable orchestration identity
+- **Jules provider identity** — the provider-side task/session identifier
 
-- `taskId`
-- `status`
-- optional `url`
+Jules `taskId` is not the primary MoonMind execution identity.
 
-MoonMind should preserve the raw `status` string as `provider_status` and treat `url` as an optional external deep link for operators and UI surfaces.
+## 5.3 Additional provider fields
+
+Jules provider responses may include compact provider-specific fields such as:
+
+- raw provider status
+- provider URL
+- provider tracking reference
+- PR URL or related publication metadata
+
+These belong in canonical `metadata`, not in workflow-facing ad hoc top-level payload shapes.
 
 ---
 
-## 6) Configuration and feature gating
+## 6. Configuration and feature gating
 
 Jules support is feature-gated and must not be assumed available just because the code exists.
 
-### 6.1 Required configuration
+## 6.1 Required configuration
 
 Jules support depends on:
 
@@ -128,489 +150,473 @@ Jules support depends on:
 - `JULES_API_URL`
 - `JULES_API_KEY`
 
-Optional operational controls:
+Optional operational controls include:
 
 - `JULES_TIMEOUT_SECONDS`
 - `JULES_RETRY_ATTEMPTS`
 - `JULES_RETRY_DELAY_SECONDS`
 
-### 6.2 Runtime gate behavior
+## 6.2 Runtime gate behavior
 
-The canonical Jules runtime gate is the same one used by the rest of the repo:
+The canonical Jules runtime gate rules are:
 
-- `targetRuntime=jules` is only valid when Jules is enabled and fully configured
-- when the runtime gate is not satisfied, Jules-backed execution must be rejected early
+- `targetRuntime=jules` is only valid when Jules is enabled and configured
+- when the runtime gate is not satisfied, Jules-backed execution must fail early
 - Jules MCP tools should be excluded from discovery when Jules is disabled or missing credentials
 
-### 6.3 Operational rule
+## 6.3 Operational rule
 
-Any new Temporal worker, API callback handler, or dashboard control that depends on Jules must obey the same runtime gate. Do not add a second Jules enablement flag for Temporal code paths.
-
----
-
-## 7) Current non-Temporal Jules contract
-
-This section documents the current adapter behavior that the Temporal implementation must either reuse or intentionally supersede.
-
-### 7.1 Current request models
-
-#### Create task
-
-Current payload fields:
-
-- `title`
-- `description`
-- optional `metadata`
-
-#### Get task
-
-Current payload fields:
-
-- `taskId`
-
-#### Resolve task
-
-Current payload fields:
-
-- `taskId`
-- `resolutionNotes`
-- `status` (defaults to `completed` in the current schema)
-
-### 7.2 Current response model
-
-The current typed response model includes:
-
-- `taskId`
-- `status`
-- optional `url`
-
-### 7.3 Current transport behavior
-
-The current Jules adapter uses:
-
-- bearer-token auth
-- JSON request/response transport
-- manual retries on `5xx`, `429`, transport errors, and timeouts
-- immediate failure on other `4xx`
-- scrubbed exception text that must not leak secrets
-
-### 7.4 Current API surface exposed through MoonMind
-
-The adapter contract currently maps to:
-
-- `POST /tasks` for create
-- `GET /tasks/{taskId}` for status/detail fetch
-- `POST /tasks/{taskId}/finish` for resolve/finish
-
-The current repo does **not** define a Jules cancel endpoint in the adapter.
+Any new Temporal worker, API ingress, callback handler, or dashboard control that depends on Jules must obey the same runtime gate. Do not create a second Jules enablement flag for a Temporal-only path.
 
 ---
 
-## 8) Jules correlation contract
+## 7. Canonical runtime contract boundary
 
-The provider-neutral Temporal design requires a stable `correlation_id` that survives retry and Continue-As-New. Jules-specific implementation must preserve that rule.
+The most important Jules contract rule is:
 
-### 8.1 Required identifiers
+> Normalize Jules-native transport payloads into MoonMind canonical runtime contracts before they reach workflow code.
 
-For Jules-backed external monitoring, MoonMind should track:
+That means the workflow-facing Jules activity contract is:
 
-- `integration_name = jules`
-- `correlation_id` — MoonMind-generated stable identifier
-- `external_operation_id` — Jules `taskId`
-- `provider_status` — raw Jules status string
-- `normalized_status` — MoonMind-mapped status
-- optional `external_url` — Jules URL when present
+- `integration.jules.start(...) -> AgentRunHandle`
+- `integration.jules.status(...) -> AgentRunStatus`
+- `integration.jules.fetch_result(...) -> AgentRunResult`
+- `integration.jules.cancel(...) -> AgentRunStatus`
 
-### 8.2 Callback correlation key
+## 7.1 What is allowed
 
-Because the current typed Jules contract does not expose a first-class callback field, `callback_correlation_key` is **optional and future-facing** for Jules.
+Jules-specific details may appear in canonical `metadata`, for example:
 
-If Jules later supports callbacks/webhooks, MoonMind should prefer a stable callback correlation token that resolves back to the durable MoonMind correlation record rather than depending on Temporal visibility scans.
+- `providerStatus`
+- `normalizedStatus`
+- `externalUrl`
+- `trackingRef`
+- `pullRequestUrl`
+- `callbackSupported`
+- clarification/question metadata
 
-### 8.3 Where correlation metadata should go today
+## 7.2 What is not allowed
 
-The current `create_task` request already supports optional `metadata`. Until Jules has a stronger callback/correlation API, MoonMind should use that field as the preferred provider-side place to embed non-secret correlation hints when useful.
+Do not rely on workflow-facing top-level payloads such as:
 
-Rules:
+- `{external_id, tracking_ref}`
+- raw Jules-native status dicts
+- provider-shaped result dicts that `MoonMind.AgentRun` must coerce
 
-- never store secrets in Jules metadata
-- prefer stable correlation values over ephemeral run identifiers
-- do not rely on provider metadata as the only source of truth; MoonMind still owns the durable correlation record
+The Jules adapter or Jules activities must own that normalization.
 
----
+## 7.3 Unsupported status handling
 
-## 9) Jules status normalization contract
+If Jules emits a provider status that MoonMind cannot map into the canonical runtime state model, that is a non-retryable contract failure such as `UnsupportedStatus`.
 
-The current Jules typed response only guarantees an opaque provider `status: str`. That means MoonMind should be conservative about what it treats as locked.
-
-### 9.1 Locked rule
-
-Always preserve the raw Jules status as:
-
-- `provider_status`
-
-### 9.2 Minimum normalization rule
-
-MoonMind should map provider status into a bounded internal state:
-
-- `queued`
-- `running`
-- `succeeded`
-- `failed`
-- `canceled`
-- `unknown`
-
-### 9.3 Current safe mapping posture
-
-Because the current adapter does not yet publish a full, locked Jules status taxonomy, MoonMind should treat the repo's existing worker-side aliases as the current implementation baseline rather than inventing new ad hoc mappings:
-
-- success aliases currently observed in the repo are `completed`, `succeeded`, `success`, `done`, `resolved`, and `finished`
-- failure aliases currently observed in the repo are `cancelled`, `canceled`, `error`, `failed`, `rejected`, `timed_out`, and `timeout`
-- a raw empty or missing status may be normalized to a non-terminal provider token such as `pending` before MoonMind maps it into a bounded workflow status
-- all other mappings should be maintained explicitly in the Jules integration implementation, not inferred ad hoc in UI code
-- unknown provider statuses must fall back to `unknown` rather than pretending success or failure
-
-### 9.4 Ownership rule
-
-The mapping from Jules `status` to MoonMind `normalized_status` belongs in the Jules integration implementation, not in generic workflow code and not in the dashboard.
-
-Temporal activity and workflow code should reuse one central Jules status normalizer so the legacy polling worker path and Temporal path cannot drift semantically.
+Workflow code should not attempt to repair unknown Jules statuses on the fly.
 
 ---
 
-## 10) Jules Temporal activity contract
+## 8. Jules Temporal activity contract
 
-Jules should follow the generic activity naming scheme from the provider-neutral design.
+Jules follows the generic external provider activity naming scheme.
 
-This section distinguishes between:
-
-- the **current repo activity signatures** that already exist today
-- the **provider-neutral semantic contract** those activities are expected to satisfy as Temporal adoption continues
-
-### 10.1 Activity names
+## 8.1 Activity names
 
 - `integration.jules.start`
 - `integration.jules.status`
 - `integration.jules.fetch_result`
 - `integration.jules.cancel`
 
-Default routing should remain:
+Default routing:
 
 - `mm.activity.integrations`
 
-Do **not** create a Jules-specific task queue by default. Only split queues if secrets, quotas, or scaling requirements demand it.
+MoonMind should not create a Jules-specific task queue by default. Split queues only if secrets, quotas, or scaling requirements demand it.
 
-Current repo alignment:
+## 8.2 `integration.jules.start`
 
-- `integration.jules.start`, `integration.jules.status`, and `integration.jules.fetch_result` are registered today
-- `integration.jules.cancel` is a reserved target contract name and should not be documented as implemented until it is added to the activity catalog and runtime bindings
+### Purpose
 
-### 10.2 `integration.jules.start`
+Start a Jules task/session and return a canonical run handle.
 
-**Purpose**
+### Input
 
-Start a Jules task and return the provider handle plus monitoring hints.
+Canonical input is based on `AgentExecutionRequest` and may include:
 
-**Input**
+- `correlation_id`
+- `idempotency_key`
+- instructions and context refs
+- publish-related parameters
+- safe provider metadata hints
 
-- semantic contract:
-  - `correlation_id`
-  - `idempotency_key`
-  - task parameters including `title`, `description`, and optional provider metadata
-  - optional callback metadata if and when Jules supports it
-- current repo signature:
-  - optional `principal`
-  - optional singular `inputs_ref` artifact used to source the description when `parameters.description` is absent
-  - optional `execution_ref`
-  - optional `idempotency_key`
-  - optional `parameters.title`
-  - optional `parameters.description`
-  - optional `parameters.metadata`
+### Output
 
-**Current implementation guidance**
+Must return `AgentRunHandle` with canonical fields such as:
 
-- call the existing Jules create-task adapter
-- embed correlation hints inside provider metadata when useful and safe
-- if `inputs_ref` is used, treat it as an implementation detail of the current MoonMind artifact contract rather than a provider-level field
-- treat the returned Jules `taskId` as `external_operation_id`
-- preserve the returned `status` as `provider_status`
-- set `callback_supported=false` unless a verified Jules callback path is implemented
-- return `external_url` when Jules returns `url`
-- keep activity retries safe by deriving provider-side idempotency from stable request identity, never from a Temporal `run_id`
+- `run_id`
+- `agent_kind`
+- `agent_id`
+- `status`
+- `started_at`
+- `poll_hint_seconds`
+- `metadata`
 
-**Output**
+Jules-specific metadata may include:
 
-- semantic contract:
-  - `external_operation_id`
-  - `normalized_status`
-  - `provider_status`
-  - `callback_supported`
-  - optional `external_url`
-  - optional `provider_summary`
-- current repo result shape:
-  - `external_id`
-  - raw `status`
-  - optional `tracking_ref`
-  - optional `url`
+- `providerStatus`
+- `normalizedStatus`
+- `externalUrl`
+- `callbackSupported`
 
-Workflow-level adapters should map the current repo result shape into the semantic contract rather than forcing dashboard code to infer meaning from raw fields.
+### Implementation rules
 
-### 10.3 `integration.jules.status`
+- preserve MoonMind correlation metadata
+- treat the Jules provider handle as the canonical `run_id` for the external provider path
+- default `callbackSupported` to false unless a verified callback ingress exists
+- keep idempotency behavior stable across activity retries
 
-**Purpose**
+## 8.3 `integration.jules.status`
 
-Read current Jules task state during polling or reconciliation.
+### Purpose
 
-**Current implementation guidance**
+Read current Jules task/session state during polling or reconciliation.
 
-- call the existing Jules get-task adapter using `taskId`
-- preserve raw Jules `status`
-- return `external_url` when present
-- treat this activity as read-only and aggressively retryable
-- persist bounded tracking artifacts when artifact storage is available, but keep the workflow-visible return value compact
+### Output
 
-**Output**
+Must return `AgentRunStatus`.
 
-- semantic contract:
-  - `normalized_status`
-  - `provider_status`
-  - `terminal`
-  - optional `external_url`
-  - optional compact `provider_summary`
-- current repo result shape:
-  - `external_id`
-  - raw `status`
-  - optional `tracking_ref`
-  - optional `url`
+This status should preserve:
 
-### 10.4 `integration.jules.fetch_result`
+- raw provider status in metadata
+- normalized MoonMind runtime status in `status`
+- provider deep links in metadata where available
 
-**Purpose**
+### Implementation rules
 
-Fetch or materialize terminal Jules outputs into MoonMind artifacts.
+- read from the Jules provider using the provider handle
+- treat this as a read-only, strongly retryable activity
+- do not let UI code own Jules status interpretation
+- reuse one central Jules normalization path
 
-**Current implementation guidance**
+## 8.4 `integration.jules.fetch_result`
 
-The current Jules adapter does **not** define a richer result-download API beyond task fetch and finish. Therefore, the first valid implementation of `integration.jules.fetch_result` should be conservative:
+### Purpose
 
-- persist the final Jules task snapshot as an artifact
-- persist any MoonMind-authored resolution notes or summary as an artifact when that data actually exists in the calling flow
-- return artifact refs for those persisted records
-- avoid assuming that Jules already provides diff/log/output endpoints unless a newer adapter contract explicitly adds them
+Fetch or materialize the terminal Jules result into a canonical result envelope.
 
-Current repo alignment:
+### Output
 
-- the current Temporal implementation reuses `integration.jules.status` and returns the resulting tracking artifact ref
-- that is acceptable as an initial compatibility step, but it should continue to be documented as a conservative snapshot fetch rather than a rich result-download contract
+Must return `AgentRunResult`.
 
-**Output**
+Representative fields:
 
 - `output_refs[]`
-- optional `summary`
-- optional `diagnostics_ref`
+- `summary`
+- `diagnostics_ref`
+- `failure_class`
+- `provider_error_code`
+- `metadata`
 
-### 10.5 `integration.jules.cancel`
+### Implementation rules
 
-**Purpose**
+- preserve the terminal Jules snapshot where useful
+- publish provider result snapshots as artifacts when large or operationally important
+- include PR-related metadata when Jules creates a PR
+- if rich result/download APIs are limited, a conservative snapshot-style result is acceptable as long as the top-level contract is canonical
+
+## 8.5 `integration.jules.cancel`
+
+### Purpose
 
 Best-effort provider cancellation.
 
-**Current implementation guidance**
+### Output
 
-`JulesAgentAdapter.cancel()` exists and attempts cancellation by calling the Jules `resolve_task` endpoint with `status="canceled"`. If the provider rejects the cancel request, the adapter returns `intervention_requested` status with `cancelAccepted: False`.
+Must return `AgentRunStatus`.
 
-However:
+### Truthfulness rule
 
-- `integration.jules.cancel` is **not yet registered** as a Temporal activity in the activity catalog
-- workflow cancellation via `MoonMind.AgentRun` proceeds with MoonMind cancellation semantics regardless of provider-side cancel support
-- the `invoke_adapter_cancel` activity in `MoonMind.AgentRun` is not yet wired to the Jules adapter (Phase C migration pending)
+MoonMind may cancel the workflow regardless of provider behavior, but provider-side cancellation must only be reported as successful if Jules actually accepts it.
 
-Current repo alignment:
-
-- the adapter-level cancel path exists but is not yet connected to the Temporal activity and workflow cancel flows
-- documentation and UI surfaces should treat provider cancellation for Jules as a best-effort capability, not a guaranteed operation
-
-Do **not** fake provider cancellation success if the Jules API rejects the cancel request.
+If Jules rejects cancellation, the returned status/metadata should reflect that truthfully rather than pretending hard cancel succeeded.
 
 ---
 
-## 11) Polling and callback posture for Jules
+## 9. Jules correlation contract
 
-### 11.1 Current posture
+MoonMind requires a stable `correlation_id` that survives retries and Continue-As-New.
 
-The current MoonMind design explicitly acknowledges existing Jules polling behavior elsewhere in the codebase and does not claim that all Jules paths are already callback-driven or Temporal-backed.
+For Jules-backed work, MoonMind should track:
 
-That means the safe current posture for Jules is:
+- `integration_name = jules`
+- `correlation_id`
+- `external_operation_id` (Jules task/session ID)
+- `provider_status`
+- `normalized_status`
+- optional `external_url`
+
+## 9.1 Callback correlation key
+
+Because current Jules callback/webhook support is not yet a locked live ingress path in MoonMind, `callback_correlation_key` remains future-facing.
+
+If Jules later supports reliable callbacks, MoonMind should prefer a stable callback correlation token that resolves back to the durable MoonMind correlation record rather than relying on visibility scans.
+
+## 9.2 Jules metadata use
+
+The Jules provider request surface supports optional metadata. MoonMind may use that field for safe, non-secret correlation hints.
+
+Rules:
+
+- never store secrets in Jules metadata
+- prefer stable MoonMind correlation values over ephemeral runtime IDs
+- do not rely on provider metadata as the sole source of truth
+
+---
+
+## 10. Jules status normalization contract
+
+Jules provider status is opaque provider data until normalized.
+
+## 10.1 Locked rule
+
+Always preserve the raw Jules status as provider metadata, for example:
+
+- `providerStatus`
+
+## 10.2 Canonical normalized target
+
+Jules statuses must normalize into MoonMind’s canonical runtime state set, such as:
+
+- `queued`
+- `running`
+- `awaiting_feedback`
+- `awaiting_approval`
+- `intervention_requested`
+- `completed`
+- `failed`
+- `canceled`
+- `timed_out`
+
+## 10.3 Ownership rule
+
+The mapping from Jules provider status to MoonMind canonical runtime status belongs in the Jules integration implementation, not in:
+
+- generic workflow code
+- dashboard code
+- API presentation compatibility code
+
+MoonMind should reuse one central Jules normalization path so transport, activities, and optional tooling do not drift.
+
+## 10.4 MoonMind-owned states
+
+Some runtime states are MoonMind-owned outcomes rather than Jules-native provider states.
+
+Important example:
+
+- `intervention_requested`
+
+MoonMind may use `intervention_requested` when:
+
+- clarification requires operator help
+- auto-answer is disabled or exhausted
+- branch publication failed and requires manual review
+- verification failed and requires a human decision
+
+---
+
+## 11. Polling and callback posture for Jules
+
+## 11.1 Current posture
+
+The safe current posture for Jules is:
 
 - polling-capable
 - callback-ready in architecture
 - callback-optional, not callback-required
 
-### 11.2 Temporal target posture
+## 11.2 Preferred target posture
 
-When a Temporal-backed Jules path is implemented, the preferred posture should still follow the shared design:
+If Jules callback ingress is added later, the preferred posture remains:
 
-- callback-first when Jules supports reliable callbacks
-- timer-driven polling fallback when callbacks are absent, late, or untrusted
-- terminal-state latch so callback and poll races cannot double-complete the workflow
+- callback-first when reliable
+- polling fallback when callbacks are absent, late, or untrusted
+- terminal-state latch so callback and polling races cannot double-complete the workflow
 
-### 11.3 Current default for `callback_supported`
+## 11.3 `callbackSupported` default
 
-Unless a concrete, verified Jules callback ingestion endpoint exists, the Jules start activity should default to:
+Unless a concrete, verified Jules callback ingress endpoint exists, Jules start behavior should default to:
 
-- `callback_supported = false`
+- `callbackSupported = false`
 
-### 11.4 Poll timing
+## 11.4 Poll timing
 
-Until provider-specific evidence suggests otherwise, Jules should inherit the generic integration polling policy:
+Jules polling should follow the generic integration polling posture:
 
-- start with a short delay
-- back off with jitter
-- cap steady-state polling conservatively
-- reset backoff when provider status materially changes
+- short initial delay
+- backoff with jitter
+- capped steady-state polling
+- backoff reset when provider status materially changes
 
-The exact defaults should live in config or activity code, not be duplicated in UI logic.
+Timing defaults belong in code/config, not duplicated in UI logic.
 
 ---
 
-## 12) ExternalEvent contract for Jules
+## 12. External event contract for future callbacks
 
-This section defines the Jules-specific use of MoonMind's generic `ExternalEvent` signal.
+MoonMind’s generic async external event model should be used if Jules callback ingress is implemented.
 
-### 12.1 Current state
+## 12.1 Current state
 
-The repo's generic Temporal design already defines `ExternalEvent` as the entry point for async provider notifications. Jules should use that signal shape if and when inbound callbacks are implemented.
+This document does **not** claim that Jules callbacks are already wired end to end. It only defines the contract any future callback implementation should follow.
 
-### 12.2 Jules-specific payload expectations
+## 12.2 Expected signal payload shape
 
-When a Jules callback path exists, the signal payload should include at minimum:
+When Jules callback ingress exists, the external event payload should include at minimum:
 
 - `source = jules`
 - `event_type`
-- `external_operation_id` (Jules `taskId`)
+- `external_operation_id`
 - optional `provider_event_id`
 - optional `normalized_status`
 - optional `provider_status`
 - `observed_at`
 - optional `payloadArtifactRef`
 
-### 12.3 Current constraint
+## 12.3 Trust and dedupe rules
 
-This document does **not** claim that Jules callbacks are already wired end-to-end in the repo. It only locks the contract that any future callback implementation must follow.
+If MoonMind adds Jules callback ingress, it should follow these rules:
 
-### 12.4 Trust and dedupe rules for future callbacks
-
-If MoonMind adds a Jules callback ingress path, it should follow these rules:
-
-- verify provider authenticity in the API ingress layer before signaling Temporal; do not pass unauthenticated callback bodies into workflow logic
-- dedupe on a bounded provider event identity such as `provider_event_id + external_operation_id` when Jules exposes one
-- store raw callback payloads as restricted artifacts when they need to be retained; signal workflows with bounded metadata only
-- treat callback delivery as advisory until correlation and authenticity checks succeed
+- verify provider authenticity before signaling workflows
+- dedupe on a bounded provider event identity when available
+- store raw callback payloads as artifacts when retention is needed
+- signal workflows with bounded metadata only
+- treat callback delivery as advisory until authenticity and correlation checks succeed
 
 ---
 
-## 13) Jules artifact contract
+## 13. Jules artifact contract
 
-Jules data should follow MoonMind's general artifact discipline: keep workflow state compact and move large or volatile payloads into artifacts.
+Jules data should follow MoonMind’s general artifact discipline: keep workflow state compact and move large or volatile payloads into artifacts.
 
-### 13.1 Recommended Jules artifact classes
+## 13.1 Recommended artifact classes
 
-Recommended artifact categories for Jules-backed monitoring:
+Recommended Jules artifact categories include:
 
-- create/start request snapshot
-- task status snapshot
+- start request snapshot
+- status snapshot
 - final result snapshot
-- resolution summary / completion notes
+- resolution or completion summary
 - raw callback payload (future, if callbacks exist)
-- diagnostics / failure summary
+- diagnostics or failure summary
+- bundle manifest or checklist context for one-shot Jules runs
 
-### 13.2 Minimum requirement
+## 13.2 Minimum requirement
 
 At minimum, a Temporal-backed Jules integration should artifact:
 
-- the terminal Jules task snapshot
-- a failure summary artifact when Jules reaches terminal failure or unsupported cancellation matters
+- the terminal Jules task/session snapshot
+- a failure summary artifact when Jules reaches terminal failure or when MoonMind-owned post-run publication/verification fails
 
-### 13.3 Artifact linking
+## 13.3 Artifact linking
 
-Jules artifacts should link back to the owning workflow execution using the same execution-link contract used by the general Temporal artifact system.
+Jules artifacts should link back to the owning workflow execution using the same execution-link contract as the rest of the Temporal artifact system.
 
-### 13.4 Backend and storage posture
+## 13.4 History discipline
 
-For Temporal-backed Jules flows, artifact storage should follow the Temporal artifact system design:
+Do not put large Jules payloads, raw callback bodies, or verbose status dumps into workflow history.
 
-- default backend is the Temporal artifact store contract, which is MinIO / S3-compatible by default for MoonMind local and Compose deployments
-- legacy filesystem artifact roots such as `var/artifacts/...` remain relevant for non-Temporal Celery/system paths, but they are not the canonical backend for this contract
-
-### 13.5 History discipline
-
-Do not put large Jules payloads, raw event bodies, or verbose status dumps into workflow history or memo fields.
-
-When retaining raw callback bodies or provider snapshots that may contain sensitive operational detail, prefer restricted or preview-only artifact presentation rather than embedding raw payloads into task detail APIs by default.
+When retaining raw provider payloads or operationally sensitive details, prefer restricted artifacts over embedding raw data into task detail APIs by default.
 
 ---
 
-## 14) Security and error-handling rules
+## 14. Jules one-shot bundle posture
 
-### 14.1 Secrets
+For multi-step Jules work, MoonMind should prefer one-shot bundled execution rather than repeated provider-driven step progression through follow-up messages.
 
-- Jules credentials belong only in approved config / secret handling paths
-- bearer tokens must never appear in workflow history, memo, artifacts, or exception text
-- worker/API logs should only use scrubbed error strings
+## 14.1 Execution rule
 
-### 14.2 Error handling
+For compatible Jules-targeted work:
 
-The Jules adapter already establishes the basic transport error rules:
+- MoonMind bundles the work into one synthetic execution node
+- compiles one checklist-shaped execution brief
+- starts one Jules session
+- polls that session to completion
+- fetches one final result
+- handles one publish outcome boundary
+
+## 14.2 Why this matters to the contract
+
+This means:
+
+- one idempotency boundary per bundled Jules run
+- one provider run handle
+- one terminal result contract
+- one artifact/result/publication boundary
+
+`sendMessage` remains valid for clarification and intervention, but it should not be the normal step-to-step progression mechanism for multi-step MoonMind work.
+
+---
+
+## 15. Security and error-handling rules
+
+## 15.1 Secrets
+
+- Jules credentials belong only in approved secret/config paths
+- bearer tokens must never appear in workflow history, artifacts, or exception text
+- worker and API logs should use scrubbed error strings
+
+## 15.2 Error handling
+
+Jules transport and integration behavior should preserve the basic policy:
 
 - retry transient failures and rate limits
-- fail fast on non-retryable `4xx`
-- surface structured failure metadata for API error mapping
+- fail fast on non-retryable 4xx
+- treat unsupported provider statuses as non-retryable contract failures
+- keep workflow code free of Jules payload repair logic
 
-Temporal activity implementations should preserve those semantics rather than inventing a second retry policy that disagrees with the adapter.
+## 15.3 Cancellation truthfulness
 
-### 14.3 Cancellation truthfulness
-
-If MoonMind cancels a workflow while a Jules task is in flight:
+If MoonMind cancels a workflow while a Jules run is in flight:
 
 - MoonMind may still close the workflow as canceled
-- provider-side cancellation must only be reported as performed if Jules actually exposes and accepts a cancel operation
+- provider-side cancellation must only be reported as performed if Jules actually accepts it
 
 ---
 
-## 15) API and UI compatibility notes
+## 16. API and UI compatibility notes
 
-During migration, MoonMind may continue exposing task-oriented product surfaces while Temporal owns durable orchestration underneath.
+During migration and compatibility work, MoonMind may continue exposing task-oriented product surfaces while Temporal owns durable orchestration underneath.
 
-For Jules-backed work specifically:
+For Jules-backed work:
 
-- UI/API compatibility layers may still show task-style labels
-- the durable provider handle remains Jules `taskId`
-- the durable MoonMind orchestration handle remains the workflow execution identity
-- for Temporal-backed compatibility rows, `taskId` should continue to follow the Visibility/UI bridge and resolve to the Temporal `workflowId`, not the Jules provider `taskId`
-- any compatibility row or detail model must preserve the distinction between MoonMind task/workflow identity and Jules provider identity
+- UI/API layers may still show task-style labels
+- the durable provider handle remains the Jules task/session ID
+- the durable MoonMind orchestration handle remains the workflow identity
+- compatibility layers must preserve the distinction between MoonMind execution identity and Jules provider identity
 
-Do not let the dashboard treat Jules `taskId` as the primary durable MoonMind execution identity.
-
----
-
-## 16) Open decisions to lock next
-
-1. What exact Jules provider status values should be mapped to `queued`, `running`, `failed`, and `canceled` once observed in production or test traffic?
-2. Does Jules support a reliable signed callback/webhook path that MoonMind should formalize?
-3. Should MoonMind embed correlation metadata into Jules `metadata` by default, or only for callback-capable flows?
-4. If Jules later exposes richer outputs (logs, patches, artifacts), should `integration.jules.fetch_result` remain a single activity or split into multiple output activities?
-5. Should provider-specific rate limiting for Jules stay inside the worker process, or does it need a dedicated queue only after usage grows?
+Dashboard code must not treat the Jules provider handle as the primary durable MoonMind execution identity.
 
 ---
 
-## 17) Summary
+## 17. Open decisions
 
-The Jules integration should be treated as **the first provider-specific implementation profile** for MoonMind's Temporal external-monitoring architecture.
+The following remain worth locking more explicitly as the integration evolves:
+
+1. What exact Jules provider statuses are observed in production and should remain first-class in the normalization table?
+2. Does Jules support a reliable signed callback/webhook path MoonMind should formalize?
+3. Should MoonMind always embed correlation hints in Jules metadata, or only for callback-capable flows?
+4. If Jules later exposes richer outputs, should `integration.jules.fetch_result` remain a single activity or split further?
+5. Are there any scaling/quoting reasons to give Jules a dedicated queue in the future?
+
+---
+
+## 18. Summary
+
+Jules should be treated as the reference poll-based provider profile for MoonMind’s Temporal external-agent architecture.
 
 The important contract stance is:
 
-- reuse the current Jules adapter and schemas as the transport baseline
-- preserve MoonMind-owned correlation and normalized status semantics
-- treat polling as required today unless verified Jules callbacks exist
-- move durable waiting, retries, and long-lived state into Temporal
-- keep provider-specific details in this document, not in the shared integrations design
+- reuse the current Jules transport and adapter baseline
+- preserve MoonMind-owned correlation and canonical status semantics
+- keep polling as the required correctness path today
+- treat callbacks as future-facing and optional
+- return canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` from the Jules Temporal activities
+- keep provider-specific details in Jules metadata and Jules-specific docs, not in generic workflow code
+- prefer one-shot bundled execution for multi-step Jules work

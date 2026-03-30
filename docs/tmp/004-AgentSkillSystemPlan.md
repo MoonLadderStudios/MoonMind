@@ -198,9 +198,9 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 - [ ] Implement explicit include, exclude, and pinned-version selectors
 - [ ] Implement `task.skills` baseline resolution
 - [ ] Implement `step.skills` override and inheritance behavior
-- [ ] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
-- [ ] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
-- [ ] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
+- [x] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
+- [x] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
+- [x] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
 - [ ] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
 - [x] Return compact refs and metadata rather than full bodies in workflow history
 - [ ] Add tests covering:
