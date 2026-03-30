@@ -1,5 +1,25 @@
 [
   {
+    "id": 3012658697,
+    "disposition": "addressed",
+    "rationale": "Removed the dead bookkeeping variable _managed_429_retry_count."
+  },
+  {
+    "id": 4033782540,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary."
+  },
+  {
+    "id": 3012661828,
+    "disposition": "addressed",
+    "rationale": "Removed obsolete methods _request_with_internal_state and _restore_internal_request_state, as well as the unused constants."
+  },
+  {
+    "id": 4033785478,
+    "disposition": "not-applicable",
+    "rationale": "Informational code review summary."
+  },
+  {
     "id": 4033499887,
     "disposition": "not-applicable",
     "rationale": "High level PR overview, no action needed."
