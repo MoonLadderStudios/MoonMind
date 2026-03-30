@@ -239,7 +239,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
                                 deleteOp.mutate(secret.slug);
                               }
                             }}
-                            className="queue-action queue-action-danger px-3 py-1 text-xs"
+                            className="queue-action queue-action-danger px-3 py-1.5 text-xs font-medium transition"
                           >
                             Delete
                           </button>

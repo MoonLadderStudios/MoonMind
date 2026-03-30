@@ -298,7 +298,7 @@ export function ProviderProfilesManager({
               <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-200 dark:divide-slate-800 bg-mm-panel/75">
+          <tbody className="divide-y divide-mm-border/80 bg-mm-panel/75">
             {profiles.length === 0 ? (
               <tr>
                 <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7}>
