@@ -2,7 +2,7 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "feature/agent-skill-phase-4",
-    "headRefOid": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
+    "headRefOid": "d0c5dbc929bcf98f3227cb26919888a4ac80765d",
     "isDraft": false,
     "mergeStateStatus": "DIRTY",
     "mergeable": "CONFLICTING",
@@ -12,61 +12,61 @@
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T23:21:23Z",
+        "completedAt": "2026-03-30T23:30:07Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772478155/job/69266929812",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772736097/job/69267728455",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-30T23:20:29Z",
+        "startedAt": "2026-03-30T23:28:59Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T23:21:12Z",
+        "completedAt": "2026-03-30T23:29:50Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772478135/job/69266929834",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772736034/job/69267728499",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-30T23:20:29Z",
+        "startedAt": "2026-03-30T23:29:00Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T23:22:32Z",
+        "completedAt": "2026-03-30T23:30:49Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772478155/job/69266929813",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772736097/job/69267728463",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-30T23:20:30Z",
+        "startedAt": "2026-03-30T23:28:59Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T23:21:36Z",
+        "completedAt": "2026-03-30T23:30:08Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772478135/job/69266929820",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772736034/job/69267728504",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-30T23:20:29Z",
+        "startedAt": "2026-03-30T23:29:01Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T23:21:39Z",
+        "completedAt": "2026-03-30T23:30:05Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772478135/job/69266929825",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23772736034/job/69267728498",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-30T23:20:29Z",
+        "startedAt": "2026-03-30T23:28:59Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-30T23:21:05Z",
+        "completedAt": "2026-03-30T23:29:41Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69266985230",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69267794375",
         "name": "CodeQL",
-        "startedAt": "2026-03-30T23:21:03Z",
+        "startedAt": "2026-03-30T23:29:40Z",
         "status": "COMPLETED",
         "workflowName": ""
       }
@@ -75,7 +75,7 @@
     "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096"
   },
   "ci": {
-    "isRunning": true,
+    "isRunning": false,
     "hasFailures": true,
     "failedChecks": [
       {
@@ -102,10 +102,10 @@
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
-    "headShaNonSecurityCheckCount": 2,
-    "previousCommitSha": "9d83d48729ad8ccad17851ea9d8a11dd56ac56a9",
-    "previousCommitNonSecurityCheckCount": 3
+    "headShaVerified": "d0c5dbc929bcf98f3227cb26919888a4ac80765d",
+    "headShaNonSecurityCheckCount": 0,
+    "previousCommitSha": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
+    "previousCommitNonSecurityCheckCount": 4
   },
   "commentsFetch": {
     "succeeded": true,
@@ -123,10 +123,10 @@
       "path": "moonmind/workflows/temporal/activity_catalog.py",
       "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
       "in_reply_to_id": null,
-      "line": 809,
+      "line": 818,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -137,7 +137,7 @@
       "updated_at": "2026-03-30T23:23:03Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012659565",
       "path": "moonmind/workflows/temporal/activity_runtime.py",
-      "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
+      "commit_id": "d0c5dbc929bcf98f3227cb26919888a4ac80765d",
       "in_reply_to_id": null,
       "line": 292,
       "side": "RIGHT",
@@ -155,10 +155,10 @@
       "path": "moonmind/services/skill_materialization.py",
       "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
       "in_reply_to_id": null,
-      "line": 67,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -171,10 +171,10 @@
       "path": "moonmind/services/skill_materialization.py",
       "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
       "in_reply_to_id": null,
-      "line": 63,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -187,10 +187,10 @@
       "path": "moonmind/workflows/temporal/runtime/launcher.py",
       "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
       "in_reply_to_id": null,
-      "line": 501,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review",
@@ -201,27 +201,116 @@
       "created_at": "2026-03-30T23:23:03Z",
       "updated_at": "2026-03-30T23:23:03Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#pullrequestreview-4033783314"
+    },
+    {
+      "type": "review_comment",
+      "id": 3012668003,
+      "user": "Copilot",
+      "body": "`AgentSkillsActivities` defines an `agent_skill.materialize` activity, but this runtime binding table does not include it. As a result, `build_activity_bindings()` will raise \u201cno runtime binding metadata\u201d if `agent_skill.materialize` is ever added to the catalog or invoked. Add a `_ACTIVITY_HANDLER_ATTRS` entry mapping `agent_skill.materialize` to the `agent_skills` implementation (e.g., `materialize`).\n```suggestion\n    \"agent_skill.resolve\": (\"agent_skills\", \"resolve_skills\"),\n    \"agent_skill.materialize\": (\"agent_skills\", \"materialize\"),\n```",
+      "created_at": "2026-03-30T23:26:35Z",
+      "updated_at": "2026-03-30T23:26:37Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668003",
+      "path": "moonmind/workflows/temporal/activity_runtime.py",
+      "commit_id": "d0c5dbc929bcf98f3227cb26919888a4ac80765d",
+      "in_reply_to_id": null,
+      "line": 291,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 3012668015,
+      "user": "Copilot",
+      "body": "The activity catalog adds `agent_skill.resolve` and `agent_skill.build_prompt_index` but omits `agent_skill.materialize`, even though `AgentSkillsActivities` implements it and repository docs list it as a core activity. This will prevent workers from hosting materialization via the catalog/topology system; add a `TemporalActivityDefinition` for `agent_skill.materialize` with the intended fleet/task queue (docs suggest routing to the agent-runtime/prep fleet).",
+      "created_at": "2026-03-30T23:26:35Z",
+      "updated_at": "2026-03-30T23:26:37Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668015",
+      "path": "moonmind/workflows/temporal/activity_catalog.py",
+      "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
+      "in_reply_to_id": null,
+      "line": 796,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": true
+    },
+    {
+      "type": "review_comment",
+      "id": 3012668022,
+      "user": "Copilot",
+      "body": "This projection replaces `.agents/skills` with a symlink to `skills_active` by renaming the existing `.agents/skills` directory. That breaks the documented invariant that `.agents/skills/local` remains available as the local-only overlay path (it gets moved under `skills_repo_source/local`). Consider preserving `.agents/skills` as a real directory and linking/mounting the active projection inside it (or explicitly re-expose `local` under the canonical path) and make the rename target idempotent (handle pre-existing `.agents/skills_repo_source`).\n```suggestion\n                workspace_agents_dir = Path(resolved_workspace_path) / \".agents\"\n                target_skills_dir = workspace_agents_dir / \"skills\"\n                active_link = target_skills_dir / \"active\"\n                try:\n                    # Ensure .agents/skills exists as a real directory so that\n                    # the local-only overlay at .agents/skills/local remains\n                    # available at its canonical path.\n                    if target_skills_dir.exists():\n                        if target_skills_dir.is_symlink():\n                            # Avoid clobbering unexpected setups where skills is already a symlink.\n                            logger.warning(\n                                \"Expected .agents/skills to be a directory, but found a symlink at %s; \"\n                                \"skipping active skills linkage.\",\n                                target_skills_dir,\n                            )\n                            raise OSError(\"Cannot link active skills into symlinked .agents/skills\")\n                    else:\n                        target_skills_dir.mkdir(parents=True)\n\n                    # Link the active skills projection inside .agents/skills without\n                    # replacing the directory itself. This preserves .agents/skills/local.\n                    if active_link.exists():\n                        # Idempotent: leave existing link or directory in place.\n                        if not active_link.is_symlink():\n                            logger.warning(\n                                \"Expected .agents/skills/active to be a symlink, but found %s; \"\n                                \"leaving it unchanged.\",\n                                active_link,\n                            )\n                    else:\n                        active_link.symlink_to(active_skills_dir, target_is_directory=True)\n```",
+      "created_at": "2026-03-30T23:26:36Z",
+      "updated_at": "2026-03-30T23:26:37Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668022",
+      "path": "moonmind/workflows/temporal/runtime/launcher.py",
+      "commit_id": "d0c5dbc929bcf98f3227cb26919888a4ac80765d",
+      "in_reply_to_id": null,
+      "line": 504,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 3012668033,
+      "user": "Copilot",
+      "body": "Phase 3 checklist marks artifact-backed outputs as completed (e.g., \u201cGenerate explicit `ResolvedSkillSet` artifacts\u201d, \u201cGenerate prompt-index artifacts\u201d, \u201cReturn compact refs\u2026\u201d), but the current implementation returns `ResolvedSkillSet` inline from `agent_skill.resolve` and `build_prompt_index` returns a raw string (no artifact writes / refs). Either implement the artifact creation/linking described here or revert these items back to unchecked so the plan matches the code.",
+      "created_at": "2026-03-30T23:26:36Z",
+      "updated_at": "2026-03-30T23:26:37Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668033",
+      "path": "docs/tmp/004-AgentSkillSystemPlan.md",
+      "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
+      "in_reply_to_id": null,
+      "line": 205,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": true
+    },
+    {
+      "type": "review_comment",
+      "id": 3012668043,
+      "user": "Copilot",
+      "body": "Import block is likely to fail isort/ruff: standard-library imports (`datetime`, `unittest.mock`) should be grouped/sorted, and there are multiple separate imports from `moonmind.schemas.agent_skill_models` that isort will typically consolidate. Please reorder/group imports into a single isort-compliant block.",
+      "created_at": "2026-03-30T23:26:36Z",
+      "updated_at": "2026-03-30T23:26:37Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668043",
+      "path": "tests/unit/workflows/agent_skills/test_agent_skills_activities.py",
+      "commit_id": "2d1dd9f3eacc60744ba28fed84ef62a4f48c879e",
+      "in_reply_to_id": null,
+      "line": 5,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": true
+    },
+    {
+      "type": "review",
+      "id": 4033791340,
+      "user": "copilot-pull-request-reviewer[bot]",
+      "state": "COMMENTED",
+      "body": "## Pull request overview\n\nImplements \u201cPhase 4\u201d scaffolding for the Agent Skill System by adding Temporal activities and services to (a) resolve skill selectors into a `ResolvedSkillSet` snapshot and (b) materialize an \u201cactive skills\u201d projection into run workspaces, plus wiring these activities into the Temporal worker binding/catalog system and updating schemas/tests accordingly.\n\n**Changes:**\n- Add agent-skill schemas (`SkillSelector`, `ResolvedSkillSet`, `RuntimeSkillMaterialization`) and thread selector/ref fields through workflow + agent-runtime request contracts.\n- Introduce skill resolution + materialization services and Temporal activities (`agent_skill.resolve`, `agent_skill.build_prompt_index`, `agent_skill.materialize`), and wire new activity families into worker binding/catlog plumbing.\n- Add unit tests for resolution/materialization behavior and update Temporal worker binding tests to include the new activities implementation.\n\n### Reviewed changes\n\nCopilot reviewed 22 out of 22 changed files in this pull request and generated 5 comments.\n\n<details>\n<summary>Show a summary per file</summary>\n\n| File | Description |\r\n| ---- | ----------- |\r\n| var/pr_resolver/snapshot.json | PR/CI snapshot metadata update for the resolver tooling. |\r\n| var/pr_comments/current-branch-comments.json | PR comment snapshot metadata update for the resolver tooling. |\r\n| artifacts/pr_resolver_addressed_comments.json | Tracks dispositions of prior review comments for automation. |\r\n| moonmind/schemas/agent_skill_models.py | Adds core Pydantic contracts/enums for selection, provenance, resolved snapshots, and materialization outputs. |\r\n| moonmind/schemas/workflow_models.py | Extends workflow run request schema to accept an optional `skills` selector payload. |\r\n| moonmind/schemas/agent_runtime_models.py | Adds `resolvedSkillsetRef` to agent execution requests with non-blank validation. |\r\n| moonmind/schemas/__init__.py | Re-exports new agent-skill schema types. |\r\n| moonmind/services/skill_resolution.py | Adds resolver + loader interfaces and a precedence-based merge implementation (currently loader stubs). |\r\n| moonmind/services/skill_materialization.py | Adds materializer that writes a run-scoped `.agents/skills_active` manifest and prompt-index ref behavior. |\r\n| moonmind/workflows/agent_skills/agent_skills_activities.py | Adds Temporal activities for resolving skills, building prompt index strings, and materializing to workspace. |\r\n| moonmind/workflows/temporal/activity_runtime.py | Registers agent-skill activity types in the activity binding metadata and accepts an `agent_skills` implementation slot. |\r\n| moonmind/workflows/temporal/activity_catalog.py | Adds catalog definitions for `agent_skill.resolve` and `agent_skill.build_prompt_index`. |\r\n| moonmind/workflows/temporal/workers.py | Threads `agent_skills_activities` through worker binding builder API. |\r\n| moonmind/workflows/temporal/worker_runtime.py | Wires `AgentSkillsActivities()` into runtime worker bootstrapping. |\r\n| moonmind/workflows/temporal/runtime/launcher.py | Adds workspace symlink/rename logic to expose `.agents/skills_active` as `.agents/skills` for runtimes. |\r\n| tests/unit/workflows/temporal/test_temporal_workers.py | Updates worker binding tests to pass `AgentSkillsActivities()` for binding construction. |\r\n| tests/unit/workflows/temporal/test_temporal_worker_runtime.py | Updates worker runtime test expectations to include `agent_skills_activities`. |\r\n| tests/unit/workflows/temporal/test_activity_runtime.py | Updates activity binding tests to provide `agent_skills_activities` when building bindings. |\r\n| tests/unit/workflows/agent_skills/test_agent_skills_activities.py | Adds unit tests for resolve/build_prompt_index/materialize activity behavior. |\r\n| tests/unit/services/test_skill_resolution.py | Adds unit tests for resolver behavior with loader stubbing and context gating. |\r\n| tests/unit/services/test_skill_materialization.py | Adds unit tests for `.agents/skills_active` output and prompt-bundled materialization behavior. |\r\n| docs/tmp/004-AgentSkillSystemPlan.md | Updates checklist status for Phase 2\u20134 items in the skill system plan. |\n</details>\n\n\n\n\n\n\n---\n\n\ud83d\udca1 <a href=\"/MoonLadderStudios/MoonMind/new/main?filename=.github/instructions/*.instructions.md\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Add Copilot custom instructions</a> for smarter, more guided reviews. <a href=\"https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot\" class=\"Link--inTextBlock\" target=\"_blank\" rel=\"noopener noreferrer\">Learn how to get started</a>.",
+      "created_at": "2026-03-30T23:26:36Z",
+      "updated_at": "2026-03-30T23:26:36Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#pullrequestreview-4033791340"
     }
   ],
   "commentsSummary": {
     "classificationVersion": 2,
-    "total": 6,
-    "reviewCommentCount": 5,
+    "total": 12,
+    "reviewCommentCount": 10,
     "issueCommentCount": 0,
-    "reviewBodyCount": 1,
-    "actionableCommentCount": 5,
+    "reviewBodyCount": 2,
+    "actionableCommentCount": 2,
     "includeBotReviewComments": true,
-    "humanCommentCount": 0,
-    "botCommentCount": 6,
+    "humanCommentCount": 5,
+    "botCommentCount": 7,
     "hasActionableComments": true,
     "actionableCommentIds": [
-      3012659557,
-      3012659565,
-      3012659568,
-      3012659573,
-      3012659578
+      3012668003,
+      3012668022
     ],
     "nonActionableReasonCounts": {
+      "addressed_in_ledger": 6,
+      "thread_outdated": 3,
       "bot_comment_excluded": 1
     },
     "classifiedComments": [
@@ -231,9 +320,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012659557",
         "path": "moonmind/workflows/temporal/activity_catalog.py",
-        "line": 809,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 818,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012659565,
@@ -242,8 +331,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012659565",
         "path": "moonmind/workflows/temporal/activity_runtime.py",
         "line": 292,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012659568,
@@ -251,9 +340,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012659568",
         "path": "moonmind/services/skill_materialization.py",
-        "line": 67,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012659573,
@@ -261,9 +350,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012659573",
         "path": "moonmind/services/skill_materialization.py",
-        "line": 63,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3012659578,
@@ -271,15 +360,75 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012659578",
         "path": "moonmind/workflows/temporal/runtime/launcher.py",
-        "line": 501,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4033783314,
         "type": "review",
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#pullrequestreview-4033783314",
+        "path": null,
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
+      },
+      {
+        "id": 3012668003,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668003",
+        "path": "moonmind/workflows/temporal/activity_runtime.py",
+        "line": 291,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 3012668015,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668015",
+        "path": "moonmind/workflows/temporal/activity_catalog.py",
+        "line": 796,
+        "actionable": false,
+        "reason": "thread_outdated"
+      },
+      {
+        "id": 3012668022,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668022",
+        "path": "moonmind/workflows/temporal/runtime/launcher.py",
+        "line": 504,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 3012668033,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668033",
+        "path": "docs/tmp/004-AgentSkillSystemPlan.md",
+        "line": 205,
+        "actionable": false,
+        "reason": "thread_outdated"
+      },
+      {
+        "id": 3012668043,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#discussion_r3012668043",
+        "path": "tests/unit/workflows/agent_skills/test_agent_skills_activities.py",
+        "line": 5,
+        "actionable": false,
+        "reason": "thread_outdated"
+      },
+      {
+        "id": 4033791340,
+        "type": "review",
+        "user": "copilot-pull-request-reviewer[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1096#pullrequestreview-4033791340",
         "path": null,
         "line": null,
         "actionable": false,
