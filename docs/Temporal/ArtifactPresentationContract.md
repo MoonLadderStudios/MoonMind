@@ -1,7 +1,8 @@
 # Artifact Presentation Contract
+
 Status: Draft
 Owners: MoonMind Platform + UI
-Last updated: 2026-03-06
+Last updated: 2026-03-30
 
 ## 1. Purpose
 
@@ -11,6 +12,7 @@ It focuses on:
 - how UI clients present artifacts in execution/task detail flows
 - how API clients interpret artifact metadata fields
 - stable conventions for `link_type`, default reads, downloads, previews, and rendering hints
+- how artifact presentation connects to canonical runtime result contracts
 
 This document is intentionally downstream of the broader Temporal architecture. It does not redefine storage internals, artifact lifecycle implementation, or execution query semantics.
 
@@ -22,6 +24,8 @@ This document is intentionally downstream of the broader Temporal architecture. 
   - Owns execution identity, list/detail query semantics, and task compatibility rules.
 - `docs/UI/MissionControlArchitecture.md`
   - Owns dashboard route wiring, source resolution, and mixed-source UI integration.
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+  - Owns canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`) and execution-model boundaries.
 
 This document owns the consumer-facing artifact contract layered on top of those decisions.
 
@@ -35,6 +39,8 @@ This document owns the consumer-facing artifact contract layered on top of those
 - preview vs raw download behavior
 - standard viewer rules by `content_type` and metadata hints
 - stable error codes and client behavior for common failure states
+- runtime result integration and artifact-backed large outputs
+- presentation rules for provider snapshots and managed-runtime diagnostics
 
 ### Out of scope
 - artifact storage backend internals
@@ -58,6 +64,7 @@ This document owns the consumer-facing artifact contract layered on top of those
 3. Clients must not derive "latest" semantics locally.
    - Use the server's query parameters and response shape.
    - Do not sort by `created_at` in the browser and call that canonical "latest output."
+   - "Latest output" for runtime/provider artifacts should be server-driven, not client-grouped.
 
 4. Artifact metadata must be safe for control-plane display.
    - `metadata` is for bounded, display-safe hints and domain semantics.
@@ -65,6 +72,11 @@ This document owns the consumer-facing artifact contract layered on top of those
 
 5. Clients must degrade gracefully.
    - Unknown `link_type`, `artifact_type`, `render_hint`, or `content_type` values must fall back to a generic artifact presentation, not a hard failure.
+
+6. Detail pages must use the latest `temporalRunId` from execution detail before listing artifacts.
+   - Artifact listing is keyed by `(namespace, workflow_id, run_id)`.
+   - The `run_id` must come from the execution detail response, not from a cached or stale value.
+   - Reruns or Continue-As-New change the `run_id`, so artifact listing must refresh accordingly.
 
 ---
 
@@ -137,11 +149,47 @@ Client rules:
 
 ---
 
-## 6. Endpoint contract (summary)
+## 6. Runtime result integration
+
+### 6.1 Canonical runtime result discipline
+
+True agent-runtime activities return compact canonical contracts. Large outputs stay in artifacts.
+
+The canonical contracts are:
+
+- `AgentRunHandle`
+- `AgentRunStatus`
+- `AgentRunResult`
+
+`AgentRunResult` normally carries artifact refs for large outputs:
+
+- `output_refs[]` — primary output artifacts
+- `diagnostics_ref` — operational diagnostics artifact
+
+This means:
+
+- provider raw payload dumps belong in artifacts, not workflow history
+- managed runtime logs belong in artifacts
+- large summaries or diffs belong in artifacts
+- workflow history should only see small summaries and refs
+
+### 6.2 Rule for task/detail UIs
+
+Task and detail UIs should prefer execution-linked artifact evidence over provider-native inline payloads.
+
+When an `AgentRunResult` references artifacts, the UI should:
+
+1. list artifacts by execution using the standard list endpoint
+2. render each artifact using the standard presentation rules
+3. not attempt to reconstruct or parse raw provider payloads inline
+
+---
+
+## 7. Endpoint contract (summary)
 
 All endpoints below are server-relative. Authentication behavior is controlled by the app auth mode.
 
-### 6.1 Create an artifact
+### 7.1 Create an artifact
 
 `POST /api/artifacts`
 
@@ -160,14 +208,14 @@ Response:
 - `artifact_ref`
 - `upload` (`mode` plus URL or upload ID, expiry, max size, and required headers)
 
-### 6.2 Upload bytes
+### 7.2 Upload bytes
 
 `PUT /api/artifacts/{artifact_id}/content`
 
 - Sends the raw request body as artifact bytes.
 - If a `Content-Type` header is present, it becomes the artifact `content_type`.
 
-### 6.3 Multipart part presign
+### 7.3 Multipart part presign
 
 `POST /api/artifacts/{artifact_id}/presign-upload-part`
 
@@ -177,7 +225,7 @@ Request:
 Response:
 - `part_number`, `url`, `expires_at`, `required_headers`
 
-### 6.4 Complete multipart upload
+### 7.4 Complete multipart upload
 
 `POST /api/artifacts/{artifact_id}/complete`
 
@@ -187,7 +235,7 @@ Request:
 Response:
 - `ArtifactRef`
 
-### 6.5 Get metadata
+### 7.5 Get metadata
 
 `GET /api/artifacts/{artifact_id}`
 
@@ -201,7 +249,7 @@ Notes:
 - If `include_download=true` and raw access is allowed, the response includes `download_url` and `download_expires_at`.
 - Clients should not assume `download_url` is present unless they explicitly requested it.
 
-### 6.6 Presign download
+### 7.6 Presign download
 
 `POST /api/artifacts/{artifact_id}/presign-download`
 
@@ -210,7 +258,7 @@ Response:
 
 Use this for raw-download affordances when `raw_access_allowed=true`.
 
-### 6.7 Download via API proxy
+### 7.7 Download via API proxy
 
 `GET /api/artifacts/{artifact_id}/download`
 
@@ -222,7 +270,7 @@ Notes:
 - The current proxy filename is transport-oriented and uses `artifact_id`.
 - Clients should prefer `metadata.name` or other UI labels for display text instead of deriving user-facing names from the download filename.
 
-### 6.8 Link artifact to an execution
+### 7.8 Link artifact to an execution
 
 `POST /api/artifacts/{artifact_id}/links`
 
@@ -234,7 +282,7 @@ Request:
 Response:
 - updated `ArtifactMetadata`
 
-### 6.9 List artifacts for an execution
+### 7.9 List artifacts for an execution
 
 `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts`
 
@@ -249,14 +297,14 @@ v1 behavior:
 - `latest_only=true` is guaranteed only when paired with `link_type`; in that case the response contains at most one artifact, the latest for that execution/link pair.
 - Without `link_type`, clients must not assume the server collapses results to one artifact per `link_type`.
 
-### 6.10 Pin / unpin
+### 7.10 Pin / unpin
 
 - `POST /api/artifacts/{artifact_id}/pin`
 - `DELETE /api/artifacts/{artifact_id}/pin`
 
 Pin request includes optional `reason`.
 
-### 6.11 Delete
+### 7.11 Delete
 
 `DELETE /api/artifacts/{artifact_id}`
 
@@ -265,7 +313,7 @@ Response:
 
 ---
 
-## 7. Error contract (stable codes)
+## 8. Error contract (stable codes)
 
 Errors are returned as `HTTPException.detail` objects with:
 - `code`: stable machine code
@@ -286,9 +334,9 @@ Client rules:
 
 ---
 
-## 8. Presentation rules (UI contract)
+## 9. Presentation rules (UI contract)
 
-### 8.1 Primary UI surfaces
+### 9.1 Primary UI surfaces
 
 Execution detail or Temporal-backed task detail should expose an artifacts panel.
 
@@ -300,12 +348,14 @@ Common modes:
 Default list call:
 - `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts`
 
+The `run_id` must be the latest `temporalRunId` from the execution detail response.
+
 Artifact detail drawer/page should:
 - fetch `GET /api/artifacts/{artifact_id}`
 - render metadata plus the default content target
 - expose raw download only when `raw_access_allowed=true`
 
-### 8.2 Default read and download behavior
+### 9.2 Default read and download behavior
 
 Default rendering:
 - resolve `default_read_ref.artifact_id`
@@ -318,7 +368,7 @@ Raw download:
 
 Clients must not use `presign-download` for inline preview rendering by default unless the product intentionally wants browser-native rendering of the raw asset.
 
-### 8.3 Redaction / preview behavior
+### 9.3 Redaction / preview behavior
 
 Use these fields as follows:
 
@@ -334,7 +384,9 @@ Use these fields as follows:
 - If `redaction_level=preview_only`:
   - treat preview presentation as an intended steady-state consumer surface, not as an error condition
 
-### 8.4 What to show/hide from metadata
+Preview/raw-access behavior applies equally to provider snapshots and managed-runtime diagnostics. These artifact classes are not exempt from redaction or preview rules.
+
+### 9.4 What to show/hide from metadata
 
 Show to most users:
 - created time
@@ -353,19 +405,21 @@ Hide by default or keep debug-only:
 - `encryption` unless needed for compliance/operator UI
 - provenance fields such as `created_by_activity_type` and `created_by_worker`
 
-### 8.5 "Latest output" semantics
+### 9.5 "Latest output" semantics
 
 For v1, the canonical latest-output contract is execution plus `link_type`, not a client-derived grouping heuristic.
 
 Rules:
 - if the UI wants "latest output" for a known artifact kind, it should specify `link_type`
 - if the UI wants cross-link aggregation later, add an explicit server mode instead of collapsing client-side
+- "latest output" for runtime/provider artifacts should be server-driven, not client-grouped
+- this applies equally to `output.primary`, `output.provider_snapshot`, `runtime.diagnostics`, and all other link types
 
 ---
 
-## 9. Rendering rules (by `content_type` + hints)
+## 10. Rendering rules (by `content_type` + hints)
 
-### 9.1 Renderer selection priority
+### 10.1 Renderer selection priority
 
 1. `metadata.render_hint`
 2. `content_type`
@@ -374,7 +428,7 @@ Rules:
 
 Unknown `render_hint` values must be ignored, not treated as fatal.
 
-### 9.2 Supported renderers (recommended baseline)
+### 10.2 Supported renderers (recommended baseline)
 
 #### Text viewer
 
@@ -415,7 +469,7 @@ Everything else:
 - show metadata, size, and download action if allowed
 - no inline rendering by default
 
-### 9.3 Standard metadata hints
+### 10.3 Standard metadata hints
 
 These reserved keys live under `ArtifactMetadata.metadata`:
 - `name`: display filename, basename only
@@ -436,9 +490,59 @@ If these keys are absent, UI should still function using `content_type` and `lin
 
 ---
 
-## 10. Upload UX contract (UI behavior)
+## 11. Presentation guidance for artifact classes
 
-### 10.1 Simple upload
+### 11.1 Standard artifact classes
+
+These artifact classes have well-defined presentation behavior:
+
+| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| --- | --- | --- | --- |
+| `input.instructions` | `text/plain`, `text/markdown` | Text viewer | User-provided input |
+| `input.manifest` | `application/json` | JSON viewer | Manifest definition |
+| `input.plan` | `application/json` | JSON viewer | Pre-computed plan |
+| `input.skill_snapshot` | `application/json` | JSON viewer | Resolved skill set |
+| `input.prompt_index` | `application/json` | JSON viewer | Prompt index for runtime |
+| `output.primary` | varies | Auto-detect | Primary execution output |
+| `output.patch` | `text/x-diff` | Diff viewer | Code patch |
+| `output.logs` | `text/plain` | Text viewer | Execution logs |
+| `output.summary` | `text/plain`, `text/markdown` | Text viewer | Human-readable summary |
+| `output.agent_result` | `application/json` | JSON viewer | Canonical agent result |
+
+### 11.2 Provider and runtime artifact classes
+
+These artifact classes represent large operational outputs from agent execution:
+
+| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| --- | --- | --- | --- |
+| `output.provider_snapshot` | `application/json` | JSON viewer | Raw provider result snapshot; may be restricted |
+| `runtime.stdout` | `text/plain` | Text viewer | Managed runtime stdout |
+| `runtime.stderr` | `text/plain` | Text viewer | Managed runtime stderr |
+| `runtime.merged_logs` | `text/plain` | Text viewer | Combined stdout/stderr |
+| `runtime.diagnostics` | `application/json`, `text/plain` | Auto-detect | Operational diagnostics; may be restricted |
+| `runtime.skill_materialization` | `application/json` | JSON viewer | Runtime delivery bundle |
+
+Rules:
+
+- provider snapshots and managed-runtime diagnostics may contain sensitive operational detail
+- preview/raw-access behavior applies equally to these classes
+- UI should not assume these artifacts are safe for unrestricted inline display
+- large runtime logs should use the standard size-threshold behavior: inline preview up to `MAX_INLINE_BYTES`, then explicit download
+
+### 11.3 Debug artifact classes
+
+| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| --- | --- | --- | --- |
+| `debug.trace` | `application/json`, `text/plain` | Auto-detect | Execution trace |
+| `debug.skill_resolution_trace` | `application/json` | JSON viewer | Skill resolution debug info |
+
+Debug artifacts should be hidden by default in normal user views and shown in operator/debug panels.
+
+---
+
+## 12. Upload UX contract (UI behavior)
+
+### 12.1 Simple upload
 
 1. `POST /api/artifacts`
 2. If `upload.mode=single_put` and `upload.upload_url` is present:
@@ -447,7 +551,7 @@ If these keys are absent, UI should still function using `content_type` and `lin
    - `PUT /api/artifacts/{artifact_id}/content`
 4. Refresh metadata until `status=complete`
 
-### 10.2 Multipart upload
+### 12.2 Multipart upload
 
 1. `POST /api/artifacts`
 2. Expect `upload.mode=multipart` and `upload.upload_id`
@@ -459,26 +563,38 @@ If these keys are absent, UI should still function using `content_type` and `lin
 
 ---
 
-## 11. Execution linkage conventions
+## 13. Execution linkage conventions
 
-### 11.1 Required link fields
+### 13.1 Required link fields
 
 - `namespace`
 - `workflow_id`
 - `run_id`
 - `link_type`
 
-### 11.2 `link_type` naming
+### 13.2 `link_type` naming
 
 Use lowercase, dot-delimited, stable machine meaning.
 
-Examples:
-- `input.manifest`
+Complete `link_type` registry:
+
 - `input.instructions`
+- `input.manifest`
+- `input.plan`
+- `input.skill_snapshot`
+- `input.prompt_index`
 - `output.primary`
 - `output.patch`
 - `output.logs`
 - `output.summary`
+- `output.provider_snapshot`
+- `output.agent_result`
+- `runtime.skill_materialization`
+- `runtime.stdout`
+- `runtime.stderr`
+- `runtime.merged_logs`
+- `runtime.diagnostics`
+- `debug.skill_resolution_trace`
 - `debug.trace`
 
 Rules:
@@ -486,7 +602,7 @@ Rules:
 - use `link_type` for machine meaning and `label` for human-facing nuance
 - clients must tolerate unknown `link_type` values and display them generically
 
-### 11.3 `label` usage
+### 13.3 `label` usage
 
 - optional, human-friendly
 - can carry versioning or presentation nuance, for example `Plan v2` or `Final output`
@@ -494,9 +610,9 @@ Rules:
 
 ---
 
-## 12. Examples
+## 14. Examples
 
-### 12.1 List the latest logs artifact for an execution
+### 14.1 List the latest logs artifact for an execution
 
 `GET /api/executions/moonmind/wf-1/run-1/artifacts?link_type=output.logs&latest_only=true`
 
@@ -530,7 +646,7 @@ Rules:
 }
 ```
 
-### 12.2 Fetch metadata with download included
+### 14.2 Fetch metadata with download included
 
 `GET /api/artifacts/art_...?include_download=true`
 
@@ -538,12 +654,28 @@ Behavior:
 - if allowed, the response contains `download_url`
 - if not allowed, `download_url` is null or omitted and the UI should not show a raw-download CTA
 
+### 14.3 List provider snapshot for an execution
+
+`GET /api/executions/moonmind/wf-1/run-1/artifacts?link_type=output.provider_snapshot&latest_only=true`
+
+This returns the latest provider result snapshot. The UI should:
+- check `raw_access_allowed` and `redaction_level`
+- render through the standard preview/raw-access rules
+- not assume the snapshot is safe for unrestricted inline display
+
+### 14.4 List managed-runtime diagnostics
+
+`GET /api/executions/moonmind/wf-1/run-1/artifacts?link_type=runtime.diagnostics&latest_only=true`
+
+This returns the latest diagnostics artifact. The same preview/raw-access rules apply.
+
 ---
 
-## 13. Open questions / future extensions
+## 15. Open questions / future extensions
 
 - Should the API add an explicit preview-generation request endpoint, or should preview creation remain worker-driven?
 - Should the API add an explicit cross-`link_type` latest mode rather than overloading `latest_only`?
 - Should MoonMind standardize `artifact_type` enums for dashboard grouping, or keep it producer-defined?
 - Should proxy downloads eventually prefer sanitized `metadata.name` over `artifact_id` for filenames?
 - Do we want content-range or partial text fetch support for very large logs?
+- Should prior-run artifact browsing become a first-class detail feature when Continue-As-New becomes common?
