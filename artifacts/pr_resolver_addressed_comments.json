@@ -1,162 +1,47 @@
 [
   {
-    "id": 4157563183,
+    "id": 4033457684,
     "disposition": "not-applicable",
-    "rationale": "Informational limit warning."
+    "rationale": "Informational top-level summary from bot, no action needed."
   },
   {
-    "id": 3011757793,
+    "id": 3012346576,
     "disposition": "addressed",
-    "rationale": "Removed duplicate sentence in docs/Temporal/ManagedAndExternalAgentExecutionModel.md."
+    "rationale": "Clarified that mm:<uuid> applies to execution workflows and type-specific prefixes for singleton/session workflows."
   },
   {
-    "id": 3011757838,
+    "id": 3012346596,
     "disposition": "addressed",
-    "rationale": "Clarified target-state vs current state in docs/Temporal/ManagedAndExternalAgentExecutionModel.md."
+    "rationale": "Added mm_owner_type to the required Search Attributes list."
   },
   {
-    "id": 3011757850,
+    "id": 3012346625,
     "disposition": "addressed",
-    "rationale": "Aligned featureFlags in docs/UI/MissionControlArchitecture.md."
+    "rationale": "Aligned mm_entry allowed values with the current list filtering capabilities of the backend."
   },
   {
-    "id": 3011757875,
+    "id": 3012346634,
     "disposition": "addressed",
-    "rationale": "Fixed numbering sequence in docs/Temporal/WorkflowArtifactSystemDesign.md."
+    "rationale": "Updated one-time deferred execution documentation to reflect that MoonMind currently passes scheduled_for internally instead of using server-side start_delay."
   },
   {
-    "id": 3011757896,
+    "id": 3012346644,
     "disposition": "addressed",
-    "rationale": "Corrected file path reference to docs/Tasks/SkillAndPlanContracts.md."
+    "rationale": "Updated recurring schedule create payload example to use the target dict instead of top-level parameters."
   },
   {
-    "id": 3011757915,
+    "id": 3012346658,
     "disposition": "addressed",
-    "rationale": "Changed planning is a skill to executable tool terminology."
+    "rationale": "Aligned mm_entry allowed values in Visibility UI model to match current backend normalization."
   },
   {
-    "id": 4032825917,
+    "id": 3012346669,
+    "disposition": "addressed",
+    "rationale": "Fixed immediate execution docs to state mm:<uuid> instead of ulid, and included mm_owner_type in search attributes."
+  },
+  {
+    "id": 4033457903,
     "disposition": "not-applicable",
-    "rationale": "PR review summary, no action needed."
-  },
-  {
-    "id": 4156996442,
-    "disposition": "not-applicable",
-    "rationale": "Informational message about Codex usage limits."
-  },
-  {
-    "id": 3011357812,
-    "disposition": "addressed",
-    "rationale": "Cleaned up duplicated and conflicting Tailwind classes in section buttons in settings.tsx."
-  },
-  {
-    "id": 3011357823,
-    "disposition": "addressed",
-    "rationale": "Cleaned up duplicated and conflicting Tailwind classes in SecretManager.tsx container."
-  },
-  {
-    "id": 3011357827,
-    "disposition": "addressed",
-    "rationale": "Removed conflicting dark mode text color classes in SecretManager.tsx header."
-  },
-  {
-    "id": 3011357834,
-    "disposition": "addressed",
-    "rationale": "Deduplicated Tailwind classes in OperationsSettingsSection.tsx alert."
-  },
-  {
-    "id": 3011357849,
-    "disposition": "addressed",
-    "rationale": "Cleaned up class strings for error and success notices in OperationsSettingsSection.tsx."
-  },
-  {
-    "id": 4032363674,
-    "disposition": "not-applicable",
-    "rationale": "General review summary comment."
-  },
-  {
-    "id": 3011357859,
-    "disposition": "addressed",
-    "rationale": "Simplified conflicting dark mode background classes in ProviderProfilesManager.tsx badge."
-  },
-  {
-    "id": 3011360898,
-    "disposition": "addressed",
-    "rationale": "Deduplicated classes and migrated hard-coded inline colors to Tailwind in SecretManager.tsx table."
-  },
-  {
-    "id": 3011360928,
-    "disposition": "addressed",
-    "rationale": "Deduplicated and simplified header container classes in settings.tsx."
-  },
-  {
-    "id": 3011360946,
-    "disposition": "addressed",
-    "rationale": "Cleaned up section tab button class strings in settings.tsx."
-  },
-  {
-    "id": 3011360972,
-    "disposition": "addressed",
-    "rationale": "Simplified contradictory text color classes in ProviderProfilesManager.tsx reset button."
-  },
-  {
-    "id": 3011360998,
-    "disposition": "addressed",
-    "rationale": "Simplified conflicting dark mode background classes in ProviderProfilesManager.tsx badge (duplicate feedback)."
-  },
-  {
-    "id": 3011361020,
-    "disposition": "addressed",
-    "rationale": "Deduplicated and simplified pause button classes in OperationsSettingsSection.tsx."
-  },
-  {
-    "id": 3011361038,
-    "disposition": "addressed",
-    "rationale": "Deduplicated repeated classes and ensured proper contrast for resume button in OperationsSettingsSection.tsx."
-  },
-  {
-    "id": 3011361058,
-    "disposition": "addressed",
-    "rationale": "Deduplicated background classes for section wrapper in ProviderProfilesManager.tsx."
-  },
-  {
-    "id": 3011361078,
-    "disposition": "addressed",
-    "rationale": "Cleaned up repeated/conflicting dark mode classes in OperationsSettingsSection.tsx wrapper."
-  },
-  {
-    "id": 4032367139,
-    "disposition": "not-applicable",
-    "rationale": "General PR overview comment."
-  },
-  {
-    "id": 4156149245,
-    "disposition": "not-applicable",
-    "rationale": "Informational codex limits warning."
-  },
-  {
-    "id": 4156792642,
-    "disposition": "not-applicable",
-    "rationale": "Informational codex limits warning."
-  },
-  {
-    "id": 3011199838,
-    "disposition": "addressed",
-    "rationale": "Removed integration filter state and UI."
-  },
-  {
-    "id": 4032180484,
-    "disposition": "not-applicable",
-    "rationale": "PR review summary generated by bot."
-  },
-  {
-    "id": 3011201783,
-    "disposition": "addressed",
-    "rationale": "Added 'integration' back to sort fields set."
-  },
-  {
-    "id": 4032182933,
-    "disposition": "not-applicable",
-    "rationale": "Copilot review summary."
+    "rationale": "Informational review summary from bot, no action needed."
   }
 ]
