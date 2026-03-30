@@ -193,12 +193,6 @@ function buildDebugFieldEntries(execution: z.infer<typeof ExecutionDetailSchema>
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled', 'completed']);
 
-interface LogLine {
-  sequence: number;
-  stream: string;
-  text: string;
-}
-
 function LiveLogsPanel({
   apiBase,
   taskRunId,
@@ -208,16 +202,31 @@ function LiveLogsPanel({
   taskRunId: string;
   isTerminal: boolean;
 }) {
-  const [lines, setLines] = useState<LogLine[]>([]);
+  const [logContent, setLogContent] = useState<string>('');
   const [status, setStatus] = useState<'connecting' | 'connected' | 'done' | 'error'>('connecting');
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const isTerminalRef = useRef(isTerminal);
+
+  // Keep isTerminalRef current so the onerror handler always sees the latest value.
+  useEffect(() => {
+    isTerminalRef.current = isTerminal;
+  }, [isTerminal]);
+
+  // Reset log state whenever we switch to a different task run.
+  useEffect(() => {
+    setLogContent('');
+    lastSeqRef.current = null;
+    setStatus('connecting');
+  }, [taskRunId]);
 
   useEffect(() => {
     if (!taskRunId) return;
 
-    const since = lastSeqRef.current != null ? `?since=${lastSeqRef.current}` : '';
+    // Request events strictly after the last seen sequence to avoid duplicates.
+    const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
+    const since = nextSince != null ? `?since=${nextSince}` : '';
     const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
     const es = new EventSource(url, { withCredentials: true });
     esRef.current = es;
@@ -226,9 +235,9 @@ function LiveLogsPanel({
 
     es.addEventListener('log_chunk', (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data) as LogLine;
+        const data = JSON.parse(event.data) as { sequence: number; text: string };
         lastSeqRef.current = data.sequence;
-        setLines((prev) => [...prev, data]);
+        setLogContent((prev) => prev + data.text);
       } catch {
         // ignore malformed events
       }
@@ -237,15 +246,13 @@ function LiveLogsPanel({
     es.onerror = () => {
       es.close();
       esRef.current = null;
-      setStatus(isTerminal ? 'done' : 'error');
+      setStatus(isTerminalRef.current ? 'done' : 'error');
     };
 
     return () => {
       es.close();
       esRef.current = null;
     };
-  // Re-connect only when taskRunId changes. Terminal transitions are handled below.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase, taskRunId]);
 
   // Close the stream once the task reaches a terminal state.
@@ -257,10 +264,10 @@ function LiveLogsPanel({
     }
   }, [isTerminal]);
 
-  // Auto-scroll to the bottom when new lines arrive.
+  // Auto-scroll to the bottom when new content arrives.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [lines]);
+    bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
+  }, [logContent]);
 
   const statusLabel =
     status === 'connected'
@@ -276,23 +283,24 @@ function LiveLogsPanel({
       <p className="small">
         Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
       </p>
-      <pre
-        style={{
-          maxHeight: '400px',
-          overflowY: 'auto',
-          background: '#111',
-          color: '#e8e8e8',
-          padding: '0.75rem',
-          fontSize: '0.7rem',
-          lineHeight: 1.4,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          borderRadius: '4px',
-        }}
-      >
-        {lines.length === 0 ? '(waiting for output…)' : lines.map((l) => l.text).join('')}
+      <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+        <pre
+          style={{
+            background: '#111',
+            color: '#e8e8e8',
+            padding: '0.75rem',
+            fontSize: '0.7rem',
+            lineHeight: 1.4,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+            borderRadius: '4px',
+            margin: 0,
+          }}
+        >
+          {logContent === '' ? '(waiting for output…)' : logContent}
+        </pre>
         <div ref={bottomRef} />
-      </pre>
+      </div>
     </div>
   );
 }
