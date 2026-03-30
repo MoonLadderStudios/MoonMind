@@ -52,6 +52,7 @@ const ExecutionDetailSchema = z
     updatedAt: z.string().optional(),
     closedAt: z.string().nullable().optional(),
     taskRunId: z.string().nullable().optional(),
+    task_run_id: z.string().nullable().optional(),
     debugFields: z
       .object({
         workflowId: z.string().optional(),
@@ -229,6 +230,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const runId = execution?.temporalRunId || execution?.runId || '';
   const namespace = execution?.namespace || '';
 
+  const isUuidLike = (val: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
+  const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
+  const resolvedTaskRunId = explicitTaskRunId || (isUuidLike(runId) ? runId : '');
+
   const artifactsQuery = useQuery({
     queryKey: ['task-detail-artifacts', namespace, workflowId, runId],
     queryFn: async () => {
@@ -393,9 +399,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             <Card label="Latest Run">
               <code className="text-xs break-all">{runId || '—'}</code>
             </Card>
-            {execution.taskRunId ? (
+            {resolvedTaskRunId ? (
               <Card label="Task Run">
-                <code className="text-xs break-all">{execution.taskRunId}</code>
+                <code className="text-xs break-all">{resolvedTaskRunId}</code>
               </Card>
             ) : null}
             <Card label="Started">{formatWhen(execution.startedAt)}</Card>
@@ -571,9 +577,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           <section>
             <h3>Live Logs</h3>
             {logTailingEnabled ? (
-              execution.taskRunId ? (
+              resolvedTaskRunId ? (
                 <p className="small">
-                  Task run <code className="text-xs">{execution.taskRunId}</code> can use the same live tailing
+                  Task run <code className="text-xs">{resolvedTaskRunId}</code> can use the same live tailing
                   endpoints as the legacy dashboard client.
                 </p>
               ) : (
