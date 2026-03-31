@@ -60,7 +60,7 @@ Freeze the implementation boundary and decide what compatibility code must stay 
 * [x] compatibility matrix
 * [x] explicit “new-history only” vs “replay compatibility” decisions
 
-> **Phase 0 Deliverables completed**: See `specs/118-canonical-return-phase0/plan.md` for the full inventory and compatibility cutover strategy.
+> **Phase 0 Deliverables completed**: See [`specs/118-canonical-return-phase0/plan.md`](specs/118-canonical-return-phase0/plan.md) for the full inventory and compatibility cutover strategy.
 
 ---
 

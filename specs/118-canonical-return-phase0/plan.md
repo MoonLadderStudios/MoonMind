@@ -1,6 +1,6 @@
 # Canonical Return Phase 0 (Plan)
 
-Following the spec requirements and the strategy outlined in `010-CanonicalReturnPlan.md`, we catalog the exact normalization touchpoints and clarify our deployment/playback constraints.
+Following the spec requirements and the strategy outlined in [`010-CanonicalReturnPlan.md`](../../docs/tmp/010-CanonicalReturnPlan.md), we catalog the exact normalization touchpoints and clarify our deployment/playback constraints.
 
 ## 1. Inventory
 
@@ -8,6 +8,7 @@ Following the spec requirements and the strategy outlined in `010-CanonicalRetur
 - `MoonMind.AgentRun._coerce_external_status_payload` (`agent_run.py`)
 - `MoonMind.AgentRun._coerce_external_start_status` (`agent_run.py`)
 - `MoonMind.AgentRun._coerce_managed_status_payload` (`agent_run.py`)
+- `MoonMind.AgentRun` inline special-case handling for non-canonical external start dicts (`agent_run.py`)
 - `MoonMind.Run._map_agent_run_result` (`run.py`)
 
 ### Activity handlers emitting mixed shapes (DOC-REQ-CANON-002)
@@ -17,11 +18,11 @@ External provider activities mapping:
 - `oauth_session_*` operations (status updates)
 
 Managed runtime activities mapping:
-- `agent_runtime_launch`
-- `agent_runtime_status`
-- `agent_runtime_fetch_result`
-- `agent_runtime_publish_artifacts`
-- `agent_runtime_cancel`
+- `agent_runtime.launch`
+- `agent_runtime.status`
+- `agent_runtime.fetch_result`
+- `agent_runtime.publish_artifacts`
+- `agent_runtime.cancel`
 
 ## 2. In-Flight Cutover Strategy & Compatibility (DOC-REQ-CANON-003)
 
@@ -34,4 +35,4 @@ The approved cutover strategy demands:
 - We deliberately refuse soft wrapper aliases outside of the patched boundary to keep adherence to MoonMind's pre-release policy tight. New activity loops or executions will strictly reject non-typed dictionary returns directly.
 
 ## 3. Plan Modifications (DOC-REQ-CANON-004)
-We append these specific deliverables directly into `010-CanonicalReturnPlan.md` and mark `Phase 0` complete.
+We append these specific deliverables directly into [`010-CanonicalReturnPlan.md`](../../docs/tmp/010-CanonicalReturnPlan.md) and mark `Phase 0` complete.
