@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
@@ -152,6 +153,8 @@ def _coerce_temporal_scalar(value: object | None) -> str:
             text = _coerce_temporal_scalar(item)
             if text:
                 return text
+        return ""
+    if isinstance(value, Mapping):
         return ""
     if value is None:
         return ""
@@ -397,8 +400,10 @@ def _serialize_execution(
         _coerce_temporal_scalar(search_attributes.get("mm_repository"))
         or _coerce_temporal_scalar(search_attributes.get("mm_repo"))
         or _coerce_temporal_scalar(search_attributes.get("repository"))
-        or str(memo.get("repository") or "").strip()
-        or str(params.get("repository") or git_payload.get("repository") or task_payload.get("repository") or "").strip()
+        or _coerce_temporal_scalar(memo.get("repository"))
+        or _coerce_temporal_scalar(params.get("repository"))
+        or _coerce_temporal_scalar(git_payload.get("repository"))
+        or _coerce_temporal_scalar(task_payload.get("repository"))
     ) or None
 
     return ExecutionModel(

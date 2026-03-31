@@ -145,7 +145,9 @@ class TaskProposalPromoteResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     proposal: TaskProposalModel = Field(..., alias="proposal")
-    promoted_execution_id: str = Field(..., alias="promotedExecutionId")
+    promoted_execution_id: str = Field(
+        ..., alias="promotedExecutionId", title="PromotedExecutionId"
+    )
 
 
 class TaskProposalPriorityRequest(BaseModel):

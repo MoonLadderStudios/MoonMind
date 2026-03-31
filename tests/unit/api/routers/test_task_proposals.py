@@ -183,6 +183,7 @@ def test_promote_proposal_returns_proposal(
     body = response.json()
     assert "proposal" in body
     assert body["proposal"]["title"] == "Add tests"
+    assert body["promotedExecutionId"] == "wf-abc-123"
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"

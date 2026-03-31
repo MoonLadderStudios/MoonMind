@@ -4359,7 +4359,7 @@ export interface components {
          */
         TaskProposalPromoteResponse: {
             proposal: components["schemas"]["TaskProposalModel"];
-            /** Promotedexecutionid */
+            /** PromotedExecutionId */
             promotedExecutionId: string;
         };
         /**
