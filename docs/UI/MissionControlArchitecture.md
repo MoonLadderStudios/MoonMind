@@ -370,8 +370,8 @@ Rules:
 
 For the task detail observability area (Live Logs panel), the correct fetch sequence is:
 
-1. `GET /api/task-runs/{id}/observability` — fetch observability summary (run status, artifact refs, live stream availability)
-2. `GET /api/task-runs/{id}/logs/merged-tail` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
+1. `GET /api/task-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability)
+2. `GET /api/task-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
 3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/task-runs/{id}/logs/stream`
 4. If the stream connection fails or is unavailable, remain in artifact-backed mode — do not leave the panel blank
 

@@ -251,11 +251,16 @@ async def test_stream_to_artifact_calls_publisher(streamer):
 
     await log_streamer.stream_to_artifact(reader, run_id="run-pub", stream_name="stdout")
 
-    assert mock_publisher.publish.call_count == 1
-    
-    call1 = mock_publisher.publish.call_args_list[0][0][0]
-    
-    assert isinstance(call1, LiveLogChunk)
-    assert call1.stream == "stdout"
-    assert call1.text == "chunk1\nchunk2\n"
-    assert call1.sequence == 1
+    assert mock_publisher.publish.call_count >= 1
+
+    published_chunks = [
+        call_args[0][0] for call_args in mock_publisher.publish.call_args_list
+    ]
+
+    for i, chunk in enumerate(published_chunks, start=1):
+        assert isinstance(chunk, LiveLogChunk)
+        assert chunk.stream == "stdout"
+        assert chunk.sequence == i
+
+    combined_text = "".join(chunk.text for chunk in published_chunks)
+    assert combined_text == "chunk1\nchunk2\n"

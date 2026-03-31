@@ -1,16 +1,12 @@
 """Unit tests for the Live Log spool transport."""
 
-import os
-import tempfile
+import asyncio
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
-from moonmind.schemas.agent_runtime_models import LiveLogChunk
-# We expect transport.py to define SpoolLogPublisher and SpoolLogReader
 from moonmind.observability.transport import SpoolLogPublisher, SpoolLogReader
-import asyncio
+from moonmind.schemas.agent_runtime_models import LiveLogChunk
 
 
 def test_spool_log_publisher_appends_json_chunks(tmp_path: Path) -> None:

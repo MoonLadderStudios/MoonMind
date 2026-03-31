@@ -479,6 +479,7 @@ __all__ = [
     "ExternalExecutionStyle",
     "AgentRunHandle",
     "AgentRunResult",
+    "LiveLogChunk",
     "AgentRunState",
     "AgentRunStatus",
     "FailureClass",

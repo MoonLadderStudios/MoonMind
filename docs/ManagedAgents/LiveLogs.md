@@ -514,7 +514,7 @@ These are now required. The old design explicitly said no new backend API was ne
 
 ## 10.1 Observability summary
 
-`GET /api/task-runs/{id}/observability`
+`GET /api/task-runs/{id}/observability-summary`
 
 Minimum required response fields:
 
@@ -549,9 +549,9 @@ Behavior when artifacts are missing or partial:
 
 ## 10.2 Tail endpoints
 
-* `GET /api/task-runs/{id}/logs/stdout?tail_lines=200`
-* `GET /api/task-runs/{id}/logs/stderr?tail_lines=200`
-* `GET /api/task-runs/{id}/logs/merged-tail?tail_lines=200`
+* `GET /api/task-runs/{id}/logs/stdout`
+* `GET /api/task-runs/{id}/logs/stderr`
+* `GET /api/task-runs/{id}/logs/merged`
 
 Each endpoint must handle:
 

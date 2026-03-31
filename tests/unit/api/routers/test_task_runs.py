@@ -233,16 +233,18 @@ def test_stream_task_run_log_merged_synthesized_from_stdout_stderr(
     def fake_is_relative_to(self: object, other: object) -> bool:
         return True
 
-    def fake_read_bytes(self: object) -> bytes:
+    import io
+
+    def fake_open(self: object, mode: str = "r") -> io.BytesIO:
         path_str = str(self)
         if "stdout" in path_str:
-            return stdout_content
-        return stderr_content
+            return io.BytesIO(stdout_content)
+        return io.BytesIO(stderr_content)
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         with patch("pathlib.Path.is_file", fake_is_file):
             with patch("pathlib.Path.is_relative_to", fake_is_relative_to):
-                with patch("pathlib.Path.read_bytes", fake_read_bytes):
+                with patch("pathlib.Path.open", fake_open):
                     response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200

@@ -57,11 +57,14 @@ class RuntimeLogStreamer:
         events: list[dict] = []
         # Carry-over buffer for incomplete lines when the parser is active.
         _line_buf: str = ""
+        current_offset: int = 0
 
         while True:
             chunk = await reader.read(_STREAM_CHUNK_SIZE)
             if not chunk:
                 break
+            
+            chunk_length = len(chunk)
             chunks.append(chunk)
             
             if self.publisher is not None:
@@ -74,12 +77,14 @@ class RuntimeLogStreamer:
                         stream=stream_name,  # type: ignore
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         text=text_content,
-                        offset=sum(len(c) for c in chunks[:-1]),
+                        offset=current_offset,
                     )
                     self.publisher.publish(obj)
                 except Exception:
                     # Failsafe: publishers must not crash the workflow
                     pass
+            
+            current_offset += chunk_length
 
             if parser is not None:
                 # Accumulate decoded text and split by newlines so that the
