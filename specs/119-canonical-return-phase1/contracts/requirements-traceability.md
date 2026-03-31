@@ -1,10 +1,10 @@
 # Requirements Traceability
 
-| Source Requirement | Functional Requirement | Implementation Surface | Validation Strategy |
-| ------------------ | ---------------------- | ---------------------- | ------------------- |
-| **DOC-REQ-001** | FR-001 | `AgentRunStatus`, `AgentRunHandle`, `AgentRunResult` classes | Unit tests for boundary enforcement, ensuring non-canonical structures raise errors or drop invalid fields. |
-| **DOC-REQ-002** | FR-002, FR-003 | `build_canonical_start_handle`, `build_canonical_status`, `build_canonical_result`, `UnsupportedStatusError` | Positive and negative tests supplying valid and invalid states/metrics. |
-| **DOC-REQ-003** | FR-004 | Activity boundary decorators / helpers in `agent_runtime_models.py` | Unit tests to ensure external provider status fields are mapped into canonical metadata consistently with managed flows. |
-| **DOC-REQ-004** | FR-005 | `build_canonical_status`, nested `metadata` field validators | Supply inputs with raw `providerStatus` etc, assert they nest correctly under dict. |
-| **DOC-REQ-005** | FR-001, FR-005 | `AgentRunStatus`, `build_canonical_status` | Ensure top-level fields like `provider_status` are mapped or stripped into nested `metadata` according to the canonical model (no exceptions raised in Phase 1 helpers). |
-| **DOC-REQ-006** | FR-006 | `tests/unit/schemas/test_agent_runtime_models_boundary.py` | Pytest fixtures confirming proper failures without ever entering workflow layers. |
+| Source Requirement | Spec FR ID     | Planned Implementation Surface                                                                 | Validation Strategy                                                                        |
+| :-------------- | :------------- | :--------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------- |
+| **DOC-REQ-001** | FR-001         | `moonmind/schemas/agent_runtime_models.py`                                                     | Add unit tests to simulate payload boundaries                                              |
+| **DOC-REQ-002** | FR-002, FR-003 | `build_canonical_*` and `raise_unsupported_status` helpers in `agent_runtime_models`           | Unit tests for building canonical handles, statuses, and results                           |
+| **DOC-REQ-003** | FR-004         | Contract enforcement functions returning standard canonical models                             | Unit tests ensuring invalid states throw correctly                                         |
+| **DOC-REQ-004** | FR-005         | Standardize metadata extraction (`providerStatus`, `normalizedStatus`) in the builders         | Unit tests asserting proper assignment to `metadata` attribute                             |
+| **DOC-REQ-005** | FR-006         | Ensure non-canonical identifiers do not construct at top-level; instead move to `metadata` dict| Unit tests asserting unexpected arbitrary payload keys are either filtered or encapsulated |
+| **DOC-REQ-006** | FR-006         | Negative test constraints validating that Pydantic validation cleanly blocks malformed inputs  | Unit test mocking dicts with malformed shapes                                              |
