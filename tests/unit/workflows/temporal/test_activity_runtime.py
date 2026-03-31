@@ -1466,6 +1466,7 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
                 agent_runtime_activities=TemporalAgentRuntimeActivities(
                     artifact_service=service,
                 ),
+                agent_skills_activities=AgentSkillsActivities(),
                 fleets=(AGENT_RUNTIME_FLEET,),
             )
 
@@ -1476,3 +1477,5 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_runtime.status" in bound_types
             assert "agent_runtime.fetch_result" in bound_types
             assert "agent_runtime.cancel" in bound_types
+            assert "agent_skill.resolve" in bound_types
+            assert "agent_skill.materialize" in bound_types

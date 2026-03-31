@@ -191,6 +191,85 @@ def _normalize_secret_ref(value: object, *, field_name: str) -> str | None:
     return f"vault://{mount}/{path}#{field}"
 
 
+class TaskSkillSelectorExact(BaseModel):
+    """Explicitly included skill by name and optional version."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    name: str = Field(..., alias="name")
+    version: str | None = Field(None, alias="version")
+
+    @field_validator("name", "version", mode="before")
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+
+class TaskSkillSelectors(BaseModel):
+    """Resolved definition for active skills during execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    sets: list[str] | None = Field(None, alias="sets")
+    include: list[TaskSkillSelectorExact] | None = Field(None, alias="include")
+    exclude: list[str] | None = Field(None, alias="exclude")
+    materialization_mode: str | None = Field(None, alias="materializationMode")
+
+    @field_validator("sets", mode="before")
+    @classmethod
+    def _normalize_sets(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.skills.sets must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = _clean_optional_str(raw)
+            if item and item not in seen:
+                normalized.append(item)
+                seen.add(item)
+        return normalized or None
+
+    @field_validator("exclude", mode="before")
+    @classmethod
+    def _normalize_exclude(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.skills.exclude must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            item = _clean_optional_str(raw)
+            if item and item not in seen:
+                normalized.append(item)
+                seen.add(item)
+        return normalized or None
+
+    @field_validator("include", mode="before")
+    @classmethod
+    def _normalize_include(cls, value: object) -> list[Any] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.skills.include must be a list")
+        return value
+
+    @field_validator("materialization_mode", mode="before")
+    @classmethod
+    def _normalize_materialization_mode(cls, value: object) -> str | None:
+        candidate = _clean_optional_str(value)
+        if candidate is None:
+            return None
+        lowered = candidate.lower()
+        if lowered not in {"hybrid", "remote", "local", "none"}:
+            raise TaskContractError(
+                "task.skills.materializationMode must be hybrid, remote, local, or none"
+            )
+        return lowered
+
+
 class TaskSkillSelection(BaseModel):
     """Selected skill and optional skill argument object."""
 
@@ -551,6 +630,7 @@ class TaskStepSpec(BaseModel):
     title: str | None = Field(None, alias="title")
     instructions: str | None = Field(None, alias="instructions")
     skill: TaskSkillSelection | None = Field(None, alias="skill")
+    skills: TaskSkillSelectors | None = Field(None, alias="skills")
 
     @field_validator("id", "title", "instructions", mode="before")
     @classmethod
@@ -595,6 +675,7 @@ class TaskExecutionSpec(BaseModel):
         validation_alias=AliasChoices("instructions", "instruction"),
     )
     skill: TaskSkillSelection = Field(default_factory=TaskSkillSelection, alias="skill")
+    skills: TaskSkillSelectors | None = Field(None, alias="skills")
     runtime: TaskRuntimeSelection = Field(
         default_factory=TaskRuntimeSelection, alias="runtime"
     )
