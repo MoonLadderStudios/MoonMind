@@ -262,7 +262,7 @@ export function ProviderProfilesManager({
   });
 
   return (
-    <section className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+    <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Provider Profiles</h3>
@@ -298,7 +298,7 @@ export function ProviderProfilesManager({
               <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-mm-border/80 bg-mm-panel/75">
+          <tbody className="divide-y divide-mm-border/80 bg-transparent">
             {profiles.length === 0 ? (
               <tr>
                 <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7}>

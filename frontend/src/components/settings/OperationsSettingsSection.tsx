@@ -182,7 +182,7 @@ export function OperationsSettingsSection({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Operations</h3>
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
@@ -192,7 +192,7 @@ export function OperationsSettingsSection({
         </div>
       </section>
 
-      <section className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
         {notice ? (
           <div
             className={`mb-4 rounded-2xl border px-4 py-3 text-sm shadow-sm ${
