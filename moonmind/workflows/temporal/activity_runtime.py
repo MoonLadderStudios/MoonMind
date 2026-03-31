@@ -2735,7 +2735,7 @@ class TemporalProposalActivities:
                             "workflow_id": workflow_id,
                             "temporal_run_id": run_id,
                             "triggerRepo": trigger_repo,
-                            "triggerJobId": workflow_id,
+                            "triggerJobId": run_id,
                             "signal": {"severity": "normal", "type": "follow_up"}
                         }
                         await service.create_proposal(
