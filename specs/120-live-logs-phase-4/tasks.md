@@ -1,0 +1,40 @@
+# Tasks
+
+- [x] T000 Install `react-virtuoso` and `anser` in `frontend/package.json` (Note: `@types/anser` doesn't exist)
+- [x] T001 Default the Live Logs panel to collapsed with no active connection in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test in `frontend/src/entrypoints/task-detail.test.tsx`
+  - [x] Implement in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Ensure tests pass
+- [x] T002 On open, fetch observability summary and merged tail before connecting to live updates in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T003 Stop streaming when the panel is collapsed in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T004 Stop/pause streaming when tab is backgrounded; reconnect when visibility returns only if active in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T005 Surface viewer states: not_available, starting, live, ended, error in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test in `frontend/src/entrypoints/task-detail.test.tsx`
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T006 Add UI tests for ended-run behavior (show artifact-backed logs without attempting live streaming) in `frontend/src/entrypoints/task-detail.test.tsx`
+  - [x] Write failing test
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T007 Show per-line stream provenance (stdout, stderr, system) in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test in `frontend/src/entrypoints/task-detail.test.tsx`
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T008 Implement Stdout, Stderr, and Diagnostics panels in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test in `frontend/src/entrypoints/task-detail.test.tsx`
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [x] T009 Add wrap toggle, copy support, and download affordances in `frontend/src/entrypoints/task-detail.tsx`
+  - [x] Write failing test in `frontend/src/entrypoints/task-detail.test.tsx`
+  - [x] Implement logic
+  - [x] Ensure tests pass
+- [ ] T010 Create PR

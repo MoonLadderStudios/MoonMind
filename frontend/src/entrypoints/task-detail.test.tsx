@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { TaskDetailPage } from './task-detail';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -413,6 +413,8 @@ describe('LiveLogsPanel', () => {
     mockFetchSequence(activeExecution, activeSummary, '');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
+    fireEvent.click(await screen.findByText('Live Logs'));
+
     // Initial state: Loading
     await waitFor(() => expect(screen.getByText(/Loading…/)).toBeTruthy());
 
@@ -428,6 +430,8 @@ describe('LiveLogsPanel', () => {
     mockFetchSequence(activeExecution, activeSummary, 'artifact line 1\nartifact line 2\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
+    fireEvent.click(await screen.findByText('Live Logs'));
+
     await waitFor(() => expect(screen.getByText(/artifact line 1/)).toBeTruthy());
     await waitFor(() => expect(screen.getByText(/artifact line 2/)).toBeTruthy());
   });
@@ -435,6 +439,8 @@ describe('LiveLogsPanel', () => {
   it('appends log_chunk text from SSE after artifact tail is shown', async () => {
     mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
     const es = MockEventSource.instances[0]!;
@@ -452,6 +458,8 @@ describe('LiveLogsPanel', () => {
     mockFetchSequence(terminalExecution, endedSummary, 'final output\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
+    fireEvent.click(await screen.findByText('Live Logs'));
+
     await waitFor(() => expect(screen.getByText(/Stream ended/)).toBeTruthy());
     expect(MockEventSource.instances.length).toBe(0);
   });
@@ -459,6 +467,8 @@ describe('LiveLogsPanel', () => {
   it('does not create EventSource when supportsLiveStreaming is false', async () => {
     mockFetchSequence(activeExecution, noStreamSummary, 'artifact-only content\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
 
     // No SSE should be created; panel shows artifact content
     await waitFor(() => expect(screen.getByText(/artifact-only content/)).toBeTruthy());
@@ -483,6 +493,8 @@ describe('LiveLogsPanel', () => {
     });
 
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
     const es = MockEventSource.instances[0]!;
     act(() => es.triggerOpen());
@@ -498,6 +510,8 @@ describe('LiveLogsPanel', () => {
     mockFetchSequence(activeExecution, activeSummary, 'artifact backup content\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
+    fireEvent.click(await screen.findByText('Live Logs'));
+
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
     const es = MockEventSource.instances[0]!;
     act(() => es.triggerOpen());
@@ -507,5 +521,205 @@ describe('LiveLogsPanel', () => {
     // Artifact content should still be visible
     await waitFor(() => expect(screen.getByText(/artifact backup content/)).toBeTruthy());
   });
-});
+  it('defaults to collapsed and does not fetch observability data until expanded', async () => {
+    fetchSpy.mockClear();
+    mockFetchSequence(activeExecution, activeSummary, 'backup');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
+    // Wait until the initial execute fetch finishes so task is loaded
+    await waitFor(() => expect(screen.getByText('Active task')).toBeTruthy());
+
+    // Before click, it shouldn't have fetched the summary
+    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    // Now it should fetch
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+    });
+  });
+
+  it('closes EventSource when the panel is collapsed', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'backup');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    // Open it
+    fireEvent.click(await screen.findByText('Live Logs'));
+    
+    // Wait for SSE to connect
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    const es = MockEventSource.instances[0]!;
+    
+    // Collapse it
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    // Ensure it closed
+    await waitFor(() => expect(es.closed).toBe(true));
+  });
+
+  it('closes EventSource when the page is hidden, reconnects when visible', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'backup');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    // Open it
+    fireEvent.click(await screen.findByText('Live Logs'));
+    
+    // Wait for SSE to connect
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    const es1 = MockEventSource.instances[0]!;
+    
+    // Hide visibility
+    act(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // Ensure it closed current stream
+    await waitFor(() => expect(es1.closed).toBe(true));
+
+    // Show visibility
+    act(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // Ensure it opened a NEW stream
+    await waitFor(() => expect(MockEventSource.instances.length).toBe(2));
+    expect(MockEventSource.instances[1]!.closed).toBe(false);
+  });
+
+  it('shows per-line stream provenance (stdout, stderr, system)', async () => {
+    mockFetchSequence(activeExecution, activeSummary, '--- stdout ---\nline 1\n--- stderr ---\nline 2');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+    
+    // Wait for artifact backing
+    await waitFor(() => {
+      expect(screen.getByText('line 1')).toBeTruthy();
+      expect(screen.getByText('line 2')).toBeTruthy();
+    });
+
+    // Check DOM for provenance attributes
+    const stdoutLine = screen.getByText('line 1').closest('div');
+    expect(stdoutLine?.getAttribute('data-stream')).toBe('stdout');
+
+    const stderrLine = screen.getByText('line 2').closest('div');
+    expect(stderrLine?.getAttribute('data-stream')).toBe('stderr');
+
+    // Simulate SSE chunk for system
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    const es = MockEventSource.instances[0]!;
+    act(() => es.triggerOpen());
+    
+    act(() => {
+      es.triggerLogChunk({ sequence: 10, text: 'system event\n', stream: 'system' });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('system event')).toBeTruthy();
+    });
+
+    const systemLine = screen.getByText('system event').closest('div');
+    expect(systemLine?.getAttribute('data-stream')).toBe('system');
+  });
+
+  it('renders Stdout, Stderr, and Diagnostics panels', async () => {
+    // Setup fetch mock to also return stdout, stderr, and diagnostics
+    const stdoutContent = 'stdout line 1\nstdout line 2';
+    const stderrContent = 'stderr error 1';
+    const diagnosticsContent = '{"some": "json"}';
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => stdoutContent } as Response);
+      if (url.includes('/logs/stderr')) return Promise.resolve({ ok: true, text: async () => stderrContent } as Response);
+      if (url.includes('/diagnostics')) return Promise.resolve({ ok: true, text: async () => diagnosticsContent } as Response);
+      if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      if (url.includes('/observability-summary')) return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          temporalRunId: '01-run',
+          namespace: 'default',
+          taskRunId: '123e4567-e89b-12d3-a456-426614174000',
+          source: 'temporal',
+          title: 'Mock task',
+          summary: 'Mock summary',
+          state: 'succeeded',
+          status: 'completed',
+          createdAt: '2026-03-28T00:00:00Z',
+          updatedAt: '2026-03-28T00:00:02Z',
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    // Trigger expanding the panels
+    fireEvent.click(await screen.findByText('Stdout'));
+    fireEvent.click(await screen.findByText('Stderr'));
+    fireEvent.click(await screen.findByText('Diagnostics'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/stdout line 1/)).toBeTruthy();
+      expect(screen.getByText(/stderr error 1/)).toBeTruthy();
+      expect(screen.getByText(/\{"some": "json"\}/)).toBeTruthy();
+    });
+  });
+
+  it('provides wrap toggle, copy support, and download affordances', async () => {
+    // Mock navigator.clipboard
+    const clipboardMock = { writeText: vi.fn() };
+    Object.assign(navigator, { clipboard: clipboardMock });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => 'stdout data' } as Response);
+      if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => 'live log data' } as Response);
+      if (url.includes('/observability-summary')) return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          temporalRunId: '01-run',
+          namespace: 'default',
+          taskRunId: 'mock-uuid-1',
+          source: 'temporal',
+          title: 'Mock task',
+          summary: 'Mock summary',
+          state: 'succeeded',
+          status: 'completed',
+          createdAt: '2026-03-28T00:00:00Z',
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    // Check Live Logs Panel
+    fireEvent.click(await screen.findByText('Live Logs'));
+    await waitFor(() => expect(screen.getByText(/live log data/)).toBeTruthy());
+
+    // Toggle wrap
+    const wrapCheckbox = screen.getAllByLabelText('Wrap lines')[0] as HTMLInputElement;
+    expect(wrapCheckbox.checked).toBe(true);
+    fireEvent.click(wrapCheckbox);
+    expect(wrapCheckbox.checked).toBe(false);
+
+    // Click copy
+    const copyButton = screen.getAllByText('Copy')[0];
+    fireEvent.click(copyButton!);
+    expect(clipboardMock.writeText).toHaveBeenCalledWith(expect.stringContaining('live log data'));
+
+    // Check download link
+    const downloadLink = screen.getAllByText('Download')[0] as HTMLAnchorElement;
+    expect(downloadLink.href).toMatch(/\/task-runs\/mock-uuid-1\/logs\/merged$/);
+  });
+
+});
