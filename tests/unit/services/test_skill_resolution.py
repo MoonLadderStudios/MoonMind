@@ -237,9 +237,6 @@ async def test_deployment_skill_loader_fetches_from_db():
     mock_result.scalars.return_value.all.return_value = [MockDef()]
     mock_session.execute.return_value = mock_result
     
-    async def get_session():
-        yield mock_session
-        
     from contextlib import asynccontextmanager
     
     @asynccontextmanager

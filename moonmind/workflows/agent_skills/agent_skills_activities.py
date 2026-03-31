@@ -53,17 +53,21 @@ class AgentSkillsActivities:
         if self._artifact_service:
             import json
             try:
-                from moonmind.workflows.temporal.artifacts import build_artifact_ref
-                # We need api_service models for retention class
-                from api_service.db.models import TemporalArtifactRetentionClass
+                from moonmind.workflows.temporal.artifacts import ExecutionRef
+                
+                link = ExecutionRef(
+                    namespace=info.namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type="input.manifest",
+                )
                 
                 payload = resolved_set.model_dump(mode="json")
                 artifact, _ = await self._artifact_service.create(
                     principal="agent_workflow",
                     content_type="application/json",
                     metadata_json={"producer": "agent_skill.resolve", "snapshot_id": snapshot_id},
-                    # Note: create currently might not take retention_class explicitly in TemporalArtifactService api
-                    # fallback to standard link meaning if needed. We'll pass it if constructor allows.
+                    link=link,
                 )
                 
                 await self._artifact_service.write_complete(

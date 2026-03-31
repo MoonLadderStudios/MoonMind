@@ -1,4 +1,5 @@
 import abc
+import typing
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +27,7 @@ class SkillResolutionContext:
         deployment_id: str | None = None,
         workspace_root: str | None = None,
         allow_local_skills: bool = False,
-        async_session_maker: Callable[[], AsyncSession] | None = None,
+        async_session_maker: Callable[[], typing.AsyncContextManager[AsyncSession]] | None = None,
     ) -> None:
         self.snapshot_id = snapshot_id
         self.deployment_id = deployment_id
@@ -93,6 +94,10 @@ class DeploymentSkillLoader(SkillLoader):
             stmt = select(AgentSkillDefinition).options(
                 selectinload(AgentSkillDefinition.versions)
             )
+            
+            if selector.include:
+                stmt = stmt.where(AgentSkillDefinition.slug.in_([e.name for e in selector.include]))
+                
             res = await session.execute(stmt)
             defs = res.scalars().all()
 
@@ -233,14 +238,16 @@ class AgentSkillResolver:
 
         final_skills = list(resolved_map.values())
         
-        # Filter to only the requested skills (if selector.include is populated)
+        requested_names = {entry.name for entry in selector.include}
         # Note: Future implementation for `sets` would expand skill names here.
-        if selector.include:
-            requested_names = {entry.name for entry in selector.include}
+
+        if selector.include or selector.sets:
             final_skills = [s for s in final_skills if s.skill_name in requested_names]
-        elif not selector.sets:
+        else:
             # If nothing was requested, return empty
             final_skills = []
+            
+        final_skills.sort(key=lambda s: s.skill_name)
 
         # 3. Create canonical snapshot
         return ResolvedSkillSet(
