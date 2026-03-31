@@ -2932,8 +2932,6 @@ export interface components {
             startingBranch?: string | null;
             /** Targetbranch */
             targetBranch?: string | null;
-            /** Repository */
-            repository?: string | null;
             /** Publishmode */
             publishMode?: string | null;
             /** Repository */
