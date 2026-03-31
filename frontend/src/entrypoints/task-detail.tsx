@@ -194,6 +194,48 @@ function buildDebugFieldEntries(execution: z.infer<typeof ExecutionDetailSchema>
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled', 'completed']);
 
+type LogViewerState = 'not_available' | 'starting' | 'live' | 'ended' | 'error';
+
+/** Fetch the plain-text merged-tail from the artifact-backed API. */
+async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<string> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return '';
+    throw new Error(`Merged tail fetch failed: ${resp.status}`);
+  }
+  return resp.text();
+}
+
+/** Fetch the observability summary for a task run. */
+async function fetchObservabilitySummary(
+  apiBase: string,
+  taskRunId: string,
+): Promise<{ supportsLiveStreaming: boolean; liveStreamStatus: string; status: string } | null> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) return null;
+  const body = (await resp.json()) as { summary: Record<string, unknown> };
+  const s = body.summary;
+  return {
+    supportsLiveStreaming: Boolean(s.supportsLiveStreaming),
+    liveStreamStatus: String(s.liveStreamStatus ?? 'unavailable'),
+    status: String(s.status ?? ''),
+  };
+}
+
+const TERMINAL_RUN_STATUSES = new Set([
+  'completed',
+  'failed',
+  'canceled',
+  'cancelled',
+  'timed_out',
+]);
+
 function LiveLogsPanel({
   apiBase,
   taskRunId,
@@ -204,7 +246,7 @@ function LiveLogsPanel({
   isTerminal: boolean;
 }) {
   const [logContent, setLogContent] = useState<string>('');
-  const [status, setStatus] = useState<'connecting' | 'connected' | 'done' | 'error'>('connecting');
+  const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -219,40 +261,93 @@ function LiveLogsPanel({
   useEffect(() => {
     setLogContent('');
     lastSeqRef.current = null;
-    setStatus('connecting');
+    setViewerState('starting');
   }, [taskRunId]);
 
+  // Phase 2 fetch sequence: summary -> artifact tail -> (optional) SSE
   useEffect(() => {
     if (!taskRunId) return;
 
-    // Request events strictly after the last seen sequence to avoid duplicates.
-    const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
-    const since = nextSince != null ? `?since=${nextSince}` : '';
-    const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
-    const es = new EventSource(url, { withCredentials: true });
-    esRef.current = es;
+    let cancelled = false;
 
-    es.onopen = () => setStatus('connected');
+    async function loadObservabilityAndMaybeLive() {
+      // Step 1: Fetch observability summary
+      const summary = await fetchObservabilitySummary(apiBase, taskRunId);
 
-    es.addEventListener('log_chunk', (event: MessageEvent) => {
+      if (cancelled) return;
+
+      // Step 2: Fetch artifact-backed merged tail; this must succeed before SSE
+      let tailContent = '';
       try {
-        const data = JSON.parse(event.data) as { sequence: number; text: string };
-        lastSeqRef.current = data.sequence;
-        setLogContent((prev) => prev + data.text);
+        tailContent = await fetchMergedTail(apiBase, taskRunId);
       } catch {
-        // ignore malformed events
+        // Tail fetch failed — set error state but keep whatever content we have
+        setViewerState('error');
+        return;
       }
-    });
 
-    es.onerror = () => {
-      es.close();
-      esRef.current = null;
-      setStatus(isTerminalRef.current ? 'done' : 'error');
-    };
+      if (cancelled) return;
+
+      if (tailContent) {
+        setLogContent(tailContent);
+      }
+
+      // Determine viewer state from backend summary
+      const runIsTerminal =
+        isTerminalRef.current ||
+        (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+
+      if (runIsTerminal) {
+        setViewerState('ended');
+        return;
+      }
+
+      const supportsStreaming = summary?.supportsLiveStreaming ?? false;
+      if (!supportsStreaming) {
+        // Artifact-backed only — no live stream available
+        setViewerState(tailContent ? 'ended' : 'not_available');
+        return;
+      }
+
+      // Step 3: Connect to live SSE only if active + streaming-capable
+      const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
+      const since = nextSince != null ? `?since=${nextSince}` : '';
+      const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
+      const es = new EventSource(url, { withCredentials: true });
+      esRef.current = es;
+
+      es.onopen = () => {
+        if (!cancelled) setViewerState('live');
+      };
+
+      es.addEventListener('log_chunk', (event: MessageEvent) => {
+        if (cancelled) return;
+        try {
+          const data = JSON.parse(event.data) as { sequence: number; text: string };
+          lastSeqRef.current = data.sequence;
+          setLogContent((prev) => prev + data.text);
+        } catch {
+          // ignore malformed events
+        }
+      });
+
+      es.onerror = () => {
+        es.close();
+        esRef.current = null;
+        if (cancelled) return;
+        // Degrade gracefully: show what we have from the artifact tail
+        setViewerState(isTerminalRef.current ? 'ended' : 'error');
+      };
+    }
+
+    void loadObservabilityAndMaybeLive();
 
     return () => {
-      es.close();
-      esRef.current = null;
+      cancelled = true;
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
+      }
     };
   }, [apiBase, taskRunId]);
 
@@ -261,7 +356,7 @@ function LiveLogsPanel({
     if (isTerminal && esRef.current) {
       esRef.current.close();
       esRef.current = null;
-      setStatus('done');
+      setViewerState('ended');
     }
   }, [isTerminal]);
 
@@ -271,13 +366,20 @@ function LiveLogsPanel({
   }, [logContent]);
 
   const statusLabel =
-    status === 'connected'
+    viewerState === 'live'
       ? 'Connected'
-      : status === 'done'
+      : viewerState === 'ended'
         ? 'Stream ended'
-        : status === 'error'
-          ? 'Disconnected'
-          : 'Connecting…';
+        : viewerState === 'error'
+          ? 'Disconnected — showing artifact backup'
+          : viewerState === 'not_available'
+            ? 'Not yet available'
+            : 'Loading…';
+
+  const emptyLabel =
+    viewerState === 'not_available'
+      ? '(no log output available yet)'
+      : '(waiting for output…)';
 
   return (
     <div className="stack">
@@ -298,7 +400,7 @@ function LiveLogsPanel({
             margin: 0,
           }}
         >
-          {logContent === '' ? '(waiting for output…)' : logContent}
+          {logContent === '' ? emptyLabel : logContent}
         </pre>
         <div ref={bottomRef} />
       </div>

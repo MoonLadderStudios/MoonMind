@@ -343,6 +343,30 @@ describe('LiveLogsPanel', () => {
     rawState: 'succeeded',
   };
 
+  const activeSummary = {
+    summary: {
+      status: 'running',
+      supportsLiveStreaming: true,
+      liveStreamStatus: 'available',
+    },
+  };
+
+  const endedSummary = {
+    summary: {
+      status: 'completed',
+      supportsLiveStreaming: false,
+      liveStreamStatus: 'ended',
+    },
+  };
+
+  const noStreamSummary = {
+    summary: {
+      status: 'running',
+      supportsLiveStreaming: false,
+      liveStreamStatus: 'unavailable',
+    },
+  };
+
   let fetchSpy: MockInstance;
   let originalEventSource: typeof EventSource;
 
@@ -361,51 +385,98 @@ describe('LiveLogsPanel', () => {
     (window as any).EventSource = originalEventSource;
   });
 
-  function mockFetchWith(execution: object) {
+  /** Build a fetch mock that routes execution, artifacts, observability, and merged tail calls. */
+  function mockFetchSequence(
+    execution: object,
+    summary: object,
+    tailContent: string = '',
+  ) {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      if (String(input).includes('/artifacts')) {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => summary } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => tailContent,
+        } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => execution } as Response);
     });
   }
 
-  it('shows Connecting then Connected status', async () => {
-    mockFetchWith(activeExecution);
+  it('shows Loading then Connected status after artifact tail + SSE connect', async () => {
+    mockFetchSequence(activeExecution, activeSummary, '');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
-    await waitFor(() => {
-      expect(MockEventSource.instances.length).toBeGreaterThan(0);
-    });
+    // Initial state: Loading
+    await waitFor(() => expect(screen.getByText(/Loading…/)).toBeTruthy());
 
+    // After fetch sequence completes, SSE is created and can be opened
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
     const es = MockEventSource.instances[0]!;
-    expect(screen.getByText(/Connecting…/)).toBeTruthy();
 
     act(() => es.triggerOpen());
     await waitFor(() => expect(screen.getByText(/Connected/)).toBeTruthy());
   });
 
-  it('appends log_chunk text to the log output', async () => {
-    mockFetchWith(activeExecution);
+  it('shows artifact tail content before SSE connects', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'artifact line 1\nartifact line 2\n');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getByText(/artifact line 1/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/artifact line 2/)).toBeTruthy());
+  });
+
+  it('appends log_chunk text from SSE after artifact tail is shown', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
     const es = MockEventSource.instances[0]!;
 
     act(() => es.triggerOpen());
-    act(() => es.triggerLogChunk({ sequence: 0, stream: 'stdout', text: 'hello world\n' }));
-    act(() => es.triggerLogChunk({ sequence: 1, stream: 'stdout', text: 'second line\n' }));
+    act(() => es.triggerLogChunk({ sequence: 0, stream: 'stdout', text: 'live line\n' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/hello world/)).toBeTruthy();
-      expect(screen.getByText(/second line/)).toBeTruthy();
+      expect(screen.getByText(/first from artifact/)).toBeTruthy();
+      expect(screen.getByText(/live line/)).toBeTruthy();
     });
+  });
+
+  it('does not create EventSource for ended runs', async () => {
+    mockFetchSequence(terminalExecution, endedSummary, 'final output\n');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getByText(/Stream ended/)).toBeTruthy());
+    expect(MockEventSource.instances.length).toBe(0);
+  });
+
+  it('does not create EventSource when supportsLiveStreaming is false', async () => {
+    mockFetchSequence(activeExecution, noStreamSummary, 'artifact-only content\n');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    // No SSE should be created; panel shows artifact content
+    await waitFor(() => expect(screen.getByText(/artifact-only content/)).toBeTruthy());
+    expect(MockEventSource.instances.length).toBe(0);
   });
 
   it('closes stream and shows Stream ended when task transitions to terminal', async () => {
     let currentExecution = activeExecution;
+    let currentSummary = activeSummary;
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      if (String(input).includes('/artifacts')) {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => currentSummary } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => currentExecution } as Response);
@@ -416,14 +487,15 @@ describe('LiveLogsPanel', () => {
     const es = MockEventSource.instances[0]!;
     act(() => es.triggerOpen());
 
-    // Transition to terminal state on next poll (default refetch interval is 2s)
+    // Transition to terminal state on next poll
     currentExecution = terminalExecution;
+    currentSummary = endedSummary;
     await waitFor(() => expect(screen.getByText(/Stream ended/)).toBeTruthy(), { timeout: 5000 });
     expect(es.closed).toBe(true);
   });
 
-  it('shows Disconnected when onerror fires on a non-terminal task', async () => {
-    mockFetchWith(activeExecution);
+  it('shows Disconnected and artifact backup when SSE onerror fires on non-terminal task', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'artifact backup content\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
@@ -431,6 +503,9 @@ describe('LiveLogsPanel', () => {
     act(() => es.triggerOpen());
     act(() => es.triggerError());
 
-    await waitFor(() => expect(screen.getByText(/Disconnected/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Disconnected — showing artifact backup/)).toBeTruthy());
+    // Artifact content should still be visible
+    await waitFor(() => expect(screen.getByText(/artifact backup content/)).toBeTruthy());
   });
 });
+

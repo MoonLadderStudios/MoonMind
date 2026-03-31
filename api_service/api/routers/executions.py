@@ -412,6 +412,7 @@ def _serialize_execution(
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
 
+
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,

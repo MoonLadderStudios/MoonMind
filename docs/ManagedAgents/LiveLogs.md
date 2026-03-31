@@ -24,6 +24,18 @@ With this design:
 
 This keeps logging deterministic, persistent, auditable, and independent from interactive terminal transport.
 
+### 1.1 Current implementation state
+
+The following represents an honest snapshot of what is implemented versus what remains:
+
+* **Implemented**: durable stdout/stderr/diagnostics artifact production is substantially complete for managed runs.
+* **Implemented**: data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) are populated by the supervisor.
+* **Partial**: observability read APIs exist but are not yet fully consumed by Mission Control.
+* **Not yet complete**: the supervised runtime does not yet emit live log records into a shared live-stream transport consumed by the API or UI.
+* **Not yet complete**: Mission Control task detail does not yet use the full observability panel described in this document; it currently uses a thin SSE tail view.
+
+> The existence of an SSE endpoint alone does not satisfy the live streaming design. Live streaming is only considered complete when supervised runtime log chunks are actually published into the live stream path consumed by Mission Control.
+
 ---
 
 ## 2. Why the old design no longer fits
@@ -90,6 +102,8 @@ This system does not aim to:
 * reproduce raw terminal escape semantics perfectly
 * replace provider-native intervention channels
 * make logs depend on browser attachment
+* implement distributed full-text log indexing or search in the first version
+* implement a terminal-grade durable replay buffer for every transient live event
 
 ---
 
@@ -119,12 +133,13 @@ The Live Logs panel should be a MoonMind-native log viewer, not an embedded term
 
 Behavior:
 
-* initially loads the most recent tail from MoonMind APIs
-* upgrades to a live stream when the run is active
+* initially loads the most recent tail from MoonMind APIs — **initial visible content must not depend on SSE success**
+* upgrades to a live stream when the run is active and live streaming is supported
 * shows stream origin per line or chunk (`stdout`, `stderr`, `system`)
-* can reconnect from last known sequence or offset
-* can fall back to artifact tail if live streaming is unavailable
+* can reconnect from last known sequence or offset — resume is best-effort; artifacts are the durable fallback
+* falls back to artifact tail if live streaming is unavailable — stream errors must transition to artifact-backed mode rather than leaving the panel blank
 * stops streaming when collapsed or when the tab is backgrounded
+* **ended runs never attempt live stream connection**; the final artifact-backed tail is always available
 
 ## 5.3 Stdout and Stderr panels
 
@@ -194,6 +209,21 @@ Components:
 
 That plane is explicitly separate from the log viewer.
 
+## 6.4 Cross-process transport boundary
+
+**Critical constraint:** The live stream publisher must be cross-process or otherwise shared across the producer and API/UI boundary.
+
+An API-process-local in-memory publisher is **not** sufficient as the canonical implementation model.
+
+The design must support the fact that managed runtime supervision and API serving may live in different processes or containers.
+
+Rules:
+
+* "The live stream transport must not assume the log producer runs in the same API process."
+* "A process-local replay buffer may exist as a performance optimization, but it is not the architecture boundary."
+* Live publication must target a shared MoonMind observability transport — such as Redis pub/sub, a shared append-only spool, or DB-backed tailing — not an API-local singleton in memory.
+* The choice of shared transport mechanism must be documented and agreed before the runtime supervisor live-emit path is implemented (see Phase 3 in `docs/tmp/009-LiveLogsPlan.md`).
+
 ---
 
 ## 7. Runtime contract
@@ -205,7 +235,7 @@ Every managed run must produce these durable outputs.
 * `stdout_artifact_ref`
 * `stderr_artifact_ref`
 * `diagnostics_ref`
-* optional `merged_log_artifact_ref`
+* optional `merged_log_artifact_ref` — may be absent; see section 7.3 for merged-tail behavior when it is missing
 * structured run summary metadata
 
 ## 7.2 Optional live observability outputs
@@ -217,6 +247,20 @@ Every managed run must produce these durable outputs.
 * `supports_live_streaming`
 
 These fields are non-authoritative convenience metadata. Artifacts remain authoritative.
+
+## 7.3 Merged-tail contract
+
+The merged-tail endpoint (`/logs/merged-tail`) may return content computed in one of two ways:
+
+* from a pre-built `merged_log_artifact_ref` if one exists
+* synthesized on demand from `stdout_artifact_ref` + `stderr_artifact_ref` + supervisor metadata if no merged artifact exists
+
+Rules for merged tail:
+
+* lines are ordered by monotonically increasing `sequence` value assigned at emit time; within the same sequence window, ordering is by timestamp ascending
+* system events (supervisor annotations, reconnect notices, truncation warnings) may appear in the merged tail and must be labeled with `stream: "system"`
+* `merged_log_artifact_ref` is **optional**; implementations must not require it to exist in order to serve a merged tail
+* the endpoint must handle partial artifacts and still return whatever durably captured content is available
 
 ---
 
@@ -241,7 +285,12 @@ The supervisor owns:
 * exit classification
 * diagnostics generation
 * final state persistence
-* optional fan-out to live subscribers
+* emission of live log records for active subscribers
+* updating `last_log_at` and `last_log_offset` metadata used by the observability summary
+* generation of `system` event annotations where needed (e.g. run start, truncation notices)
+* handoff of live log chunks to the shared live-stream transport boundary
+
+**Durability comes first. Live stream publication is secondary. Live publication failure must not break artifact persistence or run completion.**
 
 This fits the existing managed-agent execution model much better than terminal embedding, because that model already says logs and diagnostics should be artifact-backed and that runtime events should map into workflow-native mechanisms .
 
@@ -251,8 +300,8 @@ For each chunk read from stdout or stderr:
 
 1. append to durable storage or spool
 2. update artifact-building state
-3. optionally publish to live subscribers
-4. update stream metadata
+3. optionally publish to live subscribers via the shared transport boundary
+4. update stream metadata (`last_log_at`, `last_log_offset`)
 
 Durability comes first. Live streaming is secondary.
 
@@ -262,7 +311,7 @@ MoonMind-generated system events should use `structlog`, but managed-agent `stdo
 
 ## 9.0 Selected implementation baseline
 
-The phrase “MoonMind-native log viewer” is intentionally **not** a terminal emulator and **not** a third-party hosted logging product. It means a MoonMind-owned UI and API surface built on a small number of explicit libraries.
+The phrase "MoonMind-native log viewer" is intentionally **not** a terminal emulator and **not** a third-party hosted logging product. It means a MoonMind-owned UI and API surface built on a small number of explicit libraries.
 
 ### Backend logging and event tools
 
@@ -400,7 +449,7 @@ SSE is enough for one-way live logs.
 
 ## 9.2 Stream endpoint
 
-Suggested endpoint:
+Canonical endpoint:
 
 `GET /api/task-runs/{id}/logs/stream`
 
@@ -423,9 +472,23 @@ Example event payload:
 }
 ```
 
+Expected HTTP behavior:
+
+* **active run, streaming available**: respond with `200 text/event-stream` and stream events
+* **active run, streaming not supported**: respond with `200` and an appropriate status event; caller falls back to artifact-backed polling
+* **ended run**: respond with `200` and a single terminal event or an empty stream indicating `ended`; caller must not reconnect
+* **artifacts missing or partial**: the stream endpoint returns whatever is available; the observability summary indicates artifact status
+* **stream unavailable**: respond with `503` or an error event; caller transitions to artifact-backed mode
+
 ## 9.3 Reconnect behavior
 
 Mission Control should reconnect using the last known sequence or offset.
+
+**Resume is best-effort.** The system is not required to durably preserve every transient live event in a stream-only buffer.
+
+* resume works while the live stream backend still retains the in-memory or short-lived replay window
+* if the resume window has expired or the stream backend has restarted, resume falls back to durable artifact retrieval
+* artifacts are the authoritative durable fallback; they define what happened
 
 If the live stream cannot resume:
 
@@ -451,23 +514,50 @@ These are now required. The old design explicitly said no new backend API was ne
 
 ## 10.1 Observability summary
 
-`GET /api/task-runs/{id}/observability`
+`GET /api/task-runs/{id}/observability-summary`
 
-Response should include:
+Minimum required response fields:
 
-* run status
-* stdout ref
-* stderr ref
-* diagnostics ref
-* live stream availability
-* last log timestamp
-* intervention capability summary
+* `run_id`
+* `status` — canonical run status
+* `stdout_artifact_ref` — nullable
+* `stderr_artifact_ref` — nullable
+* `diagnostics_ref` — nullable
+* `merged_log_artifact_ref` — nullable
+* `supports_live_streaming` — boolean
+* `live_stream_id` — nullable
+* `live_stream_status` — nullable (`available`, `ended`, `unavailable`)
+* `last_log_at` — nullable timestamp
+* `last_log_offset` — nullable int
+* `intervention_capabilities` — summary of available controls
+
+Behavior when the run is terminal:
+
+* `live_stream_status` must be `ended` or `unavailable`
+* `supports_live_streaming` must be `false` or the API must clearly signal that no stream connection is appropriate
+* artifact refs remain populated and queryable indefinitely
+
+Behavior when live streaming is unsupported:
+
+* `supports_live_streaming: false`
+* UI falls through to artifact-backed retrieval without attempting SSE
+
+Behavior when artifacts are missing or partial:
+
+* refs are `null`; the UI shows whatever is available
+* partial artifacts should still be retrievable via the tail endpoints
 
 ## 10.2 Tail endpoints
 
-* `GET /api/task-runs/{id}/logs/stdout?tail_lines=200`
-* `GET /api/task-runs/{id}/logs/stderr?tail_lines=200`
-* `GET /api/task-runs/{id}/logs/merged-tail?tail_lines=200`
+* `GET /api/task-runs/{id}/logs/stdout`
+* `GET /api/task-runs/{id}/logs/stderr`
+* `GET /api/task-runs/{id}/logs/merged`
+
+Each endpoint must handle:
+
+* ended runs: return final artifact tail, no stream connection
+* missing artifacts: return empty body or appropriate 404/empty response
+* partial artifacts: return whatever has been durably captured so far
 
 ## 10.3 Full retrieval / download
 
@@ -512,11 +602,16 @@ class ManagedRunRecord:
     failure_class: str | None
 ```
 
-## 11.2 Live-session model
+## 11.2 Legacy live-session model and deprecation rule
 
 The persisted `TaskRunLiveSession` row uses `provider` (e.g. `none`), `liveSessionName`, `liveSessionSocketPath`, `attachRo`, and `webRo` where workers report relay metadata.
 
-That should be replaced or deprecated for managed-run observability.
+**Deprecation rule:**
+
+* `TaskRunLiveSession` is **legacy compatibility only** for historical runs that were created before the MoonMind-native observability model existed.
+* managed-run observability for new runs must **not** depend on `attachRo`, `webRo`, socket paths, or terminal-relay metadata.
+* new managed runs must use observability-specific metadata only (`stdout_artifact_ref`, `stderr_artifact_ref`, `live_stream_id`, etc.).
+* any code path that reads terminal-session fields for managed-run log viewing is a migration target, not a supported architecture path.
 
 Recommended replacement model:
 
@@ -547,26 +642,39 @@ This is much closer to the actual problem being solved.
 
 The Live Logs panel should default to collapsed with no active stream.
 
+**No live stream connection is made while the panel is collapsed.**
+
 ## 12.2 On open
 
 When the panel opens:
 
 1. fetch observability summary
-2. fetch merged tail
+2. fetch merged tail — **initial content must be visible without waiting for SSE**
 3. if stream is available and run is active, connect to stream
 4. show loading state only during initial fetch/connect
+
+The UI must never depend on SSE success before showing initial log content. If the observability summary indicates `supports_live_streaming: false` or `live_stream_status: ended`, skip step 3 entirely.
 
 ## 12.3 States
 
 Recommended UI states:
 
-* `not_available`
-* `starting`
-* `live`
-* `ended`
-* `error`
+* `not_available` — no artifacts and no live stream; run may be starting or pre-launch
+* `starting` — observability summary is loading or initial tail is in flight
+* `live` — connected to active live stream; receiving events
+* `ended` — run is terminal; showing artifact-backed tail only
+* `error` — live stream connection failed; transitioned to artifact-backed mode
 
-These are log-view states, not terminal-transport states.
+Allowed state transitions:
+
+* `not_available` → `starting`
+* `starting` → `live` (run active, stream available)
+* `starting` → `ended` (run already terminal)
+* `starting` → `error` (initial fetch failed)
+* `live` → `ended` (run completes)
+* `live` → `error` (stream connection fails)
+* `error` → `live` (reconnect succeeds and run still active)
+* `error` → `ended` (reconnect not attempted; run is terminal)
 
 ## 12.4 Ended runs
 
@@ -576,7 +684,22 @@ If the run is complete:
 * show the final artifact-backed tail
 * keep Stdout / Stderr / Diagnostics panels available
 
-This is much better than the old “Session ended” with no stream and maybe a transcript artifact, because the new system always has durable logs by design .
+This is much better than the old "Session ended" with no stream and maybe a transcript artifact, because the new system always has durable logs by design .
+
+## 12.5 Panel lifecycle rules
+
+* **collapsed**: no connection, no background streaming
+* **open + active run**: fetch tail → connect stream
+* **open + ended run**: fetch tail only; never connect stream
+* **collapse**: disconnect immediately
+* **background tab**: disconnect or pause; reconnect on foreground only if panel is open and run is still active
+* **stream error**: transition to `error` state and show artifact-backed content; do not leave panel blank
+
+## 12.6 Feature flag
+
+The observability panel must remain gated behind `logStreamingEnabled` until validated through staged rollout.
+
+A separate UI flag for the new observability panel layout may be used if a side-by-side rollout with the legacy view is required.
 
 ---
 
@@ -619,12 +742,12 @@ This is the direct replacement for the old tmate-oriented live-log requirements.
 ### Functional requirements
 
 * **FR-001**: The task detail page must include a collapsible Live Logs panel.
-* **FR-002**: The Live Logs panel must fetch an initial artifact-backed merged tail from MoonMind APIs.
+* **FR-002**: The Live Logs panel must fetch an initial artifact-backed merged tail from MoonMind APIs. Initial content must not depend on SSE success.
 * **FR-003**: When the run is active and live streaming is supported, the panel must connect to a MoonMind-owned live log stream.
 * **FR-004**: The panel must default to collapsed with no active connection.
 * **FR-005**: The panel must disconnect when collapsed.
 * **FR-006**: The panel must disconnect or pause when the browser tab loses visibility.
-* **FR-007**: The panel must reconnect when reopened or when visibility returns.
+* **FR-007**: The panel must reconnect when reopened or when visibility returns, only if the run is still active.
 * **FR-008**: The system must preserve stdout, stderr, and diagnostics as durable artifacts for every managed run.
 * **FR-009**: The UI must provide separate Stdout, Stderr, and Diagnostics views.
 * **FR-010**: The live log viewer must not depend on tmate, `web_ro`, or terminal embedding.
@@ -632,6 +755,9 @@ This is the direct replacement for the old tmate-oriented live-log requirements.
 * **FR-012**: The observability system must continue to function when live streaming is unavailable by falling back to artifact-backed retrieval.
 * **FR-013**: The launcher must not wrap managed agent runs in tmate for log visibility.
 * **FR-014**: Logging and intervention must be modeled separately in both backend APIs and Mission Control UI.
+* **FR-015**: The live stream transport must be cross-process; an API-local in-memory singleton is not compliant.
+* **FR-016**: Ended runs must never trigger a live stream connection attempt.
+* **FR-017**: Stream errors must transition the viewer to artifact-backed mode, not leave the panel blank.
 
 ### Key entities
 
@@ -653,6 +779,8 @@ This is the direct replacement for the old tmate-oriented live-log requirements.
 * **SC-004**: Closing the panel or backgrounding the tab stops live streaming within a few seconds.
 * **SC-005**: Ended runs still show useful logs and diagnostics without requiring any saved terminal transcript.
 * **SC-006**: Managed run logging works identically whether or not any terminal transport exists elsewhere in the system.
+* **SC-007**: Stream errors do not erase visible logs; the panel degrades to artifact-backed mode.
+* **SC-008**: Mission Control can fully observe a completed run without having ever had a live stream connection.
 
 ---
 
@@ -707,7 +835,7 @@ to:
 
 * artifact-backed logs
 * MoonMind log APIs
-* optional live streaming
+* optional live streaming via a cross-process shared transport
 * separate intervention controls
 
 That is the cleanest architecture and the one that best matches the broader shift away from tmate.

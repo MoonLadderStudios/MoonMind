@@ -11,6 +11,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
+    LiveLogChunk,
     is_terminal_agent_run_state,
 )
 
@@ -147,3 +148,19 @@ def test_managed_runtime_profile_rejects_unsupported_secret_passthrough_keys() -
             commandTemplate=["gemini"],
             passthroughEnvKeys=["OPENAI_API_KEY"],
         )
+
+def test_live_log_chunk_requires_valid_stream() -> None:
+    with pytest.raises(ValidationError, match="Input should be 'stdout', 'stderr' or 'system'"):
+        LiveLogChunk(sequence=1, stream="invalid_stream", text="test\n", timestamp="2026-03-31T00:00:00Z")
+
+def test_live_log_chunk_accepts_valid_data() -> None:
+    chunk = LiveLogChunk(
+        sequence=42,
+        stream="stdout",
+        text="Hello world\n",
+        timestamp="2026-03-31T00:00:00Z",
+        offset=1024,
+    )
+    assert chunk.sequence == 42
+    assert chunk.stream == "stdout"
+    assert chunk.offset == 1024

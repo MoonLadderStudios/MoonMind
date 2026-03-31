@@ -33,6 +33,7 @@ Detailed backend contracts live in the Temporal docs. This document defines the 
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
 - `docs/Tasks/AgentSkillSystem.md`
 - `docs/UI/MissionControlStyleGuide.md`
 - `docs/UI/TypeScriptSystem.md`
@@ -242,7 +243,7 @@ The detail page is the right place for:
 - attention requirement
 - execution-context metadata
 - artifact evidence
-- terminal summaries
+- managed-run observability (artifact-backed logs, diagnostics — not terminal embeds)
 - action surfaces
 
 ## 9.3 Advanced/debug information stays secondary
@@ -365,6 +366,22 @@ Rules:
 * detail routing remains anchored to `taskId == workflowId`
 * reruns or Continue-As-New should not force a route identity change
 
+## 11.4 Observability fetch sequence
+
+For the task detail observability area (Live Logs panel), the correct fetch sequence is:
+
+1. `GET /api/task-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability)
+2. `GET /api/task-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
+3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/task-runs/{id}/logs/stream`
+4. If the stream connection fails or is unavailable, remain in artifact-backed mode — do not leave the panel blank
+
+Rules:
+
+* ended runs must skip step 3 entirely; never attempt a live stream connection on a completed run
+* step 2 must always happen first and must always produce visible content when artifacts exist
+* stream failure at step 3 transitions the viewer to `error` state backed by artifact content
+* this sequence replaces any legacy approach of connecting SSE first and loading content through the stream
+
 ---
 
 ## 12. Detail page architecture
@@ -406,7 +423,91 @@ Temporal-backed detail should render:
   * outcome summaries
   * timeline/state transitions
 
-## 12.2 Timeline/event model
+## 12.2 Observability section
+
+The task detail page must include a dedicated **Observability** area for managed-run evidence. This is the canonical UI hierarchy:
+
+* **Live Logs** — merged log stream viewer (artifact-backed by default; upgrades to live follow when active)
+* **Stdout** — artifact-backed stdout viewer with tail, download, copy, and line-wrap
+* **Stderr** — artifact-backed stderr viewer with tail, download, copy, and line-wrap
+* **Diagnostics** — structured run metadata (exit code, failure class, duration, artifact refs, parsed errors)
+* **Artifacts** — full execution artifact listing (consistent with the rest of Mission Control)
+
+Rules:
+
+* managed-run observability is artifact-backed and MoonMind-native — it does not use terminal embeds
+* `xterm.js` must not appear in this area; it is reserved for OAuth sessions only
+* the observability area follows the fetch sequence defined in §11.4
+
+## 12.3 Log viewer state model
+
+The Live Logs panel has five defined states:
+
+| State | Meaning |
+| --- | --- |
+| `not_available` | No artifacts and no live stream; run may be pre-launch or starting |
+| `starting` | Observability summary or initial tail is loading |
+| `live` | Connected to active live stream; receiving events from supervised runtime |
+| `ended` | Run is terminal; showing final artifact-backed tail only |
+| `error` | Live stream connection failed; viewer shows artifact-backed content |
+
+Allowed state transitions:
+
+* `not_available` → `starting`
+* `starting` → `live` (run is active, stream available)
+* `starting` → `ended` (run already terminal when panel is opened)
+* `starting` → `error` (initial fetch failed)
+* `live` → `ended` (run completes)
+* `live` → `error` (stream connection fails)
+* `error` → `live` (reconnect succeeds and run is still active)
+* `error` → `ended` (run is terminal; reconnect not appropriate)
+
+## 12.4 Panel lifecycle rules
+
+Connection lifecycle is governed by panel open/close and tab visibility:
+
+* **collapsed**: no active connection; no background streaming
+* **open + active run**: fetch summary → fetch tail → connect stream
+* **open + ended run**: fetch summary → fetch tail → no stream connection
+* **collapse**: disconnect immediately
+* **background tab**: disconnect or pause; reconnect on foreground only if panel is open and run is still active
+* **stream error**: transition to `error` state; render artifact-backed content; do not leave panel blank
+* **ended run at any point**: never initiate a stream connection
+
+## 12.5 Degraded mode and fallback behavior
+
+* artifact-backed tail is the default baseline; it must always work
+* live follow is an optional enhancement layered on top
+* stream errors must not erase visible logs; the panel always shows the last artifact-backed state on error
+* ended runs are fully usable through artifact-backed views — operators do not need a live connection to inspect completed work
+* if `supports_live_streaming: false`, the panel shows artifact-backed content with no stream connection attempt
+
+## 12.6 Stream provenance requirements
+
+Log records must carry per-line stream provenance:
+
+* `stdout` — captured from the managed runtime's standard output
+* `stderr` — captured from the managed runtime's standard error
+* `system` — MoonMind supervisor annotations, reconnect notices, truncation warnings
+
+Stream provenance is required for correct line rendering and for the merged view. The API must include `stream` on every record.
+
+## 12.7 Feature flags for observability rollout
+
+* `logStreamingEnabled` — gates the observability panel and all associated APIs
+* a separate UI flag for the new observability panel layout may be used if a side-by-side rollout with the legacy task-detail view is required
+
+Rollout posture: read-first (artifact-backed tail before live follow before default-on).
+
+## 12.8 Success criteria for the UI layer
+
+* Opening the Live Logs panel shows recent artifact-backed tail content within 2 seconds
+* Active runs can follow live output from the supervised runtime through the panel
+* Collapsing the panel or backgrounding the tab stops live stream connections within a few seconds
+* Completed runs remain inspectable through artifact-backed views without any live connection
+* Stream errors degrade gracefully to artifact-backed content; the panel is never left blank
+
+## 12.9 Timeline/event model
 
 Temporal-backed detail should show a synthesized execution timeline based on:
 
@@ -419,7 +520,7 @@ Temporal-backed detail should show a synthesized execution timeline based on:
 
 Raw Temporal event history browsing is out of scope unless a dedicated backend contract exists.
 
-## 12.3 Waiting-state presentation
+## 12.10 Waiting-state presentation
 
 When an execution is blocked:
 

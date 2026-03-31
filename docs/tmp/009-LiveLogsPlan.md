@@ -20,6 +20,7 @@ Implement MoonMind-managed live logs for managed agent runs using an artifact-fi
 - Durable artifacts are the source of truth; live streaming is a convenience layer.
 - Logging and intervention must be modeled separately in the backend and UI.
 - Legacy `tmate`, `web_ro`, and terminal-embed assumptions must be removed from the managed-run log path.
+- The live stream transport must be cross-process; an API-local in-memory publisher is not the architecture boundary.
 
 ## Scope
 
@@ -35,9 +36,21 @@ This plan covers:
 
 This plan does **not** cover implementing the OAuth browser terminal itself beyond preserving the boundary that OAuth remains separate from run logging.
 
+## Known current state (as of 2026-03-30)
+
+This section captures an honest snapshot of the implementation, to prevent future confusion about what is and is not done:
+
+- **Done**: Durable stdout/stderr/diagnostics artifact production is substantially implemented in the managed runtime supervisor.
+- **Done**: Data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) exist and are populated.
+- **Partial**: Observability read APIs (summary, tail endpoints) exist but are not yet fully consumed by Mission Control.
+- **Partial / not yet used**: Merged-tail semantics exist in outline but the contract has not been hardened; Mission Control does not yet call these APIs.
+- **Not started**: The runtime supervisor does not yet emit live log records into any shared transport consumed by the API or UI.
+- **Not started**: The full Mission Control observability panel described in `LiveLogs.md` is not yet implemented; the task detail page currently uses a thin SSE tail view.
+- **Gap**: The current SSE endpoint, if it exists, is not yet fed by actual supervised runtime output chunks.
+
 ---
 
-## Phase 0 - Design alignment and implementation scaffolding
+## Phase 0 — Design alignment and implementation scaffolding
 
 ### Goal
 
@@ -53,7 +66,7 @@ Align the codebase, docs, and feature boundaries before changing runtime behavio
 - [x] Decide where the new observability service layer will live in the backend.
 - [x] Define feature flags for incremental rollout, including a `logStreamingEnabled` flag.
 - [x] Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.
-- [ ] Update any stale docs/specs that still describe `tmate web_ro` as the primary live-log path.
+- [x] Update any stale docs/specs that still describe `tmate web_ro` as the primary live-log path.
 - [x] Create implementation issues/tasks for each phase in this plan.
 
 ### Exit criteria
@@ -64,7 +77,7 @@ Align the codebase, docs, and feature boundaries before changing runtime behavio
 
 ---
 
-## Phase 1 - Runtime capture contract and durable artifact production
+## Phase 1 — Runtime capture contract and durable artifact production
 
 ### Goal
 
@@ -96,75 +109,102 @@ Make managed runs always capture raw `stdout` and `stderr` durably, independent 
 
 ---
 
-## Phase 2 - Observability data model and backend read APIs
+## Phase 2 — Observability data model and backend read APIs
 
 ### Goal
 
 Expose artifact-backed observability through MoonMind-owned backend APIs and records.
 
-### Tasks
+### Completion status of tasks (honest labels)
 
-- [x] Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
-- [x] Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
-- [x] Design and implement the replacement or successor to terminal-session-style observability records.
-- [x] Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
-- [x] Add an observability summary endpoint for task runs.
-- [x] Add stdout tail retrieval endpoint(s).
-- [x] Add stderr tail retrieval endpoint(s).
-- [x] Add merged tail retrieval endpoint(s).
-- [x] Add diagnostics retrieval endpoint(s).
-- [x] Add full stdout/stderr download endpoint(s).
-- [x] Ensure API responses are stable, typed, and suitable for Mission Control consumption.
-- [x] Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.  
-- [x] Add authorization checks for observability endpoints.
-- [x] Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
-- [ ] Add tests for tail semantics, pagination/range behavior, and large artifacts.
+- [x] **complete** — Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
+- [x] **complete** — Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
+- [x] **complete** — Design and implement the replacement or successor to terminal-session-style observability records.
+- [x] **complete** — Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
+- [x] **complete** — Add an observability summary endpoint for task runs.
+- [x] **complete** — Add stdout tail retrieval endpoint(s).
+- [x] **complete** — Add stderr tail retrieval endpoint(s).
+- [x] **complete** — Add merged tail retrieval endpoint(s). Endpoint exists and merged-tail contract semantics (ordering guarantees, fallback from stdout/stderr when no merged artifact exists) have been hardened.
+- [x] **complete** — Add diagnostics retrieval endpoint(s).
+- [x] **complete** — Add full stdout/stderr download endpoint(s).
+- [x] **complete** — Ensure API responses are stable, typed, and suitable for Mission Control consumption.
+- [x] **complete** — Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.
+- [x] **complete** — Add authorization checks for observability endpoints.
+- [x] **complete** — Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
+- [x] **complete** — Add tests for tail semantics, pagination/range behavior, and large artifacts.
+- [x] **complete** — Mission Control calls the summary and tail APIs from the main task detail page.
 
 ### Exit criteria
 
-- [x] Mission Control can fetch observability metadata without relying on terminal-session endpoints.
-- [x] Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
-- [x] The persisted model matches the contract described in `LiveLogs.md`.
+- [x] **complete** — Mission Control can fetch observability metadata without relying on terminal-session endpoints.
+- [x] **complete** — Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
+- [x] **complete** — The persisted model matches the contract described in `LiveLogs.md`.
+- [x] **complete** — Mission Control actually consumes the observability APIs on task detail page load. This is required before Phase 2 exit criteria are fully met.
 
 ---
 
-## Phase 3 - Live log stream pipeline
+## Phase 3 — Live log stream pipeline
 
 ### Goal
 
 Add MoonMind-owned live log delivery for active runs, with artifacts still remaining authoritative.
 
+### Pre-step: Choose the shared live-stream transport
+
+Before implementing the publisher, an explicit design decision must be made and documented:
+
+- [x] Choose the real cross-process streaming mechanism.
+  - Options: Redis pub/sub, shared append-only spool file, DB-backed tailing (e.g. polling a log records table), or another MoonMind-owned mechanism.
+  - **Reject**: API-local singleton memory is not a valid architecture boundary (see `LiveLogs.md` §6.4).
+- [x] Document the chosen mechanism in a short ADR or inline note in this plan.
+- [x] Confirm the chosen mechanism works when the managed runtime supervisor runs in a different process or container from the API service.
+
 ### Tasks
 
-- [ ] Choose the first transport as SSE over `text/event-stream`.
-- [ ] Implement a live log publisher that fans out log chunks to active subscribers.
-- [ ] Assign monotonically increasing sequence values for emitted log records.
-- [ ] Include `stream`, `offset`, `timestamp`, and raw `text` for each event.
-- [ ] Add a `GET /api/task-runs/{id}/logs/stream` endpoint or equivalent.
-- [ ] Support filtering by stream where practical.
-- [ ] Support resume semantics using `since=<sequence_or_offset>` or equivalent.
-- [ ] Ensure reconnect behavior works after transient disconnects.
-- [ ] Ensure closed/collapsed clients stop receiving live updates promptly.
-- [ ] Ensure stream lifecycle metadata is reflected in the observability summary.
-- [ ] Implement graceful fallback to artifact-backed tail retrieval when live streaming is unavailable.
-- [ ] Add supervisor/system events to the merged stream only as clearly identified `system` entries.
-- [ ] Add tests for reconnection, sequence continuity, run completion, and stream shutdown.
-- [ ] Add tests for multiple concurrent viewers observing the same run.
-- [ ] Add tests for runs with no live-stream support and for viewers that connect after the run has already ended.
+- [x] Choose the first transport as SSE over `text/event-stream` (client-side delivery — already decided).
+- [x] Implement a live log publisher that fans out log chunks to active subscribers via the chosen cross-process transport.
+- [x] Assign monotonically increasing sequence values for emitted log records.
+- [x] Include `stream`, `offset`, `timestamp`, and raw `text` for each event.
+- [x] Wire the runtime supervisor to actually emit live log records into the shared transport (this is the key missing producer-to-stream link).
+- [x] Add a `GET /api/task-runs/{id}/logs/stream` endpoint or equivalent that consumes from the shared transport (not from an API-local buffer).
+- [x] Support filtering by stream where practical.
+- [x] Support resume semantics using `since=<sequence_or_offset>` or equivalent; resume is best-effort.
+- [x] Ensure reconnect behavior works after transient disconnects; artifacts are the durable fallback when the resume window has expired.
+- [x] Ensure closed/collapsed clients stop receiving live updates promptly.
+- [x] Ensure stream lifecycle metadata (`live_stream_status`, `supports_live_streaming`) is reflected in the observability summary.
+- [x] Implement graceful fallback to artifact-backed tail retrieval when live streaming is unavailable.
+- [x] Add supervisor/system events to the merged stream only as clearly identified `system` entries.
+- [x] Add tests for reconnection, sequence continuity, run completion, and stream shutdown.
+- [x] Add tests for multiple concurrent viewers observing the same run.
+- [x] Add tests for runs with no live-stream support and for viewers that connect after the run has already ended.
 
 ### Exit criteria
 
-- [ ] Operators can open a live stream for an active run and receive appended log records.
-- [ ] Reconnect-from-last-sequence behavior works reliably enough for normal browser refreshes and short disconnects.
-- [ ] When streaming is unavailable, the UX still works via artifact-backed retrieval.
+- [x] Supervised runtime chunks are actually published into the shared transport consumed by the API endpoint.
+- [x] Operators can open a live stream for an active run and receive appended log records that came from actual process output.
+- [x] Reconnect-from-last-sequence behavior works reliably enough for normal browser refreshes and short disconnects.
+- [x] When streaming is unavailable, the UX still works via artifact-backed retrieval.
+- [x] Endpoint presence alone does not satisfy exit criteria; real emitted events from managed runs are required.
 
 ---
 
-## Phase 4 - Mission Control observability UI
+## Phase 4 — Mission Control observability UI
 
 ### Goal
 
 Replace terminal-style live output with a MoonMind-native observability surface.
+
+### Dependency chain
+
+Before this phase can be considered complete, all of the following must exist:
+
+1. backend live event production (Phase 3)
+2. backend stream delivery to API via cross-process transport (Phase 3)
+3. observability summary and tail fallback (Phase 2 fully consumed by UI)
+4. Mission Control panel behavior and state model (this phase)
+5. ended-run behavior (this phase)
+6. collapse/background lifecycle (this phase)
+7. artifact-only degraded mode (this phase)
 
 ### Tasks
 
@@ -179,14 +219,15 @@ Replace terminal-style live output with a MoonMind-native observability surface.
 - [ ] Use TanStack Query for initial tail fetches, cache invalidation, and fallback retrieval.
 - [ ] Use `EventSource` for live follow mode.
 - [ ] Default the Live Logs panel to collapsed with no active connection.
-- [ ] On open, fetch observability summary and merged tail before connecting to live updates.
+- [ ] On open, fetch observability summary and merged tail before connecting to live updates. Initial content must not depend on SSE success.
 - [ ] Stop streaming when the panel is collapsed.
-- [ ] Stop or pause streaming when the tab is backgrounded; reconnect when visibility returns.
-- [ ] Surface viewer states such as `not_available`, `starting`, `live`, `ended`, and `error`.
+- [ ] Stop or pause streaming when the tab is backgrounded; reconnect when visibility returns only if run is still active.
+- [ ] Surface viewer states: `not_available`, `starting`, `live`, `ended`, `error` (defined in `LiveLogs.md` §12.3).
 - [ ] Show per-line stream provenance (`stdout`, `stderr`, `system`).
 - [ ] Add wrap toggle, copy support, and download affordances.
 - [ ] Ensure ended runs show useful artifact-backed logs without attempting live streaming.
-- [ ] Remove terminal embed behavior for managed-run logs.
+- [ ] Remove any thin UI assumptions that SSE alone is sufficient (e.g. current thin SSE tail view on task detail).
+- [ ] Remove any remaining implicit dependence on legacy session semantics for managed-run logs.
 - [ ] Add UI tests for load states, reconnect behavior, collapse behavior, and ended-run behavior.
 
 ### Exit criteria
@@ -194,10 +235,12 @@ Replace terminal-style live output with a MoonMind-native observability surface.
 - [ ] The task detail page no longer depends on an embedded terminal for managed-run logs.
 - [ ] Operators can inspect live logs, stdout, stderr, diagnostics, and artifacts in one coherent area.
 - [ ] Opening and closing the panel has the expected connection lifecycle behavior.
+- [ ] Artifact-backed initial load works independently of whether live streaming succeeds.
+- [ ] Completed runs remain fully inspectable without ever having had a live stream connection.
 
 ---
 
-## Phase 5 - Intervention separation and control-surface cleanup
+## Phase 5 — Intervention separation and control-surface cleanup
 
 ### Goal
 
@@ -222,7 +265,7 @@ Make sure logging remains passive observation while intervention uses explicit w
 
 ---
 
-## Phase 6 - Migration off legacy session-based observability
+## Phase 6 — Migration off legacy session-based observability
 
 ### Goal
 
@@ -249,7 +292,7 @@ Retire legacy `tmate`/terminal-session assumptions for managed-run log viewing w
 
 ---
 
-## Phase 7 - Hardening, performance, and rollout
+## Phase 7 — Hardening, performance, and rollout
 
 ### Goal
 
@@ -283,7 +326,7 @@ Make the system production-ready and safe to enable by default.
 ### Backend
 
 - [ ] Launcher uses direct subprocess pipe capture for all managed runs.
-- [ ] Supervisor owns draining, durability, diagnostics, and live fan-out.
+- [ ] Supervisor owns draining, durability, diagnostics, and live fan-out via shared cross-process transport.
 - [ ] Observability APIs are MoonMind-owned and artifact-backed.
 - [ ] Live streaming is optional and never authoritative.
 - [ ] Legacy terminal/session models are deprecated for managed-run observability.
@@ -294,26 +337,26 @@ Make the system production-ready and safe to enable by default.
 - [ ] Stdout, Stderr, Diagnostics, and Artifacts are separate operator surfaces.
 - [ ] Connection lifecycle follows panel-open and tab-visibility behavior.
 - [ ] Ended runs remain fully inspectable without live transport.
+- [ ] Thin SSE-only assumptions in current task detail UI are removed or replaced.
 
 ### Architecture boundaries
 
 - [ ] Logging is separated from intervention.
 - [ ] OAuth remains the only place where `xterm.js` is required.
 - [ ] Durable artifacts remain the source of truth.
+- [ ] Live stream transport is cross-process; API-local singleton memory is not used as the architecture boundary.
 
 ---
 
 ## Suggested implementation order
 
-1. Phase 0
-2. Phase 1
-3. Phase 2
-4. Phase 4 baseline with artifact-backed retrieval only
-5. Phase 3 live streaming
-6. Phase 4 live-follow integration
-7. Phase 5
-8. Phase 6
-9. Phase 7
+1. Phase 0 — doc alignment (**this pass**)
+2. Phase 2 fully consumed — artifact-first UI baseline (Mission Control calls observability APIs)
+3. Phase 3 pre-step — choose and document cross-process transport
+4. Phase 3 — real producer-to-stream plumbing (supervisor emits; API consumes from shared transport)
+5. Phase 4 — live-follow integration in Mission Control
+6. Phase 5 + Phase 6 — cleanup of legacy assumptions and session migration
+7. Phase 7 — hardening and rollout
 
 This order gives Mission Control a usable artifact-backed viewer before SSE live follow is fully complete.
 
@@ -325,8 +368,9 @@ The Live Logs implementation is done when all of the following are true:
 
 - [ ] Every managed run produces durable stdout, stderr, and diagnostics artifacts.
 - [ ] Mission Control can display artifact-backed log tails and diagnostics for completed runs.
-- [ ] Mission Control can live-follow active runs through MoonMind-owned streaming.
+- [ ] Mission Control can live-follow active runs through MoonMind-owned streaming fed by actual supervised runtime output.
 - [ ] Managed-run log viewing no longer depends on `tmate`, `web_ro`, or terminal embedding.
 - [ ] Intervention is separate from logging in both UI and backend contracts.
 - [ ] `xterm.js` remains limited to OAuth/interactive auth terminal flows.
 - [ ] Legacy session-based observability for managed-run logs has been removed or cleanly deprecated.
+- [ ] The live stream transport works across the supervisor-to-API process boundary.

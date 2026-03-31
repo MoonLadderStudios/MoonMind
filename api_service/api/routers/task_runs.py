@@ -1,21 +1,19 @@
 import asyncio
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from api_service.api.routers.worker_auth import _WorkerRequestAuth, _require_worker_auth
 from api_service.auth_providers import get_current_user
-from api_service.db.base import get_async_session
-from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession, User
+from api_service.db.models import User
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.services.observability.subscriber import log_stream_generator
 from moonmind.utils.metrics import get_metrics_emitter
+from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
+from moonmind.observability.transport import SpoolLogReader
 
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])
 
@@ -63,7 +61,26 @@ async def get_observability_summary(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Observability record not found for this task run",
         )
-    return {"summary": record.model_dump(by_alias=True)}
+
+    terminal_statuses = {"completed", "failed", "canceled", "cancelled", "timed_out"}
+    run_status = getattr(record, "status", None)
+    is_terminal = run_status in terminal_statuses
+
+    raw_live_stream_capable = getattr(record, "live_stream_capable", None)
+    if is_terminal:
+        supports_live = False
+        live_stream_status = "ended"
+    elif raw_live_stream_capable is True:
+        supports_live = True
+        live_stream_status = "available"
+    else:  # Catches False and None
+        supports_live = False
+        live_stream_status = "unavailable"
+
+    base = record.model_dump(by_alias=True)
+    base["supportsLiveStreaming"] = supports_live
+    base["liveStreamStatus"] = live_stream_status
+    return {"summary": base}
 
 
 @router.get(
@@ -104,25 +121,54 @@ async def stream_task_run_live_logs(
             detail="Run is no longer active. Use artifact retrieval APIs.",
         )
         
+    # Check capabilities 
+    if not getattr(record, "live_stream_capable", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Live streaming is not supported for this run.",
+        )
+
     metrics = get_metrics_emitter()
     tags = {"stream": "livelogs"}
     metrics.increment("livelogs.stream.connect", tags=tags)
 
+    # Use queries parameter 'since'
+    since_sequence = since or 0
+
+    # Resolve correct workspace specifically by path tracking, matching the agent job
+    job_workspace = getattr(record, "workspace_path", None)
+    if not job_workspace:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Workspace path for this run is not available; cannot stream logs.",
+        )
+    
+    reader = SpoolLogReader(workspace_path=str(job_workspace))
+
     async def _instrumented_generator():
         try:
-            async for chunk in log_stream_generator(str(id), request, since=since):
-                yield chunk
+            # We yield lines encoded as JSON for SSE Transport
+            async for chunk in reader.follow(since_sequence=since_sequence):
+                json_str = chunk.model_dump_json(by_alias=True)
+                yield f"data: {json_str}\n\n".encode("utf-8")
+                
+                # Check terminal status once every few chunks if possible or dynamically,
+                # but our reader naturally expires/stops if told so. We'll verify terminal 
+                if is_terminal_agent_run_state(record.status):
+                    # We continue generating until spool dries, then safely break
+                    pass
         except asyncio.CancelledError:
             raise
         except Exception:
             metrics.increment("livelogs.stream.error", tags=tags)
             raise
         finally:
+            reader.stop()
             metrics.increment("livelogs.stream.disconnect", tags=tags)
 
     return StreamingResponse(
         _instrumented_generator(),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -168,6 +214,83 @@ async def stream_task_run_log(
 
     if stream_name == "merged":
         target_ref = getattr(record, "merged_log_artifact_ref", None)
+
+        # Synthesize merged tail from stdout + stderr when no pre-built artifact exists.
+        if target_ref is None:
+            stdout_ref = getattr(record, "stdout_artifact_ref", None)
+            stderr_ref = getattr(record, "stderr_artifact_ref", None)
+
+            if not stdout_ref and not stderr_ref:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Merged log artifact not found and no stdout/stderr artifacts available to synthesize from",
+                )
+
+            artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
+
+            async def _stream_artifact_safe(ref: str | None):
+                """
+                Safely stream artifact contents in chunks without loading the entire file into memory.
+                """
+                if not ref:
+                    return
+                artp = (artifacts_root / ref).resolve()
+                try:
+                    safe = artp.is_relative_to(artifacts_root)
+                except Exception:
+                    safe = False
+                if not safe:
+                    return
+                exists = await asyncio.to_thread(artp.is_file)
+                if not exists:
+                    return
+
+                # Stream file contents in chunks using a background thread to avoid blocking the event loop.
+                f = await asyncio.to_thread(artp.open, "rb")
+                try:
+                    while True:
+                        chunk = await asyncio.to_thread(f.read, 8192)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    await asyncio.to_thread(f.close)
+
+            async def merged_stream():
+                first_section_emitted = False
+
+                # Stream stdout first (if present), prefixed with a label.
+                if stdout_ref:
+                    header_emitted = False
+                    async for chunk in _stream_artifact_safe(stdout_ref):
+                        if not header_emitted:
+                            yield b"--- stdout ---\n"
+                            header_emitted = True
+                            first_section_emitted = True
+                        yield chunk
+
+                # Then stream stderr (if present), separated by a newline and prefixed with a label.
+                if stderr_ref:
+                    header_emitted = False
+                    async for chunk in _stream_artifact_safe(stderr_ref):
+                        if not header_emitted:
+                            if first_section_emitted:
+                                yield b"\n"
+                            yield b"--- stderr ---\n"
+                            header_emitted = True
+                        yield chunk
+
+            return StreamingResponse(
+                merged_stream(),
+                media_type="text/plain",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                    "X-Merged-Synthesized": "true",
+                },
+            )
+
         missing_detail = "Merged log artifact not found"
     else:
         target_ref = getattr(record, f"{stream_name}_artifact_ref", None)
