@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -472,19 +472,8 @@ class ProviderCapabilityDescriptor(BaseModel):
     )
 
 
-def build_canonical_start_handle(payload: dict[str, Any]) -> AgentRunHandle:
-    """Build a canonical AgentRunHandle, safely mapping provider-specific top-level fields."""
-    run_id = payload.get("run_id") or payload.get("runId") or payload.get("external_id")
-    if not run_id:
-        raise ValueError("External status payload is missing external_id/run_id")
-
-    raw_status = payload.get("status")
-    kind = payload.get("agentKind") or payload.get("agent_kind")
-    agent_id = payload.get("agentId") or payload.get("agent_id")
-    started_at = payload.get("startedAt") or payload.get("started_at")
-    
-    metadata = dict(payload.get("metadata") or {})
-    
+def _apply_canonical_metadata(payload: dict[str, Any], metadata: dict[str, Any]) -> None:
+    """Internal helper to map legacy provider fields into metadata."""
     for legacy_key, meta_key in [
         ("tracking_ref", "trackingRef"),
         ("trackingRef", "trackingRef"),
@@ -498,6 +487,23 @@ def build_canonical_start_handle(payload: dict[str, Any]) -> AgentRunHandle:
     ]:
         if legacy_key in payload:
             metadata[meta_key] = payload[legacy_key]
+
+def build_canonical_start_handle(payload: dict[str, Any]) -> AgentRunHandle:
+    """Build a canonical AgentRunHandle, safely mapping provider-specific top-level fields."""
+    run_id = payload.get("run_id") or payload.get("runId") or payload.get("external_id")
+    if not run_id:
+        raise ValueError("External start handle payload is missing one of runId/run_id/external_id")
+
+    raw_status = payload.get("status")
+    kind = payload.get("agentKind") or payload.get("agent_kind")
+    agent_id = payload.get("agentId") or payload.get("agent_id")
+    started_at = payload.get("startedAt") or payload.get("started_at")
+    
+    if raw_status not in get_args(AgentRunState):
+        raise_unsupported_status(str(raw_status), context=str(agent_id))
+    
+    metadata = dict(payload.get("metadata") or {})
+    _apply_canonical_metadata(payload, metadata)
 
     return AgentRunHandle(
         runId=run_id,
@@ -518,32 +524,11 @@ def build_canonical_status(payload: dict[str, Any]) -> AgentRunStatus:
     agent_id = payload.get("agentId") or payload.get("agent_id")
     raw_status = payload.get("status")
     
-    # Must enforce valid statuses before instantiation since tests specifically
-    # request UnsupportedStatusError rather than Pydantic's ValidationError
-    valid_states = TERMINAL_AGENT_RUN_STATES | {
-        "queued", "awaiting_slot", "launching", "running",
-        "awaiting_callback", "awaiting_feedback",
-        "awaiting_approval", "intervention_requested",
-        "collecting_results"
-    }
-    if raw_status not in valid_states:
+    if raw_status not in get_args(AgentRunState):
         raise_unsupported_status(str(raw_status), context=str(agent_id))
 
     metadata = dict(payload.get("metadata") or {})
-    
-    for legacy_key, meta_key in [
-        ("tracking_ref", "trackingRef"),
-        ("trackingRef", "trackingRef"),
-        ("provider_status", "providerStatus"),
-        ("providerStatus", "providerStatus"),
-        ("normalized_status", "normalizedStatus"),
-        ("normalizedStatus", "normalizedStatus"),
-        ("external_url", "externalUrl"),
-        ("externalUrl", "externalUrl"),
-        ("url", "externalUrl"),
-    ]:
-        if legacy_key in payload:
-            metadata[meta_key] = payload[legacy_key]
+    _apply_canonical_metadata(payload, metadata)
 
     return AgentRunStatus(
         runId=run_id,
@@ -554,8 +539,11 @@ def build_canonical_status(payload: dict[str, Any]) -> AgentRunStatus:
     )
 
 def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
-    """Build a canonical AgentRunResult payload."""
-    return AgentRunResult(**payload)
+    """Build a canonical AgentRunResult payload, safely filtering top-level fields."""
+    # Extract only known fields to avoid ValidationError from extra provider data
+    known_keys = AgentRunResult.model_fields.keys() | {f.alias for f in AgentRunResult.model_fields.values() if f.alias}
+    data = {k: v for k, v in payload.items() if k in known_keys}
+    return AgentRunResult(**data)
 
 
 __all__ = [
