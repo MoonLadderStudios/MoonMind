@@ -537,7 +537,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             ),
             review_activities=TemporalReviewActivities(),
             agent_skills_activities=AgentSkillsActivities(
-                artifact_service=artifact_service
+                artifact_service=artifact_service,
+                async_session_maker=get_async_session_context,
             ),
         )
         binding_descriptors = sorted(
