@@ -281,6 +281,49 @@ class ToolDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class StepSkillSelectorExact:
+    name: str
+    version: str | None = None
+
+    def __post_init__(self) -> None:
+        _ensure_non_empty(self.name, field_name="node.skills.include[].name")
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"name": self.name}
+        if self.version is not None:
+            payload["version"] = self.version
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class StepSkillSelectors:
+    sets: tuple[str, ...] = ()
+    include: tuple[StepSkillSelectorExact, ...] = ()
+    exclude: tuple[str, ...] = ()
+    materialization_mode: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.materialization_mode is not None:
+            if self.materialization_mode not in {"hybrid", "remote", "local", "none"}:
+                raise ContractValidationError(
+                    "invalid_plan",
+                    "node.skills.materializationMode must be hybrid, remote, local, or none"
+                )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.sets:
+            payload["sets"] = list(self.sets)
+        if self.include:
+            payload["include"] = [inc.to_payload() for inc in self.include]
+        if self.exclude:
+            payload["exclude"] = list(self.exclude)
+        if self.materialization_mode is not None:
+            payload["materializationMode"] = self.materialization_mode
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class Step:
     """Plan node invocation of a tool contract (skill or agent_runtime)."""
 
@@ -290,6 +333,7 @@ class Step:
     inputs: Mapping[str, Any]
     options: Mapping[str, Any] = field(default_factory=dict)
     tool_type: str = "skill"
+    skills: StepSkillSelectors | None = None
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.id, field_name="node.id")
@@ -336,6 +380,8 @@ class Step:
             payload["skill"] = {"name": self.skill_name, "version": self.skill_version}
         if self.options:
             payload["options"] = dict(self.options)
+        if self.skills is not None:
+            payload["skills"] = self.skills.to_payload()
         return payload
 
 
@@ -744,6 +790,49 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
             inline_inputs = node_payload.get("args")
         inputs = inline_inputs if isinstance(inline_inputs, Mapping) else {}
 
+    skills_raw = payload.get("skills")
+    parsed_skills: StepSkillSelectors | None = None
+    if skills_raw is not None:
+        if not isinstance(skills_raw, Mapping):
+            raise ContractValidationError("invalid_plan", "node.skills must be an object")
+
+        sets = skills_raw.get("sets")
+        if sets is not None and not isinstance(sets, list):
+            raise ContractValidationError("invalid_plan", "node.skills.sets must be a list")
+
+        exclude = skills_raw.get("exclude")
+        if exclude is not None and not isinstance(exclude, list):
+            raise ContractValidationError("invalid_plan", "node.skills.exclude must be a list")
+
+        include = skills_raw.get("include")
+        if include is not None and not isinstance(include, list):
+            raise ContractValidationError("invalid_plan", "node.skills.include must be a list")
+
+        parsed_include = []
+        if include:
+            for item in include:
+                if not isinstance(item, Mapping):
+                    raise ContractValidationError("invalid_plan", "node.skills.include entries must be objects")
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    raise ContractValidationError("invalid_plan", "node.skills.include[].name is required")
+                version = item.get("version")
+                parsed_include.append(
+                    StepSkillSelectorExact(
+                        name=name,
+                        version=val if (val := str(version or "").strip()) else None
+                    )
+                )
+
+        mat_mode = skills_raw.get("materializationMode")
+
+        parsed_skills = StepSkillSelectors(
+            sets=tuple(val for s in sets if (val := str(s or "").strip())) if sets else (),
+            include=tuple(parsed_include),
+            exclude=tuple(val for s in exclude if (val := str(s or "").strip())) if exclude else (),
+            materialization_mode=val.lower() if (val := str(mat_mode or "").strip()) else None
+        )
+
     return Step(
         id=str(payload.get("id") or "").strip(),
         skill_name=str(node_payload.get("name") or node_payload.get("id") or "").strip(),
@@ -755,6 +844,7 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
             else {}
         ),
         tool_type=tool_type,
+        skills=parsed_skills,
     )
 
 

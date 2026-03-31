@@ -166,3 +166,28 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.agent_id, "claude")
         self.assertEqual(request.parameters.get("model"), "MiniMax-M2.7")
         self.assertEqual(request.profile_selector.provider_id, "minimax")
+
+    def test_build_agent_execution_request_propagates_resolved_skillset_ref(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                },
+                node_id="node-skills",
+                tool_name="auto",
+                resolved_skillset_ref="skills:snap:12345",
+            )
+
+        self.assertEqual(request.agent_id, "codex")
+        self.assertEqual(request.resolved_skillset_ref, "skills:snap:12345")

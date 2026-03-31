@@ -690,6 +690,7 @@ class MoonMindRunWorkflow:
                             node_inputs=node_inputs,
                             node_id=node_id,
                             tool_name=tool_name,
+                            resolved_skillset_ref=registry_snapshot_ref,
                         )
                         child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
                         if system_retries > 0:
@@ -1025,6 +1026,7 @@ class MoonMindRunWorkflow:
         node_inputs: dict[str, Any],
         node_id: str,
         tool_name: str,
+        resolved_skillset_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         runtime_block = node_inputs.get("runtime") or {}
@@ -1106,6 +1108,7 @@ class MoonMindRunWorkflow:
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             instruction_ref=node_inputs.get("instructions") or node_inputs.get("instructionRef"),
+            resolved_skillset_ref=resolved_skillset_ref,
             input_refs=node_inputs.get("inputRefs") or [],
             workspace_spec=workspace_spec,
             parameters=parameters,
