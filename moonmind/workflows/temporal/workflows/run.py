@@ -163,6 +163,7 @@ class MoonMindRunWorkflow:
         self._title: Optional[str] = None
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
+        self._pull_request_url: Optional[str] = None
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -470,13 +471,21 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_COMPLETED, summary="Workflow completed successfully.")
 
         publish_mode = self._publish_mode(parameters)
-        # When publish mode is "pr" but no proposals were submitted, the
-        # workflow did not achieve its business objective.
-        if publish_mode == "pr" and self._proposals_submitted == 0:
-            output: RunWorkflowOutput = {
-                "status": "no_pr_created",
-                "message": "Workflow completed but no PR was created",
-            }
+        # When publish mode is "pr" but no PR was created (tracked via
+        # _pull_request_url from execution stage), the workflow did not
+        # achieve its business objective. Guard with workflow.patched for
+        # replay safety on in-flight executions.
+        if workflow.patched("run-workflow-pr-status-v1"):
+            if publish_mode == "pr" and self._pull_request_url is None:
+                output: RunWorkflowOutput = {
+                    "status": "no_pr_created",
+                    "message": "Workflow completed but no PR was created",
+                }
+            else:
+                output = {
+                    "status": "success",
+                    "message": "Workflow completed successfully",
+                }
         else:
             output = {
                 "status": "success",
@@ -957,6 +966,8 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"publishMode 'pr' requested; native PR creation failed: {e}"
                         ) from e
+        # Persist the PR URL so the workflow output can determine if a PR was created.
+        self._pull_request_url = pull_request_url
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -1654,8 +1665,12 @@ class MoonMindRunWorkflow:
             if status == "success":
                 publish_mode = self._publish_mode(parameters)
                 if publish_mode == "pr":
-                    # Only mark as PUBLISHED_PR if proposals were actually submitted
-                    code = "PUBLISHED_PR" if self._proposals_submitted > 0 else "NO_PR_CREATED"
+                    # Guard with workflow.patched for replay safety.
+                    if workflow.patched("run-workflow-pr-status-v1"):
+                        # Use explicit PR URL tracking from execution stage
+                        code = "PUBLISHED_PR" if self._pull_request_url else "NO_PR_CREATED"
+                    else:
+                        code = "PUBLISHED_PR"
                 elif publish_mode == "branch":
                     code = "PUBLISHED_BRANCH"
                 elif publish_mode == "none":

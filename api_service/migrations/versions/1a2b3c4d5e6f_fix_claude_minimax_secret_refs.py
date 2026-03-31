@@ -44,8 +44,14 @@ def upgrade() -> None:
     if isinstance(env_template, str):
         env_template = json.loads(env_template)
 
-    # Only apply if still in the broken state
-    if "anthropic_api_key" not in secret_refs:
+    # Only apply if still in the broken state:
+    # - legacy "anthropic_api_key" still present (original broken state), OR
+    # - ANTHROPIC_AUTH_TOKEN exists but lacks the env:// prefix (migration
+    #   was previously run but with the wrong value)
+    anthropic_auth_token = secret_refs.get("ANTHROPIC_AUTH_TOKEN", "")
+    if "anthropic_api_key" not in secret_refs and not (
+        isinstance(anthropic_auth_token, str) and anthropic_auth_token.startswith("env://")
+    ):
         return
 
     secret_refs.pop("anthropic_api_key", None)
