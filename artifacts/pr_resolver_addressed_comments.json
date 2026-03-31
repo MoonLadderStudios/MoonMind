@@ -1,47 +1,47 @@
 [
   {
-    "id": 3017279894,
+    "id": 3017718743,
     "disposition": "addressed",
-    "rationale": "Fixed logic error by checking selector.include and selector.sets properly."
+    "rationale": "Added explicit result-metadata coverage and confirmed build_canonical_result preserves canonicalized provider fields in metadata."
   },
   {
-    "id": 3017279923,
-    "disposition": "addressed",
-    "rationale": "Optimized DeploymentSkillLoader to filter by slug."
-  },
-  {
-    "id": 3017279934,
-    "disposition": "addressed",
-    "rationale": "Removed unused imports."
-  },
-  {
-    "id": 3017280011,
-    "disposition": "addressed",
-    "rationale": "Removed unused local get_session variable in the test."
-  },
-  {
-    "id": 3017295486,
-    "disposition": "addressed",
-    "rationale": "Corrected typing for async_session_maker."
-  },
-  {
-    "id": 3017295522,
-    "disposition": "addressed",
-    "rationale": "Sorted final_skills by skill_name to ensure determinism."
-  },
-  {
-    "id": 3017295538,
+    "id": 3017718756,
     "disposition": "not-applicable",
-    "rationale": "Duplicate of 3017279923, addressed there."
+    "rationale": "The legacy metadata mapping already lives in the module-level _LEGACY_METADATA_MAP constant on the current branch."
   },
   {
-    "id": 3017295556,
+    "id": 3017718759,
     "disposition": "not-applicable",
-    "rationale": "Duplicate of 3017279934, addressed there."
+    "rationale": "build_canonical_status already raises the standardized runId/run_id/external_id error message in the current branch."
   },
   {
-    "id": 3017295574,
+    "id": 4039417145,
+    "disposition": "not-applicable",
+    "rationale": "This is a review summary rather than a standalone remediation item; the underlying actionable comments were classified individually."
+  },
+  {
+    "id": 3017736486,
+    "disposition": "not-applicable",
+    "rationale": "The current _apply_canonical_metadata implementation already preserves canonical externalUrl values instead of overwriting them with url fallbacks."
+  },
+  {
+    "id": 3017736521,
+    "disposition": "not-applicable",
+    "rationale": "The current build_canonical_status error message already includes runId alongside run_id and external_id."
+  },
+  {
+    "id": 3017736543,
     "disposition": "addressed",
-    "rationale": "Added execution link to the artifact creation call."
+    "rationale": "Collapsed the duplicate boundary test module to a placeholder and kept the canonical coverage in test_agent_runtime_models.py."
+  },
+  {
+    "id": 3017736574,
+    "disposition": "addressed",
+    "rationale": "Replacing the duplicate boundary test module removed the reported trailing whitespace in that file."
+  },
+  {
+    "id": 4039439845,
+    "disposition": "not-applicable",
+    "rationale": "This is an overview review body, not a separate actionable defect; each concrete review comment was handled individually."
   }
 ]

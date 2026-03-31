@@ -390,14 +390,13 @@ def _serialize_execution(
         or ""
     ).strip() or None
 
-    repository = str(
-        git_payload.get("repository")
-        or task_payload.get("repository")
-        or params.get("repository")
-        or params.get("repo")
-        or task_payload.get("repo")
-        or ""
-    ).strip() or None
+    repository = (
+        _coerce_temporal_scalar(git_payload.get("repository"))
+        or _coerce_temporal_scalar(task_payload.get("repository"))
+        or _coerce_temporal_scalar(params.get("repository"))
+        or _coerce_temporal_scalar(params.get("repo"))
+        or _coerce_temporal_scalar(task_payload.get("repo"))
+    ) or None
 
     if not repository:
         repository = (

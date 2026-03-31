@@ -213,6 +213,27 @@ def test_build_canonical_result_enforces_correct_schema() -> None:
     assert result.metrics == {"duration": 150}
     assert not hasattr(result, "unknown_field_should_be_ignored")
 
+
+def test_build_canonical_result_maps_provider_fields_into_metadata() -> None:
+    from moonmind.schemas.agent_runtime_models import build_canonical_result
+
+    raw_payload = {
+        "outputRefs": ["ref1"],
+        "summary": "Job completed",
+        "tracking_ref": "track-123",
+        "providerStatus": "done",
+        "external_url": "https://dashboard.example.com/runs/1",
+        "url": "https://fallback.example.com/runs/1",
+    }
+
+    result = build_canonical_result(raw_payload)
+
+    assert result.metadata == {
+        "trackingRef": "track-123",
+        "providerStatus": "done",
+        "externalUrl": "https://dashboard.example.com/runs/1",
+    }
+
 def test_live_log_chunk_requires_valid_stream() -> None:
     with pytest.raises(ValidationError, match="Input should be 'stdout', 'stderr' or 'system'"):
         LiveLogChunk(sequence=1, stream="invalid_stream", text="test\n", timestamp="2026-03-31T00:00:00Z")
