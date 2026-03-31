@@ -454,7 +454,6 @@ def _serialize_execution(
         target_branch=target_branch,
         repository=repository,
         publish_mode=publish_mode,
-        repository=repository,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),
