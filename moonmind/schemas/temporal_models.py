@@ -360,6 +360,7 @@ class ExecutionModel(BaseModel):
     effort: Optional[str] = Field(None, alias="effort")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
+    repository: Optional[str] = Field(None, alias="repository")
     publish_mode: Optional[str] = Field(None, alias="publishMode")
     repository: Optional[str] = Field(None, alias="repository")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")

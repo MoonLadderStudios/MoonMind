@@ -8,6 +8,7 @@ Related:
 - [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
+- [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
 
 ---
 
@@ -542,12 +543,31 @@ Responsibilities include:
 * persist run metadata before launch
 * spawn runtime processes or containers
 * track identifiers and workspace paths
-* stream stdout/stderr to artifact-backed storage
+* stream stdout/stderr to artifact-backed storage (durability comes first)
+* emit live log records for active subscribers via the shared cross-process observability transport (secondary; must not break artifact persistence or run completion if live publish fails)
+* update `last_log_at` and `last_log_offset` metadata after each captured chunk, for use by the observability summary API
+* generate `system` event annotations where needed (e.g. run start, truncation notices, timeout classification)
+* hand off live log chunks to the shared live-stream transport boundary as they are captured
 * record state transitions
 * classify exit states
 * support cancellation and restart reconciliation
 
-## 8.4 Recovery and reconciliation
+**Priority rule:** artifact persistence is authoritative. Live stream emission is a secondary concern. If live publication fails, the supervisor must continue capturing artifacts and completing the run normally.
+
+## 8.4 Cross-process observability transport boundary
+
+**Critical architectural constraint:** Managed runtime supervision may run in a different process or container from the API service.
+
+Therefore:
+
+* live log publication must target a shared MoonMind observability transport (e.g. Redis pub/sub, shared append-only spool, DB-backed tailing), not an API-local memory singleton
+* the runtime model does not assume same-process UI/API delivery of live events
+* a process-local replay buffer may exist as a performance optimization, but it is not the architecture boundary
+* the shared transport mechanism must be documented and agreed before the live-emit path is implemented (see `docs/tmp/009-LiveLogsPlan.md` Phase 3 pre-step)
+
+This is the key constraint for live log delivery. An API-local in-memory publisher is not sufficient.
+
+## 8.5 Recovery and reconciliation
 
 Supervisor recovery must not assume a prior PID can always be reattached after restart.
 
@@ -557,17 +577,26 @@ On worker or container restart, the system should:
 * mark the run as lost or unrecoverable if not
 * trigger cancellation or degraded completion behavior where appropriate
 
-## 8.5 Wait-phase safety
+## 8.6 Wait-phase safety
 
 `MoonMind.AgentRun` must not wait indefinitely on callback paths alone.
 
 Even for managed callback-first behavior, the workflow should maintain a durable timer or bounded status-read fallback so it can wake up and inspect current state.
 
-## 8.6 Polling and status reads
+## 8.7 Polling and status reads
 
 For managed runtimes, `status(...)` should remain a short activity that reads durable supervisor state.
 
 The detached runtime itself should not be represented as one giant heartbeating Temporal activity.
+
+## 8.8 Failure-mode rule
+
+If live streaming is unavailable or degraded:
+
+* managed run execution continues normally
+* artifacts and final diagnostics still define the authoritative run record
+* Mission Control must be able to observe completed runs without ever having had a live stream connection
+* live streaming failure is never a root cause of run failure
 
 ---
 
@@ -637,6 +666,39 @@ Workflow payloads should contain only compact metadata and refs such as:
 * compact metadata dictionaries
 
 This rule applies equally to managed and external agent runs.
+
+## 10.1 `AgentRunResult` vs observability APIs
+
+`AgentRunResult` is the terminal workflow contract: it represents the final outcome of an agent run as seen by `MoonMind.AgentRun` and the workflow history.
+
+**Live logs and tailed observation are not delivered through `AgentRunResult`.** They belong to the observability API surface.
+
+Specifically:
+
+* `AgentRunResult.output_refs[]` contains durable output artifact refs for the workflow result
+* `AgentRunResult.diagnostics_ref` is the final diagnostics artifact for the run
+* live log events, artifact-backed tails, and per-stream retrieval are served through observability APIs, not through workflow payloads or `AgentRunResult`
+* Mission Control uses the observability APIs for task detail live/tailed observation, not the workflow result surface
+
+## 10.2 Observability metadata expectations for managed runs
+
+The following fields are operational observability metadata, not the authoritative data itself. They enable efficient discovery without requiring artifact downloads.
+
+Expected fields on the managed run record or observability summary:
+
+| Field | Purpose |
+| --- | --- |
+| `stdout_artifact_ref` | Ref to the durable stdout artifact |
+| `stderr_artifact_ref` | Ref to the durable stderr artifact |
+| `merged_log_artifact_ref` | Optional; ref to a pre-merged log artifact |
+| `diagnostics_ref` | Ref to the diagnostics artifact |
+| `last_log_at` | Timestamp of the most recently captured log chunk |
+| `last_log_offset` | Byte offset of the most recently captured log chunk |
+| `live_stream_id` | Identifier for the live stream session, if active |
+| `live_stream_status` | Current stream status (`available`, `ended`, `unavailable`) |
+| `supports_live_streaming` | Whether a live stream can be connected for this run |
+
+These fields are metadata only. The artifact refs and the observability APIs are the actual data access paths.
 
 ---
 
@@ -759,6 +821,19 @@ Ongoing or pending work includes:
 * failure classification refinement
 * resolved skill snapshot propagation and materialization work
 * elimination of legacy contract-shape compatibility glue where replay-safe
+* live log stream producer-to-API plumbing (supervisor must emit into shared cross-process transport)
+* Mission Control observability panel implementation (artifact-backed tail + live-follow)
+
+### 13.4 Legacy session-based observability
+
+Legacy terminal/session metadata (`TaskRunLiveSession`, `tmate web_ro`, socket paths, `attachRo`, `webRo`) may remain in the database for historical runs created before the MoonMind-native observability model was in place.
+
+Migration rules:
+
+* legacy session metadata is not the target model for managed-run observability
+* new managed runs must be modeled through observability metadata and artifacts (`stdout_artifact_ref`, `stderr_artifact_ref`, `live_stream_id`, etc.)
+* code paths that use terminal-session fields for managed-run log viewing are migration targets, not supported architecture paths
+* historical runs that only have legacy session data should degrade gracefully in the new UI
 
 ---
 

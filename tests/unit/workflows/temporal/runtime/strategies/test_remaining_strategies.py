@@ -86,7 +86,7 @@ class TestClaudeCodeBuildCommand:
         profile = _make_profile(command_template=["claude"])
         request = _make_request(instruction_ref="Refactor this")
         cmd = s.build_command(profile, request)
-        assert cmd == ["claude", "-p", "Refactor this"]
+        assert cmd == ["claude", "-p", "--dangerously-skip-permissions", "Refactor this"]
 
     def test_with_model_and_effort(self) -> None:
         s = ClaudeCodeStrategy()
@@ -101,7 +101,7 @@ class TestClaudeCodeBuildCommand:
             "claude",
             "--model", "claude-4-opus",
             "--effort", "high",
-            "-p", "Do it",
+            "-p", "--dangerously-skip-permissions", "Do it",
         ]
 
     def test_param_override(self) -> None:
@@ -123,7 +123,7 @@ class TestClaudeCodeBuildCommand:
         profile = _make_profile(command_template=["claude"])
         request = _make_request()
         cmd = s.build_command(profile, request)
-        assert cmd == ["claude", "-p"]
+        assert cmd == ["claude", "-p", "--dangerously-skip-permissions"]
 
     def test_anthropic_model_env_suppresses_model_flag(self) -> None:
         """When ANTHROPIC_MODEL is in env_overrides (MiniMax profile), --model must be omitted."""
@@ -140,7 +140,7 @@ class TestClaudeCodeBuildCommand:
         cmd = s.build_command(profile, request)
         assert "--model" not in cmd
         assert "MiniMax-M2.7" not in cmd
-        assert cmd == ["claude", "-p", "Do something"]
+        assert cmd == ["claude", "-p", "--dangerously-skip-permissions", "Do something"]
 
     def test_blank_anthropic_model_env_does_not_suppress_model_flag(self) -> None:
         """A blank ANTHROPIC_MODEL override must NOT suppress --model."""

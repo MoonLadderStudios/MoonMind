@@ -52,8 +52,9 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
             cmd.extend(["--effort", effort])
 
         # -p (--print) enables non-interactive mode, required for managed runs.
-        # The prompt is a positional argument in Claude CLI, not a --prompt flag.
-        cmd.append("-p")
+        # --dangerously-skip-permissions ensures tool execution (e.g. edits) can
+        # proceed without interactive prompts in the managed workspace.
+        cmd.extend(["-p", "--dangerously-skip-permissions"])
         if request.instruction_ref:
             cmd.append(request.instruction_ref)
 

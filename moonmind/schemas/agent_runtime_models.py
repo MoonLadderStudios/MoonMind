@@ -443,6 +443,18 @@ class ManagedRunRecord(BaseModel):
                 
         return self
 
+class LiveLogChunk(BaseModel):
+    """A single atomic chunk of live log output pushed over the stream."""
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    sequence: int = Field(..., description="Monotonically increasing sequence number")
+    stream: Literal["stdout", "stderr", "system"] = Field(
+        ..., description="Standard output, standard error, or system event log"
+    )
+    timestamp: str = Field(..., description="ISO-8601 formatted timestamp")
+    text: str = Field(..., description="Decoded output text buffer content")
+    offset: int | None = Field(None, description="Global byte offset of this chunk")
 
 
 class ProviderCapabilityDescriptor(BaseModel):
@@ -560,6 +572,7 @@ __all__ = [
     "ExternalExecutionStyle",
     "AgentRunHandle",
     "AgentRunResult",
+    "LiveLogChunk",
     "AgentRunState",
     "AgentRunStatus",
     "FailureClass",
