@@ -49,7 +49,7 @@ def upgrade() -> None:
         return
 
     secret_refs.pop("anthropic_api_key", None)
-    secret_refs["ANTHROPIC_AUTH_TOKEN"] = "MINIMAX_API_KEY"
+    secret_refs["ANTHROPIC_AUTH_TOKEN"] = "env://MINIMAX_API_KEY"
     env_template.pop("ANTHROPIC_AUTH_TOKEN", None)
 
     conn.execute(

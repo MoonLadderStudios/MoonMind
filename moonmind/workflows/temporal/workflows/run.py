@@ -469,10 +469,19 @@ class MoonMindRunWorkflow:
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(STATE_COMPLETED, summary="Workflow completed successfully.")
 
-        output: RunWorkflowOutput = {
-            "status": "success",
-            "message": "Workflow completed successfully",
-        }
+        publish_mode = self._publish_mode(parameters)
+        # When publish mode is "pr" but no proposals were submitted, the
+        # workflow did not achieve its business objective.
+        if publish_mode == "pr" and self._proposals_submitted == 0:
+            output: RunWorkflowOutput = {
+                "status": "no_pr_created",
+                "message": "Workflow completed but no PR was created",
+            }
+        else:
+            output = {
+                "status": "success",
+                "message": "Workflow completed successfully",
+            }
         if self._proposals_generated > 0 or self._proposals_submitted > 0:
             output["proposals_generated"] = self._proposals_generated
             output["proposals_submitted"] = self._proposals_submitted
@@ -1645,7 +1654,8 @@ class MoonMindRunWorkflow:
             if status == "success":
                 publish_mode = self._publish_mode(parameters)
                 if publish_mode == "pr":
-                    code = "PUBLISHED_PR" # this is a simplification
+                    # Only mark as PUBLISHED_PR if proposals were actually submitted
+                    code = "PUBLISHED_PR" if self._proposals_submitted > 0 else "NO_PR_CREATED"
                 elif publish_mode == "branch":
                     code = "PUBLISHED_BRANCH"
                 elif publish_mode == "none":
