@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,6 +30,17 @@ FailureClass = Literal[
     "execution_error",
     "system_error",
 ]
+
+class UnsupportedStatusError(ValueError):
+    """Raised when an unknown or unsupported provider status is encountered."""
+    pass
+
+def raise_unsupported_status(raw_status: str, context: str = "") -> NoReturn:
+    """Consistently format and raise an UnsupportedStatusError."""
+    msg = f"Unsupported status: {raw_status!r}"
+    if context:
+        msg += f" (context: {context})"
+    raise UnsupportedStatusError(msg)
 
 TERMINAL_AGENT_RUN_STATES: frozenset[AgentRunState] = frozenset(
     {"completed", "failed", "canceled", "timed_out"}
@@ -461,6 +472,92 @@ class ProviderCapabilityDescriptor(BaseModel):
     )
 
 
+def build_canonical_start_handle(payload: dict[str, Any]) -> AgentRunHandle:
+    """Build a canonical AgentRunHandle, safely mapping provider-specific top-level fields."""
+    run_id = payload.get("run_id") or payload.get("runId") or payload.get("external_id")
+    if not run_id:
+        raise ValueError("External status payload is missing external_id/run_id")
+
+    raw_status = payload.get("status")
+    kind = payload.get("agentKind") or payload.get("agent_kind")
+    agent_id = payload.get("agentId") or payload.get("agent_id")
+    started_at = payload.get("startedAt") or payload.get("started_at")
+    
+    metadata = dict(payload.get("metadata") or {})
+    
+    for legacy_key, meta_key in [
+        ("tracking_ref", "trackingRef"),
+        ("trackingRef", "trackingRef"),
+        ("provider_status", "providerStatus"),
+        ("providerStatus", "providerStatus"),
+        ("normalized_status", "normalizedStatus"),
+        ("normalizedStatus", "normalizedStatus"),
+        ("external_url", "externalUrl"),
+        ("externalUrl", "externalUrl"),
+        ("url", "externalUrl"),
+    ]:
+        if legacy_key in payload:
+            metadata[meta_key] = payload[legacy_key]
+
+    return AgentRunHandle(
+        runId=run_id,
+        agentKind=kind,
+        agentId=agent_id,
+        status=raw_status,
+        startedAt=started_at,
+        metadata=metadata,
+    )
+
+def build_canonical_status(payload: dict[str, Any]) -> AgentRunStatus:
+    """Build a canonical AgentRunStatus, safely mapping provider-specific top-level fields."""
+    run_id = payload.get("run_id") or payload.get("runId") or payload.get("external_id")
+    if not run_id:
+        raise ValueError("External status payload is missing external_id/run_id")
+        
+    kind = payload.get("agentKind") or payload.get("agent_kind")
+    agent_id = payload.get("agentId") or payload.get("agent_id")
+    raw_status = payload.get("status")
+    
+    # Must enforce valid statuses before instantiation since tests specifically
+    # request UnsupportedStatusError rather than Pydantic's ValidationError
+    valid_states = TERMINAL_AGENT_RUN_STATES | {
+        "queued", "awaiting_slot", "launching", "running",
+        "awaiting_callback", "awaiting_feedback",
+        "awaiting_approval", "intervention_requested",
+        "collecting_results"
+    }
+    if raw_status not in valid_states:
+        raise_unsupported_status(str(raw_status), context=str(agent_id))
+
+    metadata = dict(payload.get("metadata") or {})
+    
+    for legacy_key, meta_key in [
+        ("tracking_ref", "trackingRef"),
+        ("trackingRef", "trackingRef"),
+        ("provider_status", "providerStatus"),
+        ("providerStatus", "providerStatus"),
+        ("normalized_status", "normalizedStatus"),
+        ("normalizedStatus", "normalizedStatus"),
+        ("external_url", "externalUrl"),
+        ("externalUrl", "externalUrl"),
+        ("url", "externalUrl"),
+    ]:
+        if legacy_key in payload:
+            metadata[meta_key] = payload[legacy_key]
+
+    return AgentRunStatus(
+        runId=run_id,
+        agentKind=kind,
+        agentId=agent_id,
+        status=raw_status,
+        metadata=metadata,
+    )
+
+def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
+    """Build a canonical AgentRunResult payload."""
+    return AgentRunResult(**payload)
+
+
 __all__ = [
     "AgentExecutionRequest",
     "AgentKind",
@@ -478,4 +575,9 @@ __all__ = [
     "TERMINAL_AGENT_RUN_STATES",
     "WorkspaceMode",
     "is_terminal_agent_run_state",
+    "UnsupportedStatusError",
+    "raise_unsupported_status",
+    "build_canonical_start_handle",
+    "build_canonical_status",
+    "build_canonical_result",
 ]
