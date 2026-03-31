@@ -820,17 +820,17 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
                 parsed_include.append(
                     StepSkillSelectorExact(
                         name=name,
-                        version=str(version).strip() if version else None
+                        version=val if (val := str(version or "").strip()) else None
                     )
                 )
 
         mat_mode = skills_raw.get("materializationMode")
 
         parsed_skills = StepSkillSelectors(
-            sets=tuple(str(s).strip() for s in sets if str(s).strip()) if sets else (),
+            sets=tuple(val for s in sets if (val := str(s or "").strip())) if sets else (),
             include=tuple(parsed_include),
-            exclude=tuple(str(s).strip() for s in exclude if str(s).strip()) if exclude else (),
-            materialization_mode=str(mat_mode).strip().lower() if mat_mode else None
+            exclude=tuple(val for s in exclude if (val := str(s or "").strip())) if exclude else (),
+            materialization_mode=val.lower() if (val := str(mat_mode or "").strip()) else None
         )
 
     return Step(

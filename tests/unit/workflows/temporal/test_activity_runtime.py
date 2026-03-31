@@ -1479,3 +1479,4 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_runtime.cancel" in bound_types
             assert "agent_skill.resolve" in bound_types
             assert "agent_skill.materialize" in bound_types
+            assert "agent_skill.build_prompt_index" in bound_types

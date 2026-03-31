@@ -3,10 +3,7 @@ from __future__ import annotations
 import pytest
 
 from moonmind.workflows.tasks.task_contract import (
-    TaskContractError,
     TaskExecutionSpec,
-    TaskSkillSelectors,
-    TaskSkillSelectorExact,
     TaskStepSpec,
 )
 
