@@ -387,6 +387,12 @@ def _serialize_execution(
         or ""
     ).strip() or None
 
+    repository = str(
+        task_payload.get("repository")
+        or params.get("repository")
+        or ""
+    ).strip() or None
+
     _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
     raw_publish_mode = str(
         params.get("publishMode") or publish_payload.get("mode") or ""
@@ -424,6 +430,7 @@ def _serialize_execution(
         effort=param_effort,
         starting_branch=starting_branch,
         target_branch=target_branch,
+        repository=repository,
         publish_mode=publish_mode,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []

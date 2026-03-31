@@ -45,6 +45,7 @@ const ExecutionDetailSchema = z
     effort: z.string().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
+    repository: z.string().nullable().optional(),
     publishMode: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
     createdAt: z.string(),
@@ -497,6 +498,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.targetBranch ? (
               <Card label="Target Branch">
                 <code className="text-xs break-all">{execution.targetBranch}</code>
+              </Card>
+            ) : null}
+            {execution.repository ? (
+              <Card label="Repository">
+                <code className="text-xs break-all">{execution.repository}</code>
               </Card>
             ) : null}
             {execution.publishMode ? (
