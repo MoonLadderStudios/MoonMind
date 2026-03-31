@@ -2934,6 +2934,8 @@ export interface components {
             targetBranch?: string | null;
             /** Publishmode */
             publishMode?: string | null;
+            /** Repository */
+            repository?: string | null;
             /** Artifactrefs */
             artifactRefs?: string[];
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
@@ -4357,7 +4359,7 @@ export interface components {
          */
         TaskProposalPromoteResponse: {
             proposal: components["schemas"]["TaskProposalModel"];
-            /** Promotedexecutionid */
+            /** PromotedExecutionId */
             promotedExecutionId: string;
         };
         /**

@@ -839,6 +839,41 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
     assert dumped["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
 
 
+def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_scalar() -> None:
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={
+            "title": "Repo test",
+            "summary": "OK",
+            "repository": {"owner": "Moon", "name": "Mind"},
+        },
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="mm:repo-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        created_at="2026-03-31T00:00:00Z",
+        started_at="2026-03-31T00:00:00Z",
+        updated_at="2026-03-31T00:00:00Z",
+        closed_at=None,
+        integration_state=None,
+        parameters={"repository": ["Moon/Mind", "Ignored/Repo"]},
+        paused=False,
+        waiting_reason=None,
+        attention_required=False,
+    )
+
+    payload = _serialize_execution(record)
+
+    assert payload.repository == "Moon/Mind"
+    dumped = payload.model_dump(by_alias=True)
+    assert dumped["repository"] == "Moon/Mind"
+
+
 def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()

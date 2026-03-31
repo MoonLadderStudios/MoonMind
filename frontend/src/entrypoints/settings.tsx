@@ -160,7 +160,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-      <header className="rounded-[2rem] border border-mm-border/80 bg-mm-panel/75 px-6 py-6 shadow-sm">
+      <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
             Mission Control Settings
@@ -170,7 +170,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
         </div>
       </header>
 
-      <section className="rounded-[2rem] border border-mm-border/80 bg-mm-panel/75 p-3 shadow-sm">
+      <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
         <div className="flex flex-wrap gap-2">
           {SETTINGS_SECTIONS.map((candidate) => {
             const active = candidate.id === section;
@@ -206,7 +206,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
 
       {section === 'providers-secrets' ? (
         <div className="space-y-6">
-          <section className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
               <div className="space-y-2">
                 <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Providers & Secrets</h3>
@@ -225,7 +225,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
           </section>
 
           {areProfilesLoading ? (
-            <div className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 text-sm text-slate-500 dark:text-slate-400 shadow-sm">
+            <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 dark:text-slate-400 shadow-sm">
               Loading provider profiles...
             </div>
           ) : areProfilesErrored ? (
@@ -242,7 +242,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
           )}
 
           {areSecretsLoading ? (
-            <div className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 text-sm text-slate-500 dark:text-slate-400 shadow-sm">
+            <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 dark:text-slate-400 shadow-sm">
               Loading managed secrets...
             </div>
           ) : areSecretsErrored ? (
@@ -261,7 +261,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
 
       {section === 'user-workspace' ? (
         <div className="space-y-6">
-          <section className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-white">User / Workspace</h3>
             <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
               This section is reserved for the broader project settings model. The
@@ -270,7 +270,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
             </p>
           </section>
 
-          <section className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+          <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
             {isLoading ? (
               <p className="text-sm text-slate-500 dark:text-slate-400">Loading current user...</p>
             ) : isError ? (
