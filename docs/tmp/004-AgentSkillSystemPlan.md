@@ -196,8 +196,8 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 - [ ] Implement collision detection and deterministic resolution failures
 - [ ] Implement policy enforcement for disallowed source kinds
 - [ ] Implement explicit include, exclude, and pinned-version selectors
-- [ ] Implement `task.skills` baseline resolution
-- [ ] Implement `step.skills` override and inheritance behavior
+- [x] Implement `task.skills` baseline resolution
+- [x] Implement `step.skills` override and inheritance behavior
 - [x] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
 - [x] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
 - [x] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
@@ -207,8 +207,8 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
   - [ ] source precedence
   - [ ] collisions
   - [ ] pinned version failures
-  - [ ] policy blocks
-  - [ ] step-level exclusions
+  - [x] policy blocks
+  - [x] step-level exclusions
   - [ ] deterministic snapshot reuse across retries
 
 
@@ -274,20 +274,20 @@ Make agent skills part of the real execution contract.
 
 ### Tasks
 
-- [ ] Add canonical `task.skills` handling to task submission models
-- [ ] Add canonical `step.skills` handling to plan-node or step execution models
-- [ ] Ensure `step.skills` correctly inherits from and overrides `task.skills`
-- [ ] Add validation for invalid skill selectors during task submit or plan validation
-- [ ] Add explicit `agent_skill.*` activity family for resolution vs materialization
-- [ ] Route `agent_skill.materialize` and related preparation activities to `mm.activity.agent_runtime` or a capable preparation fleet
-- [ ] Ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries
-- [ ] Pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path
-- [ ] Ensure workflow payloads carry refs and metadata only
+- [x] Add canonical `task.skills` handling to task submission models
+- [x] Add canonical `step.skills` handling to plan-node or step execution models
+- [x] Ensure `step.skills` correctly inherits from and overrides `task.skills`
+- [x] Add validation for invalid skill selectors during task submit or plan validation
+- [x] Add explicit `agent_skill.*` activity family for resolution vs materialization
+- [x] Route `agent_skill.materialize` and related preparation activities to `mm.activity.agent_runtime` or a capable preparation fleet
+- [x] Ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries
+- [x] Pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path
+- [x] Ensure workflow payloads carry refs and metadata only
 - [ ] Ensure retries and continuation paths reuse the same resolved snapshot
 - [ ] Add workflow-boundary tests for:
-  - [ ] task-level skill selection
-  - [ ] step-level override behavior
-  - [ ] child workflow agent-run dispatch with skill snapshot ref
+  - [x] task-level skill selection
+  - [x] step-level override behavior
+  - [x] child workflow agent-run dispatch with skill snapshot ref
   - [ ] rerun behavior reusing the original snapshot by default
 
 ### Exit criteria

@@ -17,8 +17,13 @@ from moonmind.services.skill_materialization import AgentSkillMaterializer
 class AgentSkillsActivities:
     """Temporal activities for managing agent skill resolution and materialization."""
 
-    def __init__(self, artifact_service: Any | None = None) -> None:
+    def __init__(
+        self,
+        artifact_service: Any | None = None,
+        async_session_maker: Any | None = None,
+    ) -> None:
         self._artifact_service = artifact_service
+        self._async_session_maker = async_session_maker
 
     @activity.defn(name="agent_skill.resolve")
     async def resolve_skills(
@@ -39,10 +44,45 @@ class AgentSkillsActivities:
             deployment_id=run_id,
             workspace_root=workspace_root,
             allow_local_skills=allow_local_skills,
+            async_session_maker=getattr(self, "_async_session_maker", None),
         )
 
         resolver = AgentSkillResolver()
-        return await resolver.resolve(selector, context)
+        resolved_set = await resolver.resolve(selector, context)
+
+        if self._artifact_service:
+            import json
+            try:
+                from moonmind.workflows.temporal.artifacts import ExecutionRef
+                
+                link = ExecutionRef(
+                    namespace=info.namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type="input.manifest",
+                )
+                
+                payload = resolved_set.model_dump(mode="json")
+                artifact, _ = await self._artifact_service.create(
+                    principal="agent_workflow",
+                    content_type="application/json",
+                    metadata_json={"producer": "agent_skill.resolve", "snapshot_id": snapshot_id},
+                    link=link,
+                )
+                
+                await self._artifact_service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="agent_workflow",
+                    payload=json.dumps(payload, sort_keys=True, indent=2).encode("utf-8"),
+                    content_type="application/json",
+                )
+                
+                # Link the artifact to the payload
+                resolved_set.manifest_ref = artifact.artifact_id
+            except Exception as e:
+                activity.logger.warning(f"Failed to persist ResolvedSkillSet artifact: {e}")
+
+        return resolved_set
 
     @activity.defn(name="agent_skill.build_prompt_index")
     async def build_prompt_index(
