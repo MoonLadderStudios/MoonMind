@@ -185,6 +185,7 @@ def test_build_canonical_status_safely_filters_metadata() -> None:
         "providerStatus": "succeeded",
         "normalizedStatus": "completed",
         "externalUrl": "https://dashboard.example.com",
+        "url": "https://fallback.example.com",
     }
     status = build_canonical_status(raw_payload)
     assert status.run_id == "run-001"
