@@ -393,6 +393,14 @@ def _serialize_execution(
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
 
+    repository = (
+        _coerce_temporal_scalar(search_attributes.get("mm_repository"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+        or _coerce_temporal_scalar(search_attributes.get("repository"))
+        or str(memo.get("repository") or "").strip()
+        or str(params.get("repository") or git_payload.get("repository") or task_payload.get("repository") or "").strip()
+    ) or None
+
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,
@@ -425,6 +433,7 @@ def _serialize_execution(
         starting_branch=starting_branch,
         target_branch=target_branch,
         publish_mode=publish_mode,
+        repository=repository,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),
