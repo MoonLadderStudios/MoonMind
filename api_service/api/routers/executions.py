@@ -388,10 +388,19 @@ def _serialize_execution(
     ).strip() or None
 
     repository = str(
-        task_payload.get("repository")
+        git_payload.get("repository")
+        or task_payload.get("repository")
         or params.get("repository")
+        or params.get("repo")
+        or task_payload.get("repo")
         or ""
     ).strip() or None
+
+    if not repository:
+        repository = (
+            _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+            or _coerce_temporal_scalar(search_attributes.get("repository"))
+        ) or None
 
     _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
     raw_publish_mode = str(

@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+
 from api_service.api.routers.executions import _serialize_execution
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
-import pytest
 
 def test_serialize_execution_includes_repository():
     # Setup a mock execution record
@@ -28,7 +28,19 @@ def test_serialize_execution_includes_repository():
         owner_id="system",
     )
     
-    # Test 1: repository in task payload
+    # Test 1: repository in git_payload (highest precedence)
+    record.parameters = {
+        "task": {
+            "git": {
+                "repository": "MoonLadderStudios/GitRepo"
+            },
+            "repository": "MoonLadderStudios/TaskRepo"
+        }
+    }
+    result = _serialize_execution(record)
+    assert result.repository == "MoonLadderStudios/GitRepo"
+
+    # Test 2: repository in task payload
     record.parameters = {
         "task": {
             "repository": "MoonLadderStudios/MoonMind"
@@ -37,24 +49,43 @@ def test_serialize_execution_includes_repository():
     result = _serialize_execution(record)
     assert result.repository == "MoonLadderStudios/MoonMind"
 
-    # Test 2: repository in params directly
+    # Test 3: repository in params directly
     record.parameters = {
         "repository": "MoonLadderStudios/OtherRepo"
     }
     result = _serialize_execution(record)
     assert result.repository == "MoonLadderStudios/OtherRepo"
 
-    # Test 3: repository in both (task takes precedence)
+    # Test 4: legacy 'repo' key in params
     record.parameters = {
-        "task": {
-            "repository": "MoonLadderStudios/MoonMind"
-        },
-        "repository": "MoonLadderStudios/OtherRepo"
+        "repo": "MoonLadderStudios/LegacyRepo"
     }
     result = _serialize_execution(record)
-    assert result.repository == "MoonLadderStudios/MoonMind"
+    assert result.repository == "MoonLadderStudios/LegacyRepo"
 
-    # Test 4: no repository
+    # Test 5: legacy 'repo' key in task payload
+    record.parameters = {
+        "task": {
+            "repo": "MoonLadderStudios/LegacyTaskRepo"
+        }
+    }
+    result = _serialize_execution(record)
+    assert result.repository == "MoonLadderStudios/LegacyTaskRepo"
+
+    # Test 6: search attribute 'mm_repo'
     record.parameters = {}
+    record.search_attributes["mm_repo"] = "MoonLadderStudios/SearchRepo"
+    result = _serialize_execution(record)
+    assert result.repository == "MoonLadderStudios/SearchRepo"
+
+    # Test 7: search attribute 'repository'
+    record.search_attributes = {"mm_entry": "run"}
+    record.search_attributes["repository"] = "MoonLadderStudios/SearchRepoAttr"
+    result = _serialize_execution(record)
+    assert result.repository == "MoonLadderStudios/SearchRepoAttr"
+
+    # Test 8: no repository
+    record.parameters = {}
+    record.search_attributes = {"mm_entry": "run"}
     result = _serialize_execution(record)
     assert result.repository is None
