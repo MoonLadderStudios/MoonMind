@@ -2936,8 +2936,6 @@ export interface components {
             repository?: string | null;
             /** Publishmode */
             publishMode?: string | null;
-            /** Repository */
-            repository?: string | null;
             /** Artifactrefs */
             artifactRefs?: string[];
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];

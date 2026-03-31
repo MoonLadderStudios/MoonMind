@@ -405,6 +405,9 @@ def _serialize_execution(
             or _coerce_temporal_scalar(search_attributes.get("repository"))
             or _coerce_temporal_scalar(memo.get("repository"))
             or _coerce_temporal_scalar(params.get("repository"))
+            or _coerce_temporal_scalar(params.get("repo"))
+            or _coerce_temporal_scalar(git_payload.get("repository"))
+            or _coerce_temporal_scalar(task_payload.get("repository"))
         ) or None
 
     _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}

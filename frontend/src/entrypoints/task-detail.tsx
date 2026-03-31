@@ -277,7 +277,7 @@ function LiveLogsPanel({
       if (cancelled) return;
 
       // Step 2: Fetch artifact-backed merged tail; this must succeed before SSE
-      let tailContent = '';
+      let tailContent;
       try {
         tailContent = await fetchMergedTail(apiBase, taskRunId);
       } catch {
