@@ -161,7 +161,7 @@ export function SecretManager({ secrets, onNotice, queryClient }: SecretManagerP
   };
 
   return (
-    <div className="rounded-3xl border border-mm-border/80 bg-mm-panel/75 p-6 shadow-sm">
+    <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Managed Secrets</h3>
         <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">

@@ -2734,8 +2734,8 @@ class TemporalProposalActivities:
                         origin_metadata = {
                             "workflow_id": workflow_id,
                             "temporal_run_id": run_id,
-                            "trigger_repo": trigger_repo,
-                            "trigger_job_id": workflow_id,
+                            "triggerRepo": trigger_repo,
+                            "triggerJobId": run_id,
                             "signal": {"severity": "normal", "type": "follow_up"}
                         }
                         await service.create_proposal(

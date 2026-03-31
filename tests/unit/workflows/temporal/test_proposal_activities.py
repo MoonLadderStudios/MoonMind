@@ -112,6 +112,42 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 1)
         mock_service.create_proposal.assert_awaited_once()
 
+    async def test_origin_metadata_uses_camelcase_trigger_keys(self) -> None:
+        """origin_metadata must use camelCase triggerRepo/triggerJobId per spec."""
+        mock_service = AsyncMock()
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+        activities = TemporalProposalActivities(
+            proposal_service_factory=factory,
+        )
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "There is a bug",
+                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+            },
+        ]
+        await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {},
+                "origin": {
+                    "workflow_id": "wf-1",
+                    "temporal_run_id": "run-1",
+                    "trigger_repo": "org/repo",
+                },
+            }
+        )
+        call_kwargs = mock_service.create_proposal.call_args.kwargs
+        meta = call_kwargs["origin_metadata"]
+        self.assertIn("triggerRepo", meta)
+        self.assertIn("triggerJobId", meta)
+        self.assertNotIn("trigger_repo", meta)
+        self.assertNotIn("trigger_job_id", meta)
+        self.assertEqual(meta["triggerRepo"], "org/repo")
+        self.assertEqual(meta["triggerJobId"], "run-1")
+
     async def test_service_failure_recorded(self) -> None:
         mock_service = AsyncMock()
         mock_service.create_proposal.side_effect = RuntimeError("DB down")

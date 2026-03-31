@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
@@ -152,6 +153,8 @@ def _coerce_temporal_scalar(value: object | None) -> str:
             text = _coerce_temporal_scalar(item)
             if text:
                 return text
+        return ""
+    if isinstance(value, Mapping):
         return ""
     if value is None:
         return ""
@@ -387,11 +390,36 @@ def _serialize_execution(
         or ""
     ).strip() or None
 
+    repository = str(
+        git_payload.get("repository")
+        or task_payload.get("repository")
+        or params.get("repository")
+        or params.get("repo")
+        or task_payload.get("repo")
+        or ""
+    ).strip() or None
+
+    if not repository:
+        repository = (
+            _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+            or _coerce_temporal_scalar(search_attributes.get("repository"))
+        ) or None
+
     _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
     raw_publish_mode = str(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+
+    repository = (
+        _coerce_temporal_scalar(search_attributes.get("mm_repository"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+        or _coerce_temporal_scalar(search_attributes.get("repository"))
+        or _coerce_temporal_scalar(memo.get("repository"))
+        or _coerce_temporal_scalar(params.get("repository"))
+        or _coerce_temporal_scalar(git_payload.get("repository"))
+        or _coerce_temporal_scalar(task_payload.get("repository"))
+    ) or None
 
     return ExecutionModel(
         task_id=record.workflow_id,
@@ -424,7 +452,9 @@ def _serialize_execution(
         effort=param_effort,
         starting_branch=starting_branch,
         target_branch=target_branch,
+        repository=repository,
         publish_mode=publish_mode,
+        repository=repository,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),

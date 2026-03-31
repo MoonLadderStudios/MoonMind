@@ -9059,6 +9059,17 @@
             ],
             "title": "Publishmode"
           },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
           "artifactRefs": {
             "items": {
               "type": "string"
@@ -13045,11 +13056,16 @@
         "properties": {
           "proposal": {
             "$ref": "#/components/schemas/TaskProposalModel"
+          },
+          "promotedExecutionId": {
+            "type": "string",
+            "title": "PromotedExecutionId"
           }
         },
         "type": "object",
         "required": [
-          "proposal"
+          "proposal",
+          "promotedExecutionId"
         ],
         "title": "TaskProposalPromoteResponse",
         "description": "Promotion response containing proposal + queue job."
