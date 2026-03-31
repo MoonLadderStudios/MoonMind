@@ -54,12 +54,13 @@ class AgentSkillsActivities:
             import json
             try:
                 from moonmind.workflows.temporal.artifacts import ExecutionRef
+                from api_service.db.models import TemporalArtifactRetentionClass, TemporalArtifactRedactionLevel
                 
                 link = ExecutionRef(
                     namespace=info.namespace,
                     workflow_id=info.workflow_id,
                     run_id=info.workflow_run_id,
-                    link_type="input.manifest",
+                    link_type="input.skill_snapshot",
                 )
                 
                 payload = resolved_set.model_dump(mode="json")
@@ -68,6 +69,8 @@ class AgentSkillsActivities:
                     content_type="application/json",
                     metadata_json={"producer": "agent_skill.resolve", "snapshot_id": snapshot_id},
                     link=link,
+                    retention_class=TemporalArtifactRetentionClass.LONG,
+                    redaction_level=TemporalArtifactRedactionLevel.NONE,
                 )
                 
                 await self._artifact_service.write_complete(
