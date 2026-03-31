@@ -7,6 +7,9 @@ import json
 import inspect
 from typing import Any
 
+from datetime import datetime, timezone
+
+from moonmind.schemas.agent_runtime_models import LiveLogChunk
 from moonmind.workflows.temporal.runtime.output_parser import (
     ParsedOutput,
     PlainTextOutputParser,
@@ -23,8 +26,10 @@ _STREAM_CHUNK_SIZE = 65536
 class RuntimeLogStreamer:
     """Streams subprocess output to artifact storage and collects diagnostics."""
 
-    def __init__(self, artifact_storage: Any) -> None:
+    def __init__(self, artifact_storage: Any, publisher: Any | None = None) -> None:
         self._storage = artifact_storage
+        self.publisher = publisher
+        self._sequence_counter: dict[str, int] = {"stdout": 0, "stderr": 0, "system": 0}
 
     async def stream_to_artifact(
         self,
@@ -58,6 +63,24 @@ class RuntimeLogStreamer:
             if not chunk:
                 break
             chunks.append(chunk)
+            
+            if self.publisher is not None:
+                self._sequence_counter.setdefault(stream_name, 0)
+                self._sequence_counter[stream_name] += 1
+                try:
+                    text_content = chunk.decode("utf-8", errors="replace")
+                    obj = LiveLogChunk(
+                        sequence=self._sequence_counter[stream_name],
+                        stream=stream_name,  # type: ignore
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        text=text_content,
+                        offset=sum(len(c) for c in chunks[:-1]),
+                    )
+                    self.publisher.publish(obj)
+                except Exception:
+                    # Failsafe: publishers must not crash the workflow
+                    pass
+
             if parser is not None:
                 # Accumulate decoded text and split by newlines so that the
                 # parser always receives whole lines, not raw read() chunks

@@ -230,3 +230,32 @@ async def test_stream_and_parse_no_parser_uses_default(streamer):
     assert isinstance(parsed, ParsedOutput)
     assert not parsed.has_structured_output
     assert parsed.raw_text == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_stream_to_artifact_calls_publisher(streamer):
+    from unittest.mock import Mock
+    from moonmind.schemas.agent_runtime_models import LiveLogChunk
+
+    log_streamer, _ = streamer
+    mock_publisher = Mock()
+    log_streamer.publisher = mock_publisher
+
+    # Reset offset for deterministic sequence test
+    log_streamer._sequence_counter = {"stdout": 0, "stderr": 0}
+
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"chunk1\n")
+    reader.feed_data(b"chunk2\n")
+    reader.feed_eof()
+
+    await log_streamer.stream_to_artifact(reader, run_id="run-pub", stream_name="stdout")
+
+    assert mock_publisher.publish.call_count == 1
+    
+    call1 = mock_publisher.publish.call_args_list[0][0][0]
+    
+    assert isinstance(call1, LiveLogChunk)
+    assert call1.stream == "stdout"
+    assert call1.text == "chunk1\nchunk2\n"
+    assert call1.sequence == 1
