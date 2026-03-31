@@ -390,6 +390,21 @@ def _serialize_execution(
         or ""
     ).strip() or None
 
+    repository = str(
+        git_payload.get("repository")
+        or task_payload.get("repository")
+        or params.get("repository")
+        or params.get("repo")
+        or task_payload.get("repo")
+        or ""
+    ).strip() or None
+
+    if not repository:
+        repository = (
+            _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+            or _coerce_temporal_scalar(search_attributes.get("repository"))
+        ) or None
+
     _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
     raw_publish_mode = str(
         params.get("publishMode") or publish_payload.get("mode") or ""
@@ -437,6 +452,7 @@ def _serialize_execution(
         effort=param_effort,
         starting_branch=starting_branch,
         target_branch=target_branch,
+        repository=repository,
         publish_mode=publish_mode,
         repository=repository,
         artifact_refs=(
