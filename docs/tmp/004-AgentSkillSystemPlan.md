@@ -1,6 +1,6 @@
 # Agent Skill System Plan
 
-Status: Proposed  
+Status: In Progress  
 Owners: MoonMind Engineering  
 Last Updated: 2026-03-30  
 Canonical doc: `docs/Tasks/AgentSkillSystem.md`  
@@ -188,29 +188,28 @@ Resolve all applicable skill inputs into a stable per-run or per-step snapshot.
 
 - [x] Define concrete runtime contract for `ResolvedSkillSet`
 - [x] Define concrete runtime contract for source provenance and resolution inputs
-- [ ] Implement built-in skill source loader
-- [ ] Implement deployment skill source loader
-- [ ] Implement repo checked-in skill source loader
-- [ ] Implement `.agents/skills/local` source loader
-- [ ] Implement precedence rules from the canonical doc
-- [ ] Implement collision detection and deterministic resolution failures
-- [ ] Implement policy enforcement for disallowed source kinds
-- [ ] Implement explicit include, exclude, and pinned-version selectors
+- [x] Implement built-in skill source loader
+- [x] Implement deployment skill source loader
+- [x] Implement repo checked-in skill source loader
+- [x] Implement `.agents/skills/local` source loader
+- [x] Implement precedence rules from the canonical doc
+- [x] Implement collision detection and deterministic resolution failures
+- [x] Implement policy enforcement for disallowed source kinds
+- [x] Implement explicit include, exclude, and pinned-version selectors
 - [x] Implement `task.skills` baseline resolution
 - [x] Implement `step.skills` override and inheritance behavior
 - [x] Generate explicit `ResolvedSkillSet` artifacts for runs and, where needed, for steps
 - [x] Generate prompt-index artifacts and runtime materialization bundle artifacts based on the resolved snapshot
 - [x] Apply correct artifact link types (e.g., input.manifest, input.instructions) for skill-related execution context
-- [ ] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
+- [x] Apply proper retention and redaction defaults for all skill artifacts per `WorkflowArtifactSystemDesign.md`
 - [x] Return compact refs and metadata rather than full bodies in workflow history
-- [ ] Add tests covering:
-  - [ ] source precedence
-  - [ ] collisions
-  - [ ] pinned version failures
+- [x] Add tests covering:
+  - [x] source precedence
+  - [x] collisions
+  - [x] pinned version failures
   - [x] policy blocks
   - [x] step-level exclusions
-  - [ ] deterministic snapshot reuse across retries
-
+  - [x] deterministic snapshot reuse across retries
 
 ### Exit criteria
 

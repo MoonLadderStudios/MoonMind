@@ -252,3 +252,74 @@ async def test_deployment_skill_loader_fetches_from_db():
     assert results[0].version == "1.0.0"
     assert results[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
 
+async def test_resolver_respects_precedence():
+    from unittest.mock import AsyncMock
+
+    built_in = BuiltInSkillLoader()
+    built_in.load_skills = AsyncMock(return_value=[
+        ResolvedSkillEntry(skill_name="shared_skill", version="1.0", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+    ])
+
+    deployment = DeploymentSkillLoader()
+    deployment.load_skills = AsyncMock(return_value=[
+        ResolvedSkillEntry(skill_name="shared_skill", version="1.0", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT))
+    ])
+
+    resolver = AgentSkillResolver(loaders=[built_in, deployment])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[{"name": "shared_skill"}])
+    
+    result = await resolver.resolve(selector, context)
+    assert len(result.skills) == 1
+    # Deployment overrides built-in
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
+
+
+async def test_resolver_rejects_collisions_within_source():
+    class CollisionLoader(BuiltInSkillLoader):
+        async def load_skills(self, sel, ctx):
+            return [
+                ResolvedSkillEntry(skill_name="dup_skill", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)),
+                ResolvedSkillEntry(skill_name="dup_skill", version="2.0", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+            ]
+
+    resolver = AgentSkillResolver(loaders=[CollisionLoader()])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[])
+    
+    with pytest.raises(ValueError, match="Duplicate skill definition"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_fails_on_pinned_version_mismatch():
+    class SingleLoader(BuiltInSkillLoader):
+        async def load_skills(self, sel, ctx):
+            return [
+                ResolvedSkillEntry(skill_name="test_skill", version="1.0", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+            ]
+
+    resolver = AgentSkillResolver(loaders=[SingleLoader()])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[{"name": "test_skill", "version": "2.0"}])
+    
+    with pytest.raises(ValueError, match="Could not resolve pinned version"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_produces_deterministic_snapshot_sorting():
+    class DisorderLoader(BuiltInSkillLoader):
+        async def load_skills(self, sel, ctx):
+            # Out of alphabetical order
+            return [
+                ResolvedSkillEntry(skill_name="zebra", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)),
+                ResolvedSkillEntry(skill_name="alpha", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)),
+                ResolvedSkillEntry(skill_name="charlie", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+            ]
+
+    resolver = AgentSkillResolver(loaders=[DisorderLoader()])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[{"name": "zebra"}, {"name": "alpha"}, {"name": "charlie"}])
+    
+    result = await resolver.resolve(selector, context)
+    assert len(result.skills) == 3
+    assert result.skills[0].skill_name == "alpha"
+    assert result.skills[1].skill_name == "charlie"
+    assert result.skills[2].skill_name == "zebra"

@@ -1,5 +1,15 @@
 [
   {
+    "id": 3018530178,
+    "disposition": "addressed",
+    "rationale": "Moved workflow artifact enums to moonmind.core.artifacts and updated schemas and models to consume them from the decoupled package."
+  },
+  {
+    "id": 3018540061,
+    "disposition": "addressed",
+    "rationale": "Replaced DummyLoader subclasses with the concrete BuiltInSkillLoader and DeploymentSkillLoader instances and monkeypatched load_skills to strictly test deterministic source merging precedence."
+  },
+  {
     "id": 3017718743,
     "disposition": "addressed",
     "rationale": "Added explicit result-metadata coverage and confirmed build_canonical_result preserves canonicalized provider fields in metadata."
