@@ -253,18 +253,19 @@ async def test_deployment_skill_loader_fetches_from_db():
     assert results[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
 
 async def test_resolver_respects_precedence():
-    class DummyLoader(BuiltInSkillLoader):
-        def __init__(self, kind):
-            self.kind = kind
-        async def load_skills(self, sel, ctx):
-            return [ResolvedSkillEntry(skill_name="shared_skill", version="1.0", provenance=AgentSkillProvenance(source_kind=self.kind))]
+    from unittest.mock import AsyncMock
 
-    resolver = AgentSkillResolver(loaders=[])
-    # Manually configure the internal state of the mock to inject dummy data
-    built_in = DummyLoader(AgentSkillSourceKind.BUILT_IN)
-    deployment = DummyLoader(AgentSkillSourceKind.DEPLOYMENT)
-    
-    resolver.loaders = [built_in, deployment]
+    built_in = BuiltInSkillLoader()
+    built_in.load_skills = AsyncMock(return_value=[
+        ResolvedSkillEntry(skill_name="shared_skill", version="1.0", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+    ])
+
+    deployment = DeploymentSkillLoader()
+    deployment.load_skills = AsyncMock(return_value=[
+        ResolvedSkillEntry(skill_name="shared_skill", version="1.0", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT))
+    ])
+
+    resolver = AgentSkillResolver(loaders=[built_in, deployment])
     context = SkillResolutionContext(snapshot_id="snap")
     selector = SkillSelector(include=[{"name": "shared_skill"}])
     

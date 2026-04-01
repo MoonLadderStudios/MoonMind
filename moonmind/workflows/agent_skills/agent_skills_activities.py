@@ -54,7 +54,7 @@ class AgentSkillsActivities:
             import json
             try:
                 from moonmind.workflows.temporal.artifacts import ExecutionRef
-                from api_service.db.models import TemporalArtifactRetentionClass, TemporalArtifactRedactionLevel
+                from moonmind.core.artifacts import TemporalArtifactRetentionClass, TemporalArtifactRedactionLevel
                 
                 link = ExecutionRef(
                     namespace=info.namespace,

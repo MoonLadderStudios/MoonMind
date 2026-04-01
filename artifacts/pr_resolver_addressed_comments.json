@@ -1,47 +1,12 @@
 [
   {
-    "id": 3017279894,
+    "id": 3018530178,
     "disposition": "addressed",
-    "rationale": "Fixed logic error by checking selector.include and selector.sets properly."
+    "rationale": "Moved workflow artifact enums to moonmind.core.artifacts and updated schemas and models to consume them from the decoupled package."
   },
   {
-    "id": 3017279923,
+    "id": 3018540061,
     "disposition": "addressed",
-    "rationale": "Optimized DeploymentSkillLoader to filter by slug."
-  },
-  {
-    "id": 3017279934,
-    "disposition": "addressed",
-    "rationale": "Removed unused imports."
-  },
-  {
-    "id": 3017280011,
-    "disposition": "addressed",
-    "rationale": "Removed unused local get_session variable in the test."
-  },
-  {
-    "id": 3017295486,
-    "disposition": "addressed",
-    "rationale": "Corrected typing for async_session_maker."
-  },
-  {
-    "id": 3017295522,
-    "disposition": "addressed",
-    "rationale": "Sorted final_skills by skill_name to ensure determinism."
-  },
-  {
-    "id": 3017295538,
-    "disposition": "not-applicable",
-    "rationale": "Duplicate of 3017279923, addressed there."
-  },
-  {
-    "id": 3017295556,
-    "disposition": "not-applicable",
-    "rationale": "Duplicate of 3017279934, addressed there."
-  },
-  {
-    "id": 3017295574,
-    "disposition": "addressed",
-    "rationale": "Added execution link to the artifact creation call."
+    "rationale": "Replaced DummyLoader subclasses with the concrete BuiltInSkillLoader and DeploymentSkillLoader instances and monkeypatched load_skills to strictly test deterministic source merging precedence."
   }
 ]
