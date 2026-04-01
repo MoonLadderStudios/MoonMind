@@ -105,12 +105,24 @@ Mission Control relies on two distinct generated outputs:
 - `dashboard.css`
 - Vite `dist/` bundles
 
-The CSS build and the Vite build are separate responsibilities and must both remain reproducible in CI.
+The CSS build and the Vite build are separate responsibilities and must both remain reproducible in CI. Frontend-consumed API types are a third checked-in generated artifact and are refreshed alongside `dashboard.css`.
+
+The canonical local generation path is:
+
+1. `npm run generate`
+2. `npm run ui:build`
+
+`npm run generate` is responsible for:
+
+- rebuilding `api_service/static/task_dashboard/dashboard.css`
+- regenerating `frontend/src/generated/openapi.ts`
+
+The canonical CI drift gate is `npm run generate:check`, which reruns that generation path and fails on diffs in the checked-in generated files. OpenAPI generation now writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
 
 Representative workflow:
 
 1. install packages
-2. build or watch dashboard CSS
+2. run `npm run generate`
 3. run Vite build
 4. verify manifest/static output as needed
 

@@ -403,6 +403,10 @@ def _serialize_execution(
             or _coerce_temporal_scalar(search_attributes.get("mm_repo"))
             or _coerce_temporal_scalar(search_attributes.get("repository"))
             or _coerce_temporal_scalar(memo.get("repository"))
+            or _coerce_temporal_scalar(params.get("repository"))
+            or _coerce_temporal_scalar(params.get("repo"))
+            or _coerce_temporal_scalar(git_payload.get("repository"))
+            or _coerce_temporal_scalar(task_payload.get("repository"))
         ) or None
 
     _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
@@ -410,7 +414,6 @@ def _serialize_execution(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
-
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,
