@@ -124,6 +124,18 @@ def _iter_artifact_fallback_content(
             yield b"\n"
 
 
+def _resolve_legacy_log_artifact_path(
+    record: object,
+    artifacts_root: Path,
+) -> Path | None:
+    """Return the pre-Phase-2 combined log artifact for historical runs."""
+
+    return _resolve_safe_artifact_path(
+        getattr(record, "log_artifact_ref", None),
+        artifacts_root,
+    )
+
+
 @router.get(
     "/{id}/observability-summary",
     response_model=dict,
@@ -326,13 +338,27 @@ async def stream_task_run_log(
                     getattr(record, "stderr_artifact_ref", None),
                     artifacts_root,
                 )
-                if not stdout_path and not stderr_path:
+                legacy_log_path = _resolve_legacy_log_artifact_path(
+                    record,
+                    artifacts_root,
+                )
+                if legacy_log_path is not None:
+                    content_stream = _iter_file_chunks(legacy_log_path)
+                    order_source = "legacy-log-artifact"
+                elif not stdout_path and not stderr_path:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail="Merged log artifact not found and no stdout/stderr artifacts available to synthesize from",
+                        detail=(
+                            "Merged log artifact not found and no stdout/stderr or "
+                            "legacy log artifacts are available to synthesize from"
+                        ),
                     )
-                content_stream = _iter_artifact_fallback_content(stdout_path, stderr_path)
-                order_source = "artifact-fallback"
+                else:
+                    content_stream = _iter_artifact_fallback_content(
+                        stdout_path,
+                        stderr_path,
+                    )
+                    order_source = "artifact-fallback"
 
             return StreamingResponse(
                 content_stream,
