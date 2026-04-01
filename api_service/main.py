@@ -443,6 +443,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "gemini_cli",
             "provider_id": "google",
             "provider_label": "Google",
+            "default_model": "gemini-3.1-pro-preview",
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("GEMINI_VOLUME_NAME", "gemini_auth_volume"),
@@ -454,6 +455,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "codex_cli",
             "provider_id": "moonladder",
             "provider_label": "MoonLadder",
+            "default_model": "gpt-5.4",
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CODEX_VOLUME_NAME", "codex_auth_volume"),
@@ -465,6 +467,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "claude_code",
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
+            "default_model": "Sonnet 4.6",
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
@@ -482,6 +485,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "claude_code",
             "provider_id": "minimax",
             "provider_label": "MiniMax",
+            "default_model": "MiniMax-M2.7",
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
             "secret_refs": {
@@ -509,14 +513,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
-            # Fetch all existing profile_ids in one query.
-            existing_result = await session.execute(
-                select(ManagedAgentProviderProfile.profile_id)
-            )
-            existing_ids: set[str] = {row[0] for row in existing_result.all()}
+            existing_result = await session.execute(select(ManagedAgentProviderProfile))
+            existing_rows = existing_result.scalars().all()
+            existing_by_id = {row.profile_id: row for row in existing_rows}
+            existing_ids: set[str] = set(existing_by_id)
 
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
+            for profile_def in _DEFAULT_PROFILES:
+                existing = existing_by_id.get(profile_def["profile_id"])
+                desired_default_model = profile_def.get("default_model")
+                if (
+                    existing is not None
+                    and desired_default_model
+                    and not str(existing.default_model or "").strip()
+                ):
+                    existing.default_model = desired_default_model
             if not to_insert:
+                await session.commit()
                 return []
 
             logger.info(
@@ -530,6 +543,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     runtime_id=profile_def["runtime_id"],
                     provider_id=profile_def["provider_id"],
                     provider_label=profile_def.get("provider_label"),
+                    default_model=profile_def.get("default_model"),
                     credential_source=profile_def["credential_source"],
                     runtime_materialization_mode=profile_def["runtime_materialization_mode"],
                     volume_ref=profile_def.get("volume_ref"),

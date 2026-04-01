@@ -9455,13 +9455,34 @@
                 <label>
                   Runtime ID
                   <input type="text" name="runtime_id" maxlength="80"
-                         placeholder="e.g. gemini_pro_runtime" />
+                         placeholder="e.g. gemini_cli, codex_cli, claude_code" />
                 </label>
                 <label>
-                  Auth Mode
-                  <select name="auth_mode" required>
-                    <option value="oauth" selected>OAuth</option>
-                    <option value="api_key">API Key</option>
+                  Provider ID
+                  <input type="text" name="provider_id" maxlength="80"
+                         placeholder="e.g. google, openai, anthropic, minimax" />
+                </label>
+                <label>
+                  Default Model
+                  <input type="text" name="default_model" maxlength="255"
+                         placeholder="Falls back to the runtime default when blank" />
+                </label>
+                <label>
+                  Credential Source
+                  <select name="credential_source" required>
+                    <option value="oauth_volume" selected>OAuth volume</option>
+                    <option value="secret_ref">Secret ref</option>
+                    <option value="none">None</option>
+                  </select>
+                </label>
+                <label>
+                  Runtime Materialization Mode
+                  <select name="runtime_materialization_mode" required>
+                    <option value="oauth_home" selected>oauth_home</option>
+                    <option value="api_key_env">api_key_env</option>
+                    <option value="env_bundle">env_bundle</option>
+                    <option value="config_bundle">config_bundle</option>
+                    <option value="composite">composite</option>
                   </select>
                 </label>
                 <label>
@@ -9470,28 +9491,28 @@
                          placeholder="e.g. gemini_auth_volume" />
                 </label>
                 <label>
-                  API Key Ref
-                  <input type="text" name="api_key_ref" maxlength="120"
-                         placeholder="Worker env var name (e.g. MINIMAX_API_KEY) or vault:// ref" />
+                  Volume Mount Path
+                  <input type="text" name="volume_mount_path" maxlength="160"
+                         placeholder="e.g. /home/app/.codex" />
                 </label>
                 <label>
-                  API key target env (Claude Code)
-                  <input type="text" name="api_key_env_var" maxlength="64"
-                         placeholder="ANTHROPIC_API_KEY (default) or ANTHROPIC_AUTH_TOKEN for MiniMax" />
+                  Secret Refs (JSON object)
+                  <textarea name="secret_refs_json" rows="4" class="wide"
+                    placeholder='{\n  "provider_api_key": "env://MINIMAX_API_KEY"\n}'></textarea>
                 </label>
-                <p class="form-caption">
-                  For MiniMax M2.7 via Claude Code, set target to <code>ANTHROPIC_AUTH_TOKEN</code>,
-                  point <strong>API Key Ref</strong> at a worker env var that holds your MiniMax key,
-                  and paste non-secret Claude Code env below (e.g. <code>ANTHROPIC_BASE_URL</code>, model names).
-                </p>
                 <label>
-                  Runtime env overrides (JSON object, API key mode)
-                  <textarea name="runtime_env_overrides_json" rows="8" class="wide"
+                  Environment Template (JSON object)
+                  <textarea name="env_template_json" rows="8" class="wide"
                     placeholder='{\n  "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",\n  "ANTHROPIC_MODEL": "MiniMax-M2.7",\n  "API_TIMEOUT_MS": "600000",\n  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"\n}'></textarea>
                 </label>
                 <label>
+                  Clear Env Keys (comma-separated)
+                  <input type="text" name="clear_env_keys"
+                         placeholder="e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY" />
+                </label>
+                <label>
                   Max Parallel Runs
-                  <input type="number" name="max_parallel_runs" min="0" value="1" />
+                  <input type="number" name="max_parallel_runs" min="1" value="1" />
                 </label>
                 <label>
                   Cooldown After 429 (seconds)
@@ -9502,7 +9523,7 @@
                   <select name="rate_limit_policy">
                     <option value="backoff" selected>Backoff</option>
                     <option value="queue">Queue</option>
-                    <option value="reject">Reject</option>
+                    <option value="fail_fast">Fail Fast</option>
                   </select>
                 </label>
                 <label>
@@ -9697,10 +9718,10 @@
             <tr>
               <th>Profile ID</th>
               <th>Runtime</th>
-              <th>Auth Mode</th>
-              <th>Key env</th>
+              <th>Provider</th>
+              <th>Default Model</th>
+              <th>Credential Source</th>
               <th>Max Runs</th>
-              <th>Cooldown</th>
               <th>Enabled</th>
               <th>Actions</th>
             </tr>
@@ -9710,14 +9731,24 @@
               <tr data-profile-id="${escapeHtml(p.profile_id)}">
                 <td>${escapeHtml(p.profile_id)}</td>
                 <td>${escapeHtml(p.runtime_id || "-")}</td>
-                <td>${escapeHtml(p.auth_mode || "-")}</td>
-                <td>${escapeHtml(p.api_key_env_var || "—")}</td>
+                <td>${escapeHtml(p.provider_id || "-")}</td>
+                <td>
+                  <input
+                    type="text"
+                    data-profile-default-model="${escapeHtml(p.profile_id)}"
+                    value="${escapeHtml(p.default_model || "")}"
+                    placeholder="runtime default"
+                  />
+                </td>
+                <td>${escapeHtml(p.credential_source || "-")}</td>
                 <td>${p.max_parallel_runs ?? "-"}</td>
-                <td>${p.cooldown_after_429_seconds ?? "-"}s</td>
                 <td>${p.enabled ? "✅" : "❌"}</td>
                 <td>
                   <button class="btn-small" data-profile-oauth="${escapeHtml(p.profile_id)}" data-runtime="${escapeHtml(p.runtime_id || "")}" data-volume="${escapeHtml(p.volume_ref || "")}">
                     Connect with OAuth
+                  </button>
+                  <button class="btn-small" data-profile-save="${escapeHtml(p.profile_id)}">
+                    Save
                   </button>
                   <button class="btn-small" data-profile-toggle="${escapeHtml(p.profile_id)}">
                     ${p.enabled ? "Disable" : "Enable"}
@@ -9856,6 +9887,40 @@
         });
       });
 
+      document.querySelectorAll("[data-profile-save]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const profileId = btn.dataset.profileSave;
+          const row = btn.closest("[data-profile-id]");
+          const defaultModelInput = row
+            ? row.querySelector("[data-profile-default-model]")
+            : null;
+          const endpoint = providerProfileEndpoints.update.replace("{profileId}", profileId);
+          const defaultModel = defaultModelInput
+            ? String(defaultModelInput.value || "").trim()
+            : "";
+          try {
+            const response = await fetch(endpoint, {
+              method: "PATCH",
+              credentials: "include",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ default_model: defaultModel || null }),
+            });
+            if (!response.ok) {
+              setNotice("error", `Failed to update profile "${profileId}".`);
+              syncDynamicView();
+              return;
+            }
+            setNotice("ok", `Profile "${profileId}" updated.`);
+            syncDynamicView();
+            await loadProviderProfiles();
+          } catch (error) {
+            console.error("save profile failed", error);
+            setNotice("error", `Failed to update profile "${profileId}".`);
+            syncDynamicView();
+          }
+        });
+      });
+
       document.querySelectorAll("[data-profile-toggle]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const profileId = btn.dataset.profileToggle;
@@ -9898,36 +9963,57 @@
       createForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const formData = new FormData(createForm);
-        const rawEnvJson = String(formData.get("runtime_env_overrides_json") || "").trim();
-        let runtime_env_overrides = undefined;
-        if (rawEnvJson) {
+        const parseJsonObjectField = (rawValue, label) => {
+          const text = String(rawValue || "").trim();
+          if (!text) {
+            return undefined;
+          }
           try {
-            runtime_env_overrides = JSON.parse(rawEnvJson);
+            const parsed = JSON.parse(text);
+            if (
+              typeof parsed !== "object"
+              || parsed === null
+              || Array.isArray(parsed)
+            ) {
+              throw new Error(`${label} must be a JSON object.`);
+            }
+            return parsed;
           } catch (err) {
-            setNotice("error", "Runtime env overrides must be valid JSON.");
-            syncDynamicView();
-            return;
+            throw new Error(`${label} must be valid JSON object text.`);
           }
-          if (
-            typeof runtime_env_overrides !== "object"
-            || runtime_env_overrides === null
-            || Array.isArray(runtime_env_overrides)
-          ) {
-            setNotice("error", "Runtime env overrides must be a JSON object.");
-            syncDynamicView();
-            return;
-          }
+        };
+
+        let secret_refs;
+        let env_template;
+        try {
+          secret_refs = parseJsonObjectField(formData.get("secret_refs_json"), "Secret Refs");
+          env_template = parseJsonObjectField(formData.get("env_template_json"), "Environment Template");
+        } catch (error) {
+          setNotice("error", error.message || "Invalid provider profile JSON.");
+          syncDynamicView();
+          return;
         }
+
+        const clearEnvKeysRaw = String(formData.get("clear_env_keys") || "").trim();
+        const clear_env_keys = clearEnvKeysRaw
+          ? clearEnvKeysRaw.split(",").map((value) => String(value || "").trim()).filter(Boolean)
+          : undefined;
         const payload = {
           profile_id: String(formData.get("profile_id") || "").trim(),
           runtime_id: String(formData.get("runtime_id") || "").trim() || undefined,
-          auth_mode: String(formData.get("auth_mode") || "oauth"),
+          provider_id: String(formData.get("provider_id") || "").trim() || undefined,
+          default_model: String(formData.get("default_model") || "").trim() || undefined,
+          credential_source: String(formData.get("credential_source") || "oauth_volume"),
+          runtime_materialization_mode: String(
+            formData.get("runtime_materialization_mode") || "oauth_home",
+          ),
           volume_ref: String(formData.get("volume_ref") || "").trim() || undefined,
-          api_key_ref: String(formData.get("api_key_ref") || "").trim() || undefined,
-          api_key_env_var: String(formData.get("api_key_env_var") || "").trim() || undefined,
-          runtime_env_overrides,
+          volume_mount_path: String(formData.get("volume_mount_path") || "").trim() || undefined,
+          secret_refs,
+          env_template,
+          clear_env_keys,
           max_parallel_runs: Number(formData.get("max_parallel_runs")) || 1,
-          cooldown_after_429_seconds: Number(formData.get("cooldown_after_429_seconds")) || 60,
+          cooldown_after_429_seconds: Number(formData.get("cooldown_after_429_seconds")) || 900,
           rate_limit_policy: String(formData.get("rate_limit_policy") || "backoff"),
           enabled: Boolean(formData.get("enabled")),
         };
