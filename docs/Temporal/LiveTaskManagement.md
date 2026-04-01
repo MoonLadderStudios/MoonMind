@@ -3,6 +3,7 @@
 > [!WARNING]
 > **DEPRECATED (Phase 6)**: This document describes the legacy terminal-session observability pattern (e.g., `web_ro`, `tmate` embedding). 
 > **Managed run observability is now strictly artifact-backed.**
+> Route examples below are historical references only; `/api/task-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
 > Please see [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) for the active architecture.
 
 **Implementation tracking:** [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) · [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/)
@@ -47,7 +48,7 @@ Implementation detail: the managed launcher runs agents as a plain subprocess wi
 Real-time visibility is delivered without an external terminal relay in the default managed path:
 
 1. **Managed runtime** — `ManagedRuntimeLauncher` spawns a direct subprocess; `ManagedRunSupervisor` streams stdout/stderr into run-scoped artifacts. Contracts and UI integration are described in [LiveLogs.md](../ManagedAgents/LiveLogs.md).
-2. **Task-run live sessions** — Optional metadata for operator tooling lives in **`task_run_live_sessions`**. Workers report via **`POST /api/task-runs/{id}/live-session/report`** and heartbeats; operators read **`GET /api/task-runs/{id}/live-session`**. Provider **`none`** applies when no external relay is in use.
+2. **Task-run live sessions** — Historical metadata for operator tooling lived in **`task_run_live_sessions`**. Those `/api/task-runs/{id}/live-session*` routes are migration-era references, not the active managed-run log path. Provider **`none`** applies when no external relay is in use.
 3. **Queue worker** — The standalone worker may report live-session state over HTTP when enabled; it does not provision a relay when the configured provider is `none`.
 
 ### 4.1 Session lifecycle (conceptual)
@@ -102,9 +103,9 @@ The UI reads recent terminal output from **artifact-backed log APIs** (or equiva
 - **Terminal workflows**: Show "Session ended" with no stream. If a `transcript.log` artifact exists, offer a download link.
 - **No session available**: Show "Live output is not available for this task" (session in `DISABLED` or `ERROR` state).
 
-### 5.4 API Contract
+### 5.4 Historical API Contract
 
-The live session metadata endpoint already provides the web RO URL:
+Before Phase 6, the live session metadata endpoint provided the web RO URL:
 
 ```
 GET /api/workflows/{id}/live-session
@@ -120,7 +121,7 @@ Response (when `status = READY`):
 }
 ```
 
-When `webRo` is present, the dashboard may offer a link; artifact APIs remain the default source of truth for tailing managed-runtime output.
+When `webRo` is present in historical data, the dashboard may offer a link; current managed-run log viewing should use the artifact-backed APIs documented in [LiveLogs.md](../ManagedAgents/LiveLogs.md).
 
 ---
 
@@ -186,7 +187,9 @@ Tracks operator-driven actions for audit.
 
 ---
 
-## 8. API Surface & Temporal Signals
+## 8. Historical API Surface & Temporal Signals
+
+The route names in this section are preserved to explain the retired terminal-session flow. They are not the active `/api/task-runs` contract for managed-run observability.
 
 ### 8.1 Session Lifecycle (REST APIs)
 
@@ -232,7 +235,7 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 {
   "features": {
     "liveTaskManagement": {
-      "logTailingEnabled": true,
+      "logStreamingEnabled": true,
       "handoffEnabled": false,
       "operatorMessagesEnabled": false
     }

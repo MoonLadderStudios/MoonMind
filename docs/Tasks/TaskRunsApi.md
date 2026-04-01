@@ -2,18 +2,18 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-16
+Last Updated: 2026-04-01
 
 ## 1. Purpose
 
-Define the REST API surface for creating, monitoring, and controlling MoonMind task runs. The API acts as a translation layer between the Mission Control UI and the Temporal Workflow engine: incoming HTTP requests are normalized into the canonical task payload and dispatched as `MoonMind.Run` Temporal Workflow Executions.
+Define the REST API surface for creating, monitoring, and observing MoonMind task runs. The API acts as a translation layer between the Mission Control UI and the Temporal Workflow engine: incoming HTTP requests are normalized into the canonical task payload and dispatched as `MoonMind.Run` Temporal Workflow Executions.
 
 ## 2. API Surface
 
 Task runs are served by two routers:
 
 - **`/api/queue/jobs`** — Job lifecycle (create, list, detail, update, cancel, resubmit, events, artifacts, attachments).
-- **`/api/task-runs`** — Live session controls and operator interaction during an active run.
+- **`/api/task-runs`** — Artifact-backed observability endpoints for Temporal-backed task runs.
 
 ### 2.1 Job Lifecycle (`/api/queue/jobs`)
 
@@ -48,25 +48,29 @@ These endpoints are authenticated with worker tokens and used by agent workers d
 | `POST` | `/api/queue/jobs/{jobId}/cancel/ack` | Worker acknowledges cancellation |
 | `POST` | `/api/queue/jobs/{jobId}/recover` | Worker requests recovery |
 
-### 2.3 Live Session & Control (`/api/task-runs`)
+### 2.3 Observability (`/api/task-runs`)
 
-These endpoints manage real-time operator interaction with an in-progress run (live session metadata, grants, and related controls).
+These endpoints expose read-only observability for Temporal-backed runs. The legacy `/live-session*` family used by terminal-session experiments is not part of the active Phase 6 API surface.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/task-runs/{taskRunId}/live-session` | Create/enable live session tracking |
-| `GET`  | `/api/task-runs/{taskRunId}/live-session` | Get live session state |
-| `POST` | `/api/task-runs/{taskRunId}/live-session/grant-write` | Grant temporary RW attach credentials |
-| `POST` | `/api/task-runs/{taskRunId}/live-session/revoke` | Force-revoke a live session |
-| `POST` | `/api/task-runs/{taskRunId}/live-session/report` | Worker reports live session metadata |
-| `POST` | `/api/task-runs/{taskRunId}/live-session/heartbeat` | Worker heartbeat for live sessions |
-| `GET`  | `/api/task-runs/{taskRunId}/live-session/worker` | Worker-token view of session state |
-| `POST` | `/api/task-runs/{taskRunId}/control` | Apply pause/resume/takeover controls |
-| `POST` | `/api/task-runs/{taskRunId}/operator-messages` | Append operator message to event stream |
+| `GET` | `/api/task-runs/{taskRunId}/observability-summary` | Get observability metadata and artifact refs |
+| `GET` | `/api/task-runs/{taskRunId}/logs/stream` | Stream active live logs over SSE when supported |
+| `GET` | `/api/task-runs/{taskRunId}/logs/stdout` | Read the stdout log artifact |
+| `GET` | `/api/task-runs/{taskRunId}/logs/stderr` | Read the stderr log artifact |
+| `GET` | `/api/task-runs/{taskRunId}/logs/merged` | Read the merged log view or synthesized fallback |
+| `GET` | `/api/task-runs/{taskRunId}/diagnostics` | Read the diagnostics artifact |
 
-### 2.4 Task Control via Temporal Signals
+### 2.4 Observability Behavior
 
-Control operations (`POST .../control`) translate the REST request into a Temporal Signal targeted at the Workflow Execution ID for the task run. Supported actions include `pause`, `resume`, and `takeover`.
+These routes are artifact-first:
+
+- `observability-summary` reports whether live follow is appropriate for the current run.
+- `logs/stream` is the SSE live-follow endpoint for active runs only.
+- `logs/stdout`, `logs/stderr`, and `logs/merged` remain available for historical and terminal runs.
+- `diagnostics` exposes the persisted supervision payload for postmortem inspection.
+
+Legacy live-session and terminal-handoff routes should be treated as deprecated migration references only. See [Live Logs](../ManagedAgents/LiveLogs.md) and [Live Task Management](../Temporal/LiveTaskManagement.md).
 
 ## 3. Canonical Task Payload
 

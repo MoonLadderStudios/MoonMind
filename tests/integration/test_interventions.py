@@ -13,13 +13,7 @@ from api_service.api.routers.executions import _get_service, get_current_user
 @pytest_asyncio.fixture
 async def mock_execution_service():
     service_mock = MagicMock()
-    service_mock.update_execution = AsyncMock(
-        return_value={
-            "accepted": True,
-            "applied": "immediate",
-            "message": "Signal routed successfully"
-        }
-    )
+    service_mock.signal_execution = AsyncMock()
     yield service_mock
 
 @pytest_asyncio.fixture
@@ -29,15 +23,15 @@ async def async_client(mock_execution_service) -> AsyncGenerator[AsyncClient, No
         yield client
 
 @pytest.mark.asyncio
-async def test_intervention_signal_without_logs(async_client: AsyncClient, mock_execution_service):
+async def test_intervention_signal_without_logs(
+    async_client: AsyncClient, mock_execution_service
+):
     """
     Verify that intervention actions (Phase 5) route through backend signals
     independently of any active live log session.
     """
     task_run_id = str(uuid.uuid4())
-    payload = {
-        "updateName": "Pause"
-    }
+    payload = {"signalName": "Pause", "payload": {}}
     
     # We bypass auth by overriding current_user dependency if necessary, but
     # _get_owned_execution is mocked anyway. For safety, we'll patch the dependency overrides:
@@ -68,18 +62,15 @@ async def test_intervention_signal_without_logs(async_client: AsyncClient, mock_
     mock_record.memo = {}
     mock_record.parameters = {}
     mock_record.artifact_refs = []
+    mock_execution_service.signal_execution.return_value = mock_record
     app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="test@test.com")
     
     # _get_owned_execution is called directly, not as a dependency
     with patch("api_service.api.routers.executions._get_owned_execution", new_callable=AsyncMock) as mock_get_owned:
         mock_get_owned.return_value = mock_record
-        mock_execution_service.describe_execution = AsyncMock(return_value=mock_record)
-        response = await async_client.post(f"/api/executions/{task_run_id}/update", json=payload)
+        response = await async_client.post(f"/api/executions/{task_run_id}/signal", json=payload)
     app.dependency_overrides.clear()
 
-    assert response.status_code == 200, response.text
-    assert mock_execution_service.update_execution.called
-    assert mock_execution_service.update_execution.call_args[1]["update_name"] == "Pause"
-    assert response.json().get("accepted") is True
-    assert response.json().get("applied") == "immediate"
-
+    assert response.status_code == 202, response.text
+    assert mock_execution_service.signal_execution.called
+    assert mock_execution_service.signal_execution.call_args[1]["signal_name"] == "Pause"

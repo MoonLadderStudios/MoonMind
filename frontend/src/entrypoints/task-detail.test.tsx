@@ -258,7 +258,7 @@ describe('Task Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Live log tailing requires a task run id/i),
+        screen.getByText(/Live log streaming requires a task run id/i),
       ).toBeTruthy();
     });
   });
@@ -313,6 +313,243 @@ describe('Task Detail Entrypoint', () => {
         'https://external-storage.com/art-with-url'
       );
     });
+  });
+
+  it('renders separate Intervention and Observation sections with intervention audit history', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Intervention task',
+      summary: 'Awaiting operator action',
+      status: 'waiting',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canPause: true,
+        canResume: true,
+        canApprove: true,
+        canCancel: true,
+        canReject: true,
+        canSendMessage: true,
+      },
+      interventionAudit: [
+        {
+          action: 'pause',
+          transport: 'temporal_signal',
+          summary: 'Pause requested.',
+          createdAt: '2026-03-28T00:00:05Z',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Intervention' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
+      expect(screen.getByText(/Pause requested\./)).toBeTruthy();
+      expect(screen.getByText(/Live logs are passive observation only/i)).toBeTruthy();
+    });
+  });
+
+  it('routes Pause through the explicit signal endpoint without requiring live log fetches', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Pause task',
+      summary: 'Running',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canPause: true,
+      },
+      interventionAudit: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/signal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'awaiting_external',
+            rawState: 'awaiting_external',
+            summary: 'Execution paused.',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            signalName: 'Pause',
+            payload: {},
+          }),
+        }),
+      );
+    });
+
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/observability-summary')),
+    ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/logs/stream')),
+    ).toBe(false);
+  });
+
+  it('supports explicit send-message and reject controls outside the log viewer', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Awaiting reply',
+      summary: 'Need operator guidance',
+      status: 'waiting',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canApprove: true,
+        canResume: true,
+        canCancel: true,
+        canReject: true,
+        canSendMessage: true,
+      },
+      interventionAudit: [],
+    };
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/signal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockExecution,
+        } as Response);
+      }
+      if (url.endsWith('/cancel')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'canceled',
+            rawState: 'canceled',
+            summary: 'Rejected by operator.',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Operator message'), {
+      target: { value: 'Please use Provider Profiles.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            signalName: 'SendMessage',
+            payload: { message: 'Please use Provider Profiles.' },
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/cancel',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'reject',
+            graceful: true,
+            reason: 'Rejected by operator.',
+          }),
+        }),
+      );
+    });
+
+    confirmSpy.mockRestore();
   });
 });
 
@@ -747,4 +984,62 @@ describe('LiveLogsPanel', () => {
     expect(downloadLink.href).toMatch(/\/task-runs\/mock-uuid-1\/logs\/merged$/);
   });
 
+  it('keeps panels expanded when operators use their controls', async () => {
+    const clipboardMock = { writeText: vi.fn() };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboardMock,
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => 'stdout data' } as Response);
+      if (url.includes('/diagnostics')) return Promise.resolve({ ok: true, text: async () => '{"diag":true}' } as Response);
+      if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => 'live log data' } as Response);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          temporalRunId: '01-run',
+          namespace: 'default',
+          taskRunId: 'mock-uuid-1',
+          source: 'temporal',
+          title: 'Mock task',
+          summary: 'Mock summary',
+          state: 'succeeded',
+          status: 'completed',
+          createdAt: '2026-03-28T00:00:00Z',
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+    fireEvent.click(await screen.findByText('Stdout'));
+    fireEvent.click(await screen.findByText('Diagnostics'));
+
+    await waitFor(() => expect(screen.getByText(/live log data/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/stdout data/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/\{"diag":true\}/)).toBeTruthy());
+
+    const liveDetails = screen.getByText('Live Logs').closest('details');
+    const stdoutDetails = screen.getByText('Stdout').closest('details');
+    const diagnosticsDetails = screen.getByText('Diagnostics').closest('details');
+
+    fireEvent.click(screen.getAllByText('Copy')[0]!);
+    fireEvent.click(screen.getAllByLabelText('Wrap lines')[1]!);
+    fireEvent.click(screen.getAllByText('Copy')[2]!);
+
+    expect(liveDetails?.hasAttribute('open')).toBe(true);
+    expect(stdoutDetails?.hasAttribute('open')).toBe(true);
+    expect(diagnosticsDetails?.hasAttribute('open')).toBe(true);
+  });
 });

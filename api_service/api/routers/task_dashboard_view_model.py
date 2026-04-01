@@ -191,7 +191,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactMetadata": temporal_dashboard.artifact_metadata_endpoint,
                 "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
                 "artifactDownload": temporal_dashboard.artifact_download_endpoint,
-                "liveSession": "/api/task-runs/{id}/live-session",
             },
 
         },
@@ -204,8 +203,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
-            "logTailingEnabled": bool(
-                os.environ.get("MOONMIND_LOG_TAILING_ENABLED", "true").strip().lower()
+            "logStreamingEnabled": bool(
+                os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
                 not in ("0", "false", "no", "off")
             ),
         },

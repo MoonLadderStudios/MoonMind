@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections.abc import Mapping
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -96,6 +97,11 @@ ALLOWED_OWNER_TYPES: set[str] = {item.value for item in TemporalExecutionOwnerTy
 ALLOWED_ENTRY_VALUES: set[str] = set(WORKFLOW_ENTRY_BY_TYPE.values())
 ALLOWED_UPDATE_NAMES: frozenset[str] = frozenset(SUPPORTED_UPDATE_NAMES)
 ALLOWED_SIGNAL_NAMES: frozenset[str] = frozenset(SUPPORTED_SIGNAL_NAMES)
+RUN_INTERVENTION_UPDATE_NAMES: frozenset[str] = frozenset(
+    {"Pause", "Resume", "Approve", "Cancel"}
+)
+INTERVENTION_AUDIT_MEMO_KEY = "intervention_audit"
+INTERVENTION_AUDIT_LIMIT = 50
 ALLOWED_FAILURE_POLICIES: frozenset[str] = frozenset(SUPPORTED_FAILURE_POLICIES)
 ALLOWED_ERROR_CATEGORIES: set[str] = {
     "user_error",
@@ -216,12 +222,18 @@ class TemporalExecutionService:
         """Send a Quiesce resume signal to all paused workflows (DOC-REQ-003, FR-010)."""
         return await self._client_adapter.send_batch_resume_signal()
 
-    async def _validate_dependencies(self, depends_on: list[str], new_workflow_id: str) -> None:
+    async def _validate_dependencies(
+        self, depends_on: list[str], new_workflow_id: str
+    ) -> None:
         if len(depends_on) > 10:
-            raise TemporalExecutionValidationError("dependsOn can have a maximum of 10 items.")
+            raise TemporalExecutionValidationError(
+                "dependsOn can have a maximum of 10 items."
+            )
 
         if new_workflow_id in depends_on:
-            raise TemporalExecutionValidationError(f"Workflow cannot depend on itself: {new_workflow_id}")
+            raise TemporalExecutionValidationError(
+                f"Workflow cannot depend on itself: {new_workflow_id}"
+            )
 
         visited: set[str] = set()
         queue: deque[tuple[str, int]] = deque([(dep_id, 1) for dep_id in depends_on])
@@ -237,18 +249,28 @@ class TemporalExecutionService:
             total_nodes_checked += 1
 
             if total_nodes_checked > 50:
-                raise TemporalExecutionValidationError("Dependency graph too large (exceeded 50 nodes).")
+                raise TemporalExecutionValidationError(
+                    "Dependency graph too large (exceeded 50 nodes)."
+                )
 
             if depth > 10:
-                raise TemporalExecutionValidationError("Dependency graph too deep (exceeded depth 10).")
+                raise TemporalExecutionValidationError(
+                    "Dependency graph too deep (exceeded depth 10)."
+                )
 
             try:
                 record = await self.describe_execution(current_id)
             except TemporalExecutionNotFoundError:
-                raise TemporalExecutionValidationError(f"Dependency not found: {current_id}")
+                raise TemporalExecutionValidationError(
+                    f"Dependency not found: {current_id}"
+                )
 
             if getattr(record, "workflow_type", None) is not TemporalWorkflowType.RUN:
-                wf_type_value = getattr(getattr(record, 'workflow_type', None), 'value', getattr(record, 'workflow_type', 'unknown'))
+                wf_type_value = getattr(
+                    getattr(record, "workflow_type", None),
+                    "value",
+                    getattr(record, "workflow_type", "unknown"),
+                )
                 raise TemporalExecutionValidationError(
                     f"Dependency {current_id} is a {wf_type_value} workflow, not a MoonMind.Run workflow."
                 )
@@ -450,7 +472,11 @@ class TemporalExecutionService:
                 input_args=input_args,
                 memo=memo,
                 search_attributes=search_attributes,
-                start_delay=start_delay if workflow_type_enum is not TemporalWorkflowType.RUN else None,
+                start_delay=(
+                    start_delay
+                    if workflow_type_enum is not TemporalWorkflowType.RUN
+                    else None
+                ),
             )
             start_run_id = getattr(start_result, "run_id", None)
             if (
@@ -467,9 +493,8 @@ class TemporalExecutionService:
             )
 
         synced_record = await self._sync_projection_best_effort(record)
-        if (
-            scheduled_for is not None
-            and isinstance(synced_record, TemporalExecutionRecord)
+        if scheduled_for is not None and isinstance(
+            synced_record, TemporalExecutionRecord
         ):
             synced_record.scheduled_for = scheduled_for
             await self._session.commit()
@@ -588,7 +613,7 @@ class TemporalExecutionService:
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
-        
+
         if include_orphaned:
             projection = await self._load_projection_execution(
                 canonical_workflow_id,
@@ -634,6 +659,18 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Update {update_name} is only supported for "
                 "MoonMind.ManifestIngest workflows"
+            )
+
+        if (
+            record.workflow_type is TemporalWorkflowType.RUN
+            and update_name in RUN_INTERVENTION_UPDATE_NAMES
+        ):
+            endpoint = "/api/executions/{id}/signal"
+            if update_name == "Cancel":
+                endpoint = "/api/executions/{id}/cancel"
+            raise TemporalExecutionValidationError(
+                f"Update {update_name} is not supported for MoonMind.Run workflows; "
+                f"use {endpoint} instead."
             )
 
         if idempotency_key and idempotency_key == record.last_update_idempotency_key:
@@ -822,9 +859,18 @@ class TemporalExecutionService:
             )
         record = await self._require_source_execution(workflow_id)
 
-        if signal_name in {"Pause", "Resume", "Approve"}:
+        if signal_name in {"Pause", "Resume", "Approve", "SendMessage"}:
             self._ensure_non_terminal(record)
-            update_arg = dict(payload or {})
+            operator_message = self._extract_operator_message(payload)
+            update_arg: dict[str, Any] = {}
+            if signal_name == "SendMessage":
+                if operator_message is None:
+                    raise TemporalExecutionValidationError(
+                        "message is required when signal_name is SendMessage"
+                    )
+                update_arg = {"message": operator_message}
+            elif operator_message is not None:
+                update_arg = {"message": operator_message}
             try:
                 if update_arg:
                     await self._client_adapter.update_workflow(
@@ -836,7 +882,7 @@ class TemporalExecutionService:
                     )
             except Exception as exc:
                 raise TemporalExecutionValidationError(
-                    f"Temporal signal failed: {exc}"
+                    f"Temporal update failed: {exc}"
                 ) from exc
 
             if signal_name == "Pause":
@@ -852,28 +898,50 @@ class TemporalExecutionService:
                     waiting_reason="operator_paused",
                     attention_required=True,
                 )
+                self._append_intervention_audit(
+                    record,
+                    action="pause",
+                    transport="temporal_update",
+                    summary="Pause requested.",
+                )
                 self._update_summary(record, "Execution paused.")
             elif signal_name == "Resume":
                 record.paused = False
                 self._clear_waiting_metadata(record)
                 self._set_state(record, MoonMindWorkflowState.EXECUTING)
-                if (
-                    isinstance(payload, dict)
-                    and str(
-                        payload.get("message")
-                        or payload.get("clarification_response")
-                        or payload.get("clarificationResponse")
-                        or ""
-                    ).strip()
-                ):
+                self._append_intervention_audit(
+                    record,
+                    action="resume",
+                    transport="temporal_update",
+                    summary="Resume requested.",
+                    detail=operator_message,
+                )
+                if operator_message is not None:
                     self._update_summary(record, "Clarification reply sent to agent.")
                 else:
                     self._update_summary(record, "Execution resumed.")
             else:
-                record.paused = False
-                self._clear_waiting_metadata(record)
-                self._set_state(record, MoonMindWorkflowState.EXECUTING)
-                self._update_summary(record, "Approval signal received.")
+                if signal_name == "Approve":
+                    record.paused = False
+                    self._clear_waiting_metadata(record)
+                    self._set_state(record, MoonMindWorkflowState.EXECUTING)
+                    self._append_intervention_audit(
+                        record,
+                        action="approve",
+                        transport="temporal_update",
+                        summary="Approval requested.",
+                        detail=operator_message,
+                    )
+                    self._update_summary(record, "Approval signal received.")
+                else:
+                    self._append_intervention_audit(
+                        record,
+                        action="send_message",
+                        transport="temporal_update",
+                        summary="Operator message sent.",
+                        detail=operator_message,
+                    )
+                    self._update_summary(record, "Operator message sent.")
 
             await self._sync_integration_correlation_record(record)
             await self._session.commit()
@@ -1195,10 +1263,15 @@ class TemporalExecutionService:
         workflow_id: str,
         reason: str | None,
         graceful: bool,
+        action: str = "cancel",
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_source_execution(workflow_id)
 
-        reason_text = (reason or "Canceled by user.").strip() or "Canceled by user."
+        action_name = "reject" if action == "reject" else "cancel"
+        default_reason = (
+            "Rejected by operator." if action_name == "reject" else "Canceled by user."
+        )
+        reason_text = (reason or default_reason).strip() or default_reason
 
         try:
             if graceful:
@@ -1218,6 +1291,12 @@ class TemporalExecutionService:
 
         record.paused = False
         self._clear_waiting_metadata(record)
+        self._append_intervention_audit(
+            record,
+            action=action_name,
+            transport="temporal_cancel",
+            summary=reason_text,
+        )
         if graceful:
             self._set_state(
                 record,
@@ -1715,6 +1794,32 @@ class TemporalExecutionService:
             memo.pop("external_url", None)
         record.memo = memo
 
+    def _append_intervention_audit(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+        *,
+        action: str,
+        transport: str,
+        summary: str,
+        detail: str | None = None,
+    ) -> None:
+        memo = dict(record.memo or {})
+        existing = memo.get(INTERVENTION_AUDIT_MEMO_KEY)
+        audit_entries = list(existing) if isinstance(existing, list) else []
+        audit_entries.append(
+            {
+                "action": action,
+                "transport": transport,
+                "summary": summary,
+                "detail": detail,
+                "createdAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            }
+        )
+        if len(audit_entries) > INTERVENTION_AUDIT_LIMIT:
+            audit_entries = audit_entries[-INTERVENTION_AUDIT_LIMIT:]
+        memo[INTERVENTION_AUDIT_MEMO_KEY] = audit_entries
+        record.memo = memo
+
     def _set_wait_metadata(
         self,
         record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
@@ -1857,6 +1962,13 @@ class TemporalExecutionService:
             return None
         text = str(value).strip()
         return text or None
+
+    def _extract_operator_message(
+        self, payload: Mapping[str, Any] | None
+    ) -> str | None:
+        if not isinstance(payload, Mapping):
+            return None
+        return self._clean_text(payload.get("message"))
 
     def _require_text(self, value: Any, *, field_name: str) -> str:
         text = self._clean_text(value)

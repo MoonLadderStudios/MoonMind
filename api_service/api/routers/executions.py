@@ -301,6 +301,7 @@ def _serialize_execution(
         attention_required = True
     dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(record.state, "queued")
     actions = _build_action_capabilities(record)
+    intervention_audit = _parse_intervention_audit_entries(memo)
     debug_fields = _build_debug_fields(
         record=record,
         temporal_status=temporal_status,
@@ -442,6 +443,7 @@ def _serialize_execution(
         close_status=close_status,
         waiting_reason=str(waiting_reason) if waiting_reason else None,
         attention_required=attention_required,
+        intervention_audit=intervention_audit,
         search_attributes=search_attributes,
         memo=memo,
         target_runtime=target_runtime,
@@ -512,6 +514,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "pause",
                     "resume",
                     "cancel",
+                    "reject",
+                    "sendMessage",
                 )
             }
         )
@@ -533,7 +537,14 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_update_inputs",
             "can_cancel",
         },
-        "awaiting_external": {"can_approve", "can_pause", "can_resume", "can_cancel"},
+        "awaiting_external": {
+            "can_approve",
+            "can_pause",
+            "can_resume",
+            "can_cancel",
+            "can_reject",
+            "can_send_message",
+        },
         "finalizing": {"can_cancel"},
         "completed": {"can_rerun"},
         "failed": {"can_rerun"},
@@ -548,6 +559,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_pause": "canPause",
         "can_resume": "canResume",
         "can_cancel": "canCancel",
+        "can_reject": "canReject",
+        "can_send_message": "canSendMessage",
     }
     disabled_reasons = {
         alias: "state_not_eligible"
@@ -562,6 +575,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
         can_cancel="can_cancel" in enabled,
+        can_reject="can_reject" in enabled,
+        can_send_message="can_send_message" in enabled,
         disabled_reasons=disabled_reasons,
     )
 
@@ -601,6 +616,39 @@ def _coerce_artifact_ref(value: Any) -> str | None:
             if candidate:
                 return candidate
     return None
+
+
+def _parse_intervention_audit_entries(
+    memo: Mapping[str, object],
+) -> list[dict[str, object]]:
+    raw_entries = memo.get("intervention_audit")
+    if not isinstance(raw_entries, list):
+        return []
+
+    entries: list[dict[str, object]] = []
+    for item in raw_entries:
+        if not isinstance(item, Mapping):
+            continue
+        action = str(item.get("action") or "").strip()
+        transport = str(item.get("transport") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        created_at_raw = item.get("createdAt")
+        if not action or not transport or not summary or not isinstance(created_at_raw, str):
+            continue
+        try:
+            created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        entries.append(
+            {
+                "action": action,
+                "transport": transport,
+                "summary": summary,
+                "detail": str(item.get("detail") or "").strip() or None,
+                "createdAt": created_at,
+            }
+        )
+    return entries
 
 
 def _invalid_task_request(message: str) -> HTTPException:
@@ -1837,6 +1885,7 @@ async def cancel_execution(
         workflow_id=workflow_id,
         reason=request.reason,
         graceful=request.graceful,
+        action=request.action,
     )
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:

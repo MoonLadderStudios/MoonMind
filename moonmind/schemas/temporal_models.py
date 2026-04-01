@@ -26,7 +26,7 @@ SUPPORTED_UPDATE_NAMES = (
     "Cancel",
     "Approve",
 )
-SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Pause", "Resume", "Approve")
+SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Pause", "Resume", "Approve", "SendMessage")
 TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
 TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
@@ -260,6 +260,7 @@ class CancelExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    action: Literal["cancel", "reject"] = Field("cancel", alias="action")
     reason: Optional[str] = Field(None, alias="reason")
     graceful: bool = Field(True, alias="graceful")
 
@@ -284,9 +285,23 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_pause: bool = Field(False, alias="canPause")
     can_resume: bool = Field(False, alias="canResume")
     can_cancel: bool = Field(False, alias="canCancel")
+    can_reject: bool = Field(False, alias="canReject")
+    can_send_message: bool = Field(False, alias="canSendMessage")
     disabled_reasons: dict[str, str] = Field(
         default_factory=dict, alias="disabledReasons"
     )
+
+
+class ExecutionInterventionAuditEntryModel(BaseModel):
+    """One explicit operator intervention record shown outside stdout/stderr logs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: str = Field(..., alias="action")
+    transport: str = Field(..., alias="transport")
+    summary: str = Field(..., alias="summary")
+    detail: Optional[str] = Field(None, alias="detail")
+    created_at: datetime = Field(..., alias="createdAt")
 
 
 class ExecutionDebugFieldsModel(BaseModel):
@@ -350,6 +365,9 @@ class ExecutionModel(BaseModel):
     close_status: Optional[str] = Field(None, alias="closeStatus")
     waiting_reason: Optional[str] = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
+    intervention_audit: list[ExecutionInterventionAuditEntryModel] = Field(
+        default_factory=list, alias="interventionAudit"
+    )
     search_attributes: dict[str, Any] = Field(
         default_factory=dict, alias="searchAttributes"
     )

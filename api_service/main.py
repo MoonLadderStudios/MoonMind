@@ -417,8 +417,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
     Each profile is checked individually by ``profile_id`` so that:
     - On a fresh install all defaults are created.
     - When ``MINIMAX_API_KEY`` is added to the environment after the initial
-      seed, the ``claude_minimax`` profile is inserted without touching any
-      existing profiles.
+      seed, the ``claude_minimax`` profile is inserted.
+    - Existing profiles have their missing `default_model` values backfilled.
 
     Returns the list of ``runtime_id`` values for profiles that were actually
     inserted, or an empty list when nothing was seeded.
@@ -513,25 +513,39 @@ async def _auto_seed_provider_profiles() -> list[str]:
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
-            existing_result = await session.execute(select(ManagedAgentProviderProfile))
-            existing_rows = existing_result.scalars().all()
-            existing_by_id = {row.profile_id: row for row in existing_rows}
+            from sqlalchemy import update
+            existing_result = await session.execute(
+                select(
+                    ManagedAgentProviderProfile.profile_id,
+                    ManagedAgentProviderProfile.default_model,
+                )
+            )
+            existing_rows = existing_result.all()
+            existing_by_id = {row.profile_id: row.default_model for row in existing_rows}
             existing_ids: set[str] = set(existing_by_id)
 
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
+
+            needs_commit = False
             for profile_def in _DEFAULT_PROFILES:
-                existing = existing_by_id.get(profile_def["profile_id"])
+                profile_id = profile_def["profile_id"]
                 desired_default_model = profile_def.get("default_model")
-                # Only reconcile when the seeded profile has an explicit desired model
-                # (non-None) and the existing row is blank — never clear user-set values.
-                if (
-                    existing is not None
-                    and desired_default_model is not None
-                    and not str(existing.default_model or "").strip()
-                ):
-                    existing.default_model = desired_default_model
+                if profile_id in existing_by_id:
+                    current_model = existing_by_id[profile_id]
+                    # Only reconcile when the seeded profile has an explicit desired model
+                    # (non-None) and the existing row is blank — never clear user-set values.
+                    if desired_default_model is not None and not str(current_model or "").strip():
+                        stmt = (
+                            update(ManagedAgentProviderProfile)
+                            .where(ManagedAgentProviderProfile.profile_id == profile_id)
+                            .values(default_model=desired_default_model)
+                        )
+                        await session.execute(stmt)
+                        needs_commit = True
+
             if not to_insert:
-                await session.commit()
+                if needs_commit:
+                    await session.commit()
                 return []
 
             logger.info(

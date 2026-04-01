@@ -2297,6 +2297,12 @@ export interface components {
          * @description Request payload for cancellation.
          */
         CancelExecutionRequest: {
+            /**
+             * Action
+             * @default cancel
+             * @enum {string}
+             */
+            action: "cancel" | "reject";
             /** Reason */
             reason?: string | null;
             /**
@@ -2773,6 +2779,16 @@ export interface components {
              * @default false
              */
             canCancel: boolean;
+            /**
+             * Canreject
+             * @default false
+             */
+            canReject: boolean;
+            /**
+             * Cansendmessage
+             * @default false
+             */
+            canSendMessage: boolean;
             /** Disabledreasons */
             disabledReasons?: {
                 [key: string]: string;
@@ -2804,6 +2820,25 @@ export interface components {
              * @default false
              */
             attentionRequired: boolean;
+        };
+        /**
+         * ExecutionInterventionAuditEntryModel
+         * @description One explicit operator intervention record shown outside stdout/stderr logs.
+         */
+        ExecutionInterventionAuditEntryModel: {
+            /** Action */
+            action: string;
+            /** Transport */
+            transport: string;
+            /** Summary */
+            summary: string;
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
         };
         /**
          * ExecutionListResponse
@@ -2912,6 +2947,8 @@ export interface components {
              * @default false
              */
             attentionRequired: boolean;
+            /** Interventionaudit */
+            interventionAudit?: components["schemas"]["ExecutionInterventionAuditEntryModel"][];
             /** Searchattributes */
             searchAttributes?: {
                 [key: string]: unknown;
@@ -4168,7 +4205,7 @@ export interface components {
              * Signalname
              * @enum {string}
              */
-            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve";
+            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve" | "SendMessage";
             /** Payload */
             payload?: {
                 [key: string]: unknown;

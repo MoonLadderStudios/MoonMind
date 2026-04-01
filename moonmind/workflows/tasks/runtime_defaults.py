@@ -35,6 +35,7 @@ _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "claude_code": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
     "jules": ("MOONMIND_JULES_MODEL", "JULES_MODEL"),
 }
+
 _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "codex_cli": (
         "MOONMIND_CODEX_EFFORT",

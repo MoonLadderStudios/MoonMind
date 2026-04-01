@@ -151,12 +151,11 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process, endpoints, _cleanup = await launcher.launch(
+    record, process, _cleanup = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
 
-    assert endpoints is None
     assert record.run_id == "run-1"
     assert record.pid == process.pid
     assert record.status == "launching"
@@ -204,12 +203,11 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints, _cleanup = await launcher.launch(
+    _record, process, _cleanup = await launcher.launch(
         run_id="run-passthrough-1", request=request, profile=profile
     )
     await process.wait()
 
-    assert endpoints is None
     assert captured_env["MM_SAFE"] == "1"
     assert captured_env["GH_TOKEN"] == "ghp-runtime"
     assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
@@ -356,18 +354,17 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     request = _make_request()
 
     # First launch
-    record, process, _, _cleanup = await launcher.launch(
+    record, process, _cleanup = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
 
     # Second launch with same run_id returns existing record (idempotent)
-    existing, exc_process, exc_endpoints, _cleanup2 = await launcher.launch(
+    existing, exc_process, _cleanup2 = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     assert existing.run_id == "run-1"
     assert exc_process is None
-    assert exc_endpoints is None
 
 
 @pytest.mark.asyncio
@@ -395,7 +392,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _endpoints, _cleanup = await launcher.launch(
+    record, process, _cleanup = await launcher.launch(
         run_id="run-2",
         request=request,
         profile=profile,
@@ -404,6 +401,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
 
     expected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
     assert record.workspace_path == str(expected_workspace)
+    assert record.live_stream_capable is True
     assert expected_workspace.exists()
     assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")
 
@@ -478,18 +476,18 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    record, process, endpoints, _cleanup = await launcher.launch(
+    record, process, _cleanup = await launcher.launch(
         run_id="workspace-run-1",
         request=request,
         profile=profile,
     )
     await process.wait()
 
-    assert endpoints is None
     expected_workspace = str(
         (tmp_path / "workspaces" / "workspace-run-1" / "repo").resolve()
     )
     assert record.workspace_path == expected_workspace
+    assert record.live_stream_capable is True
     assert process.pid == 2001
 
     clone_call = next(args for args, _ in calls if args[:2] == ("git", "clone"))
@@ -567,7 +565,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _endpoints, _cleanup = await launcher.launch(
+    _record, process, _cleanup = await launcher.launch(
         run_id="workspace-run-existing-branch",
         request=request,
         profile=profile,
@@ -688,7 +686,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints, _cleanup = await launcher.launch(
+    _record, process, _cleanup = await launcher.launch(
         run_id="run-env-layer-1", request=request, profile=profile
     )
     await process.wait()
@@ -709,6 +707,8 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(
@@ -757,7 +757,7 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         _fake_resolve,
     )
 
-    _record, process, _endpoints, _cleanup = await launcher.launch(
+    _record, process, _cleanup = await launcher.launch(
         run_id="run-managed-api-key-1", request=request, profile=profile
     )
     await process.wait()
@@ -827,7 +827,7 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     )
     request = _make_request()
 
-    _, _, _, _ = await launcher.launch(
+    _, _, _ = await launcher.launch(
         run_id="root-run",
         request=request,
         profile=profile,

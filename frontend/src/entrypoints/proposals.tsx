@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -60,6 +60,7 @@ function replaceUrlQuery(params: URLSearchParams) {
 }
 
 function ProposalsPage({ payload }: { payload: BootPayload }) {
+  const queryClient = useQueryClient();
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
   const [status, setStatus] = useState(() => {
@@ -97,6 +98,36 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
   }, [syncUrl]);
 
   const queryKey = ['proposals', pageSize, status, normalizedRepository, listCursor] as const;
+
+  const promoteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(`${payload.apiBase}/proposals/${id}/promote`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) throw new Error('Failed to promote');
+      return response.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['proposals'] }),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(`${payload.apiBase}/proposals/${id}/dismiss`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) throw new Error('Failed to dismiss');
+      return response.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['proposals'] }),
+  });
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey,
@@ -269,6 +300,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                       <th>Title</th>
                       <th>Created</th>
                       <th>Promoted</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -290,6 +322,28 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                         <td>{row.title}</td>
                         <td>{formatWhen(row.createdAt)}</td>
                         <td>{formatWhen(row.promotedAt)}</td>
+                        <td>
+                          {row.status === 'open' && (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button
+                                type="button"
+                                className="button primary small"
+                                onClick={() => promoteMutation.mutate(row.id)}
+                                disabled={promoteMutation.isPending || dismissMutation.isPending}
+                              >
+                                Promote
+                              </button>
+                              <button
+                                type="button"
+                                className="button secondary small"
+                                onClick={() => dismissMutation.mutate(row.id)}
+                                disabled={promoteMutation.isPending || dismissMutation.isPending}
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -348,6 +402,26 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                       </div>
                     </dl>
                     <div className="queue-card-actions">
+                      {row.status === 'open' && (
+                        <>
+                          <button
+                            type="button"
+                            className="button primary"
+                            onClick={() => promoteMutation.mutate(row.id)}
+                            disabled={promoteMutation.isPending || dismissMutation.isPending}
+                          >
+                            Promote
+                          </button>
+                          <button
+                            type="button"
+                            className="button secondary"
+                            onClick={() => dismissMutation.mutate(row.id)}
+                            disabled={promoteMutation.isPending || dismissMutation.isPending}
+                          >
+                            Dismiss
+                          </button>
+                        </>
+                      )}
                       <a
                         href={`/proposals/${encodeURIComponent(row.id)}`}
                         className="button secondary"

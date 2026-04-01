@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Iterator
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -214,63 +215,157 @@ def test_stream_task_run_log_returns_file_response(
 # Merged-tail (artifact-backed and synthesized)
 # ---------------------------------------------------------------------------
 
-def test_stream_task_run_log_merged_synthesized_from_stdout_stderr(
+def test_stream_task_run_log_merged_synthesized_from_spool(
     client: tuple[TestClient, AsyncMock],
+    tmp_path,
 ) -> None:
-    """When merged_log_artifact_ref is absent, the endpoint synthesizes from stdout+stderr."""
+    """When spool metadata exists, merged synthesis preserves spool ordering across streams."""
     test_client, _ = client
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    spool_path = workspace_path / "live_streams.spool"
+    spool_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"sequence": 1, "stream": "stdout", "text": "hello from stdout\n", "timestamp": "2026-03-31T00:00:00Z"}),
+                json.dumps({"sequence": 2, "stream": "stderr", "text": "warning from stderr\n", "timestamp": "2026-03-31T00:00:01Z"}),
+                json.dumps({"sequence": 3, "stream": "stdout", "text": "goodbye from stdout\n", "timestamp": "2026-03-31T00:00:02Z"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.workspace_path = str(workspace_path)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-synthesized"] == "true"
+    assert response.headers["x-merged-order-source"] == "spool"
+    body = response.text
+    assert body.index("--- stdout ---") < body.index("hello from stdout")
+    assert body.index("--- stderr ---") > body.index("hello from stdout")
+    assert body.index("warning from stderr") > body.index("--- stderr ---")
+    assert body.index("goodbye from stdout") > body.index("warning from stderr")
+
+
+def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "stdout.log").write_text("hello from stdout\n", encoding="utf-8")
+    (run_dir / "stderr.log").write_text("warning from stderr\n", encoding="utf-8")
+
     mock_record = MagicMock()
     mock_record.merged_log_artifact_ref = None
     mock_record.stdout_artifact_ref = "run/stdout.log"
     mock_record.stderr_artifact_ref = "run/stderr.log"
-
-    stdout_content = b"hello from stdout"
-    stderr_content = b"warning from stderr"
-
-    def fake_is_file(self: object) -> bool:
-        return True
-
-    def fake_is_relative_to(self: object, other: object) -> bool:
-        return True
-
-    import io
-
-    def fake_open(self: object, mode: str = "r") -> io.BytesIO:
-        path_str = str(self)
-        if "stdout" in path_str:
-            return io.BytesIO(stdout_content)
-        return io.BytesIO(stderr_content)
+    mock_record.workspace_path = str(tmp_path / "workspace-without-spool")
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
-        with patch("pathlib.Path.is_file", fake_is_file):
-            with patch("pathlib.Path.is_relative_to", fake_is_relative_to):
-                with patch("pathlib.Path.open", fake_open):
-                    response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 200
-    assert response.headers["x-merged-synthesized"] == "true"
-    body = response.content
-    assert b"stdout" in body
-    assert b"stderr" in body
-    assert b"hello from stdout" in body
-    assert b"warning from stderr" in body
+    assert response.headers["x-merged-order-source"] == "artifact-fallback"
+    assert "[merged-order unavailable: spool metadata missing]" in response.text
+
+
+def test_stream_task_run_log_merged_falls_back_to_legacy_log_artifact(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "combined.log").write_text(
+        "legacy combined output\nwarning\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.log_artifact_ref = "run/combined.log"
+    mock_record.workspace_path = str(tmp_path / "workspace-without-spool")
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "legacy-log-artifact"
+    assert response.text == "legacy combined output\nwarning\n"
 
 
 def test_stream_task_run_log_merged_returns_404_when_both_artifacts_absent(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """When merged_log_artifact_ref and both stdout/stderr refs are absent, must return 404."""
+    """When merged, split, and legacy log artifacts are absent, must return 404."""
     test_client, _ = client
     mock_record = MagicMock()
     mock_record.merged_log_artifact_ref = None
     mock_record.stdout_artifact_ref = None
     mock_record.stderr_artifact_ref = None
+    mock_record.log_artifact_ref = None
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 404
-    assert "no stdout/stderr artifacts" in response.json()["detail"].lower()
+    assert "no stdout/stderr or legacy log artifacts" in response.json()["detail"].lower()
+
+
+def test_stream_task_run_log_merged_uses_spool_when_stdout_stderr_refs_are_absent(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "live_streams.spool").write_text(
+        json.dumps(
+            {
+                "sequence": 1,
+                "stream": "stdout",
+                "text": "active run output\n",
+                "timestamp": "2026-03-31T00:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.workspace_path = str(workspace_path)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "spool"
+    assert "active run output" in response.text
 
 
 def test_stream_task_run_log_merged_uses_prebuilt_artifact_when_available(

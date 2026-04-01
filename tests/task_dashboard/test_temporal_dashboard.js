@@ -337,7 +337,7 @@ const helpers = loadTemporalHelpers();
     liveLogsAvailable: false,
   });
 
-  assert(html.includes("Live log tailing is not configured for Temporal tasks."));
+  assert(html.includes("Live log streaming is not configured for Temporal tasks."));
   assert(!html.includes('id="temporal-start-tailing"'));
 })();
 
@@ -442,7 +442,6 @@ const helpers = loadTemporalHelpers();
   });
 
   const requiredIds = [
-    "temporal-live-output-section",
     "temporal-live-logs-inactive",
     "temporal-live-logs-active",
     "temporal-start-tailing",

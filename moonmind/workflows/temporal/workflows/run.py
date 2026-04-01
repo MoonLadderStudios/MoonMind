@@ -127,7 +127,9 @@ class MoonMindRunWorkflow:
         try:
             info = workflow.info()
         except Exception:
-            logging.getLogger(__name__).exception("Error getting workflow info in _get_logger")
+            logging.getLogger(__name__).exception(
+                "Error getting workflow info in _get_logger"
+            )
             return logging.getLogger(__name__)
 
         extra = {
@@ -148,7 +150,9 @@ class MoonMindRunWorkflow:
             logger_to_use.isEnabledFor(logging.INFO)
             return logging.LoggerAdapter(logger_to_use, extra=extra)
         except Exception:
-            logging.getLogger(__name__).exception("Error checking logger capabilities in _get_logger")
+            logging.getLogger(__name__).exception(
+                "Error checking logger capabilities in _get_logger"
+            )
             return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
 
     def __init__(self) -> None:
@@ -257,8 +261,12 @@ class MoonMindRunWorkflow:
         name: str,
         payload: dict[str, Any],
     ) -> str:
-        artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.create")
-        artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
+        artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "artifact.create"
+        )
+        artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "artifact.write_complete"
+        )
         artifact_ref, _upload_desc = await workflow.execute_activity(
             "artifact.create",
             {
@@ -303,7 +311,9 @@ class MoonMindRunWorkflow:
 
             group = [node]
             cursor = idx + 1
-            while cursor < len(ordered_nodes) and eligible_for_bundle(group[-1], ordered_nodes[cursor]):
+            while cursor < len(ordered_nodes) and eligible_for_bundle(
+                group[-1], ordered_nodes[cursor]
+            ):
                 group.append(ordered_nodes[cursor])
                 cursor += 1
 
@@ -392,23 +402,35 @@ class MoonMindRunWorkflow:
         )
 
         if self._scheduled_for:
-            self._set_state(STATE_SCHEDULED, summary=f"Execution scheduled for {self._scheduled_for}.")
+            self._set_state(
+                STATE_SCHEDULED,
+                summary=f"Execution scheduled for {self._scheduled_for}.",
+            )
             while True:
                 if not self._scheduled_for:
                     break
-                
+
                 try:
                     from datetime import datetime
-                    target_dt = datetime.fromisoformat(self._scheduled_for.replace("Z", "+00:00"))
+
+                    target_dt = datetime.fromisoformat(
+                        self._scheduled_for.replace("Z", "+00:00")
+                    )
                 except ValueError as exc:
-                    self._get_logger().error(f"Invalid scheduled_for format: {self._scheduled_for}", exc_info=True)
-                    raise exceptions.ApplicationError(f"Invalid scheduled_for format: {self._scheduled_for}", non_retryable=True) from exc
-                
+                    self._get_logger().error(
+                        f"Invalid scheduled_for format: {self._scheduled_for}",
+                        exc_info=True,
+                    )
+                    raise exceptions.ApplicationError(
+                        f"Invalid scheduled_for format: {self._scheduled_for}",
+                        non_retryable=True,
+                    ) from exc
+
                 now = workflow.now()
                 delay = target_dt - now
                 if delay.total_seconds() <= 0:
                     break
-                
+
                 self._reschedule_requested = False
                 try:
                     await workflow.wait_condition(
@@ -417,13 +439,17 @@ class MoonMindRunWorkflow:
                     )
                 except asyncio.TimeoutError:
                     # Timeout means no reschedule/cancel happened before the scheduled time.
-                    self._get_logger().debug("Scheduled delay elapsed without reschedule/cancel.")
-                
+                    self._get_logger().debug(
+                        "Scheduled delay elapsed without reschedule/cancel."
+                    )
+
                 if self._cancel_requested:
                     break
 
         if self._cancel_requested:
-            await self._run_finalizing_stage(parameters=parameters, status="canceled", error=None)
+            await self._run_finalizing_stage(
+                parameters=parameters, status="canceled", error=None
+            )
             return {"status": "canceled"}
 
         self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
@@ -432,7 +458,9 @@ class MoonMindRunWorkflow:
         # Pause until unpaused
         await workflow.wait_condition(lambda: not self._paused)
         if self._cancel_requested:
-            await self._run_finalizing_stage(parameters=parameters, status="canceled", error=None)
+            await self._run_finalizing_stage(
+                parameters=parameters, status="canceled", error=None
+            )
             return {"status": "canceled"}
 
         try:
@@ -446,7 +474,9 @@ class MoonMindRunWorkflow:
                 plan_ref=resolved_plan_ref,
             )
         except ValueError as exc:
-            await self._run_finalizing_stage(parameters=parameters, status="failed", error=str(exc))
+            await self._run_finalizing_stage(
+                parameters=parameters, status="failed", error=str(exc)
+            )
             self._close_status = CLOSE_STATUS_FAILED
             self._set_state(STATE_FAILED, summary=str(exc))
             raise exceptions.ApplicationError(
@@ -454,18 +484,24 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             ) from exc
         except Exception as exc:
-            await self._run_finalizing_stage(parameters=parameters, status="failed", error=str(exc))
+            await self._run_finalizing_stage(
+                parameters=parameters, status="failed", error=str(exc)
+            )
             raise
 
         if self._cancel_requested:
-            await self._run_finalizing_stage(parameters=parameters, status="canceled", error=None)
+            await self._run_finalizing_stage(
+                parameters=parameters, status="canceled", error=None
+            )
             return {"status": "canceled"}
 
         await self._run_proposals_stage(parameters=parameters)
 
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
-        await self._run_finalizing_stage(parameters=parameters, status="success", error=None)
+        await self._run_finalizing_stage(
+            parameters=parameters, status="success", error=None
+        )
 
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(STATE_COMPLETED, summary="Workflow completed successfully.")
@@ -580,7 +616,11 @@ class MoonMindRunWorkflow:
                 "run_id": workflow.info().run_id,
                 "link_type": "plan",
             },
-            idempotency_key=f"{workflow.info().workflow_id}_plan_generate" if workflow.patched("idempotency_key_phase3") else None,
+            idempotency_key=(
+                f"{workflow.info().workflow_id}_plan_generate"
+                if workflow.patched("idempotency_key_phase3")
+                else None
+            ),
         )
 
         plan_result = await execute_typed_activity(
@@ -683,9 +723,11 @@ class MoonMindRunWorkflow:
                     "plan node tool definition is required (node.skill is legacy alias)"
                 )
 
-            tool_type = str(
-                selected_node.get("type") or selected_node.get("kind") or "skill"
-            ).strip().lower()
+            tool_type = (
+                str(selected_node.get("type") or selected_node.get("kind") or "skill")
+                .strip()
+                .lower()
+            )
             tool_name = str(
                 selected_node.get("name") or selected_node.get("id") or ""
             ).strip()
@@ -710,9 +752,13 @@ class MoonMindRunWorkflow:
                             tool_name=tool_name,
                             resolved_skillset_ref=registry_snapshot_ref,
                         )
-                        child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
+                        child_workflow_id = (
+                            f"{workflow.info().workflow_id}:agent:{node_id}"
+                        )
                         if system_retries > 0:
-                            child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
+                            child_workflow_id = (
+                                f"{child_workflow_id}:retry{system_retries}"
+                            )
                         self._active_agent_child_workflow_id = child_workflow_id
                         self._active_agent_id = request.agent_id
                         try:
@@ -738,12 +784,18 @@ class MoonMindRunWorkflow:
                         raise ValueError("plan node tool name/version is required")
                     invocation_payload = {
                         "id": node_id,
-                        "tool": {"type": "skill", "name": tool_name, "version": tool_version},
+                        "tool": {
+                            "type": "skill",
+                            "name": tool_name,
+                            "version": tool_version,
+                        },
                         "skill": {"name": tool_name, "version": tool_version},
                         "inputs": node_inputs,
                         "options": node.get("options", {}),
                     }
-                    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
+                    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "mm.skill.execute"
+                    )
                     if skill_definitions_by_key:
                         skill_key = (tool_name, tool_version)
                         if skill_key not in skill_definitions_by_key:
@@ -755,7 +807,10 @@ class MoonMindRunWorkflow:
                         route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
                             skill_definitions_by_key[skill_key]
                         )
-                    if route.activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
+                    if route.activity_type not in {
+                        "mm.skill.execute",
+                        "mm.tool.execute",
+                    }:
                         raise ValueError(
                             "plan node tool executor "
                             f"'{route.activity_type}' is unsupported by MoonMind.Run; "
@@ -774,7 +829,9 @@ class MoonMindRunWorkflow:
                             },
                         }
                         if workflow.patched("idempotency_key_phase3"):
-                            execute_payload["idempotency_key"] = f"{workflow.info().workflow_id}_{node_id}_execute"
+                            execute_payload["idempotency_key"] = (
+                                f"{workflow.info().workflow_id}_{node_id}_execute"
+                            )
 
                         execution_result = await workflow.execute_activity(
                             route.activity_type,
@@ -806,12 +863,9 @@ class MoonMindRunWorkflow:
                         execution_result
                     )
 
-                    retryable = (
-                        failure_message == "system_error"
-                        or (
-                            failure_message == "execution_error"
-                            and tool_type == "agent_runtime"
-                        )
+                    retryable = failure_message == "system_error" or (
+                        failure_message == "execution_error"
+                        and tool_type == "agent_runtime"
                     )
                     if retryable and system_retries < 3:
                         system_retries += 1
@@ -839,7 +893,7 @@ class MoonMindRunWorkflow:
 
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
-                
+
                 # If still not found, check the diagnostics artifact if present
                 if pull_request_url is None and tool_type == "skill":
                     outputs = self._get_from_result(execution_result, "outputs") or {}
@@ -855,22 +909,33 @@ class MoonMindRunWorkflow:
                                 **self._execute_kwargs_for_route(artifact_read_route),
                             )
                             if isinstance(diag_payload, bytes):
-                                diag_text = diag_payload.decode("utf-8", errors="replace")
+                                diag_text = diag_payload.decode(
+                                    "utf-8", errors="replace"
+                                )
                             elif isinstance(diag_payload, str):
                                 diag_text = diag_payload
                             else:
                                 diag_text = str(diag_payload)
-                                
+
                             pr_match = _GITHUB_PR_URL_PATTERN.search(diag_text)
                             if pr_match:
                                 pull_request_url = pr_match.group(0)
                         except Exception as e:
-                            self._get_logger().warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
-                            
+                            self._get_logger().warning(
+                                f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}"
+                            )
+
         if require_pull_request_url and pull_request_url is None:
-            last_tool = str(
-                (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get("name") or ""
-            ).strip().lower()
+            last_tool = (
+                str(
+                    (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get(
+                        "name"
+                    )
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             # Derive the last node's effective agent_id using the same
             # resolution logic as _build_agent_execution_request so that
             # Jules-via-runtime-settings (e.g. tool.name="auto" with
@@ -878,15 +943,21 @@ class MoonMindRunWorkflow:
             _last_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
             _last_rt = _last_inputs.get("runtime") or {}
             last_agent_id = (
-                _last_rt.get("mode")
-                or _last_rt.get("agent_id")
-                or _last_inputs.get("targetRuntime")
-                or last_tool
-                or ""
-            ).strip().lower()
-            
-            ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
-            
+                (
+                    _last_rt.get("mode")
+                    or _last_rt.get("agent_id")
+                    or _last_inputs.get("targetRuntime")
+                    or last_tool
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
+
+            ws = (
+                self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
+            )
+
             if last_agent_id in ("jules", "jules_api", "github_pr_creator"):
                 self._get_logger().info(
                     "Skipping native PR creation: agent '%s' handles its own PRs.",
@@ -895,11 +966,15 @@ class MoonMindRunWorkflow:
             else:
                 agent_outputs = {}
                 if "execution_result" in locals():
-                    agent_outputs = self._get_from_result(execution_result, "outputs") or {}
+                    agent_outputs = (
+                        self._get_from_result(execution_result, "outputs") or {}
+                    )
                     if not isinstance(agent_outputs, dict):
                         agent_outputs = {}
-                
-                last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
+
+                last_node_inputs = (
+                    ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
+                )
                 head_branch = (
                     agent_outputs.get("branch")
                     or agent_outputs.get("targetBranch")
@@ -915,7 +990,7 @@ class MoonMindRunWorkflow:
                     or last_node_inputs.get("startingBranch")
                     or "main"
                 )
-                
+
                 push_status = agent_outputs.get("push_status", "")
                 if push_status == "no_commits":
                     self._get_logger().info(
@@ -952,7 +1027,9 @@ class MoonMindRunWorkflow:
                         summary = self._get_from_result(create_result, "summary") or ""
                         if pr_url:
                             pull_request_url = pr_url
-                            self._get_logger().info(f"Natively created PR: {pull_request_url}")
+                            self._get_logger().info(
+                                f"Natively created PR: {pull_request_url}"
+                            )
                         else:
                             if "422" in summary:
                                 self._get_logger().warning(
@@ -1073,13 +1150,27 @@ class MoonMindRunWorkflow:
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
-        for ws_key in ("repository", "repo", "startingBranch", "targetBranch", "branch"):
+        for ws_key in (
+            "repository",
+            "repo",
+            "startingBranch",
+            "targetBranch",
+            "branch",
+        ):
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
 
         parameters: dict[str, Any] = {}
-        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts", "steps"):
+        for param_key in (
+            "model",
+            "effort",
+            "publishMode",
+            "allowed_tools",
+            "stepCount",
+            "maxAttempts",
+            "steps",
+        ):
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
@@ -1127,7 +1218,8 @@ class MoonMindRunWorkflow:
             execution_profile_ref=execution_profile_ref,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
-            instruction_ref=node_inputs.get("instructions") or node_inputs.get("instructionRef"),
+            instruction_ref=node_inputs.get("instructions")
+            or node_inputs.get("instructionRef"),
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=node_inputs.get("inputRefs") or [],
             workspace_spec=workspace_spec,
@@ -1159,9 +1251,10 @@ class MoonMindRunWorkflow:
 
         normalized_agent_id = _normalize_agent_runtime_id(agent_id)
         requested_model = str(parameters.get("model") or "").strip().lower()
-        if normalized_agent_id in {"claude", "claude_code"} and requested_model.startswith(
-            "minimax"
-        ):
+        if normalized_agent_id in {
+            "claude",
+            "claude_code",
+        } and requested_model.startswith("minimax"):
             selector["providerId"] = "minimax"
 
         return selector
@@ -1172,7 +1265,9 @@ class MoonMindRunWorkflow:
             failure = result.get("failure_class") or result.get("failureClass")
             summary = result.get("summary") or ""
             output_refs = result.get("output_refs") or result.get("outputRefs") or []
-            diagnostics_ref = result.get("diagnostics_ref") or result.get("diagnosticsRef")
+            diagnostics_ref = result.get("diagnostics_ref") or result.get(
+                "diagnosticsRef"
+            )
             metadata = result.get("metadata") or {}
         else:
             failure = getattr(result, "failure_class", None)
@@ -1214,7 +1309,9 @@ class MoonMindRunWorkflow:
         step_instructions: list[str] = []
         if plan_ref:
             try:
-                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "artifact.read"
+                )
                 plan_payload = await execute_typed_activity(
                     "artifact.read",
                     ArtifactReadInput(
@@ -1278,7 +1375,8 @@ class MoonMindRunWorkflow:
                             or workspace_spec.get("branch")
                             or "main",
                             "targetBranch": workspace_spec.get("targetBranch"),
-                            "publishMode": self._publish_mode(integration_parameters) or "none",
+                            "publishMode": self._publish_mode(integration_parameters)
+                            or "none",
                         },
                     }
                 )
@@ -1346,7 +1444,7 @@ class MoonMindRunWorkflow:
 
         external_id = self._get_from_result(start_result, "external_id")
         self._correlation_id = external_id
-        
+
         self._waiting_reason = "external_completion"
         self._attention_required = False
         self._update_search_attributes()
@@ -1359,7 +1457,11 @@ class MoonMindRunWorkflow:
             max_poll_interval_seconds = 300
             _poll_terminal = False
 
-            while not self._resume_requested and not self._cancel_requested and not _poll_terminal:
+            while (
+                not self._resume_requested
+                and not self._cancel_requested
+                and not _poll_terminal
+            ):
                 self._wait_cycle_count += 1
                 try:
                     await workflow.wait_condition(
@@ -1399,16 +1501,25 @@ class MoonMindRunWorkflow:
                         self._update_memo()
 
                     status = self._get_from_result(poll_result, "normalized_status")
-                    if status in ("completed", "failed", "canceled", "awaiting_feedback"):
+                    if status in (
+                        "completed",
+                        "failed",
+                        "canceled",
+                        "awaiting_feedback",
+                    ):
                         # Temporal records which branch was taken; replay without the patch marker
                         # must follow the pre-patch control flow (else branch + clear below).
                         if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
                             _poll_terminal = True
                         else:
                             self._resume_requested = True
-                        self._external_status = "completed" if status == "awaiting_feedback" else status
+                        self._external_status = (
+                            "completed" if status == "awaiting_feedback" else status
+                        )
                         if status == "failed":
-                            self._get_logger().warning(f"Integration failed: {poll_result}")
+                            self._get_logger().warning(
+                                f"Integration failed: {poll_result}"
+                            )
                         elif status == "canceled":
                             self._cancel_requested = True
                 except Exception as exc:
@@ -1448,7 +1559,9 @@ class MoonMindRunWorkflow:
             and not self._cancel_requested
             and self._external_status == "completed"
         ):
-            self._get_logger().info("Jules branch-publish: fetching result for PR merge")
+            self._get_logger().info(
+                "Jules branch-publish: fetching result for PR merge"
+            )
             try:
                 fetch_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                     self._integration_activity_type("fetch_result")
@@ -1463,10 +1576,9 @@ class MoonMindRunWorkflow:
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     **self._execute_kwargs_for_route(fetch_route),
                 )
-                pr_url = (
-                    self._get_from_result(fetch_result, "external_url")
-                    or self._get_from_result(fetch_result, "url")
-                )
+                pr_url = self._get_from_result(
+                    fetch_result, "external_url"
+                ) or self._get_from_result(fetch_result, "url")
                 # If external_url is the session URL, try to extract PR URL
                 # from the summary or output_refs text.
                 if pr_url and not _GITHUB_PR_URL_PATTERN.search(pr_url):
@@ -1486,9 +1598,8 @@ class MoonMindRunWorkflow:
                     starting_branch = (
                         ws.get("startingBranch") or ws.get("branch") or "main"
                     )
-                    base_override = (
-                        parameters.get("publishBaseBranch")
-                        or ws.get("publishBaseBranch")
+                    base_override = parameters.get("publishBaseBranch") or ws.get(
+                        "publishBaseBranch"
                     )
                     # Only re-target when explicitly different from starting
                     effective_base = (
@@ -1516,9 +1627,7 @@ class MoonMindRunWorkflow:
                         **self._execute_kwargs_for_route(merge_route),
                     )
                     merged = self._get_from_result(merge_result, "merged")
-                    merge_summary = (
-                        self._get_from_result(merge_result, "summary") or ""
-                    )
+                    merge_summary = self._get_from_result(merge_result, "summary") or ""
                     if merged:
                         self._get_logger().info(
                             "Jules branch-publish: PR merged: %s", merge_summary
@@ -1528,17 +1637,13 @@ class MoonMindRunWorkflow:
                             f"Jules branch-publish: merge failed: {merge_summary}"
                         )
                 else:
-                    raise ValueError(
-                        "Jules branch-publish: no PR URL found in result"
-                    )
+                    raise ValueError("Jules branch-publish: no PR URL found in result")
             except Exception as exc:
                 raise ValueError(
                     f"Jules branch-publish auto-merge failed: {exc}"
                 ) from exc
 
-    async def _run_proposals_stage(
-        self, *, parameters: dict[str, Any]
-    ) -> None:
+    async def _run_proposals_stage(self, *, parameters: dict[str, Any]) -> None:
         """Best-effort proposal generation phase.
 
         Runs only when ``proposeTasks`` is set in ``initialParameters``.
@@ -1567,7 +1672,9 @@ class MoonMindRunWorkflow:
                 "parameters": parameters,
             }
             if workflow.patched("idempotency_key_phase3"):
-                generate_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_generate"
+                generate_payload["idempotency_key"] = (
+                    f"{workflow.info().workflow_id}_proposal_generate"
+                )
 
             candidates = await workflow.execute_activity(
                 "proposal.generate",
@@ -1589,26 +1696,31 @@ class MoonMindRunWorkflow:
             return
 
         try:
-            submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                "proposal.submit"
-            )
+            submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("proposal.submit")
             task_node = parameters.get("task")
             task = task_node if isinstance(task_node, dict) else {}
             policy = task.get("proposalPolicy")
             if isinstance(policy, dict):
                 from moonmind.workflows.tasks.task_contract import TaskProposalPolicy
+
                 try:
                     parsed_policy = TaskProposalPolicy.model_validate(policy)
                     max_items_dict = parsed_policy.max_items or {}
-                    max_items_val = max_items_dict.get("project", parameters.get("proposalMaxItems", 10))
-                    
+                    max_items_val = max_items_dict.get(
+                        "project", parameters.get("proposalMaxItems", 10)
+                    )
+
                     policy_payload = {
                         "max_items": max_items_val,
-                        "targets": parsed_policy.targets or parameters.get("proposalTargets", "project"),
-                        "default_runtime": parsed_policy.default_runtime or parameters.get("proposalDefaultRuntime"),
+                        "targets": parsed_policy.targets
+                        or parameters.get("proposalTargets", "project"),
+                        "default_runtime": parsed_policy.default_runtime
+                        or parameters.get("proposalDefaultRuntime"),
                     }
                 except Exception as exc:
-                    self._get_logger().warning("Failed to validate task.proposalPolicy: %s", exc)
+                    self._get_logger().warning(
+                        "Failed to validate task.proposalPolicy: %s", exc
+                    )
                     policy_payload = {
                         "max_items": parameters.get("proposalMaxItems", 10),
                         "targets": parameters.get("proposalTargets", "project"),
@@ -1633,7 +1745,9 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
             }
             if workflow.patched("idempotency_key_phase3"):
-                submit_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_submit"
+                submit_payload["idempotency_key"] = (
+                    f"{workflow.info().workflow_id}_proposal_submit"
+                )
 
             submit_result = await workflow.execute_activity(
                 "proposal.submit",
@@ -1642,9 +1756,7 @@ class MoonMindRunWorkflow:
                 **self._execute_kwargs_for_route(submit_route),
             )
             if isinstance(submit_result, dict):
-                self._proposals_submitted = submit_result.get(
-                    "submitted_count", 0
-                )
+                self._proposals_submitted = submit_result.get("submitted_count", 0)
                 errors = submit_result.get("errors") or []
                 self._proposals_errors.extend(errors)
         except Exception as exc:
@@ -1652,7 +1764,6 @@ class MoonMindRunWorkflow:
                 "Proposal submission failed (best-effort): %s", exc
             )
             self._proposals_errors.append(f"submission failed: {str(exc)[:200]}")
-
 
     async def _run_finalizing_stage(
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
@@ -1671,7 +1782,11 @@ class MoonMindRunWorkflow:
                     # Guard with workflow.patched for replay safety.
                     if workflow.patched("run-workflow-pr-status-v1"):
                         # Use explicit PR URL tracking from execution stage
-                        code = "PUBLISHED_PR" if self._pull_request_url else "NO_PR_CREATED"
+                        code = (
+                            "PUBLISHED_PR"
+                            if self._pull_request_url
+                            else "NO_PR_CREATED"
+                        )
                     else:
                         code = "PUBLISHED_PR"
                 elif publish_mode == "branch":
@@ -1686,7 +1801,10 @@ class MoonMindRunWorkflow:
                 "timestamps": {
                     "startedAt": workflow.info().start_time.isoformat(),
                     "finishedAt": workflow.now().isoformat(),
-                    "durationMs": int((workflow.now() - workflow.info().start_time).total_seconds() * 1000),
+                    "durationMs": int(
+                        (workflow.now() - workflow.info().start_time).total_seconds()
+                        * 1000
+                    ),
                 },
                 "finishOutcome": {
                     "code": code,
@@ -1697,21 +1815,32 @@ class MoonMindRunWorkflow:
                     "mode": self._publish_mode(parameters),
                     "status": "skipped" if status != "success" else "published",
                     "reason": (
-                        "run did not complete successfully" if status in ("failed", "canceled")
-                        else "publishing disabled" if self._publish_mode(parameters) == "none"
-                        else "published successfully" if status == "success"
-                        else "no local changes"
+                        "run did not complete successfully"
+                        if status in ("failed", "canceled")
+                        else (
+                            "publishing disabled"
+                            if self._publish_mode(parameters) == "none"
+                            else (
+                                "published successfully"
+                                if status == "success"
+                                else "no local changes"
+                            )
+                        )
                     ),
                 },
                 "proposals": {
-                    "requested": _coerce_bool(parameters.get("proposeTasks"), default=False),
+                    "requested": _coerce_bool(
+                        parameters.get("proposeTasks"), default=False
+                    ),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,
-                }
+                },
             }
 
-            artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.create")
+            artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "artifact.create"
+            )
             artifact_ref, upload_desc = await workflow.execute_activity(
                 "artifact.create",
                 {
@@ -1722,7 +1851,9 @@ class MoonMindRunWorkflow:
                 **self._execute_kwargs_for_route(artifact_create_route),
             )
 
-            artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
+            artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "artifact.write_complete"
+            )
             resolved_artifact_id = (
                 self._get_from_result(artifact_ref, "artifact_id")
                 or self._get_from_result(artifact_ref, "artifactId")
@@ -1875,7 +2006,10 @@ class MoonMindRunWorkflow:
         if self._scheduled_for:
             try:
                 from datetime import datetime
-                attributes["mm_scheduled_for"] = datetime.fromisoformat(self._scheduled_for.replace("Z", "+00:00"))
+
+                attributes["mm_scheduled_for"] = datetime.fromisoformat(
+                    self._scheduled_for.replace("Z", "+00:00")
+                )
             except ValueError:
                 self._get_logger().warning(
                     "Could not parse scheduled_for for search attribute: %s",
@@ -1969,7 +2103,9 @@ class MoonMindRunWorkflow:
 
         # Use the runtime_id passed from the child via profile_assigned signal.
         # Fall back to inference from child_workflow_id if not available.
-        runtime_id = self._assigned_runtime_id or self._infer_runtime_from_child(child_wf_id)
+        runtime_id = self._assigned_runtime_id or self._infer_runtime_from_child(
+            child_wf_id
+        )
         if runtime_id:
             manager_id = self._manager_workflow_id(runtime_id)
             try:
@@ -1977,9 +2113,7 @@ class MoonMindRunWorkflow:
                 # Schedule the async signal without awaiting - best effort cleanup.
                 # The manager's verify_lease_holders will reclaim the slot if this fails.
                 asyncio.create_task(
-                    self._signal_release_slot(
-                        manager_handle, child_wf_id, profile_id
-                    )
+                    self._signal_release_slot(manager_handle, child_wf_id, profile_id)
                 )
             except Exception:
                 self._get_logger().warning(
@@ -2070,6 +2204,20 @@ class MoonMindRunWorkflow:
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot approve a completed workflow.")
 
+    @workflow.update(name="SendMessage")
+    async def send_message(self, payload: dict[str, Any] | None = None) -> None:
+        message = self._extract_operator_message(payload)
+        if message is not None:
+            await self._forward_operator_message_to_active_child({"message": message})
+        self._update_search_attributes()
+
+    @send_message.validator
+    def validate_send_message(self, payload: dict[str, Any] | None = None) -> None:
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot send a message to a completed workflow.")
+        if self._extract_operator_message(payload) is None:
+            raise ValueError("message is required when sending an operator message.")
+
     @workflow.update(name="Cancel")
     def cancel(self, reason: Optional[str] = None) -> None:
         self._cancel_requested = True
@@ -2089,7 +2237,9 @@ class MoonMindRunWorkflow:
     def reschedule(self, new_scheduled_for: str) -> None:
         self._scheduled_for = new_scheduled_for
         self._reschedule_requested = True
-        self._set_state(STATE_SCHEDULED, summary=f"Execution rescheduled for {self._scheduled_for}.")
+        self._set_state(
+            STATE_SCHEDULED, summary=f"Execution rescheduled for {self._scheduled_for}."
+        )
         self._update_search_attributes()
 
     @workflow.signal(name="ExternalEvent")
@@ -2113,7 +2263,11 @@ class MoonMindRunWorkflow:
             "awaiting_feedback",
         ):
             if normalized_status:
-                self._external_status = "completed" if normalized_status == "awaiting_feedback" else normalized_status
+                self._external_status = (
+                    "completed"
+                    if normalized_status == "awaiting_feedback"
+                    else normalized_status
+                )
             elif event_type == "completed":
                 self._external_status = "completed"
 
@@ -2133,6 +2287,16 @@ class MoonMindRunWorkflow:
             elif normalized_status == "canceled":
                 self._cancel_requested = True
             self._resume_requested = True
+
+    @staticmethod
+    def _extract_operator_message(payload: Mapping[str, Any] | None) -> str | None:
+        if not isinstance(payload, Mapping):
+            return None
+        candidate = payload.get("message")
+        if candidate is None:
+            return None
+        normalized = str(candidate).strip()
+        return normalized or None
 
     @staticmethod
     def _extract_clarification_message(payload: Mapping[str, Any] | None) -> str | None:
@@ -2166,7 +2330,10 @@ class MoonMindRunWorkflow:
             return False
         if not self._active_agent_child_workflow_id:
             return False
-        if str(self._active_agent_id or "").strip().lower() not in {"jules", "jules_api"}:
+        if str(self._active_agent_id or "").strip().lower() not in {
+            "jules",
+            "jules_api",
+        }:
             return False
         handle = workflow.get_external_workflow_handle(
             self._active_agent_child_workflow_id
