@@ -540,14 +540,35 @@ class ManagedRuntimeLauncher:
             env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
             env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env_overrides,
-            cwd=resolved_workspace_path,
-        )
+        # The claude CLI refuses --dangerously-skip-permissions when running as root
+        # (security restriction). For claude_code runtime, drop to the app user.
+        _run_as_root = os.geteuid() == 0
+        _is_claude_code = profile.runtime_id == "claude_code"
+        _needs_priv_drop = _run_as_root and _is_claude_code
+
+        if _needs_priv_drop:
+            # Build inline env string for su -c (it doesn't inherit parent env)
+            env_str = " ".join(
+                f"{shlex.quote(k)}={shlex.quote(v)}"
+                for k, v in env_overrides.items()
+            )
+            full_cmd_str = f"{env_str} {shlex.join(cmd)}"
+            process = await asyncio.create_subprocess_exec(
+                "su", "app", "-c", full_cmd_str,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=resolved_workspace_path,
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_overrides,
+                cwd=resolved_workspace_path,
+            )
 
         record = ManagedRunRecord(
             run_id=run_id,
