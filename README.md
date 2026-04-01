@@ -72,4 +72,4 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 MIT — free for personal and commercial use.
 
 ### UI Development
-To develop the frontend UI, run `npm install` first. Then run `npm run ui:dev` to start the Vite development server (note: you still need the FastAPI backend running for API calls and template rendering). For production builds, run `npm run ui:build` which outputs assets to the `api_service/static/dist/` directory. **Do not edit files in `dist/` directly**, as they are generated build artifacts.
+To develop the frontend UI, run `npm install` first. Then run `npm run ui:dev` to start the Vite development server (note: you still need the FastAPI backend running for API calls and template rendering). If you change Tailwind-backed dashboard markup or API contracts consumed by the frontend, run `npm run generate` to refresh the checked-in generated assets before pushing. For production builds, run `npm run ui:build` which outputs assets to the `api_service/static/dist/` directory. **Do not edit files in `dist/` directly**, as they are generated build artifacts.
