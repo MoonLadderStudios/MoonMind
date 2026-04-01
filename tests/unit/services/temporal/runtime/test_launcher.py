@@ -779,7 +779,7 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     )
     request = _make_request()
 
-    record, process, _endpoints, _cleanup = await launcher.launch(
+    _, _, _, _ = await launcher.launch(
         run_id="root-run",
         request=request,
         profile=profile,
