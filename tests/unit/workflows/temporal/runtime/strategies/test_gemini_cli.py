@@ -90,7 +90,12 @@ class TestGeminiCliBuildCommand:
         profile = _make_profile()
         request = _make_request(instruction_ref="Fix the bug")
         cmd = s.build_command(profile, request)
-        assert cmd == ["gemini", "--yolo", "--prompt", "Fix the bug"]
+        # When profile.default_model is None, gemini_cli runtime default applies.
+        assert cmd == [
+            "gemini",
+            "--model", "gemini-3.1-pro-preview",
+            "--yolo", "--prompt", "Fix the bug",
+        ]
 
     def test_with_model(self) -> None:
         s = GeminiCliStrategy()
@@ -123,8 +128,10 @@ class TestGeminiCliBuildCommand:
         profile = _make_profile(default_effort="high")
         request = _make_request(instruction_ref="Think hard")
         cmd = s.build_command(profile, request)
+        # No --effort, but runtime default model applies since default_model is None.
         assert cmd == [
             "gemini",
+            "--model", "gemini-3.1-pro-preview",
             "--yolo", "--prompt", "Think hard",
         ]
 
@@ -153,8 +160,10 @@ class TestGeminiCliBuildCommand:
         )
         cmd = s.build_command(profile, request)
         assert "--effort" not in cmd
+        # Runtime default model still applies.
         assert cmd == [
             "gemini",
+            "--model", "gemini-3.1-pro-preview",
             "--yolo", "--prompt", "Think hard",
         ]
 
@@ -163,15 +172,18 @@ class TestGeminiCliBuildCommand:
         profile = _make_profile()
         request = _make_request()
         cmd = s.build_command(profile, request)
-        assert cmd == ["gemini"]
+        # No prompt but runtime default model still applies.
+        assert cmd == ["gemini", "--model", "gemini-3.1-pro-preview"]
 
     def test_custom_command_template(self) -> None:
         s = GeminiCliStrategy()
         profile = _make_profile(command_template=["gemini", "--sandbox"])
         request = _make_request(instruction_ref="Test")
         cmd = s.build_command(profile, request)
+        # Runtime default model applies since default_model is None.
         assert cmd == [
             "gemini", "--sandbox",
+            "--model", "gemini-3.1-pro-preview",
             "--yolo", "--prompt", "Test",
         ]
 

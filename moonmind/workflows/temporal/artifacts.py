@@ -2206,6 +2206,8 @@ class TemporalArtifactActivities:
                     "api_key_ref": None,
                     "runtime_env_overrides": row.env_template or {},
                     "api_key_env_var": None,
+                    "default_model": row.default_model,
+                    "model_overrides": row.model_overrides or {},
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,

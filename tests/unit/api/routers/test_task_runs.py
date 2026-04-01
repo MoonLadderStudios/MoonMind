@@ -284,21 +284,54 @@ def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
     assert "[merged-order unavailable: spool metadata missing]" in response.text
 
 
+def test_stream_task_run_log_merged_falls_back_to_legacy_log_artifact(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "combined.log").write_text(
+        "legacy combined output\nwarning\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.log_artifact_ref = "run/combined.log"
+    mock_record.workspace_path = str(tmp_path / "workspace-without-spool")
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "legacy-log-artifact"
+    assert response.text == "legacy combined output\nwarning\n"
+
+
 def test_stream_task_run_log_merged_returns_404_when_both_artifacts_absent(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """When merged_log_artifact_ref and both stdout/stderr refs are absent, must return 404."""
+    """When merged, split, and legacy log artifacts are absent, must return 404."""
     test_client, _ = client
     mock_record = MagicMock()
     mock_record.merged_log_artifact_ref = None
     mock_record.stdout_artifact_ref = None
     mock_record.stderr_artifact_ref = None
+    mock_record.log_artifact_ref = None
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
         response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
 
     assert response.status_code == 404
-    assert "no stdout/stderr artifacts" in response.json()["detail"].lower()
+    assert "no stdout/stderr or legacy log artifacts" in response.json()["detail"].lower()
 
 
 def test_stream_task_run_log_merged_uses_spool_when_stdout_stderr_refs_are_absent(

@@ -102,14 +102,14 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
-    assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini_cli", "claude")
+    assert config["system"]["defaultTaskRuntime"] in ("codex_cli", "gemini_cli", "claude_code")
     assert "defaultTaskModel" in config["system"]
     assert "defaultTaskEffort" in config["system"]
     assert "defaultTaskModelByRuntime" in config["system"]
     assert "defaultTaskEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
-    assert "claude" in config["system"]["supportedWorkerRuntimes"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert "claude_code" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
     assert "templateSaveEnabled" in config["system"]["taskTemplateCatalog"]
@@ -162,7 +162,10 @@ def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> 
 
 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
-    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude")
+    # The alias 'claude' is normalized to 'claude_code' internally, but since
+    # 'claude' is not in supportedTaskRuntimes (now 'claude_code' is), it will
+    # fall back to the settings-configured default (codex_cli) rather than 'claude'.
+    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude_code")
     monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
@@ -170,15 +173,16 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     config = build_runtime_config("/tasks")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
-    assert config["system"]["defaultTaskRuntime"] == "claude"
+    assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
+    assert config["system"]["defaultTaskRuntime"] == "claude_code"
+    assert config["system"]["defaultTaskModel"] == "Sonnet 4.6"
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
     monkeypatch.setattr(settings.workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.workflow, "codex_effort", "medium")
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
     monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
@@ -187,11 +191,28 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultRepository"] == "Octo/Repo"
     assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
     assert config["system"]["defaultTaskEffort"] == "medium"
-    assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
+    assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-test-codex"
     assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-2.5-pro"
-    assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
+    assert config["system"]["defaultTaskEffortByRuntime"]["codex_cli"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
     assert config["system"]["defaultProposeTasks"] is False
+
+
+def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("MOONMIND_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setattr(settings.workflow, "codex_model", None)
+    monkeypatch.setattr(settings.workflow, "codex_effort", None)
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-5.4"
+    assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro-preview"
+    assert config["system"]["defaultTaskModelByRuntime"]["claude_code"] == "Sonnet 4.6"
 
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
@@ -206,7 +227,7 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
 
     config = build_runtime_config("/tasks")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
 
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
@@ -256,9 +277,9 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     config = build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == [
-        "codex",
+        "codex_cli",
         "gemini_cli",
-        "claude",
+        "claude_code",
         "codex_cloud",
         "jules",
     ]
@@ -275,12 +296,9 @@ def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> Non
     assert config["features"]["logStreamingEnabled"] is False
 
 
-def test_build_runtime_config_temporal_live_session_endpoint() -> None:
+def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
     config = build_runtime_config("/tasks")
-    assert (
-        config["sources"]["temporal"]["liveSession"]
-        == "/api/task-runs/{id}/live-session"
-    )
+    assert "liveSession" not in config["sources"]["temporal"]
 
 
 # ---------------------------------------------------------------------------

@@ -1069,10 +1069,17 @@ class WorkflowSettings(BaseSettings):
     @field_validator("default_task_runtime", mode="before")
     @classmethod
     def _normalize_default_task_runtime(cls, value: object) -> str:
-        """Normalize queue runtime fallback and reject unknown values."""
+        """Normalize queue runtime fallback and reject unknown values.
 
-        normalized = str(value or "").strip().lower() or "codex"
-        allowed = {"codex", "gemini_cli", "claude", "jules"}
+        Accepts both canonical IDs (codex_cli, claude_code) and legacy aliases
+        (codex, claude) and normalizes them to canonical form so internal state
+        is consistent with the runtime_defaults canonical-first direction.
+        """
+        normalized = str(value or "").strip().lower() or "codex_cli"
+        # Map legacy aliases to canonical before validation.
+        _aliases = {"codex": "codex_cli", "claude": "claude_code"}
+        normalized = _aliases.get(normalized, normalized)
+        allowed = {"codex_cli", "gemini_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_task_runtime must be one of: {supported}")

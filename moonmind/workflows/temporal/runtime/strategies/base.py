@@ -80,15 +80,28 @@ class ManagedRuntimeStrategy(ABC):
         """
 
     def get_model(self, profile: Any, request: Any) -> str | None:
-        """Extract model from request parameters or profile default with overrides."""
+        """Extract model from request parameters or profile default with overrides.
+
+        Resolution order:
+        1. ``request.parameters["model"]`` (task-level override with model_overrides applied).
+        2. ``profile.default_model`` (provider-profile default).
+        3. Runtime default from the canonical registry.
+        """
         requested_model = request.parameters.get("model") if request.parameters else None
-        
+
         if requested_model:
             overrides = getattr(profile, "model_overrides", {}) or {}
             resolved = overrides.get(requested_model, requested_model)
             return resolved
-            
-        return getattr(profile, "default_model", None)
+
+        profile_default = str(getattr(profile, "default_model", None) or "").strip() or None
+        if profile_default:
+            return profile_default
+
+        # Runtime-default fallback so launch adapters never silently drop the model.
+        from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
+        runtime_model, _ = resolve_runtime_defaults(self.runtime_id)
+        return runtime_model
 
     def get_effort(self, profile: Any, request: Any) -> str | None:
         """Extract effort from request parameters or profile default."""

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Callable, Literal, Mapping
 
-ALLOWED_WORKER_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules", "universal"})
+ALLOWED_WORKER_RUNTIMES = frozenset({"codex", "codex_cli", "gemini_cli", "claude", "claude_code", "jules", "universal"})
 ALLOWED_GEMINI_CLI_AUTH_MODES = frozenset({"api_key", "oauth"})
 GeminiHomeValidationIssue = Literal[
     "missing_for_oauth",

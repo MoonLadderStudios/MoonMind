@@ -28,6 +28,8 @@ interface ProviderProfilesManagerProps {
   secretSlugs: string[];
   onNotice: (notice: Notice | null) => void;
   queryClient: QueryClient;
+  /** Map of canonical runtime_id → default model from the boot config. */
+  defaultTaskModelByRuntime?: Record<string, string>;
 }
 
 interface ProviderProfileFormState {
@@ -118,6 +120,7 @@ export function ProviderProfilesManager({
   secretSlugs,
   onNotice,
   queryClient,
+  defaultTaskModelByRuntime = {},
 }: ProviderProfilesManagerProps) {
   const [form, setForm] = useState<ProviderProfileFormState>(() => defaultFormState());
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
@@ -312,9 +315,15 @@ export function ProviderProfilesManager({
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
                     {profile.default_model ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Default model: {profile.default_model}
+                        Model: {profile.default_model}
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="text-xs text-slate-400 dark:text-slate-500 italic">
+                        {defaultTaskModelByRuntime[profile.runtime_id]
+                          ? `Inherits: ${defaultTaskModelByRuntime[profile.runtime_id]}`
+                          : 'No model (runtime default)'}
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-4 text-slate-700 dark:text-slate-300">{profile.runtime_id}</td>
                   <td className="px-3 py-4">
@@ -498,7 +507,7 @@ export function ProviderProfilesManager({
               <option value="oauth_home">oauth_home</option>
             </select>
           </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+          <div className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
             <span>Default model</span>
             <input
               className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -506,9 +515,20 @@ export function ProviderProfilesManager({
               onChange={(event) =>
                 setForm((current) => ({ ...current, defaultModel: event.target.value }))
               }
-              placeholder="gpt-5.4"
+              placeholder={
+                defaultTaskModelByRuntime[form.runtimeId]
+                  ? `Inherited: ${defaultTaskModelByRuntime[form.runtimeId]}`
+                  : 'Leave blank to inherit runtime default'
+              }
             />
-          </label>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Leave blank to inherit the runtime default model
+              {defaultTaskModelByRuntime[form.runtimeId]
+                ? ` (${defaultTaskModelByRuntime[form.runtimeId]})`
+                : ''}.
+              Set an explicit value to override it for this profile.
+            </p>
+          </div>
           <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"
