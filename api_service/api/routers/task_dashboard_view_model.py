@@ -121,9 +121,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
 
     supported_task_runtimes = _build_supported_task_runtimes()
     temporal_dashboard = settings.temporal_dashboard
-    configured_runtime = (
-        str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower()
-    )
+    configured_runtime = normalize_runtime_id(
+        str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower() or None
+    ) if os.environ.get("MOONMIND_WORKER_RUNTIME", "").strip() else ""
     if configured_runtime in supported_task_runtimes:
         default_task_runtime = configured_runtime
     else:

@@ -71,6 +71,9 @@ def resolve_effective_model(
         ``"task_override"``, ``"provider_profile_default"``,
         ``"runtime_default"``, or ``"none"``.
     """
+    # Preserve the raw requested_model exactly for pass-through; only use a
+    # clean copy internally to detect blankness. This keeps `codex.model` and
+    # `codex.effort` inputs unmodified (Compatibility Policy §codex).
     clean_requested = (str(requested_model or "").strip()) or None
 
     # 1. Explicit task-level model takes top priority.
@@ -83,15 +86,16 @@ def resolve_effective_model(
         if profile_model:
             return profile_model, _MODEL_SOURCE_PROFILE_DEFAULT
 
-    # 3. Runtime default.
-    canonical_runtime = normalize_runtime_id(runtime_id) if runtime_id else None
-    if canonical_runtime:
-        runtime_model, _ = resolve_runtime_defaults(
-            canonical_runtime,
-            workflow_settings=workflow_settings,
-            env=env,
-        )
-        if runtime_model:
-            return runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT
+    # 3. Runtime default.  Always normalize (normalize_runtime_id falls back to
+    # DEFAULT_TASK_RUNTIME for None/empty), so the runtime-default tier applies
+    # even when the caller omits targetRuntime.
+    canonical_runtime = normalize_runtime_id(runtime_id)
+    runtime_model, _ = resolve_runtime_defaults(
+        canonical_runtime,
+        workflow_settings=workflow_settings,
+        env=env,
+    )
+    if runtime_model:
+        return runtime_model, _MODEL_SOURCE_RUNTIME_DEFAULT
 
     return None, _MODEL_SOURCE_NONE

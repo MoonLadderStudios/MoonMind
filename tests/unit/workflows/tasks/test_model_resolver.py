@@ -191,14 +191,14 @@ class TestResolveEffectiveModelNone:
         assert model is None
         assert source == "none"
 
-    def test_no_runtime_no_profile_returns_none(self):
+    def test_no_runtime_resolves_to_default_task_runtime(self):
         model, source = resolve_effective_model(
             runtime_id=None,
             profile=None,
             requested_model=None,
         )
-        assert model is None
-        assert source == "none"
+        assert model == "gpt-5.4"
+        assert source == "runtime_default"
 
 
 # ---------------------------------------------------------------------------

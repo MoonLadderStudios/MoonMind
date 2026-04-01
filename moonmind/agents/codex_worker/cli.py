@@ -54,7 +54,7 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
     runtime = (
         str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
     )
-    allowed = {"codex", "gemini_cli", "claude", "jules", "universal"}
+    allowed = {"codex", "codex_cli", "gemini_cli", "claude", "claude_code", "jules", "universal"}
     if runtime not in allowed:
         supported = ", ".join(sorted(allowed))
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
