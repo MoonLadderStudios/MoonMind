@@ -13,4 +13,4 @@
 
 ## Testing and Guardrails
 - [x] T006 Provide regression scenarios within `tests/integration/` validating the launcher passes cleanly and historical test stubs mock gracefully skipping `web_ro`. (Implements DOC-REQ-008, Validates DOC-REQ-001, DOC-REQ-004)
-- [x] T007 Validate the codebase still parses correctly via `pytest` and `npm run build` after removal of DTO references. (Validates DOC-REQ-002, DOC-REQ-003, DOC-REQ-005)
+- [x] T007 Validate the codebase still parses correctly via `./tools/test_unit.sh` and `npm run build` after removal of DTO references. (Validates DOC-REQ-002, DOC-REQ-003, DOC-REQ-005)
