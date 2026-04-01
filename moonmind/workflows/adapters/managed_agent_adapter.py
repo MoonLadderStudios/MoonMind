@@ -47,6 +47,7 @@ from moonmind.auth.env_shaping import (
     OAUTH_CLEARED_VARS,
     _should_filter_base_env_var,
 )
+from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +320,9 @@ class ManagedAgentAdapter:
 
         if self._run_launcher is not None:
             runtime_id_for_profile = self._runtime_id or request.agent_id
+            runtime_default_model, runtime_default_effort = resolve_runtime_defaults(
+                runtime_id_for_profile
+            )
             cmd_template = profile.get("command_template")
             if not cmd_template:
                 if _strategy is not None:
@@ -339,6 +343,9 @@ class ManagedAgentAdapter:
                 env_overrides=delta_env_overrides,
                 passthrough_env_keys=passthrough_env_keys,
                 command_template=cmd_template,
+                default_model=profile.get("default_model") or runtime_default_model,
+                default_effort=profile.get("default_effort") or runtime_default_effort,
+                model_overrides=profile.get("model_overrides") or {},
                 secret_refs=profile.get("secret_refs") or {},
                 clear_env_keys=profile.get("clear_env_keys") or [],
             )

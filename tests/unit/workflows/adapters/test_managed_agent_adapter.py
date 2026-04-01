@@ -451,6 +451,90 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
 
 
+async def test_start_passes_profile_default_model_to_launcher() -> None:
+    profiles = [
+        {
+            "profile_id": "claude-minimax",
+            "default_model": "MiniMax-M2.7",
+            "model_overrides": {"small_fast": "MiniMax-M2.7"},
+            "command_template": ["claude"],
+        }
+    ]
+    captured_payload: dict[str, Any] = {}
+
+    async def _run_launcher(**kwargs: Any):
+        payload = kwargs.get("payload")
+        if isinstance(payload, dict):
+            captured_payload.update(payload)
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-profile-default-model",
+        runtime_id="claude_code",
+        run_launcher=_run_launcher,
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-minimax",
+        correlationId="corr-profile-default-model",
+        idempotencyKey="idem-profile-default-model",
+    )
+    await adapter.start(request)
+
+    profile_payload = captured_payload.get("profile") or {}
+    assert profile_payload.get("defaultModel") == "MiniMax-M2.7"
+    assert profile_payload.get("modelOverrides") == {"small_fast": "MiniMax-M2.7"}
+
+
+async def test_start_falls_back_to_runtime_default_model_when_profile_blank() -> None:
+    profiles = [
+        {
+            "profile_id": "codex-defaults",
+            "command_template": ["codex", "exec"],
+        }
+    ]
+    captured_payload: dict[str, Any] = {}
+
+    async def _run_launcher(**kwargs: Any):
+        payload = kwargs.get("payload")
+        if isinstance(payload, dict):
+            captured_payload.update(payload)
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-runtime-default-model",
+        runtime_id="codex_cli",
+        run_launcher=_run_launcher,
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        executionProfileRef="codex-defaults",
+        correlationId="corr-runtime-default-model",
+        idempotencyKey="idem-runtime-default-model",
+    )
+    await adapter.start(request)
+
+    profile_payload = captured_payload.get("profile") or {}
+    assert profile_payload.get("defaultModel") == "gpt-5.4"
+    assert profile_payload.get("defaultEffort") == "high"
+
+
 async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
     profiles = [

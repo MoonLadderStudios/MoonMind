@@ -172,6 +172,7 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
     assert config["system"]["defaultTaskRuntime"] == "claude"
+    assert config["system"]["defaultTaskModel"] == "Sonnet 4.6"
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
@@ -192,6 +193,23 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
     assert config["system"]["defaultProposeTasks"] is False
+
+
+def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("MOONMIND_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setattr(settings.workflow, "codex_model", None)
+    monkeypatch.setattr(settings.workflow, "codex_effort", None)
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-5.4"
+    assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro-preview"
+    assert config["system"]["defaultTaskModelByRuntime"]["claude"] == "Sonnet 4.6"
 
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
