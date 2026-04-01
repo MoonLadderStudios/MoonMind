@@ -704,9 +704,10 @@ This is much better than the old "Session ended" with no stream and maybe a tran
 
 ## 12.6 Feature flag
 
-The observability panel must remain gated behind `logStreamingEnabled` until validated through staged rollout.
+The observability panel may be disabled through `logStreamingEnabled`, but the default posture is enabled.
 
 Current runtime env/config name: `MOONMIND_LOG_STREAMING_ENABLED`.
+Default: `true`.
 
 A separate UI flag for the new observability panel layout may be used if a side-by-side rollout with the legacy view is required.
 
@@ -760,7 +761,7 @@ This is the direct replacement for the old tmate-oriented live-log requirements.
 * **FR-008**: The system must preserve stdout, stderr, and diagnostics as durable artifacts for every managed run.
 * **FR-009**: The UI must provide separate Stdout, Stderr, and Diagnostics views.
 * **FR-010**: The live log viewer must not depend on tmate, `web_ro`, or terminal embedding.
-* **FR-011**: The feature must be gated behind a feature flag such as `logStreamingEnabled`.
+* **FR-011**: The feature must support an operator-visible disable switch such as `logStreamingEnabled`, with the default configuration enabled.
 * **FR-012**: The observability system must continue to function when live streaming is unavailable by falling back to artifact-backed retrieval.
 * **FR-013**: The launcher must not wrap managed agent runs in tmate for log visibility.
 * **FR-014**: Logging and intervention must be modeled separately in both backend APIs and Mission Control UI.

@@ -314,9 +314,9 @@ Make the system production-ready and safe to enable by default.
 - [ ] Add alerting or health indicators for stream failures, artifact write failures, and diagnostics generation failures.
 - [ ] Validate security and authorization on all observability and download endpoints.
 - [ ] Validate behavior across browser refreshes, tab visibility changes, and network interruptions.
-- [ ] Roll out behind feature flags.
-- [ ] Run a staged rollout in local/dev, then broader internal usage, then default-on if successful.
-- [ ] Remove feature flag gates only after operational confidence is high.
+- [ ] Keep `MOONMIND_LOG_STREAMING_ENABLED` as an operator disable switch, with default-on behavior preserved.
+- [ ] Validate the default-on path in local/dev, then broader internal usage.
+- [ ] Remove any stale default-off or staged-rollout assumptions from related docs and UI copy.
 
 ### Exit criteria
 

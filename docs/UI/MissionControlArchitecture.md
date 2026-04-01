@@ -506,10 +506,10 @@ Stream provenance is required for correct line rendering and for the merged view
 
 ## 12.7 Feature flags for observability rollout
 
-* `logStreamingEnabled` — gates the observability panel and all associated APIs
+* `logStreamingEnabled` — operator-visible disable switch for the observability panel and live-follow behavior; default `true` via `MOONMIND_LOG_STREAMING_ENABLED`
 * a separate UI flag for the new observability panel layout may be used if a side-by-side rollout with the legacy task-detail view is required
 
-Rollout posture: read-first (artifact-backed tail before live follow before default-on).
+Rollout posture: default-on with an explicit disable path. The read-first fetch sequence still applies: artifact-backed tail before live follow.
 
 ## 12.8 Success criteria for the UI layer
 
