@@ -250,7 +250,7 @@ def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
         encoding="utf-8",
     )
 
-    env = {"GITHUB_TOKEN": "ghp_supportroot789", "PATH": "/usr/bin"}
+    env = {"GITHUB_TOKEN": "test-support-root-token", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(
         env,
         str(repo_root),
@@ -279,7 +279,7 @@ def test_persist_gh_config_writes_git_credential_helper(tmp_path):
         encoding="utf-8",
     )
 
-    env = {"GITHUB_TOKEN": "ghp_credtest456", "PATH": "/usr/bin"}
+    env = {"GITHUB_TOKEN": "test-cred-store-token", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
 
     # gh hosts.yml should still be written
@@ -289,7 +289,7 @@ def test_persist_gh_config_writes_git_credential_helper(tmp_path):
     cred_store = tmp_path / ".moonmind" / "gh" / "git-credentials"
     assert cred_store.exists()
     cred_content = cred_store.read_text()
-    assert "ghp_credtest456" in cred_content
+    assert "test-cred-store-token" in cred_content
     assert "github.com" in cred_content
     assert (cred_store.stat().st_mode & 0o777) == 0o600
 
@@ -308,7 +308,7 @@ def test_persist_gh_config_git_credential_idempotent(tmp_path):
     git_config = git_dir / "config"
     git_config.write_text("[core]\n\tbare = false\n", encoding="utf-8")
 
-    env = {"GITHUB_TOKEN": "ghp_idempotent", "PATH": "/usr/bin"}
+    env = {"GITHUB_TOKEN": "test-idempotent-token", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
 
@@ -319,13 +319,32 @@ def test_persist_gh_config_git_credential_idempotent(tmp_path):
 
 def test_persist_gh_config_skips_git_cred_without_git_dir(tmp_path):
     """When no .git/config exists, only gh hosts.yml should be written."""
-    env = {"GITHUB_TOKEN": "ghp_nogitdir", "PATH": "/usr/bin"}
+    env = {"GITHUB_TOKEN": "test-no-gitdir-token", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
 
     # gh config should still be written
     assert (tmp_path / ".moonmind" / "gh" / "hosts.yml").exists()
     # But no git-credentials file since there's no .git/config
     assert not (tmp_path / ".moonmind" / "gh" / "git-credentials").exists()
+
+
+def test_persist_gh_config_quotes_helper_path_when_store_has_spaces(tmp_path):
+    run_root = tmp_path / "run root"
+    git_dir = run_root / "repo" / ".git"
+    git_dir.mkdir(parents=True)
+    git_config = git_dir / "config"
+    git_config.write_text("[core]\n\tbare = false\n", encoding="utf-8")
+
+    env = {"GITHUB_TOKEN": "test-space-path-token", "PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(run_root / "repo"),
+        support_root=str(run_root),
+    )
+
+    updated_config = git_config.read_text(encoding="utf-8")
+    assert 'helper = store --file="' in updated_config
+    assert str(run_root / ".moonmind" / "gh" / "git-credentials") in updated_config
 
 
 @pytest.mark.asyncio
