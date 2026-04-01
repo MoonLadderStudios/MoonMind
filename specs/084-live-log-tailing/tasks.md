@@ -21,10 +21,10 @@
 
 ## Phase 2: Foundational (Feature Flag)
 
-**Purpose**: Add the `logTailingEnabled` feature flag so the panel can be controlled at runtime.
+**Purpose**: Add the `logStreamingEnabled` feature flag so the panel can be controlled at runtime.
 
-- [x] T002 Add `MOONMIND_LOG_TAILING_ENABLED` environment variable (default `true`) and expose `logTailingEnabled` in the view model features config in `api_service/api/routers/task_dashboard_view_model.py` (DOC-REQ-010, FR-011)
-- [x] T003 Add unit test for `logTailingEnabled` flag in `tests/unit/api/routers/test_task_dashboard_view_model.py` (DOC-REQ-010, FR-011)
+- [x] T002 Add `MOONMIND_LOG_STREAMING_ENABLED` environment variable (default `true`) and expose `logStreamingEnabled` in the view model features config in `api_service/api/routers/task_dashboard_view_model.py` (DOC-REQ-010, FR-011)
+- [x] T003 Add unit test for `logStreamingEnabled` flag in `tests/unit/api/routers/test_task_dashboard_view_model.py` (DOC-REQ-010, FR-011)
 
 **Checkpoint**: Feature flag wired and tested.
 
@@ -41,7 +41,7 @@
 - [x] T004 [US1] Add `renderLiveOutputPanel(state)` function to `api_service/static/task_dashboard/dashboard.js` that renders a collapsible panel with an iframe embedding `web_ro` URL when session status is `ready` (DOC-REQ-001, DOC-REQ-004, FR-001, FR-002, FR-013)
 - [x] T005 [US1] Wire the Live Output panel into the queue detail view HTML in `api_service/static/task_dashboard/dashboard.js` — place it below the header and above the existing live session card section (DOC-REQ-001, FR-001)
 - [x] T006 [US1] Implement panel collapse/expand toggle: on expand create iframe with `web_ro` src; on collapse remove iframe to terminate connection (DOC-REQ-003, DOC-REQ-005, FR-003, FR-008)
-- [x] T007 [US1] Gate the Live Output panel rendering behind the `logTailingEnabled` feature flag from the view model config (DOC-REQ-010, FR-011)
+- [x] T007 [US1] Gate the Live Output panel rendering behind the `logStreamingEnabled` feature flag from the view model config (DOC-REQ-010, FR-011)
 
 **Checkpoint**: Live Output panel shows live terminal output for READY sessions. Panel toggle works. Feature flag controls visibility.
 

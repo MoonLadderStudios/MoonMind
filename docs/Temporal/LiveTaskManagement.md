@@ -232,7 +232,7 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 {
   "features": {
     "liveTaskManagement": {
-      "logTailingEnabled": true,
+      "logStreamingEnabled": true,
       "handoffEnabled": false,
       "operatorMessagesEnabled": false
     }

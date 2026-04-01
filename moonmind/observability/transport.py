@@ -38,9 +38,14 @@ class SpoolLogReader:
         """Signal the tailing loop to stop at the next iteration."""
         self._stop_event.set()
 
-    async def follow(self, since_sequence: int = 0) -> AsyncIterator[LiveLogChunk]:
+    async def follow(
+        self,
+        since_sequence: int = 0,
+        *,
+        start_at_end: bool = False,
+    ) -> AsyncIterator[LiveLogChunk]:
         """Asynchronously follow the spool file, yielding new chunks.
-        
+
         If since_sequence is provided, any chunk with sequence <= since_sequence
         will be silently skipped.
         """
@@ -50,7 +55,9 @@ class SpoolLogReader:
                 return
             await asyncio.sleep(0.05)
 
-        with open(self._spool_path, "r", encoding="utf-8") as f:
+        with open(self._spool_path, "r", encoding="utf-8", errors="replace") as f:
+            if start_at_end and since_sequence <= 0:
+                f.seek(0, 2)
             while True:
                 line = f.readline()
                 if not line:

@@ -36,17 +36,20 @@ This plan covers:
 
 This plan does **not** cover implementing the OAuth browser terminal itself beyond preserving the boundary that OAuth remains separate from run logging.
 
-## Known current state (as of 2026-03-30)
+## Known current state (as of 2026-03-31)
 
 This section captures an honest snapshot of the implementation, to prevent future confusion about what is and is not done:
 
+Canonical architecture and operator-visible contract text lives in [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md). This tmp plan owns rollout tracking and implementation status.
+
 - **Done**: Durable stdout/stderr/diagnostics artifact production is substantially implemented in the managed runtime supervisor.
 - **Done**: Data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) exist and are populated.
-- **Partial**: Observability read APIs (summary, tail endpoints) exist but are not yet fully consumed by Mission Control.
-- **Partial / not yet used**: Merged-tail semantics exist in outline but the contract has not been hardened; Mission Control does not yet call these APIs.
-- **Not started**: The runtime supervisor does not yet emit live log records into any shared transport consumed by the API or UI.
-- **Not started**: The full Mission Control observability panel described in `LiveLogs.md` is not yet implemented; the task detail page currently uses a thin SSE tail view.
-- **Gap**: The current SSE endpoint, if it exists, is not yet fed by actual supervised runtime output chunks.
+- **Done**: Observability read APIs (summary, tail endpoints, downloads, diagnostics) are consumed by the Mission Control task detail page.
+- **Done**: The runtime supervisor emits live log records into the shared append-only spool transport consumed by the API SSE endpoint.
+- **Done**: The launcher persists `liveStreamCapable` for workspace-backed managed runs so summary metadata truthfully reports stream availability.
+- **Done**: Live log sequence assignment is one run-global namespace across stdout/stderr/system, so reconnect-by-sequence now matches the API contract.
+- **Partial**: The merged endpoint now prefers chronological synthesis from spool metadata; historical runs without spool metadata still degrade to labeled artifact concatenation with a warning.
+- **Partial**: The full Mission Control observability panel is implemented on the task detail page, but the preferred `react-virtuoso` / `anser` rendering baseline remains a follow-up rather than part of the current implementation.
 
 ---
 
@@ -157,6 +160,7 @@ Before implementing the publisher, an explicit design decision must be made and 
   - Options: Redis pub/sub, shared append-only spool file, DB-backed tailing (e.g. polling a log records table), or another MoonMind-owned mechanism.
   - **Reject**: API-local singleton memory is not a valid architecture boundary (see `LiveLogs.md` §6.4).
 - [x] Document the chosen mechanism in a short ADR or inline note in this plan.
+  - Current choice: shared append-only spool file under the run workspace, consumed by the API SSE endpoint via `SpoolLogReader`.
 - [x] Confirm the chosen mechanism works when the managed runtime supervisor runs in a different process or container from the API service.
 
 ### Tasks
@@ -208,35 +212,35 @@ Before this phase can be considered complete, all of the following must exist:
 
 ### Tasks
 
-- [ ] Create or update the task detail page Observability section.
-- [ ] Implement the **Live Logs** panel using a native React log viewer.
-- [ ] Implement the **Stdout** panel backed by stdout retrieval/download APIs.
-- [ ] Implement the **Stderr** panel backed by stderr retrieval/download APIs.
-- [ ] Implement the **Diagnostics** panel backed by diagnostics APIs.
-- [ ] Keep **Artifacts** visible and consistent with the rest of Mission Control.
+- [x] Create or update the task detail page Observability section.
+- [x] Implement the **Live Logs** panel using a native React log viewer.
+- [x] Implement the **Stdout** panel backed by stdout retrieval/download APIs.
+- [x] Implement the **Stderr** panel backed by stderr retrieval/download APIs.
+- [x] Implement the **Diagnostics** panel backed by diagnostics APIs.
+- [x] Keep **Artifacts** visible and consistent with the rest of Mission Control.
 - [ ] Use `react-virtuoso` or the chosen virtualized rendering base for long/growing log streams.
 - [ ] Use `anser` or the chosen ANSI parser for styled rendering of ANSI output.
-- [ ] Use TanStack Query for initial tail fetches, cache invalidation, and fallback retrieval.
-- [ ] Use `EventSource` for live follow mode.
-- [ ] Default the Live Logs panel to collapsed with no active connection.
-- [ ] On open, fetch observability summary and merged tail before connecting to live updates. Initial content must not depend on SSE success.
-- [ ] Stop streaming when the panel is collapsed.
-- [ ] Stop or pause streaming when the tab is backgrounded; reconnect when visibility returns only if run is still active.
-- [ ] Surface viewer states: `not_available`, `starting`, `live`, `ended`, `error` (defined in `LiveLogs.md` §12.3).
-- [ ] Show per-line stream provenance (`stdout`, `stderr`, `system`).
-- [ ] Add wrap toggle, copy support, and download affordances.
-- [ ] Ensure ended runs show useful artifact-backed logs without attempting live streaming.
-- [ ] Remove any thin UI assumptions that SSE alone is sufficient (e.g. current thin SSE tail view on task detail).
-- [ ] Remove any remaining implicit dependence on legacy session semantics for managed-run logs.
-- [ ] Add UI tests for load states, reconnect behavior, collapse behavior, and ended-run behavior.
+- [x] Use TanStack Query for initial tail fetches, cache invalidation, and fallback retrieval.
+- [x] Use `EventSource` for live follow mode.
+- [x] Default the Live Logs panel to collapsed with no active connection.
+- [x] On open, fetch observability summary and merged tail before connecting to live updates. Initial content must not depend on SSE success.
+- [x] Stop streaming when the panel is collapsed.
+- [x] Stop or pause streaming when the tab is backgrounded; reconnect when visibility returns only if run is still active.
+- [x] Surface viewer states: `not_available`, `starting`, `live`, `ended`, `error` (defined in `LiveLogs.md` §12.3).
+- [x] Show per-line stream provenance (`stdout`, `stderr`, `system`).
+- [x] Add wrap toggle, copy support, and download affordances.
+- [x] Ensure ended runs show useful artifact-backed logs without attempting live streaming.
+- [x] Remove any thin UI assumptions that SSE alone is sufficient (e.g. current thin SSE tail view on task detail).
+- [x] Remove any remaining implicit dependence on legacy session semantics for managed-run logs.
+- [x] Add UI tests for load states, reconnect behavior, collapse behavior, and ended-run behavior.
 
 ### Exit criteria
 
-- [ ] The task detail page no longer depends on an embedded terminal for managed-run logs.
-- [ ] Operators can inspect live logs, stdout, stderr, diagnostics, and artifacts in one coherent area.
-- [ ] Opening and closing the panel has the expected connection lifecycle behavior.
-- [ ] Artifact-backed initial load works independently of whether live streaming succeeds.
-- [ ] Completed runs remain fully inspectable without ever having had a live stream connection.
+- [x] The task detail page no longer depends on an embedded terminal for managed-run logs.
+- [x] Operators can inspect live logs, stdout, stderr, diagnostics, and artifacts in one coherent area.
+- [x] Opening and closing the panel has the expected connection lifecycle behavior.
+- [x] Artifact-backed initial load works independently of whether live streaming succeeds.
+- [x] Completed runs remain fully inspectable without ever having had a live stream connection.
 
 ---
 
@@ -248,20 +252,20 @@ Make sure logging remains passive observation while intervention uses explicit w
 
 ### Tasks
 
-- [ ] Audit the current UI and backend for places where live output and intervention are coupled.
-- [ ] Remove assumptions that a live log session implies shell access or operator control access.
-- [ ] Define the Intervention panel or controls separately from the log viewer.
-- [ ] Ensure Pause/Resume/Cancel/Approve/Reject/Send Message actions route through Temporal signals/updates or provider-native adapters rather than terminal transport.
-- [ ] Ensure intervention actions are logged/audited separately from stdout/stderr.
-- [ ] Ensure the live log viewer can show future inline system annotations without becoming an intervention mechanism itself.
-- [ ] Add tests verifying intervention actions do not require a live log connection.
-- [ ] Update UI language to clearly distinguish observation from control.
+- [x] Audit the current UI and backend for places where live output and intervention are coupled.
+- [x] Remove assumptions that a live log session implies shell access or operator control access.
+- [x] Define the Intervention panel or controls separately from the log viewer.
+- [x] Ensure Pause/Resume/Cancel/Approve/Reject/Send Message actions route through Temporal signals/updates or provider-native adapters rather than terminal transport.
+- [x] Ensure intervention actions are logged/audited separately from stdout/stderr.
+- [x] Ensure the live log viewer can show future inline system annotations without becoming an intervention mechanism itself.
+- [x] Add tests verifying intervention actions do not require a live log connection.
+- [x] Update UI language to clearly distinguish observation from control.
 
 ### Exit criteria
 
-- [ ] Managed-run logs are a passive observability surface only.
-- [ ] Intervention is explicit, auditable, and transport-independent.
-- [ ] No managed-run operator action depends on a terminal embed or log session attachment.
+- [x] Managed-run logs are a passive observability surface only.
+- [x] Intervention is explicit, auditable, and transport-independent.
+- [x] No managed-run operator action depends on a terminal embed or log session attachment.
 
 ---
 

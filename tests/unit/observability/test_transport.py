@@ -103,3 +103,31 @@ async def test_spool_log_reader_respects_since_sequence(tmp_path: Path) -> None:
     
     assert len(chunks) == 1
     assert chunks[0].sequence == 3
+
+
+@pytest.mark.asyncio
+async def test_spool_log_reader_without_since_starts_at_end_when_requested(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "run-tail-end"
+    workspace_dir.mkdir()
+    publisher = SpoolLogPublisher(workspace_path=str(workspace_dir))
+
+    publisher.publish(LiveLogChunk(sequence=1, stream="stdout", text="1", timestamp="0", offset=0))
+    publisher.publish(LiveLogChunk(sequence=2, stream="stdout", text="2", timestamp="1", offset=1))
+
+    reader = SpoolLogReader(workspace_path=str(workspace_dir))
+    chunks = []
+
+    async def consume() -> None:
+        async for chunk in reader.follow(start_at_end=True):
+            chunks.append(chunk)
+            reader.stop()
+
+    consumer_task = asyncio.create_task(consume())
+    await asyncio.sleep(0.01)
+
+    publisher.publish(LiveLogChunk(sequence=3, stream="stderr", text="3", timestamp="2", offset=2))
+
+    await asyncio.wait_for(consumer_task, timeout=2.0)
+
+    assert len(chunks) == 1
+    assert chunks[0].sequence == 3

@@ -24,17 +24,11 @@ With this design:
 
 This keeps logging deterministic, persistent, auditable, and independent from interactive terminal transport.
 
-### 1.1 Current implementation state
+### 1.1 Implementation tracking
 
-The following represents an honest snapshot of what is implemented versus what remains:
+This document is the canonical desired-state architecture for managed-run observability.
 
-* **Implemented**: durable stdout/stderr/diagnostics artifact production is substantially complete for managed runs.
-* **Implemented**: data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) are populated by the supervisor.
-* **Partial**: observability read APIs exist but are not yet fully consumed by Mission Control.
-* **Not yet complete**: the supervised runtime does not yet emit live log records into a shared live-stream transport consumed by the API or UI.
-* **Not yet complete**: Mission Control task detail does not yet use the full observability panel described in this document; it currently uses a thin SSE tail view.
-
-> The existence of an SSE endpoint alone does not satisfy the live streaming design. Live streaming is only considered complete when supervised runtime log chunks are actually published into the live stream path consumed by Mission Control.
+Current implementation status, phased rollout notes, and remaining migration work live in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md).
 
 ---
 
@@ -222,7 +216,7 @@ Rules:
 * "The live stream transport must not assume the log producer runs in the same API process."
 * "A process-local replay buffer may exist as a performance optimization, but it is not the architecture boundary."
 * Live publication must target a shared MoonMind observability transport — such as Redis pub/sub, a shared append-only spool, or DB-backed tailing — not an API-local singleton in memory.
-* The choice of shared transport mechanism must be documented and agreed before the runtime supervisor live-emit path is implemented (see Phase 3 in `docs/tmp/009-LiveLogsPlan.md`).
+* Current implementation choice: a shared append-only spool file under the run workspace is the active transport boundary between the runtime supervisor and the API SSE reader.
 
 ---
 
@@ -248,19 +242,23 @@ Every managed run must produce these durable outputs.
 
 These fields are non-authoritative convenience metadata. Artifacts remain authoritative.
 
+For current managed runs, `supports_live_streaming` is derived from whether the launcher persisted a real spool-backed live-stream capability for that run. Terminal runs still suppress live connectivity even if they were stream-capable while active.
+
 ## 7.3 Merged-tail contract
 
-The merged-tail endpoint (`/logs/merged-tail`) may return content computed in one of two ways:
+The merged-tail endpoint (`/logs/merged`) may return content computed in one of two ways:
 
 * from a pre-built `merged_log_artifact_ref` if one exists
-* synthesized on demand from `stdout_artifact_ref` + `stderr_artifact_ref` + supervisor metadata if no merged artifact exists
+* synthesized on demand from `stdout_artifact_ref` + `stderr_artifact_ref` + spool/supervisor metadata if no merged artifact exists
 
 Rules for merged tail:
 
-* lines are ordered by monotonically increasing `sequence` value assigned at emit time; within the same sequence window, ordering is by timestamp ascending
+* live log `sequence` is one run-global monotonically increasing namespace shared across `stdout`, `stderr`, and `system`
+* when spool metadata is available, merged content is ordered by monotonically increasing `sequence` value assigned at emit time
 * system events (supervisor annotations, reconnect notices, truncation warnings) may appear in the merged tail and must be labeled with `stream: "system"`
 * `merged_log_artifact_ref` is **optional**; implementations must not require it to exist in order to serve a merged tail
 * the endpoint must handle partial artifacts and still return whatever durably captured content is available
+* when a historical run lacks both `merged_log_artifact_ref` and spool metadata, the endpoint may fall back to labeled stdout/stderr artifact concatenation with an explicit warning that chronological merge order is unavailable
 
 ---
 
@@ -354,6 +352,11 @@ The Mission Control Live Logs panel should be implemented as a native React comp
 This combination is preferred over terminal or editor widgets because the Live Logs panel is a passive observability surface, not an interactive shell and not a code editor.
 
 ### Why this baseline was selected
+
+Implementation tracking note:
+
+* the preferred rendering foundation remains TanStack Query plus `EventSource` for transport, with `react-virtuoso` and `anser` as the desired viewer baseline
+* concrete rollout status for the current viewer implementation is tracked in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md)
 
 #### Why `react-virtuoso`
 
@@ -483,6 +486,8 @@ Expected HTTP behavior:
 ## 9.3 Reconnect behavior
 
 Mission Control should reconnect using the last known sequence or offset.
+
+For the live SSE path, the canonical resume cursor is the run-global `sequence` value shared across all streams.
 
 **Resume is best-effort.** The system is not required to durably preserve every transient live event in a stream-only buffer.
 
@@ -699,6 +704,8 @@ This is much better than the old "Session ended" with no stream and maybe a tran
 
 The observability panel must remain gated behind `logStreamingEnabled` until validated through staged rollout.
 
+Current runtime env/config name: `MOONMIND_LOG_STREAMING_ENABLED`.
+
 A separate UI flag for the new observability panel layout may be used if a side-by-side rollout with the legacy view is required.
 
 ---
@@ -784,37 +791,9 @@ This is the direct replacement for the old tmate-oriented live-log requirements.
 
 ---
 
-## 16. Migration plan
+## 16. Implementation tracking
 
-## Phase 1
-
-Rewrite the docs and specs to remove `tmate web_ro` and terminal embedding requirements.
-
-## Phase 2
-
-Change launcher/supervisor contracts so managed runs always use direct subprocess pipes.
-
-## Phase 3
-
-Add observability APIs:
-
-* summary
-* merged tail
-* stdout/stderr retrieval
-* diagnostics
-* live stream
-
-## Phase 4
-
-Replace Mission Control Live Output terminal embed with MoonMind-native log viewer.
-
-## Phase 5
-
-Deprecate or replace `TaskRunLiveSession` for managed-run observability.
-
-## Phase 6
-
-Keep `xterm.js` only in the OAuth subsystem.
+Phased rollout notes, migration sequencing, and remaining implementation work are tracked in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md) so this document stays focused on the target-state contract.
 
 ---
 

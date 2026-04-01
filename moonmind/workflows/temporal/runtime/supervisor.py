@@ -103,6 +103,7 @@ class ManagedRunSupervisor:
                     process.stdout,
                     process.stderr,
                     run_id=run_id,
+                    workspace_path=record.workspace_path if record else None,
                     parser=parser,
                     event_callback=_handle_stream_events,
                 )
