@@ -2297,14 +2297,14 @@ export interface components {
          * @description Request payload for cancellation.
          */
         CancelExecutionRequest: {
-            /** Reason */
-            reason?: string | null;
             /**
              * Action
              * @default cancel
              * @enum {string}
              */
             action: "cancel" | "reject";
+            /** Reason */
+            reason?: string | null;
             /**
              * Graceful
              * @default true
@@ -2822,6 +2822,25 @@ export interface components {
             attentionRequired: boolean;
         };
         /**
+         * ExecutionInterventionAuditEntryModel
+         * @description One explicit operator intervention record shown outside stdout/stderr logs.
+         */
+        ExecutionInterventionAuditEntryModel: {
+            /** Action */
+            action: string;
+            /** Transport */
+            transport: string;
+            /** Summary */
+            summary: string;
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /**
          * ExecutionListResponse
          * @description Paginated list response for executions.
          */
@@ -2928,6 +2947,8 @@ export interface components {
              * @default false
              */
             attentionRequired: boolean;
+            /** Interventionaudit */
+            interventionAudit?: components["schemas"]["ExecutionInterventionAuditEntryModel"][];
             /** Searchattributes */
             searchAttributes?: {
                 [key: string]: unknown;
@@ -2955,7 +2976,6 @@ export interface components {
             /** Artifactrefs */
             artifactRefs?: string[];
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
-            interventionAudit?: components["schemas"]["ExecutionInterventionAuditEntryModel"][];
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;
@@ -3020,25 +3040,6 @@ export interface components {
             staleState: boolean;
             /** Refreshedat */
             refreshedAt?: string | null;
-        };
-        /**
-         * ExecutionInterventionAuditEntryModel
-         * @description Audit record for one explicit operator intervention.
-         */
-        ExecutionInterventionAuditEntryModel: {
-            /** Action */
-            action: string;
-            /** Transport */
-            transport: string;
-            /** Summary */
-            summary: string;
-            /** Detail */
-            detail?: string | null;
-            /**
-             * Createdat
-             * Format: date-time
-             */
-            createdAt: string;
         };
         /**
          * ExecutionRefreshEnvelope
