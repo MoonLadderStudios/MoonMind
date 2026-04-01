@@ -258,7 +258,7 @@ describe('Task Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Live log tailing requires a task run id/i),
+        screen.getByText(/Live log streaming requires a task run id/i),
       ).toBeTruthy();
     });
   });

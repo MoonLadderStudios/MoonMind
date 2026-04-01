@@ -241,8 +241,7 @@ async def test_stream_to_artifact_calls_publisher(streamer):
     mock_publisher = Mock()
     log_streamer.publisher = mock_publisher
 
-    # Reset offset for deterministic sequence test
-    log_streamer._sequence_counter = {"stdout": 0, "stderr": 0}
+    log_streamer._sequence_counter = 0
 
     reader = asyncio.StreamReader()
     reader.feed_data(b"chunk1\n")
@@ -264,3 +263,32 @@ async def test_stream_to_artifact_calls_publisher(streamer):
 
     combined_text = "".join(chunk.text for chunk in published_chunks)
     assert combined_text == "chunk1\nchunk2\n"
+
+
+@pytest.mark.asyncio
+async def test_stream_and_parse_uses_one_global_sequence_across_streams(tmp_path):
+    from unittest.mock import Mock
+
+    storage = _StubArtifactStorage(tmp_path)
+    log_streamer = RuntimeLogStreamer(storage)
+    mock_publisher = Mock()
+    log_streamer.publisher = mock_publisher
+
+    stdout_reader = asyncio.StreamReader()
+    stdout_reader.feed_data(b"out-1\n")
+    stdout_reader.feed_eof()
+    stderr_reader = asyncio.StreamReader()
+    stderr_reader.feed_data(b"err-1\n")
+    stderr_reader.feed_eof()
+
+    await log_streamer.stream_and_parse(
+        stdout_reader,
+        stderr_reader,
+        run_id="run-global-seq",
+    )
+
+    published_chunks = [
+        call_args[0][0] for call_args in mock_publisher.publish.call_args_list
+    ]
+    assert [chunk.sequence for chunk in published_chunks] == [1, 2]
+    assert {chunk.stream for chunk in published_chunks} == {"stdout", "stderr"}

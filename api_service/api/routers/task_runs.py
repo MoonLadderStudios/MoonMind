@@ -1,16 +1,15 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from api_service.api.routers.worker_auth import _WorkerRequestAuth, _require_worker_auth
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.services.observability.subscriber import log_stream_generator
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
 from moonmind.observability.transport import SpoolLogReader
@@ -34,6 +33,85 @@ def _get_agent_runtime_artifacts_root() -> str:
         os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"),
         "artifacts",
     )
+
+
+def _load_spool_chunks(workspace_path: str | None) -> list[dict[str, object]]:
+    if not workspace_path:
+        return []
+    spool_path = (Path(workspace_path) / "live_streams.spool").resolve()
+    if not spool_path.is_file():
+        return []
+
+    chunks: list[dict[str, object]] = []
+    for raw_line in spool_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        sequence = payload.get("sequence")
+        if not isinstance(sequence, int):
+            continue
+        chunks.append(payload)
+    chunks.sort(key=lambda item: (int(item["sequence"]), str(item.get("timestamp", ""))))
+    return chunks
+
+
+async def _read_artifact_text(ref: str | None, artifacts_root: Path) -> str:
+    if not ref:
+        return ""
+    artifact_path = (artifacts_root / ref).resolve()
+    try:
+        is_safe = artifact_path.is_relative_to(artifacts_root)
+    except Exception:
+        is_safe = False
+    if not is_safe or not await asyncio.to_thread(artifact_path.is_file):
+        return ""
+    return await asyncio.to_thread(artifact_path.read_text, encoding="utf-8", errors="replace")
+
+
+async def _build_synthesized_merged_content(
+    record: object,
+    artifacts_root: Path,
+) -> tuple[bytes, str]:
+    spool_chunks = _load_spool_chunks(getattr(record, "workspace_path", None))
+    if spool_chunks:
+        rendered: list[str] = []
+        current_stream: str | None = None
+        for chunk in spool_chunks:
+            stream = str(chunk.get("stream", "system"))
+            text = str(chunk.get("text", ""))
+            if stream != current_stream:
+                if rendered and not rendered[-1].endswith("\n"):
+                    rendered.append("\n")
+                rendered.append(f"--- {stream} ---\n")
+                current_stream = stream
+            rendered.append(text)
+            if text and not text.endswith("\n"):
+                rendered.append("\n")
+        return "".join(rendered).encode("utf-8"), "spool"
+
+    stdout_text = await _read_artifact_text(getattr(record, "stdout_artifact_ref", None), artifacts_root)
+    stderr_text = await _read_artifact_text(getattr(record, "stderr_artifact_ref", None), artifacts_root)
+    if not stdout_text and not stderr_text:
+        return b"", "artifact-fallback"
+
+    fallback_parts = ["--- system ---\n", "[merged-order unavailable: spool metadata missing]\n"]
+    if stdout_text:
+        fallback_parts.append("--- stdout ---\n")
+        fallback_parts.append(stdout_text)
+        if not stdout_text.endswith("\n"):
+            fallback_parts.append("\n")
+    if stderr_text:
+        fallback_parts.append("--- stderr ---\n")
+        fallback_parts.append(stderr_text)
+        if not stderr_text.endswith("\n"):
+            fallback_parts.append("\n")
+    return "".join(fallback_parts).encode("utf-8"), "artifact-fallback"
 
 @router.get(
     "/{id}/observability-summary",
@@ -149,6 +227,8 @@ async def stream_task_run_live_logs(
         try:
             # We yield lines encoded as JSON for SSE Transport
             async for chunk in reader.follow(since_sequence=since_sequence):
+                if await request.is_disconnected():
+                    break
                 json_str = chunk.model_dump_json(by_alias=True)
                 yield f"data: {json_str}\n\n".encode("utf-8")
                 
@@ -227,58 +307,15 @@ async def stream_task_run_log(
                 )
 
             artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
-
-            async def _stream_artifact_safe(ref: str | None):
-                """
-                Safely stream artifact contents in chunks without loading the entire file into memory.
-                """
-                if not ref:
-                    return
-                artp = (artifacts_root / ref).resolve()
-                try:
-                    safe = artp.is_relative_to(artifacts_root)
-                except Exception:
-                    safe = False
-                if not safe:
-                    return
-                exists = await asyncio.to_thread(artp.is_file)
-                if not exists:
-                    return
-
-                # Stream file contents in chunks using a background thread to avoid blocking the event loop.
-                f = await asyncio.to_thread(artp.open, "rb")
-                try:
-                    while True:
-                        chunk = await asyncio.to_thread(f.read, 8192)
-                        if not chunk:
-                            break
-                        yield chunk
-                finally:
-                    await asyncio.to_thread(f.close)
+            synthesized_bytes, order_source = await _build_synthesized_merged_content(record, artifacts_root)
+            if not synthesized_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Merged log artifact not found and no stdout/stderr artifacts available to synthesize from",
+                )
 
             async def merged_stream():
-                first_section_emitted = False
-
-                # Stream stdout first (if present), prefixed with a label.
-                if stdout_ref:
-                    header_emitted = False
-                    async for chunk in _stream_artifact_safe(stdout_ref):
-                        if not header_emitted:
-                            yield b"--- stdout ---\n"
-                            header_emitted = True
-                            first_section_emitted = True
-                        yield chunk
-
-                # Then stream stderr (if present), separated by a newline and prefixed with a label.
-                if stderr_ref:
-                    header_emitted = False
-                    async for chunk in _stream_artifact_safe(stderr_ref):
-                        if not header_emitted:
-                            if first_section_emitted:
-                                yield b"\n"
-                            yield b"--- stderr ---\n"
-                            header_emitted = True
-                        yield chunk
+                yield synthesized_bytes
 
             return StreamingResponse(
                 merged_stream(),
@@ -288,6 +325,7 @@ async def stream_task_run_log(
                     "Pragma": "no-cache",
                     "Expires": "0",
                     "X-Merged-Synthesized": "true",
+                    "X-Merged-Order-Source": order_source,
                 },
             )
 

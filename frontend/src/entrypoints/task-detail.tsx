@@ -13,7 +13,7 @@ type DashboardConfig = {
       actionsEnabled?: boolean;
       debugFieldsEnabled?: boolean;
     };
-    logTailingEnabled?: boolean;
+    logStreamingEnabled?: boolean;
   };
   sources?: {
     temporal?: Record<string, string>;
@@ -724,7 +724,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
-  const logTailingEnabled = cfg?.features?.logTailingEnabled !== false;
+  const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
@@ -1107,7 +1107,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           </section>
 
           <section className="stack">
-            {logTailingEnabled ? (
+            {logStreamingEnabled ? (
               resolvedTaskRunId ? (
                 <>
                   <LiveLogsPanel
@@ -1123,14 +1123,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <>
                   <h3>Live Logs</h3>
                   <p className="small">
-                    Live log tailing requires a task run id. Waiting for the task to start executing...
+                    Live log streaming requires a task run id. Waiting for the task to start executing...
                   </p>
                 </>
               )
             ) : (
               <>
                 <h3>Live Logs</h3>
-                <p className="small">Live log tailing is disabled in the server dashboard config.</p>
+                  <p className="small">Live log streaming is disabled in the server dashboard config.</p>
               </>
             )}
           </section>
