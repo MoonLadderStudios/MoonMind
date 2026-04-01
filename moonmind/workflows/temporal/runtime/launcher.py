@@ -309,6 +309,8 @@ class ManagedRuntimeLauncher:
     def _persist_gh_config(
         env: dict[str, str],
         workspace_path: str | None,
+        *,
+        support_root: str | None = None,
     ) -> None:
         """Write ``gh`` file-based auth so ``gh`` works even when AI CLIs
         strip secret env vars from tool-call subprocesses.
@@ -326,8 +328,9 @@ class ManagedRuntimeLauncher:
         token = env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
         if not token or not workspace_path:
             return
+        gh_root = Path(support_root or workspace_path)
+        gh_dir = gh_root / ".moonmind" / "gh"
         try:
-            gh_dir = Path(workspace_path) / ".moonmind" / "gh"
             gh_dir.mkdir(parents=True, exist_ok=True)
             hosts_path = gh_dir / "hosts.yml"
             hosts_path.write_text(
@@ -340,6 +343,7 @@ class ManagedRuntimeLauncher:
             env["GH_CONFIG_DIR"] = str(gh_dir)
         except OSError:
             logger.debug("Failed to persist gh config", exc_info=True)
+            return
 
         # Inject git credential helper into .git/config so git push works
         # even when the AI CLI strips env vars from tool-call subprocesses.
@@ -365,7 +369,7 @@ class ManagedRuntimeLauncher:
                 credential_section = (
                     f"\n{marker}\n"
                     f"[credential]\n"
-                    f"\thelper = store --file={cred_store_path}\n"
+                    f'\thelper = store --file="{cred_store_path}"\n'
                 )
                 git_config_path.write_text(
                     existing_config + credential_section,
@@ -485,8 +489,9 @@ class ManagedRuntimeLauncher:
                 )
 
         # Expose active skills projection if present
+        run_root: Path | None = None
         if resolved_workspace_path is not None:
-            run_root = (self._workspace_root() / run_id).resolve()
+            run_root = Path(resolved_workspace_path).resolve().parent
             active_skills_dir = run_root / ".agents" / "skills_active"
             if active_skills_dir.exists():
                 workspace_agents_dir = Path(resolved_workspace_path) / ".agents"
@@ -528,7 +533,12 @@ class ManagedRuntimeLauncher:
                 continue
             env_overrides[key] = value
 
-        self._persist_gh_config(env_overrides, resolved_workspace_path)
+        if resolved_workspace_path is not None:
+            self._persist_gh_config(
+                env_overrides,
+                resolved_workspace_path,
+                support_root=str(run_root),
+            )
 
         from moonmind.config.settings import settings as _mm_settings
         _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None

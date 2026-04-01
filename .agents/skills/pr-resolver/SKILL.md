@@ -47,6 +47,7 @@ This writes:
   - `comments_unavailable`
   - `ci_signal_degraded`
   - `merge_not_ready` (limited grace retries)
+- If retries transition from transient CI states into actionable `ci_failures`, continue into `run_fix_ci_skill` instead of stopping at manual review.
 - Non-retryable stop reasons:
   - `comment_policy_not_enforced`
   - any unknown blocker
