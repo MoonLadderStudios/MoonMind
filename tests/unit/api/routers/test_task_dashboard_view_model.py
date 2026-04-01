@@ -293,12 +293,9 @@ def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> Non
     assert config["features"]["logStreamingEnabled"] is False
 
 
-def test_build_runtime_config_temporal_live_session_endpoint() -> None:
+def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
     config = build_runtime_config("/tasks")
-    assert (
-        config["sources"]["temporal"]["liveSession"]
-        == "/api/task-runs/{id}/live-session"
-    )
+    assert "liveSession" not in config["sources"]["temporal"]
 
 
 # ---------------------------------------------------------------------------
@@ -352,4 +349,3 @@ def test_normalize_status_maps_temporal_awaiting_slot_to_queued() -> None:
 def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> None:
     """waiting_on_dependencies should map to waiting on the dashboard."""
     assert normalize_status("temporal", "waiting_on_dependencies") == "waiting"
-

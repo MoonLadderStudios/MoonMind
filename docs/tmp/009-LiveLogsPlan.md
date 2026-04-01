@@ -49,6 +49,7 @@ Canonical architecture and operator-visible contract text lives in [`docs/Manage
 - **Done**: The launcher persists `liveStreamCapable` for workspace-backed managed runs so summary metadata truthfully reports stream availability.
 - **Done**: Live log sequence assignment is one run-global namespace across stdout/stderr/system, so reconnect-by-sequence now matches the API contract.
 - **Partial**: The merged endpoint now prefers chronological synthesis from spool metadata; historical runs without spool metadata still degrade to labeled artifact concatenation with a warning.
+- **Done**: Historical runs that only persisted legacy `logArtifactRef` now degrade through the merged-log endpoint instead of any session-viewer path.
 - **Partial**: The full Mission Control observability panel is implemented on the task detail page, but the preferred `react-virtuoso` / `anser` rendering baseline remains a follow-up rather than part of the current implementation.
 
 ---
@@ -277,22 +278,22 @@ Retire legacy `tmate`/terminal-session assumptions for managed-run log viewing w
 
 ### Tasks
 
-- [ ] Add compatibility handling for historical runs that only have legacy session/transcript data.
-- [ ] Decide how old runs should appear in the new Observability UI when stdout/stderr artifacts are missing.
-- [ ] Mark legacy terminal-session observability records as deprecated in code and docs.
-- [ ] Remove or gate old `web_ro`-driven viewer paths for managed runs.
-- [ ] Remove launcher/runtime branches that enabled `tmate` only for live-log visibility.
-- [ ] Remove obsolete DTOs, frontend state, and API paths once replacement coverage is complete.
-- [ ] Update docs that previously described terminal embedding as the standard managed-run observability path.
-- [ ] Ensure OAuth docs still retain `xterm.js` where interactive terminal behavior is actually needed.
-- [ ] Add migration notes for operators and contributors.
-- [ ] Add regression tests covering both migrated and non-migrated runs.
+- [x] Add compatibility handling for historical runs that only have legacy session/transcript data.
+- [x] Decide how old runs should appear in the new Observability UI when stdout/stderr artifacts are missing.
+- [x] Mark legacy terminal-session observability records as deprecated in code and docs.
+- [x] Remove or gate old `web_ro`-driven viewer paths for managed runs.
+- [x] Remove launcher/runtime branches that enabled `tmate` only for live-log visibility.
+- [x] Remove obsolete DTOs, frontend state, and API paths once replacement coverage is complete.
+- [x] Update docs that previously described terminal embedding as the standard managed-run observability path.
+- [x] Ensure OAuth docs still retain `xterm.js` where interactive terminal behavior is actually needed.
+- [x] Add migration notes for operators and contributors.
+- [x] Add regression tests covering both migrated and non-migrated runs.
 
 ### Exit criteria
 
-- [ ] Managed-run observability no longer depends on legacy session-viewer infrastructure.
-- [ ] Historical runs degrade gracefully.
-- [ ] The docs consistently describe the new architecture.
+- [x] Managed-run observability no longer depends on legacy session-viewer infrastructure.
+- [x] Historical runs degrade gracefully.
+- [x] The docs consistently describe the new architecture.
 
 ---
 
@@ -333,7 +334,7 @@ Make the system production-ready and safe to enable by default.
 - [ ] Supervisor owns draining, durability, diagnostics, and live fan-out via shared cross-process transport.
 - [ ] Observability APIs are MoonMind-owned and artifact-backed.
 - [ ] Live streaming is optional and never authoritative.
-- [ ] Legacy terminal/session models are deprecated for managed-run observability.
+- [x] Legacy terminal/session models are deprecated for managed-run observability.
 
 ### Frontend
 
@@ -373,8 +374,8 @@ The Live Logs implementation is done when all of the following are true:
 - [ ] Every managed run produces durable stdout, stderr, and diagnostics artifacts.
 - [ ] Mission Control can display artifact-backed log tails and diagnostics for completed runs.
 - [ ] Mission Control can live-follow active runs through MoonMind-owned streaming fed by actual supervised runtime output.
-- [ ] Managed-run log viewing no longer depends on `tmate`, `web_ro`, or terminal embedding.
+- [x] Managed-run log viewing no longer depends on `tmate`, `web_ro`, or terminal embedding.
 - [ ] Intervention is separate from logging in both UI and backend contracts.
 - [ ] `xterm.js` remains limited to OAuth/interactive auth terminal flows.
-- [ ] Legacy session-based observability for managed-run logs has been removed or cleanly deprecated.
+- [x] Legacy session-based observability for managed-run logs has been removed or cleanly deprecated.
 - [ ] The live stream transport works across the supervisor-to-API process boundary.

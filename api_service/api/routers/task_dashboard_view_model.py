@@ -190,7 +190,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactMetadata": temporal_dashboard.artifact_metadata_endpoint,
                 "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
                 "artifactDownload": temporal_dashboard.artifact_download_endpoint,
-                "liveSession": "/api/task-runs/{id}/live-session",
             },
 
         },

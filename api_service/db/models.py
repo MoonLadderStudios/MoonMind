@@ -1994,6 +1994,12 @@ class AgentJobLiveSessionStatus(str, enum.Enum):
 
 
 class TaskRunLiveSession(Base):
+    """Legacy terminal-relay metadata kept only for historical compatibility.
+
+    Managed-run observability must use stdout/stderr artifacts and MoonMind log
+    streaming. New log-viewing code must not depend on this model.
+    """
+
     __tablename__ = "task_run_live_sessions"
     __table_args__ = (
         Index("ix_task_run_live_sessions_status_expires_at", "status", "expires_at"),

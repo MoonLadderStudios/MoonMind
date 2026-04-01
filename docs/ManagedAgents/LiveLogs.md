@@ -615,7 +615,9 @@ The persisted `TaskRunLiveSession` row uses `provider` (e.g. `none`), `liveSessi
 
 * `TaskRunLiveSession` is **legacy compatibility only** for historical runs that were created before the MoonMind-native observability model existed.
 * managed-run observability for new runs must **not** depend on `attachRo`, `webRo`, socket paths, or terminal-relay metadata.
+* the deprecated `/api/task-runs/{taskRunId}/live-session*` route family is **not** part of the supported managed-run observability API surface; any remaining references are migration-only.
 * new managed runs must use observability-specific metadata only (`stdout_artifact_ref`, `stderr_artifact_ref`, `live_stream_id`, etc.).
+* historical runs that only persisted `logArtifactRef` should degrade through read-only merged-log fallback, not through terminal relays.
 * any code path that reads terminal-session fields for managed-run log viewing is a migration target, not a supported architecture path.
 
 Recommended replacement model:

@@ -442,7 +442,6 @@ const helpers = loadTemporalHelpers();
   });
 
   const requiredIds = [
-    "temporal-live-output-section",
     "temporal-live-logs-inactive",
     "temporal-live-logs-active",
     "temporal-start-tailing",

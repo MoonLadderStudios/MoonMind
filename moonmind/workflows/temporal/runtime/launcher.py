@@ -421,18 +421,18 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
-        ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None, list[str]]:
+        ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, list[str]]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
         without launching a new process.
 
-        External live-session relay endpoints are not produced here; managed runs use a
-        direct subprocess with piped stdout/stderr for log streaming.
+        Managed runs use a direct subprocess with piped stdout/stderr for log
+        streaming. Terminal-relay endpoints are not part of this contract.
         """
         existing = self._store.load(run_id)
         if existing is not None and existing.status not in TERMINAL_AGENT_RUN_STATES:
-            return existing, None, None, []
+            return existing, None, []
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)
@@ -598,4 +598,4 @@ class ManagedRuntimeLauncher:
             live_stream_capable=bool(resolved_workspace_path),
         )
         self._store.save(record)
-        return record, process, None, materializer.generated_files
+        return record, process, materializer.generated_files
