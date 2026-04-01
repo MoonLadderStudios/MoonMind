@@ -2597,9 +2597,14 @@ class TemporalProposalActivities:
         # Derive a concise title from the first line of instructions.
         first_line = instructions.splitlines()[0].strip()
         title_prefix = "Follow-up: "
+
+        # Make the title unique and distinct from the parent workflow by appending a short ID.
+        short_id = workflow_id.split("-")[-1] if "-" in workflow_id else workflow_id[-8:]
+        run_suffix = f" ({short_id})" if short_id else ""
+
         max_title_len = 200
-        title_body = first_line[: max_title_len - len(title_prefix)]
-        title = f"{title_prefix}{title_body}"
+        title_body = first_line[: max_title_len - len(title_prefix) - len(run_suffix)]
+        title = f"{title_prefix}{title_body}{run_suffix}"
 
         summary = (
             f"Automatic follow-up proposal generated from workflow {workflow_id}. "
