@@ -1,57 +1,62 @@
 [
   {
-    "id": 3018530178,
+    "id": 3018862495,
     "disposition": "addressed",
-    "rationale": "Moved workflow artifact enums to moonmind.core.artifacts and updated schemas and models to consume them from the decoupled package."
+    "rationale": "The task-detail EventSource client now accepts both named log_chunk events and default message events, so live log delivery works regardless of SSE event-name framing."
   },
   {
-    "id": 3018540061,
+    "id": 3018862515,
     "disposition": "addressed",
-    "rationale": "Replaced DummyLoader subclasses with the concrete BuiltInSkillLoader and DeploymentSkillLoader instances and monkeypatched load_skills to strictly test deterministic source merging precedence."
+    "rationale": "Live Logs copy now routes through a guarded clipboard helper that skips unsupported environments and swallows rejected writes to avoid unhandled promise rejections."
   },
   {
-    "id": 3017718743,
+    "id": 3018862533,
     "disposition": "addressed",
-    "rationale": "Added explicit result-metadata coverage and confirmed build_canonical_result preserves canonicalized provider fields in metadata."
+    "rationale": "Stdout/Stderr copy now uses the same guarded clipboard helper, avoiding unhandled clipboard rejections."
   },
   {
-    "id": 3017718756,
-    "disposition": "not-applicable",
-    "rationale": "The legacy metadata mapping already lives in the module-level _LEGACY_METADATA_MAP constant on the current branch."
-  },
-  {
-    "id": 3017718759,
-    "disposition": "not-applicable",
-    "rationale": "build_canonical_status already raises the standardized runId/run_id/external_id error message in the current branch."
-  },
-  {
-    "id": 4039417145,
-    "disposition": "not-applicable",
-    "rationale": "This is a review summary rather than a standalone remediation item; the underlying actionable comments were classified individually."
-  },
-  {
-    "id": 3017736486,
-    "disposition": "not-applicable",
-    "rationale": "The current _apply_canonical_metadata implementation already preserves canonical externalUrl values instead of overwriting them with url fallbacks."
-  },
-  {
-    "id": 3017736521,
-    "disposition": "not-applicable",
-    "rationale": "The current build_canonical_status error message already includes runId alongside run_id and external_id."
-  },
-  {
-    "id": 3017736543,
+    "id": 3018862545,
     "disposition": "addressed",
-    "rationale": "Collapsed the duplicate boundary test module to a placeholder and kept the canonical coverage in test_agent_runtime_models.py."
+    "rationale": "Diagnostics copy now uses the guarded clipboard helper so missing clipboard support or rejected writes do not throw."
   },
   {
-    "id": 3017736574,
+    "id": 3018862562,
     "disposition": "addressed",
-    "rationale": "Replacing the duplicate boundary test module removed the reported trailing whitespace in that file."
+    "rationale": "The task-detail UI tests now save and restore the document.hidden descriptor in afterEach so visibility-state mutations do not leak across tests."
   },
   {
-    "id": 4039439845,
+    "id": 3018862570,
+    "disposition": "addressed",
+    "rationale": "The task-detail UI tests now save and restore navigator.clipboard after each test, preventing clipboard mocks from leaking into later cases."
+  },
+  {
+    "id": 3018862601,
+    "disposition": "addressed",
+    "rationale": "The Phase 4 plan no longer instructs adding @types/anser and now reflects the implemented no-new-dependencies approach."
+  },
+  {
+    "id": 3018862614,
+    "disposition": "addressed",
+    "rationale": "The placeholder Phase 4 spec template was replaced with a concrete Live Logs Phase 4 specification covering stories, requirements, edge cases, and success criteria."
+  },
+  {
+    "id": 4040670337,
     "disposition": "not-applicable",
-    "rationale": "This is an overview review body, not a separate actionable defect; each concrete review comment was handled individually."
+    "rationale": "This review body is an overview summary rather than a standalone remediation item; the concrete per-file comments were classified individually."
+  },
+  {
+    "id": 4040674047,
+    "disposition": "not-applicable",
+    "rationale": "This review body summarizes the two trailing-newline rendering comments, which were handled as the underlying line-specific review comments."
+  },
+  {
+    "id": 3018866363,
+    "disposition": "addressed",
+    "rationale": "Artifact log parsing now trims a single trailing newline before splitting so the viewer does not render an extra empty row from merged-tail content."
+  },
+  {
+    "id": 3018866369,
+    "disposition": "addressed",
+    "rationale": "SSE log-chunk parsing now trims a single trailing newline before splitting so live chunks do not add empty rows after each emitted line."
   }
 ]
