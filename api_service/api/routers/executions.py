@@ -80,7 +80,7 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.CANCELED: "canceled",
 }
 
-_MAX_TASK_TITLE_LENGTH = 120
+_MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
 _TASK_SUMMARY_ELLIPSIS = "..."
 

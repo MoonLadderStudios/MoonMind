@@ -419,16 +419,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             />
           </label>
         </div>
-        <div className="grid-2">
-          <div className="card">
-            <strong>Status:</strong>{' '}
-            {countSummary
-              ? `Showing ${pageStart || 0}-${pageEnd || 0} of ${countSummary}`
-              : pageEnd > 0
-                ? `Showing ${pageStart}-${pageEnd}`
-                : 'No rows loaded.'}
-          </div>
-        </div>
       </form>
 
       {isLoading ? (
