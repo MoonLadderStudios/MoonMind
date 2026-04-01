@@ -1,50 +1,64 @@
-# Fully implement Phase 4 of docs/tmp/009-LiveLogsPlan.md
+# Implementation Plan: live-logs-phase-4
 
-This implements the **Mission Control observability UI** using a native React log viewer, replacing legacy `tmate`/terminal session assumptions. We will use test-driven development (TDD) for every task. 
+**Branch**: `120-live-logs-phase-4-affordances` | **Date**: 2026-03-31 | **Spec**: [spec.md](./spec.md)
+**Input**: Feature specification from `specs/120-live-logs-phase-4/spec.md`
 
-## User Review Required
-> [!IMPORTANT]
-> Since we're replacing the legacy log viewer with a native React component, I'll need to install three new dependencies in `frontend/package.json`:
-> 1. `react-virtuoso` (for rendering large lists)
-> 2. `anser` (for parsing ANSI terminal colors into HTML/React elements)
-> 3. `@types/anser` (for TypeScript support)
-> Do you approve of adding these dependencies?
+## Summary
 
-> [!NOTE]
-> The prompt specified: "implement tests for one task at a time. Run them and get a red result. Implement the task. Then run tests again and fix the code until you get a green result." I will strictly adhere to this Red-Green-Refactor loop per sub-task.
+Implement Phase 4 Mission Control observability affordances on the task detail page by making the Live Logs viewer artifact-first, expanding observability into separate stdout/stderr/diagnostics panels, and tightening client lifecycle behavior around collapse, ended runs, and page visibility.
 
-## Proposed Changes
+## Technical Context
 
-### Frontend Dependencies
+**Language/Version**: TypeScript + React 19
+**Primary Dependencies**: React, TanStack Query, Vite/Vitest
+**Testing**: `npm run ui:test`, plus repo-approved unit validation via `./tools/test_unit.sh` when touched Python scope requires it
+**Project Type**: Frontend entrypoint consumed by Mission Control
+**Constraints**: Reuse existing repo dependencies; do not add `@types/anser` because that package does not exist and this phase does not require new viewer dependencies
 
-#### [MODIFY] package.json
-- Add `react-virtuoso`
-- Add `anser` and `@types/anser`
+## Constitution Check
 
-### Main UI Components
+*GATE: Must pass before implementation and after design updates.*
 
-#### [MODIFY] frontend/src/entrypoints/task-detail.tsx
-Currently, the `LiveLogsPanel` fetches a merged artifact tail and opens an `EventSource`, dumping text into a single `<pre>` tag. Phase 4 tasks require splitting observability into discrete surfaces:
-- **Live Logs**: Virtualized rendering of live logs with `EventSource`, ANSI coloring via `anser`.
-- **Stdout/Stderr/Diagnostics panels**: Fetch logic using React Query for standalone static viewing, with download links.
-- **Connection Lifecycle Management**: Pause/stop tracking when panel collapses or tab is backgrounded.
-- **Viewer state indicators**: show provenances (stdout/stderr) and statuses (live, errored, ended).
+- **I. Orchestrate, Don't Recreate**: PASS. The UI consumes MoonMind observability APIs rather than introducing a parallel terminal or provider-specific control path.
+- **II. One-Click Agent Deployment**: PASS. The work stays within existing frontend dependencies and repo-managed scripts.
+- **VIII. Modular and Extensible Architecture**: PASS. The task-detail entrypoint remains the presentation layer over stable observability endpoints.
+- **IX. Resilient by Default**: PASS. Artifact-backed initial load and degraded states remain available even when live streaming is unavailable or interrupted.
+- **XI. Spec-Driven Development Is the Source of Truth**: PASS. The spec, plan, and tasks are aligned to the implemented Phase 4 scope.
+- **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. This phase removes thin SSE-only assumptions rather than preserving duplicate UI paths.
 
-#### [MODIFY] frontend/src/entrypoints/task-detail.test.tsx
-- Setup mocked `EventSource` tests.
-- Setup test blocks for load states, background/visibility reconnection, collapse lifecycle, and ended-run behaviors in isolation.
+## Scope
 
-## Open Questions
-- Do you want me to mock out TanStack Query and EventSource using `vitest` mocks in `task-detail.test.tsx`?
-- Should I invoke `speckit-*` CLI commands sequentially alongside these code executions as dictated by the `speckit-orchestrate` prompt, or should I proceed primarily as Antigravity following this plan? (I've created the `120-live-logs-phase-4` git branch using the `speckit-specify` bash script automatically).
+### In Scope
+
+- Live Logs panel lifecycle and viewer-state behavior
+- Artifact-backed initial merged-tail loading
+- SSE follow mode for active runs
+- Per-line provenance rendering
+- Stdout, stderr, and diagnostics panels
+- Wrap/copy/download affordances
+- Frontend tests covering collapse, reconnection, ended runs, and panel behavior
+
+### Out of Scope
+
+- Backend streaming transport redesign
+- New terminal emulation or OAuth terminal work
+- Adding virtualization or ANSI-rendering dependencies not required by the implemented Phase 4 slice
+
+## Structure Decision
+
+- Keep the implementation in `frontend/src/entrypoints/task-detail.tsx` because the feature is scoped to Mission Control task detail rendering.
+- Keep coverage in `frontend/src/entrypoints/task-detail.test.tsx` so lifecycle and observability behaviors stay exercised at the entrypoint boundary.
+- Keep feature documentation under `specs/120-live-logs-phase-4/` synchronized with the actual implementation.
 
 ## Verification Plan
 
 ### Automated Tests
-- For each piece of functionality (e.g. "Default the Live Logs panel to collapsed with no active connection"):
-  1. Write failing test in `task-detail.test.tsx` (Red).
-  2. Implement functional change in `task-detail.tsx` (Green).
-  3. Refactor (Refactor).
 
-### Manual Verification
-- Once the automated tests pass, run `npm run ui:test` and UI checks locally before creating the PR.
+1. Run `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx` to verify the frontend entrypoint behavior for this phase.
+2. Run `./tools/test_unit.sh --python-only tests/unit/schemas/test_agent_runtime_models.py tests/unit/schemas/test_agent_runtime_models_boundary.py` only when touched Python scope requires it.
+
+### Manual Validation
+
+1. Open a task detail page with a task run id and confirm Live Logs remains collapsed until expanded.
+2. Confirm stdout, stderr, and diagnostics panels load independently and expose wrap/copy/download controls.
+3. Confirm live streaming shuts down on collapse or tab hide and resumes only when appropriate.

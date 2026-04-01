@@ -19,6 +19,7 @@ class MockEventSource {
 
   onopen: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
   private listeners = new Map<string, LogChunkListener[]>();
   closed = false;
 
@@ -43,6 +44,10 @@ class MockEventSource {
   triggerLogChunk(data: { sequence: number; stream: string; text: string }) {
     const event = new MessageEvent('log_chunk', { data: JSON.stringify(data) });
     for (const listener of this.listeners.get('log_chunk') ?? []) listener(event);
+  }
+
+  triggerMessage(data: { sequence: number; stream: string; text: string }) {
+    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(data) }));
   }
 
   triggerError() {
@@ -369,12 +374,16 @@ describe('LiveLogsPanel', () => {
 
   let fetchSpy: MockInstance;
   let originalEventSource: typeof EventSource;
+  let originalClipboardDescriptor: PropertyDescriptor | undefined;
+  let originalDocumentHiddenDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
     window.history.pushState({}, 'Test', '/tasks/wf-1?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch');
     MockEventSource.reset();
     originalEventSource = window.EventSource;
+    originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    originalDocumentHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).EventSource = MockEventSource;
     Element.prototype.scrollIntoView = vi.fn();
@@ -383,6 +392,16 @@ describe('LiveLogsPanel', () => {
   afterEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).EventSource = originalEventSource;
+    if (originalClipboardDescriptor) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+    if (originalDocumentHiddenDescriptor) {
+      Object.defineProperty(document, 'hidden', originalDocumentHiddenDescriptor);
+    } else {
+      Reflect.deleteProperty(document, 'hidden');
+    }
   });
 
   /** Build a fetch mock that routes execution, artifacts, observability, and merged tail calls. */
@@ -434,6 +453,9 @@ describe('LiveLogsPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/artifact line 1/)).toBeTruthy());
     await waitFor(() => expect(screen.getByText(/artifact line 2/)).toBeTruthy());
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-stream]').length).toBe(2);
+    });
   });
 
   it('appends log_chunk text from SSE after artifact tail is shown', async () => {
@@ -452,6 +474,7 @@ describe('LiveLogsPanel', () => {
       expect(screen.getByText(/first from artifact/)).toBeTruthy();
       expect(screen.getByText(/live line/)).toBeTruthy();
     });
+    expect(document.querySelectorAll('[data-stream]').length).toBe(2);
   });
 
   it('does not create EventSource for ended runs', async () => {
@@ -673,9 +696,11 @@ describe('LiveLogsPanel', () => {
   });
 
   it('provides wrap toggle, copy support, and download affordances', async () => {
-    // Mock navigator.clipboard
     const clipboardMock = { writeText: vi.fn() };
-    Object.assign(navigator, { clipboard: clipboardMock });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboardMock,
+    });
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

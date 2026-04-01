@@ -284,15 +284,39 @@ type LogLine = {
   stream: 'stdout' | 'stderr' | 'system' | 'unknown';
 };
 
+function splitLogText(content: string): string[] {
+  if (!content) return [];
+  const normalized = content.endsWith('\n') ? content.slice(0, -1) : content;
+  return normalized ? normalized.split('\n') : [];
+}
+
+function copyTextToClipboard(text: string): void {
+  if (
+    typeof navigator === 'undefined' ||
+    !navigator.clipboard ||
+    typeof navigator.clipboard.writeText !== 'function'
+  ) {
+    return;
+  }
+  try {
+    const maybePromise = navigator.clipboard.writeText(text);
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      void maybePromise.catch(() => {});
+    }
+  } catch {
+    // Ignore synchronous clipboard failures for now; the UI should stay stable.
+  }
+}
+
 function parseArtifactToLines(content: string): LogLine[] {
-  const lines = content.split('\n');
+  const lines = splitLogText(content);
   let currentStream: LogLine['stream'] = 'unknown';
-  
+
   return lines.map((line, i) => {
     if (line.startsWith('--- stdout ---')) currentStream = 'stdout';
     else if (line.startsWith('--- stderr ---')) currentStream = 'stderr';
     else if (line.startsWith('--- system ---')) currentStream = 'system';
-    
+
     return { id: `artifact-${i}`, text: line, stream: currentStream };
   });
 }
@@ -398,27 +422,28 @@ function LiveLogsPanel({
       if (!cancelled) setViewerState('live');
     };
 
-    es.addEventListener('log_chunk', (event: MessageEvent) => {
+    const handleLogChunk = (event: MessageEvent) => {
       if (cancelled) return;
       try {
         const data = JSON.parse(event.data) as { sequence: number; text: string; stream?: string };
         lastSeqRef.current = data.sequence;
-        
+
         setLogContent((prev) => {
-          const lines = data.text.split('\n');
-          // if chunk doesn't end with a newline, the last element is the trailing text.
-          // For simplicity we just make them lines.
+          const lines = splitLogText(data.text);
           const mapped: LogLine[] = lines.map((l, i) => ({
             id: `live-${data.sequence}-${i}`,
             text: l,
-            stream: (data.stream as LogLine['stream']) || 'unknown'
+            stream: (data.stream as LogLine['stream']) || 'unknown',
           }));
           return [...prev, ...mapped];
         });
       } catch {
         // ignore malformed events
       }
-    });
+    };
+
+    es.onmessage = handleLogChunk;
+    es.addEventListener('log_chunk', handleLogChunk);
 
     es.onerror = () => {
       es.close();
@@ -470,7 +495,8 @@ function LiveLogsPanel({
   const [wrapLines, setWrapLines] = useState(true);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(logContent.map(l => l.text).join('\n'));
+    if (logContent.length === 0) return;
+    copyTextToClipboard(logContent.map((line) => line.text).join('\n'));
   };
 
   const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`;
@@ -559,7 +585,7 @@ function StaticLogPanel({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
-  
+
   const streamQuery = useQuery({
     queryKey: ['task-run-stream', taskRunId, stream],
     queryFn: () => fetchStream(apiBase, taskRunId, stream),
@@ -570,7 +596,8 @@ function StaticLogPanel({
   const title = stream === 'stdout' ? 'Stdout' : 'Stderr';
 
   const handleCopy = () => {
-    if (streamQuery.data) navigator.clipboard.writeText(streamQuery.data);
+    if (!streamQuery.data) return;
+    copyTextToClipboard(streamQuery.data);
   };
 
   const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`;
@@ -639,7 +666,8 @@ function DiagnosticsPanel({
   });
 
   const handleCopy = () => {
-    if (diagQuery.data) navigator.clipboard.writeText(diagQuery.data);
+    if (!diagQuery.data) return;
+    copyTextToClipboard(diagQuery.data);
   };
 
   const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`;
