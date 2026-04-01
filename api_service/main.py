@@ -443,7 +443,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "gemini_cli",
             "provider_id": "google",
             "provider_label": "Google",
-            "default_model": "gemini-3.1-pro-preview",
+            "default_model": None,  # inherits runtime default: gemini-3.1-pro-preview
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("GEMINI_VOLUME_NAME", "gemini_auth_volume"),
@@ -455,7 +455,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "codex_cli",
             "provider_id": "moonladder",
             "provider_label": "MoonLadder",
-            "default_model": "gpt-5.4",
+            "default_model": None,  # inherits runtime default: gpt-5.4
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CODEX_VOLUME_NAME", "codex_auth_volume"),
@@ -467,7 +467,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "claude_code",
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
-            "default_model": "Sonnet 4.6",
+            "default_model": None,  # inherits runtime default: Sonnet 4.6
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
@@ -522,9 +522,11 @@ async def _auto_seed_provider_profiles() -> list[str]:
             for profile_def in _DEFAULT_PROFILES:
                 existing = existing_by_id.get(profile_def["profile_id"])
                 desired_default_model = profile_def.get("default_model")
+                # Only reconcile when the seeded profile has an explicit desired model
+                # (non-None) and the existing row is blank — never clear user-set values.
                 if (
                     existing is not None
-                    and desired_default_model
+                    and desired_default_model is not None
                     and not str(existing.default_model or "").strip()
                 ):
                     existing.default_model = desired_default_model

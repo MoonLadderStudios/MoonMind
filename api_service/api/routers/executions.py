@@ -60,6 +60,7 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from api_service.api.schemas import CreateJobRequest
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
@@ -326,6 +327,9 @@ def _serialize_execution(
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+    param_requested_model = str(params.get("requestedModel") or "").strip() or None
+    param_model_source = str(params.get("modelSource") or "").strip() or None
+    param_profile_id = str(params.get("profileId") or "").strip() or None
     if not target_runtime:
         runtime_nested = params.get("runtime")
         if isinstance(runtime_nested, dict):
@@ -442,6 +446,10 @@ def _serialize_execution(
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
+        requested_model=param_requested_model,
+        resolved_model=param_model,
+        model_source=param_model_source,
+        profile_id=param_profile_id,
         effort=param_effort,
         starting_branch=starting_branch,
         target_branch=target_branch,
@@ -866,14 +874,44 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner=normalized_task_for_planner,
     )
 
+    # --- Model resolution ---
+    raw_target_runtime = (
+        payload.get("targetRuntime")
+        or runtime_payload.get("mode")
+        or ""
+    )
+    raw_profile_id = str(
+        runtime_payload.get("profileId")
+        or task_payload.get("profileId")
+        or payload.get("profileId")
+        or ""
+    ).strip() or None
+    raw_requested_model = str(runtime_payload.get("model") or "").strip() or None
+
+    # Load provider profile when a profileId is supplied.
+    _provider_profile = None
+    if raw_profile_id and session is not None:
+        from api_service.db.models import ManagedAgentProviderProfile
+        _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
+
+    resolved_model, model_source = resolve_effective_model(
+        runtime_id=raw_target_runtime or None,
+        profile=_provider_profile,
+        requested_model=raw_requested_model,
+        workflow_settings=settings.workflow,
+    )
+
     initial_parameters = {
         "requestType": request.type,
         "repository": repository,
         "requiredCapabilities": required_capabilities,
         "priority": request.priority,
         "maxAttempts": request.max_attempts,
-        "targetRuntime": payload.get("targetRuntime") or runtime_payload.get("mode"),
-        "model": runtime_payload.get("model"),
+        "targetRuntime": raw_target_runtime or None,
+        "model": resolved_model,
+        "requestedModel": raw_requested_model,
+        "modelSource": model_source,
+        "profileId": raw_profile_id,
         "effort": runtime_payload.get("effort"),
         "publishMode": ((task_payload.get("publish") or {}).get("mode")),
         "proposeTasks": _coerce_bool(task_payload.get("proposeTasks"), default=False),

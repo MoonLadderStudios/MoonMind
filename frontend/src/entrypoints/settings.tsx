@@ -80,6 +80,9 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
   const workerPauseConfig =
     (payload.initialData as { workerPause?: WorkerPauseConfig } | undefined)?.workerPause ??
     null;
+  const defaultTaskModelByRuntime: Record<string, string> =
+    (payload.initialData as { runtimeConfig?: { system?: { defaultTaskModelByRuntime?: Record<string, string> } } } | undefined)
+      ?.runtimeConfig?.system?.defaultTaskModelByRuntime ?? {};
 
   useEffect(() => {
     const handlePopState = () => {
@@ -238,6 +241,7 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
               secretSlugs={(secretsData?.items ?? []).map((secret) => secret.slug)}
               onNotice={setNotice}
               queryClient={queryClient}
+              defaultTaskModelByRuntime={defaultTaskModelByRuntime}
             />
           )}
 

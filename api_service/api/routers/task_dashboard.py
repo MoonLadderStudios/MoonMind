@@ -374,11 +374,13 @@ async def task_settings_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
+    runtime_config = build_runtime_config("/tasks/settings")
     initial_data = {
         "workerPause": {
             "get": "/api/system/worker-pause",
             "post": "/api/system/worker-pause",
-        }
+        },
+        "runtimeConfig": runtime_config,
     }
     return _render_react_page(
         request,
