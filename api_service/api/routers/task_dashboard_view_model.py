@@ -203,8 +203,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
-            "logTailingEnabled": bool(
-                os.environ.get("MOONMIND_LOG_TAILING_ENABLED", "true").strip().lower()
+            "logStreamingEnabled": bool(
+                os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
                 not in ("0", "false", "no", "off")
             ),
         },

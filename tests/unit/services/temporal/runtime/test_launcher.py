@@ -404,6 +404,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
 
     expected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
     assert record.workspace_path == str(expected_workspace)
+    assert record.live_stream_capable is True
     assert expected_workspace.exists()
     assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")
 
@@ -490,6 +491,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         (tmp_path / "workspaces" / "workspace-run-1" / "repo").resolve()
     )
     assert record.workspace_path == expected_workspace
+    assert record.live_stream_capable is True
     assert process.pid == 2001
 
     clone_call = next(args for args, _ in calls if args[:2] == ("git", "clone"))

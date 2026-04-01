@@ -10,6 +10,7 @@ from typing import Any
 from datetime import datetime, timezone
 
 from moonmind.schemas.agent_runtime_models import LiveLogChunk
+from moonmind.observability.transport import SpoolLogPublisher
 from moonmind.workflows.temporal.runtime.output_parser import (
     ParsedOutput,
     PlainTextOutputParser,
@@ -29,7 +30,11 @@ class RuntimeLogStreamer:
     def __init__(self, artifact_storage: Any, publisher: Any | None = None) -> None:
         self._storage = artifact_storage
         self.publisher = publisher
-        self._sequence_counter: dict[str, int] = {"stdout": 0, "stderr": 0, "system": 0}
+        self._sequence_counter = 0
+
+    def _next_sequence(self) -> int:
+        self._sequence_counter += 1
+        return self._sequence_counter
 
     async def stream_to_artifact(
         self,
@@ -37,6 +42,7 @@ class RuntimeLogStreamer:
         *,
         run_id: str,
         stream_name: str,
+        workspace_path: str | None = None,
         parser: RuntimeOutputParser | None = None,
         event_callback: Any | None = None,
     ) -> tuple[str, str, list[dict]]:
@@ -58,6 +64,9 @@ class RuntimeLogStreamer:
         # Carry-over buffer for incomplete lines when the parser is active.
         _line_buf: str = ""
         current_offset: int = 0
+        live_publisher = self.publisher
+        if live_publisher is None and workspace_path:
+            live_publisher = SpoolLogPublisher(workspace_path=workspace_path)
 
         while True:
             chunk = await reader.read(_STREAM_CHUNK_SIZE)
@@ -67,19 +76,17 @@ class RuntimeLogStreamer:
             chunk_length = len(chunk)
             chunks.append(chunk)
             
-            if self.publisher is not None:
-                self._sequence_counter.setdefault(stream_name, 0)
-                self._sequence_counter[stream_name] += 1
+            if live_publisher is not None:
                 try:
                     text_content = chunk.decode("utf-8", errors="replace")
                     obj = LiveLogChunk(
-                        sequence=self._sequence_counter[stream_name],
+                        sequence=self._next_sequence(),
                         stream=stream_name,  # type: ignore
                         timestamp=datetime.now(timezone.utc).isoformat(),
                         text=text_content,
                         offset=current_offset,
                     )
-                    self.publisher.publish(obj)
+                    live_publisher.publish(obj)
                 except Exception:
                     # Failsafe: publishers must not crash the workflow
                     pass
@@ -126,6 +133,7 @@ class RuntimeLogStreamer:
         stderr_reader: asyncio.StreamReader | None,
         *,
         run_id: str,
+        workspace_path: str | None = None,
         parser: RuntimeOutputParser | None = None,
         event_callback: Any | None = None,
     ) -> tuple[dict[str, str], str, str, ParsedOutput, list[dict]]:
@@ -148,6 +156,7 @@ class RuntimeLogStreamer:
                     stdout_reader,
                     run_id=run_id,
                     stream_name="stdout",
+                    workspace_path=workspace_path,
                     parser=parser,
                     event_callback=event_callback,
                 )
@@ -161,6 +170,7 @@ class RuntimeLogStreamer:
                     stderr_reader,
                     run_id=run_id,
                     stream_name="stderr",
+                    workspace_path=workspace_path,
                     parser=parser,
                     event_callback=event_callback,
                 )

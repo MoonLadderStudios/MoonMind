@@ -27,6 +27,6 @@
 
 ## R3: Feature Flag Mechanism
 
-**Decision**: Add `logTailingEnabled` to the view model config returned to the dashboard.
+**Decision**: Add `logStreamingEnabled` to the view model config returned to the dashboard.
 
-**Rationale**: The dashboard view model (`task_dashboard_view_model.py`) already returns configuration objects. Adding a boolean flag is trivial and consistent with how other feature controls work. An environment variable `MOONMIND_LOG_TAILING_ENABLED` defaults to `true`.
+**Rationale**: The dashboard view model (`task_dashboard_view_model.py`) already returns configuration objects. Adding a boolean flag is trivial and consistent with how other feature controls work. An environment variable `MOONMIND_LOG_STREAMING_ENABLED` defaults to `true`.

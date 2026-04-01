@@ -5,7 +5,7 @@
 
 ## Summary
 
-Add a collapsible Live Output panel to the Mission Control task detail page that embeds the tmate `web_ro` URL as a read-only terminal view. The panel streams live agent terminal output on demand, disconnects when collapsed or backgrounded, and handles all session lifecycle states. The feature is UI-only (no new backend endpoints) and is gated behind a `logTailingEnabled` feature flag.
+Add a collapsible Live Output panel to the Mission Control task detail page that embeds the tmate `web_ro` URL as a read-only terminal view. The panel streams live agent terminal output on demand, disconnects when collapsed or backgrounded, and handles all session lifecycle states. The feature is UI-only (no new backend endpoints) and is gated behind a `logStreamingEnabled` feature flag.
 
 ## Technical Context
 
@@ -31,7 +31,7 @@ Add a collapsible Live Output panel to the Mission Control task detail page that
 | IV. Own Your Data | PASS | No data leaves operator-controlled infrastructure beyond existing tmate relay. |
 | V. Skills Are First-Class | N/A | Not a skill feature. |
 | VI. Bittersweet Lesson | PASS | Thin UI scaffold embedding an external viewer — trivially replaceable. |
-| VII. Powerful Runtime Configurability | PASS | Feature flag (`logTailingEnabled`) controls visibility at runtime. |
+| VII. Powerful Runtime Configurability | PASS | Feature flag (`logStreamingEnabled`) controls visibility at runtime. |
 | VIII. Modular and Extensible | PASS | Panel is a self-contained UI component; no changes to core orchestration. |
 | IX. Resilient by Default | PASS | Error states handled gracefully; session failures don't affect task execution. |
 | X. Facilitate Continuous Improvement | N/A | Not directly applicable. |
@@ -67,10 +67,10 @@ api_service/
 │                                     #   - visibilitychange listener
 │                                     #   - Feature flag check
 ├── api/routers/
-│   └── task_dashboard_view_model.py  # MODIFY: Add logTailingEnabled to features config
+│   └── task_dashboard_view_model.py  # MODIFY: Add logStreamingEnabled to features config
 tests/
 └── unit/api/routers/
-    └── test_task_dashboard_view_model.py  # MODIFY: Add test for logTailingEnabled flag
+    └── test_task_dashboard_view_model.py  # MODIFY: Add test for logStreamingEnabled flag
 ```
 
 **Structure Decision**: This feature modifies 2-3 existing files. The primary change is in `dashboard.js` (new UI panel). The view model file adds the feature flag. No new files are required in the source tree.
@@ -95,7 +95,7 @@ The panel manages its own connection lifecycle:
 
 ### 2. Feature Flag (task_dashboard_view_model.py)
 
-Add `logTailingEnabled` to the existing features configuration object exposed by the view model. Default to `true` when the live session system is available. The dashboard checks this flag before rendering the panel.
+Add `logStreamingEnabled` to the existing features configuration object exposed by the view model. Default to `true` when the live session system is available. The dashboard checks this flag before rendering the panel.
 
 ### 3. ManagedRuntimeLauncher (launcher.py)
 

@@ -13,6 +13,6 @@
 | DOC-REQ-007 | FR-005 | `dashboard.js`: render "Session ended" for ENDED/REVOKED status | Unit: mock ENDED state, assert message text |
 | DOC-REQ-008 | FR-006 | `dashboard.js`: render "Live output is not available" for DISABLED/ERROR | Unit: mock DISABLED and ERROR states, assert message text |
 | DOC-REQ-009 | FR-007 | Uses existing `GET /api/queue/jobs/{id}/live-session` and `GET /api/task-runs/{id}/live-session`; no new endpoint | Verify: no new route registrations in diff |
-| DOC-REQ-010 | FR-011 | `task_dashboard_view_model.py`: `logTailingEnabled` flag; `dashboard.js`: conditional rendering | Unit: test flag controls panel visibility |
+| DOC-REQ-010 | FR-011 | `task_dashboard_view_model.py`: `logStreamingEnabled` flag; `dashboard.js`: conditional rendering | Unit: test flag controls panel visibility |
 | DOC-REQ-011 | FR-012 | `dashboard.js`: switch on status value for all 6 states | Unit: render function tested with each status enum value |
 | DOC-REQ-012 | FR-009, FR-010 | `dashboard.js`: `visibilitychange` event listener pauses/resumes iframe | Manual: tab switch test; Unit: mock visibilitychange event |

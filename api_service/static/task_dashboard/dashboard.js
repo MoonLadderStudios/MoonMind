@@ -7484,7 +7484,7 @@
           </div>
           <pre id="temporal-live-output" class="queue-live-output"></pre>
         </div>`
-          : "<p class='small'>Live log tailing is not configured for Temporal tasks. Use Live Output.</p>"
+          : "<p class='small'>Live log streaming is not configured for Temporal tasks. Use Live Output.</p>"
         }
       </section>
       ${debugFields}
@@ -7552,8 +7552,8 @@
       if (!node) {
         return;
       }
-      const logTailingEnabled = Boolean(featuresConfig.logTailingEnabled);
-      if (!logTailingEnabled) {
+      const logStreamingEnabled = Boolean(featuresConfig.logStreamingEnabled);
+      if (!logStreamingEnabled) {
         node.innerHTML = "";
         return;
       }

@@ -13,7 +13,7 @@ type DashboardConfig = {
       actionsEnabled?: boolean;
       debugFieldsEnabled?: boolean;
     };
-    logTailingEnabled?: boolean;
+    logStreamingEnabled?: boolean;
   };
   sources?: {
     temporal?: Record<string, string>;
@@ -513,21 +513,19 @@ function LiveLogsPanel({
         }}
         style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Live Logs</span>
-          {expanded && (
-            <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }} onClick={(e) => e.stopPropagation()}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-                <span className="small">Wrap lines</span>
-              </label>
-              <button className="secondary small" onClick={handleCopy}>Copy</button>
-              <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-            </div>
-          )}
-        </div>
+        <span>Live Logs</span>
       </summary>
       <div className="stack">
+        {expanded ? (
+          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+              <span className="small">Wrap lines</span>
+            </label>
+            <button className="secondary small" onClick={handleCopy}>Copy</button>
+            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+          </div>
+        ) : null}
         <p className="small">
         Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
       </p>
@@ -611,21 +609,19 @@ function StaticLogPanel({
         }}
         style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{title}</span>
-          {expanded && (
-            <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }} onClick={(e) => e.stopPropagation()}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-                <span className="small">Wrap lines</span>
-              </label>
-              <button className="secondary small" onClick={handleCopy}>Copy</button>
-              <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-            </div>
-          )}
-        </div>
+        <span>{title}</span>
       </summary>
       <div className="stack">
+        {expanded ? (
+          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+              <span className="small">Wrap lines</span>
+            </label>
+            <button className="secondary small" onClick={handleCopy}>Copy</button>
+            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+          </div>
+        ) : null}
         <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
           <pre
             style={{
@@ -681,21 +677,19 @@ function DiagnosticsPanel({
         }}
         style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Diagnostics</span>
-          {expanded && (
-            <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }} onClick={(e) => e.stopPropagation()}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-                <span className="small">Wrap lines</span>
-              </label>
-              <button className="secondary small" onClick={handleCopy}>Copy</button>
-              <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-            </div>
-          )}
-        </div>
+        <span>Diagnostics</span>
       </summary>
       <div className="stack">
+        {expanded ? (
+          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+              <span className="small">Wrap lines</span>
+            </label>
+            <button className="secondary small" onClick={handleCopy}>Copy</button>
+            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+          </div>
+        ) : null}
         <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
           <pre
             style={{
@@ -724,7 +718,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
-  const logTailingEnabled = cfg?.features?.logTailingEnabled !== false;
+  const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
@@ -1107,7 +1101,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           </section>
 
           <section className="stack">
-            {logTailingEnabled ? (
+            {logStreamingEnabled ? (
               resolvedTaskRunId ? (
                 <>
                   <LiveLogsPanel
@@ -1123,14 +1117,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <>
                   <h3>Live Logs</h3>
                   <p className="small">
-                    Live log tailing requires a task run id. Waiting for the task to start executing...
+                    Live log streaming requires a task run id. Waiting for the task to start executing...
                   </p>
                 </>
               )
             ) : (
               <>
                 <h3>Live Logs</h3>
-                <p className="small">Live log tailing is disabled in the server dashboard config.</p>
+                <p className="small">Live log streaming is disabled in the server dashboard config.</p>
               </>
             )}
           </section>

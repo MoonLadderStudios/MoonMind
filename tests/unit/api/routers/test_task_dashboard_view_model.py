@@ -264,15 +264,15 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     ]
 
 
-def test_build_runtime_config_log_tailing_enabled_by_default() -> None:
+def test_build_runtime_config_log_streaming_enabled_by_default() -> None:
     config = build_runtime_config("/tasks")
-    assert config["features"]["logTailingEnabled"] is True
+    assert config["features"]["logStreamingEnabled"] is True
 
 
-def test_build_runtime_config_log_tailing_disabled_via_env(monkeypatch) -> None:
-    monkeypatch.setenv("MOONMIND_LOG_TAILING_ENABLED", "false")
+def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "false")
     config = build_runtime_config("/tasks")
-    assert config["features"]["logTailingEnabled"] is False
+    assert config["features"]["logStreamingEnabled"] is False
 
 
 def test_build_runtime_config_temporal_live_session_endpoint() -> None:
@@ -334,5 +334,4 @@ def test_normalize_status_maps_temporal_awaiting_slot_to_queued() -> None:
 def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> None:
     """waiting_on_dependencies should map to waiting on the dashboard."""
     assert normalize_status("temporal", "waiting_on_dependencies") == "waiting"
-
 

@@ -595,6 +595,7 @@ class ManagedRuntimeLauncher:
             pid=process.pid,
             started_at=datetime.now(tz=UTC),
             workspace_path=resolved_workspace_path,
+            live_stream_capable=bool(resolved_workspace_path),
         )
         self._store.save(record)
         return record, process, None, materializer.generated_files
