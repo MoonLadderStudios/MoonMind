@@ -8,6 +8,14 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from api_service.db import models as db_models
+from moonmind.core.artifacts import (
+    TemporalArtifactStorageBackend,
+    TemporalArtifactEncryption,
+    TemporalArtifactStatus,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactRedactionLevel,
+    TemporalArtifactUploadMode,
+)
 
 
 class ArtifactRefModel(BaseModel):
@@ -73,14 +81,14 @@ class CreateArtifactRequest(BaseModel):
     content_type: Optional[str] = None
     size_bytes: Optional[int] = Field(None, ge=0)
     sha256: Optional[str] = None
-    retention_class: Optional[db_models.TemporalArtifactRetentionClass] = None
+    retention_class: Optional[TemporalArtifactRetentionClass] = None
     link: Optional[ArtifactCreateExecutionLinkRequest] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    redaction_level: db_models.TemporalArtifactRedactionLevel = Field(
-        db_models.TemporalArtifactRedactionLevel.NONE
+    redaction_level: TemporalArtifactRedactionLevel = Field(
+        TemporalArtifactRedactionLevel.NONE
     )
-    encryption: db_models.TemporalArtifactEncryption = Field(
-        db_models.TemporalArtifactEncryption.NONE
+    encryption: TemporalArtifactEncryption = Field(
+        TemporalArtifactEncryption.NONE
     )
 
 
@@ -162,13 +170,13 @@ class ArtifactMetadataModel(BaseModel):
     content_type: Optional[str] = None
     size_bytes: Optional[int] = None
     sha256: Optional[str] = None
-    storage_backend: db_models.TemporalArtifactStorageBackend
+    storage_backend: TemporalArtifactStorageBackend
     storage_key: str
-    encryption: db_models.TemporalArtifactEncryption
-    status: db_models.TemporalArtifactStatus
-    retention_class: db_models.TemporalArtifactRetentionClass
+    encryption: TemporalArtifactEncryption
+    status: TemporalArtifactStatus
+    retention_class: TemporalArtifactRetentionClass
     expires_at: Optional[datetime] = None
-    redaction_level: db_models.TemporalArtifactRedactionLevel
+    redaction_level: TemporalArtifactRedactionLevel
     metadata: dict[str, Any] = Field(default_factory=dict)
     links: list[ArtifactExecutionLinkModel] = Field(default_factory=list)
     pinned: bool = False
