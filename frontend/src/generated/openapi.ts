@@ -2926,6 +2926,14 @@ export interface components {
             targetSkill?: string | null;
             /** Model */
             model?: string | null;
+            /** Requestedmodel */
+            requestedModel?: string | null;
+            /** Resolvedmodel */
+            resolvedModel?: string | null;
+            /** Modelsource */
+            modelSource?: string | null;
+            /** Profileid */
+            profileId?: string | null;
             /** Effort */
             effort?: string | null;
             /** Startingbranch */
