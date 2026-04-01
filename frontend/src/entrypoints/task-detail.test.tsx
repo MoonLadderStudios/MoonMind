@@ -747,4 +747,63 @@ describe('LiveLogsPanel', () => {
     expect(downloadLink.href).toMatch(/\/task-runs\/mock-uuid-1\/logs\/merged$/);
   });
 
+  it('keeps panels expanded when operators use their controls', async () => {
+    const clipboardMock = { writeText: vi.fn() };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboardMock,
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => 'stdout data' } as Response);
+      if (url.includes('/diagnostics')) return Promise.resolve({ ok: true, text: async () => '{"diag":true}' } as Response);
+      if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => 'live log data' } as Response);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          temporalRunId: '01-run',
+          namespace: 'default',
+          taskRunId: 'mock-uuid-1',
+          source: 'temporal',
+          title: 'Mock task',
+          summary: 'Mock summary',
+          state: 'succeeded',
+          status: 'completed',
+          createdAt: '2026-03-28T00:00:00Z',
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+    fireEvent.click(await screen.findByText('Stdout'));
+    fireEvent.click(await screen.findByText('Diagnostics'));
+
+    await waitFor(() => expect(screen.getByText(/live log data/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/stdout data/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/\{"diag":true\}/)).toBeTruthy());
+
+    const liveDetails = screen.getByText('Live Logs').closest('details');
+    const stdoutDetails = screen.getByText('Stdout').closest('details');
+    const diagnosticsDetails = screen.getByText('Diagnostics').closest('details');
+
+    fireEvent.click(screen.getAllByText('Copy')[0]!);
+    fireEvent.click(screen.getAllByLabelText('Wrap lines')[1]!);
+    fireEvent.click(screen.getAllByText('Copy')[2]!);
+
+    expect(liveDetails?.hasAttribute('open')).toBe(true);
+    expect(stdoutDetails?.hasAttribute('open')).toBe(true);
+    expect(diagnosticsDetails?.hasAttribute('open')).toBe(true);
+  });
+
 });

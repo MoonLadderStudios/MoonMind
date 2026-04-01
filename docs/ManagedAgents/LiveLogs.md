@@ -24,19 +24,11 @@ With this design:
 
 This keeps logging deterministic, persistent, auditable, and independent from interactive terminal transport.
 
-### 1.1 Current implementation state
+### 1.1 Implementation tracking
 
-The following represents an honest snapshot of what is implemented versus what remains:
+This document is the canonical desired-state architecture for managed-run observability.
 
-* **Implemented**: durable stdout/stderr/diagnostics artifact production is substantially complete for managed runs.
-* **Implemented**: data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) are populated by the supervisor.
-* **Implemented**: managed-run launch records now persist live-stream capability metadata for real workspace-backed runs, so observability summary truthfully reports when Mission Control may connect to SSE.
-* **Implemented**: the supervised runtime emits live log chunks into a shared append-only spool under the run workspace, and the API SSE endpoint consumes from that cross-process transport.
-* **Implemented**: Mission Control task detail now consumes observability summary, merged tail, stdout, stderr, and diagnostics APIs through a native observability panel.
-* **Partial**: merged-tail synthesis is chronological for runs that still have spool metadata; historical runs that only have separate stdout/stderr artifacts degrade to a labeled artifact fallback with an explicit warning that chronological merge order is unavailable.
-* **Partial**: the current Mission Control viewer satisfies the artifact-first/live-follow contract, but it does not yet use the preferred `react-virtuoso` + `anser` rendering baseline described later in this document.
-
-> Live streaming is only considered complete when supervised runtime log chunks are actually published into the shared live stream path consumed by Mission Control. Endpoint presence alone is not enough.
+Current implementation status, phased rollout notes, and remaining migration work live in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md).
 
 ---
 
@@ -361,10 +353,10 @@ This combination is preferred over terminal or editor widgets because the Live L
 
 ### Why this baseline was selected
 
-Current implementation note:
+Implementation tracking note:
 
-* the active task-detail viewer already uses TanStack Query plus `EventSource`
-* `react-virtuoso` and `anser` remain the preferred next rendering upgrade, not a precondition for the artifact-first/live-follow contract that is now implemented
+* the preferred rendering foundation remains TanStack Query plus `EventSource` for transport, with `react-virtuoso` and `anser` as the desired viewer baseline
+* concrete rollout status for the current viewer implementation is tracked in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md)
 
 #### Why `react-virtuoso`
 
@@ -799,37 +791,9 @@ This is the direct replacement for the old tmate-oriented live-log requirements.
 
 ---
 
-## 16. Migration plan
+## 16. Implementation tracking
 
-## Phase 1
-
-Rewrite the docs and specs to remove `tmate web_ro` and terminal embedding requirements.
-
-## Phase 2
-
-Change launcher/supervisor contracts so managed runs always use direct subprocess pipes.
-
-## Phase 3
-
-Add observability APIs:
-
-* summary
-* merged tail
-* stdout/stderr retrieval
-* diagnostics
-* live stream
-
-## Phase 4
-
-Replace Mission Control Live Output terminal embed with MoonMind-native log viewer.
-
-## Phase 5
-
-Deprecate or replace `TaskRunLiveSession` for managed-run observability.
-
-## Phase 6
-
-Keep `xterm.js` only in the OAuth subsystem.
+Phased rollout notes, migration sequencing, and remaining implementation work are tracked in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md) so this document stays focused on the target-state contract.
 
 ---
 

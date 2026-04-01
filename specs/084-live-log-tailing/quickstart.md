@@ -32,4 +32,4 @@
 
 ## Feature Flag
 
-Set `MOONMIND_LOG_TAILING_ENABLED=false` in `.env` to disable the panel entirely. Default is `true`.
+Set `MOONMIND_LOG_STREAMING_ENABLED=false` in `.env` to disable the panel entirely. Default is `true`.

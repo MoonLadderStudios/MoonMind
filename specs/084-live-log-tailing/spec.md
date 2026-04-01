@@ -18,7 +18,7 @@
 | DOC-REQ-007 | §5.3 UI Behavior | For terminal (completed) workflows, the UI MUST show "Session ended" with no stream. |
 | DOC-REQ-008 | §5.3 UI Behavior | When no session is available (DISABLED or ERROR), the UI MUST show "Live output is not available for this task." |
 | DOC-REQ-009 | §5.4 API Contract | The UI MUST use the existing `GET /api/workflows/{id}/live-session` endpoint to obtain the `web_ro` URL. No new API endpoint is required. |
-| DOC-REQ-010 | §10.2 Feature Flags | Live log tailing MUST be gated behind a `logTailingEnabled` feature flag. |
+| DOC-REQ-010 | §10.2 Feature Flags | Live log tailing MUST be gated behind a `logStreamingEnabled` feature flag. |
 | DOC-REQ-011 | §4.1 Session Lifecycle | The UI MUST handle all session lifecycle states: DISABLED, STARTING, READY, REVOKED, ENDED, ERROR. |
 | DOC-REQ-012 | §5.3 UI Behavior | The UI MUST disconnect or pause the stream when the tab loses visibility (via `visibilitychange` event). |
 
@@ -74,7 +74,7 @@ An operator has the Live Output panel open and switches to a different browser t
 
 ### User Story 4 - Feature Flag Control (Priority: P2)
 
-The platform operator can enable or disable the Live Output panel via the `logTailingEnabled` feature flag. When disabled, the panel does not appear on the task detail page.
+The platform operator can enable or disable the Live Output panel via the `logStreamingEnabled` feature flag. When disabled, the panel does not appear on the task detail page.
 
 **Why this priority**: Enables gradual rollout and the ability to disable the feature without code changes.
 
@@ -82,8 +82,8 @@ The platform operator can enable or disable the Live Output panel via the `logTa
 
 **Acceptance Scenarios**:
 
-1. **Given** `logTailingEnabled` is set to `true`, **When** an operator views a task detail page, **Then** the Live Output panel toggle is visible.
-2. **Given** `logTailingEnabled` is set to `false`, **When** an operator views a task detail page, **Then** the Live Output panel toggle is not rendered.
+1. **Given** `logStreamingEnabled` is set to `true`, **When** an operator views a task detail page, **Then** the Live Output panel toggle is visible.
+2. **Given** `logStreamingEnabled` is set to `false`, **When** an operator views a task detail page, **Then** the Live Output panel toggle is not rendered.
 
 ---
 
@@ -107,7 +107,7 @@ The platform operator can enable or disable the Live Output panel via the `logTa
 - **FR-008**: The panel MUST disconnect the stream when collapsed. *(DOC-REQ-003)*
 - **FR-009**: The panel MUST disconnect or pause the stream when the browser tab loses visibility. *(DOC-REQ-012)*
 - **FR-010**: The panel MUST reconnect the stream when the browser tab regains visibility and the panel is open.
-- **FR-011**: The feature MUST be gated behind a `logTailingEnabled` feature flag. *(DOC-REQ-010)*
+- **FR-011**: The feature MUST be gated behind a `logStreamingEnabled` feature flag. *(DOC-REQ-010)*
 - **FR-012**: The panel MUST handle all session lifecycle states: DISABLED, STARTING, READY, REVOKED, ENDED, ERROR. *(DOC-REQ-011)*
 - **FR-013**: The rolling buffer MUST display approximately the most recent 200 lines. *(DOC-REQ-001, DOC-REQ-002)*
 - **FR-014**: The `ManagedRuntimeLauncher` MUST wrap managed agent subprocesses in a headless `tmate` session to generate the `web_ro` URL for log tailing. *(DOC-REQ-004)*
@@ -125,5 +125,5 @@ The platform operator can enable or disable the Live Output panel via the `logTa
 - **SC-001**: Operators can view live agent terminal output within 5 seconds of toggling the panel open when the session is READY.
 - **SC-002**: The panel correctly renders all 6 session lifecycle states with appropriate user-facing messages.
 - **SC-003**: Stream connections are terminated within 2 seconds of the panel being collapsed or the tab being backgrounded.
-- **SC-004**: The feature can be fully disabled via the `logTailingEnabled` flag with no residual UI elements visible.
+- **SC-004**: The feature can be fully disabled via the `logStreamingEnabled` flag with no residual UI elements visible.
 - **SC-005**: No new API endpoints are required — the feature works entirely with the existing live session endpoint.

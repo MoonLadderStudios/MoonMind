@@ -40,6 +40,8 @@ This plan does **not** cover implementing the OAuth browser terminal itself beyo
 
 This section captures an honest snapshot of the implementation, to prevent future confusion about what is and is not done:
 
+Canonical architecture and operator-visible contract text lives in [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md). This tmp plan owns rollout tracking and implementation status.
+
 - **Done**: Durable stdout/stderr/diagnostics artifact production is substantially implemented in the managed runtime supervisor.
 - **Done**: Data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) exist and are populated.
 - **Done**: Observability read APIs (summary, tail endpoints, downloads, diagnostics) are consumed by the Mission Control task detail page.
