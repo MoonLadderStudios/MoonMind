@@ -9,6 +9,7 @@ from typing import Any
 from moonmind.config.settings import settings
 from moonmind.workflows.tasks.runtime_defaults import (
     DEFAULT_REPOSITORY,
+    normalize_runtime_id,
     resolve_default_task_runtime,
     resolve_runtime_defaults,
 )
@@ -19,7 +20,7 @@ _POLL_INTERVALS_MS = {
     "events": 1000,
 }
 
-_SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini_cli", "claude", "jules", "universal")
+_SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "gemini_cli", "claude_code", "jules", "universal")
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
@@ -84,7 +85,7 @@ def status_maps() -> dict[str, dict[str, str]]:
 
 
 def _build_supported_task_runtimes() -> list[str]:
-    supported: list[str] = ["codex", "gemini_cli", "claude", "codex_cloud"]
+    supported: list[str] = ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported
@@ -120,9 +121,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
 
     supported_task_runtimes = _build_supported_task_runtimes()
     temporal_dashboard = settings.temporal_dashboard
-    configured_runtime = (
-        str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower()
-    )
+    configured_runtime = normalize_runtime_id(
+        str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower() or None
+    ) if os.environ.get("MOONMIND_WORKER_RUNTIME", "").strip() else ""
     if configured_runtime in supported_task_runtimes:
         default_task_runtime = configured_runtime
     else:

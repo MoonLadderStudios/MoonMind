@@ -356,7 +356,7 @@ class TestWorkflowSettings:
         settings = WorkflowSettings(_env_file=None)
         assert settings.codex_model == "gpt-5.3-codex"
         assert settings.codex_effort == "high"
-        assert settings.default_task_runtime == "codex"
+        assert settings.default_task_runtime == "codex_cli"
         assert settings.default_publish_mode == "pr"
         assert settings.claude_volume_name == "claude_auth_volume"
         assert settings.claude_volume_path == "/home/app/.claude"
@@ -382,7 +382,7 @@ class TestWorkflowSettings:
 
         assert settings.codex_model == "gpt-custom-codex"
         assert settings.codex_effort == "medium"
-        assert settings.default_task_runtime == "claude"
+        assert settings.default_task_runtime == "claude_code"
         assert settings.default_publish_mode == "branch"
         assert settings.claude_volume_name == "claude_auth_custom"
         assert settings.claude_volume_path == "/runtime/claude-auth"
@@ -830,7 +830,7 @@ class TestAppSettingsRuntimeValidation:
         defaults["anthropic"] = {"anthropic_api_key": "test-key"}
 
         settings = AppSettings(**defaults)
-        assert settings.workflow.default_task_runtime == "claude"
+        assert settings.workflow.default_task_runtime == "claude_code"
 
     def test_app_settings_maps_claude_alias_to_anthropic_api_key(
         self, app_settings_defaults, monkeypatch
@@ -857,7 +857,7 @@ class TestAppSettingsRuntimeValidation:
         defaults["workflow"] = {"default_task_runtime": "claude"}
 
         settings = AppSettings(**defaults)
-        assert settings.workflow.default_task_runtime == "claude"
+        assert settings.workflow.default_task_runtime == "claude_code"
 
     def test_app_settings_rejects_jules_default_without_runtime_config(
         self, app_settings_defaults, monkeypatch

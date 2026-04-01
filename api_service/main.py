@@ -443,7 +443,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "gemini_cli",
             "provider_id": "google",
             "provider_label": "Google",
-            "default_model": "gemini-3.1-pro-preview",
+            "default_model": None,  # inherits runtime default: gemini-3.1-pro-preview
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("GEMINI_VOLUME_NAME", "gemini_auth_volume"),
@@ -455,7 +455,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "codex_cli",
             "provider_id": "moonladder",
             "provider_label": "MoonLadder",
-            "default_model": "gpt-5.4",
+            "default_model": None,  # inherits runtime default: gpt-5.4
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CODEX_VOLUME_NAME", "codex_auth_volume"),
@@ -467,7 +467,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_id": "claude_code",
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
-            "default_model": "Sonnet 4.6",
+            "default_model": None,  # inherits runtime default: Sonnet 4.6
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
@@ -532,7 +532,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
                     current_model = existing_by_id[profile_id]
-                    if desired_default_model and not str(current_model or "").strip():
+                    # Only reconcile when the seeded profile has an explicit desired model
+                    # (non-None) and the existing row is blank — never clear user-set values.
+                    if desired_default_model is not None and not str(current_model or "").strip():
                         stmt = (
                             update(ManagedAgentProviderProfile)
                             .where(ManagedAgentProviderProfile.profile_id == profile_id)

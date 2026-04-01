@@ -60,6 +60,8 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.tasks.model_resolver import resolve_effective_model
+from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from api_service.api.schemas import CreateJobRequest
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
@@ -327,6 +329,9 @@ def _serialize_execution(
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+    param_requested_model = str(params.get("requestedModel") or "").strip() or None
+    param_model_source = str(params.get("modelSource") or "").strip() or None
+    param_profile_id = str(params.get("profileId") or "").strip() or None
     if not target_runtime:
         runtime_nested = params.get("runtime")
         if isinstance(runtime_nested, dict):
@@ -444,6 +449,10 @@ def _serialize_execution(
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
+        requested_model=param_requested_model,
+        resolved_model=param_model,
+        model_source=param_model_source,
+        profile_id=param_profile_id,
         effort=param_effort,
         starting_branch=starting_branch,
         target_branch=target_branch,
@@ -914,14 +923,69 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner=normalized_task_for_planner,
     )
 
+    # --- Model resolution ---
+    _SUPPORTED_TASK_RUNTIMES = frozenset({
+        "codex_cli", "gemini_cli", "claude_code", "codex_cloud", "jules",
+        # Legacy aliases accepted and normalized below.
+        "codex", "claude",
+    })
+
+    raw_target_runtime = (
+        payload.get("targetRuntime")
+        or runtime_payload.get("mode")
+        or ""
+    )
+    raw_profile_id = str(
+        runtime_payload.get("profileId")
+        or task_payload.get("profileId")
+        or payload.get("profileId")
+        or ""
+    ).strip() or None
+    # Preserve the original requested model byte-for-byte (Compatibility Policy:
+    # codex.model and codex.effort inputs must not be modified).
+    raw_requested_model: str | None = runtime_payload.get("model") or None
+    if raw_requested_model is not None:
+        raw_requested_model = str(raw_requested_model)
+
+    # Normalize targetRuntime to canonical form and validate it.
+    canonical_target_runtime: str | None = None
+    if raw_target_runtime:
+        normalized_rt = normalize_runtime_id(raw_target_runtime)
+        if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
+            raise _invalid_task_request(
+                f"Unsupported targetRuntime: {raw_target_runtime!r}. "
+                "Must be one of: codex_cli, gemini_cli, claude_code, codex_cloud, jules."
+            )
+        canonical_target_runtime = normalized_rt
+
+    # Load provider profile when a profileId is supplied.
+    _provider_profile = None
+    if raw_profile_id and session is not None:
+        from api_service.db.models import ManagedAgentProviderProfile
+        _provider_profile = await session.get(ManagedAgentProviderProfile, raw_profile_id)
+        if _provider_profile is None:
+            raise _invalid_task_request(
+                f"Provider profile not found: {raw_profile_id!r}."
+            )
+
+    resolved_model, model_source = resolve_effective_model(
+        runtime_id=canonical_target_runtime,
+        profile=_provider_profile,
+        requested_model=raw_requested_model,
+        workflow_settings=settings.workflow,
+    )
+
     initial_parameters = {
         "requestType": request.type,
         "repository": repository,
         "requiredCapabilities": required_capabilities,
         "priority": request.priority,
         "maxAttempts": request.max_attempts,
-        "targetRuntime": payload.get("targetRuntime") or runtime_payload.get("mode"),
-        "model": runtime_payload.get("model"),
+        "targetRuntime": canonical_target_runtime,
+        "model": resolved_model,
+        "requestedModel": raw_requested_model,
+        "modelSource": model_source,
+        "profileId": raw_profile_id if _provider_profile is not None else None,
         "effort": runtime_payload.get("effort"),
         "publishMode": ((task_payload.get("publish") or {}).get("mode")),
         "proposeTasks": _coerce_bool(task_payload.get("proposeTasks"), default=False),

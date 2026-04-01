@@ -9333,7 +9333,7 @@
                 <label>
                   Runtime ID
                   <input type="text" name="runtime_id" maxlength="80" required
-                         placeholder="e.g. gemini_cli, codex, claude" />
+                         placeholder="e.g. gemini_cli, codex_cli, claude_code" />
                 </label>
                 <label>
                   Provider ID

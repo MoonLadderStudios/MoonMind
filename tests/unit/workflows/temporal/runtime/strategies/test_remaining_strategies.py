@@ -86,7 +86,12 @@ class TestClaudeCodeBuildCommand:
         profile = _make_profile(command_template=["claude"])
         request = _make_request(instruction_ref="Refactor this")
         cmd = s.build_command(profile, request)
-        assert cmd == ["claude", "-p", "--dangerously-skip-permissions", "Refactor this"]
+        # When no profile default_model is set, the claude_code runtime default applies.
+        assert cmd == [
+            "claude",
+            "--model", "Sonnet 4.6",
+            "-p", "--dangerously-skip-permissions", "Refactor this",
+        ]
 
     def test_with_model_and_effort(self) -> None:
         s = ClaudeCodeStrategy()
@@ -123,7 +128,8 @@ class TestClaudeCodeBuildCommand:
         profile = _make_profile(command_template=["claude"])
         request = _make_request()
         cmd = s.build_command(profile, request)
-        assert cmd == ["claude", "-p", "--dangerously-skip-permissions"]
+        # No instruction_ref but runtime default model still applies.
+        assert cmd == ["claude", "--model", "Sonnet 4.6", "-p", "--dangerously-skip-permissions"]
 
     def test_anthropic_model_env_suppresses_model_flag(self) -> None:
         """When ANTHROPIC_MODEL is in env_overrides (MiniMax profile), --model must be omitted."""
@@ -245,7 +251,8 @@ class TestCodexCliBuildCommand:
         )
         request = _make_request(instruction_ref="Fix the bug")
         cmd = s.build_command(profile, request)
-        assert cmd == ["codex", "exec", "--full-auto", "Fix the bug"]
+        # When no profile default_model set, codex_cli runtime default applies.
+        assert cmd == ["codex", "exec", "--full-auto", "-m", "gpt-5.4", "Fix the bug"]
 
     def test_with_model(self) -> None:
         s = CodexCliStrategy()
@@ -281,7 +288,8 @@ class TestCodexCliBuildCommand:
         )
         request = _make_request()
         cmd = s.build_command(profile, request)
-        assert cmd == ["codex", "exec", "--full-auto"]
+        # No instruction_ref but runtime default model still applies.
+        assert cmd == ["codex", "exec", "--full-auto", "-m", "gpt-5.4"]
 
 
 class TestCodexCliShapeEnvironment:

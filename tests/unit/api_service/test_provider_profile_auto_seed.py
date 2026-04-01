@@ -56,10 +56,13 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert len(profiles) == 3
     profile_ids = {p.profile_id for p in profiles}
     assert profile_ids == {"gemini_default", "codex_default", "claude_anthropic"}
+    # Standard profiles are seeded with default_model=None so they inherit
+    # the runtime default (codex_cli→gpt-5.4, gemini_cli→gemini-3.1-pro-preview,
+    # claude_code→Sonnet 4.6) rather than storing a duplicate value.
     defaults = {p.profile_id: p.default_model for p in profiles}
-    assert defaults["gemini_default"] == "gemini-3.1-pro-preview"
-    assert defaults["codex_default"] == "gpt-5.4"
-    assert defaults["claude_anthropic"] == "Sonnet 4.6"
+    assert defaults["gemini_default"] is None
+    assert defaults["codex_default"] is None
+    assert defaults["claude_anthropic"] is None
 
 
 
@@ -159,26 +162,30 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_auto_seed_backfills_missing_default_model(_module_db, monkeypatch):
-    """Existing built-in profiles with blank defaults should be updated on startup."""
+async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module_db, monkeypatch):
+    """The reconciliation loop must not clear user-set default_model values."""
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     await _auto_seed_provider_profiles()
 
+    # Simulate a user setting an explicit model on the seeded profile.
     async with db_base.async_session_maker() as session:
         profile = await session.get(ManagedAgentProviderProfile, "codex_default")
         assert profile is not None
-        profile.default_model = None
+        profile.default_model = "gpt-user-custom"
         await session.commit()
 
+    # Run auto-seed again — it must not overwrite the user-set value.
     seeded = await _auto_seed_provider_profiles()
     assert seeded == []
 
     async with db_base.async_session_maker() as session:
         profile = await session.get(ManagedAgentProviderProfile, "codex_default")
         assert profile is not None
-        assert profile.default_model == "gpt-5.4"
+        # User-set value must be preserved; reconciliation loop is a no-op
+        # because desired_default_model is None for the standard profiles.
+        assert profile.default_model == "gpt-user-custom"
 
 
 @pytest.mark.asyncio
