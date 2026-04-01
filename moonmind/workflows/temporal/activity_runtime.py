@@ -1583,15 +1583,24 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_status(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
-        return await jules_status_activity(payload)
+        external_id = payload
+        if isinstance(payload, Mapping):
+            external_id = payload.get("external_id") or payload.get("run_id")
+        return await jules_status_activity(external_id)
 
     async def integration_jules_fetch_result(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
-        return await jules_fetch_result_activity(payload)
+        external_id = payload
+        if isinstance(payload, Mapping):
+            external_id = payload.get("external_id") or payload.get("run_id")
+        return await jules_fetch_result_activity(external_id)
 
     async def integration_jules_cancel(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_cancel_activity
-        return await jules_cancel_activity(payload)
+        external_id = payload
+        if isinstance(payload, Mapping):
+            external_id = payload.get("external_id") or payload.get("run_id")
+        return await jules_cancel_activity(external_id)
 
     async def repo_create_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
@@ -1607,7 +1616,10 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_list_activities(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_list_activities_activity
-        return await jules_list_activities_activity(payload)
+        session_id = payload
+        if isinstance(payload, Mapping):
+            session_id = payload.get("session_id") or payload.get("sessionId")
+        return await jules_list_activities_activity(session_id)
 
     async def integration_jules_answer_question(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_answer_question_activity
@@ -1636,15 +1648,24 @@ class TemporalIntegrationActivities:
 
     async def integration_codex_cloud_status(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_status_activity
-        return await codex_cloud_status_activity(payload)
+        external_id = payload
+        if isinstance(payload, Mapping):
+            external_id = payload.get("external_id") or payload.get("run_id")
+        return await codex_cloud_status_activity(external_id)
 
     async def integration_codex_cloud_fetch_result(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_fetch_result_activity
-        return await codex_cloud_fetch_result_activity(payload)
+        external_id = payload
+        if isinstance(payload, Mapping):
+            external_id = payload.get("external_id") or payload.get("run_id")
+        return await codex_cloud_fetch_result_activity(external_id)
 
     async def integration_codex_cloud_cancel(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_cancel_activity
-        return await codex_cloud_cancel_activity(payload)
+        external_id = payload
+        if isinstance(payload, Mapping):
+            external_id = payload.get("external_id") or payload.get("run_id")
+        return await codex_cloud_cancel_activity(external_id)
 
     async def integration_openclaw_execute(self, request, /, **kwargs):
         from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity

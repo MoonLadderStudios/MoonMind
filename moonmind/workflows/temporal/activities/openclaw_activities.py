@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
-
 from temporalio import activity
 
 from moonmind.schemas.agent_runtime_models import (
@@ -17,7 +15,7 @@ async def openclaw_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
     """Run one OpenClaw streaming execution; heartbeats carry stream progress.
-    
+
     Delegates to the OpenClaw executor, which reads configuration, yields content,
     and returns canonical AgentRunResult.
     """

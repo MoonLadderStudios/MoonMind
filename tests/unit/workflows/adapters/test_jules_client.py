@@ -105,7 +105,7 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
     from moonmind.schemas.agent_runtime_models import UnsupportedStatusError
     with pytest.raises(UnsupportedStatusError):
         normalize_jules_status("mystery")
-    
+
     # Actual Jules API State enum values
     assert normalize_jules_status("QUEUED") == "queued"
     assert normalize_jules_status("PLANNING") == "running"

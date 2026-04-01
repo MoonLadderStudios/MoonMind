@@ -425,3 +425,39 @@ async def test_jules_get_auto_answer_config_invalid_timeout_raises():
     with patch.dict("os.environ", {"JULES_AUTO_ANSWER_TIMEOUT_SECONDS": "xyz"}, clear=False):
         with pytest.raises(ValueError, match="JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer"):
             await jules_get_auto_answer_config_activity()
+
+
+async def test_repo_create_pr_activity_validates_payload():
+    from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+    with pytest.raises(ValueError, match="Invalid payload"):
+        await repo_create_pr_activity({})
+
+
+async def test_repo_create_pr_activity_delegates():
+    from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+    
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as mock_svc_cls:
+        mock_svc = mock_svc_cls.return_value
+        
+        from moonmind.workflows.adapters.github_service import CreatePRResult
+        expected_inner = CreatePRResult(url="https://github.com/abc", created=True, summary="")
+        mock_svc.create_pull_request = AsyncMock(return_value=expected_inner)
+        
+        payload = {
+            "repo": "owner/repo",
+            "head": "branch",
+            "base": "main",
+            "title": "Title",
+            "body": "Body"
+        }
+        
+        result = await repo_create_pr_activity(payload)
+        
+        assert result == expected_inner.model_dump(by_alias=True)
+        mock_svc.create_pull_request.assert_awaited_once_with(
+            repo="owner/repo",
+            head="branch",
+            base="main",
+            title="Title",
+            body="Body",
+        )

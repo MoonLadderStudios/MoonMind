@@ -329,15 +329,31 @@ async def jules_get_auto_answer_config_activity(_args: list | None = None) -> di
 @activity.defn(name="repo.create_pr")
 async def repo_create_pr_activity(payload: dict) -> dict:
     """Create a PR via GitHub REST API (provider-agnostic)."""
+    from pydantic import BaseModel, Field, ValidationError
+
+    class _CreatePRPayload(BaseModel):
+        repo: str = Field(min_length=1)
+        head: str = Field(min_length=1)
+        base: str = Field(min_length=1)
+        title: str = Field(min_length=1)
+        body: str = Field(default="")
+
+    try:
+        validated = _CreatePRPayload.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid payload for repo_create_pr_activity: {exc}"
+        ) from exc
+
     from moonmind.workflows.adapters.github_service import GitHubService
 
     svc = GitHubService()
     result = await svc.create_pull_request(
-        repo=payload.get("repo") or "",
-        head=payload.get("head") or "",
-        base=payload.get("base") or "",
-        title=payload.get("title") or "",
-        body=payload.get("body") or "",
+        repo=validated.repo,
+        head=validated.head,
+        base=validated.base,
+        title=validated.title,
+        body=validated.body,
     )
     return result.model_dump(by_alias=True)
 
