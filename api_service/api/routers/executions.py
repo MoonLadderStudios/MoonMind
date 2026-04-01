@@ -394,21 +394,9 @@ def _serialize_execution(
         _coerce_temporal_scalar(git_payload.get("repository"))
         or _coerce_temporal_scalar(task_payload.get("repository"))
         or _coerce_temporal_scalar(params.get("repository"))
-        or str(params.get("repo") or "").strip() or None
+        or _coerce_temporal_scalar(params.get("repo"))
         or _coerce_temporal_scalar(task_payload.get("repo"))
-    )
-
-    if not repository:
-        repository = (
-            _coerce_temporal_scalar(search_attributes.get("mm_repo"))
-            or _coerce_temporal_scalar(search_attributes.get("repository"))
-        ) or None
-
-    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
-    raw_publish_mode = str(
-        params.get("publishMode") or publish_payload.get("mode") or ""
-    ).strip() or None
-    publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+    ) or None
 
     if not repository:
         repository = (
@@ -421,6 +409,12 @@ def _serialize_execution(
             or _coerce_temporal_scalar(git_payload.get("repository"))
             or _coerce_temporal_scalar(task_payload.get("repository"))
         ) or None
+
+    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
+    raw_publish_mode = str(
+        params.get("publishMode") or publish_payload.get("mode") or ""
+    ).strip() or None
+    publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
 
     return ExecutionModel(
         task_id=record.workflow_id,
