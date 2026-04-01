@@ -143,5 +143,45 @@
     "id": 4041865644,
     "disposition": "not-applicable",
     "rationale": "This review body is a PR overview summary; the concrete rule-violation and bug comments were tracked individually."
+  },
+  {
+    "id": 4166791990,
+    "disposition": "not-applicable",
+    "rationale": "This is a high-level walkthrough summary, not a standalone remediation item; the concrete review comments were classified individually."
+  },
+  {
+    "id": 4166792094,
+    "disposition": "not-applicable",
+    "rationale": "This issue comment aggregates the underlying token, support-root, and quoting concerns, which were classified on the individual review comments."
+  },
+  {
+    "id": 3019274135,
+    "disposition": "not-applicable",
+    "rationale": "Current launcher code defines gh_dir before the try block and returns immediately on OSError, so the reported UnboundLocalError path is no longer reachable."
+  },
+  {
+    "id": 3019274156,
+    "disposition": "addressed",
+    "rationale": "The launcher now derives run_root from Path(resolved_workspace_path).resolve().parent and passes that support root into _persist_gh_config, keeping credential storage aligned with the actual workspace layout."
+  },
+  {
+    "id": 4041174595,
+    "disposition": "not-applicable",
+    "rationale": "This review body is an overview summary rather than an additional actionable item."
+  },
+  {
+    "id": 3019276204,
+    "disposition": "addressed",
+    "rationale": "The test no longer uses a ghp_-prefixed token string; it now uses a neutral placeholder token that avoids secret-pattern false positives."
+  },
+  {
+    "id": 4041179579,
+    "disposition": "not-applicable",
+    "rationale": "This review body summarizes launcher comments that were classified separately and does not require its own code change."
+  },
+  {
+    "id": 3019278963,
+    "disposition": "not-applicable",
+    "rationale": "Current code already reuses the resolved workspace parent as run_root and only persists GitHub config when resolved_workspace_path is present, so the suggested cleanup is already reflected."
   }
 ]

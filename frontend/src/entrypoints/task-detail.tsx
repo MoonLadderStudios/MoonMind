@@ -1124,7 +1124,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             ) : (
               <>
                 <h3>Live Logs</h3>
-                  <p className="small">Live log streaming is disabled in the server dashboard config.</p>
+                <p className="small">Live log streaming is disabled in the server dashboard config.</p>
               </>
             )}
           </section>

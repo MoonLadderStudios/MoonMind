@@ -805,5 +805,4 @@ describe('LiveLogsPanel', () => {
     expect(stdoutDetails?.hasAttribute('open')).toBe(true);
     expect(diagnosticsDetails?.hasAttribute('open')).toBe(true);
   });
-
 });
