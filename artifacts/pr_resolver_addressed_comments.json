@@ -1,42 +1,62 @@
 [
   {
-    "id": 4166791990,
+    "id": 4172139736,
     "disposition": "not-applicable",
-    "rationale": "This is a high-level walkthrough summary, not a standalone remediation item; the concrete review comments were classified individually."
+    "rationale": "Automated PR summary."
   },
   {
-    "id": 4166792094,
+    "id": 4172139943,
     "disposition": "not-applicable",
-    "rationale": "This issue comment aggregates the underlying token, support-root, and quoting concerns, which were classified on the individual review comments."
+    "rationale": "Automated PR review summary."
   },
   {
-    "id": 3019274135,
+    "id": 4046217804,
     "disposition": "not-applicable",
-    "rationale": "Current launcher code defines gh_dir before the try block and returns immediately on OSError, so the reported UnboundLocalError path is no longer reachable."
+    "rationale": "No action needed from bot."
   },
   {
-    "id": 3019274156,
+    "id": 3023893323,
     "disposition": "addressed",
-    "rationale": "The launcher now derives run_root from Path(resolved_workspace_path).resolve().parent and passes that support root into _persist_gh_config, keeping credential storage aligned with the actual workspace layout."
+    "rationale": "Updated normalize_runtime_id fallback and model_resolver."
   },
   {
-    "id": 4041174595,
-    "disposition": "not-applicable",
-    "rationale": "This review body is an overview summary rather than an additional actionable item."
-  },
-  {
-    "id": 3019276204,
+    "id": 3023893380,
     "disposition": "addressed",
-    "rationale": "The test no longer uses a ghp_-prefixed token string; it now uses a neutral placeholder token that avoids secret-pattern false positives."
+    "rationale": "Added validation for profile existence in executions.py."
   },
   {
-    "id": 4041179579,
-    "disposition": "not-applicable",
-    "rationale": "This review body summarizes launcher comments that were classified separately and does not require its own code change."
+    "id": 3023893421,
+    "disposition": "addressed",
+    "rationale": "Used normalize_runtime_id in task_dashboard_view_model.py."
   },
   {
-    "id": 3019278963,
+    "id": 3023893455,
     "disposition": "not-applicable",
-    "rationale": "Current code already reuses the resolved workspace parent as run_root and only persists GitHub config when resolved_workspace_path is present, so the suggested cleanup is already reflected."
+    "rationale": "Javascript string coercion is out of scope for this backend API precedence fix."
+  },
+  {
+    "id": 4046219121,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary."
+  },
+  {
+    "id": 3023897912,
+    "disposition": "addressed",
+    "rationale": "Preserved exact requested_model byte-for-byte in executions.py."
+  },
+  {
+    "id": 3023897914,
+    "disposition": "addressed",
+    "rationale": "Added validation to reject unknown runtimes in executions.py."
+  },
+  {
+    "id": 3023897919,
+    "disposition": "addressed",
+    "rationale": "Added canonical ids to allowed list in CLI and runtime mode."
+  },
+  {
+    "id": 3023897921,
+    "disposition": "addressed",
+    "rationale": "Updated settings validation to accept and canonicalize aliases."
   }
 ]
