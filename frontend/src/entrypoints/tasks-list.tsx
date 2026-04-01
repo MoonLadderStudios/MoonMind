@@ -55,6 +55,7 @@ const ExecutionRowSchema = z
     integration: z.string().nullable().optional(),
     targetRuntime: z.string().nullable().optional(),
     targetSkill: z.string().nullable().optional(),
+    taskSkills: z.array(z.string()).nullable().optional(),
     title: z.string(),
     status: z.string(),
     state: z.string(),
@@ -488,7 +489,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           </a>
                         </td>
                         <td>{row.targetRuntime || '—'}</td>
-                        <td>{row.targetSkill || '—'}</td>
+                        <td>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill ? `${row.targetSkill} (inherited)` : '—'}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
@@ -541,7 +542,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Skill</dt>
-                        <dd>{row.targetSkill || '—'}</dd>
+                        <dd>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill ? `${row.targetSkill} (inherited)` : '—'}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>

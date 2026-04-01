@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
+import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -46,6 +46,8 @@ const ExecutionDetailSchema = z
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
+    resolvedSkillsetRef: z.string().nullable().optional(),
+    taskSkills: z.array(z.string()).nullable().optional(),
     publishMode: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
     createdAt: z.string(),
@@ -1111,7 +1113,6 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             <Card label="Workflow Type">{execution.workflowType || '—'}</Card>
             <Card label="Entry">{execution.entry || '—'}</Card>
             {execution.targetRuntime ? <Card label="Runtime">{execution.targetRuntime}</Card> : null}
-            {execution.targetSkill ? <Card label="Skill">{execution.targetSkill}</Card> : null}
             {execution.model ? (
               <Card label="Model">
                 <code className="text-xs">{execution.model}</code>
@@ -1159,6 +1160,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               <code className="text-xs break-all">{workflowId}</code>
             </Card>
           </div>
+
+          <SkillProvenanceBadge 
+            resolvedSkillsetRef={execution.resolvedSkillsetRef} 
+            taskSkills={execution.taskSkills} 
+            targetSkill={execution.targetSkill} 
+          />
 
           <section>
             <h3>Summary</h3>

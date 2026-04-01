@@ -2981,6 +2981,10 @@ export interface components {
             repository?: string | null;
             /** Publishmode */
             publishMode?: string | null;
+            /** Resolvedskillsetref */
+            resolvedSkillsetRef?: string | null;
+            /** Taskskills */
+            taskSkills?: string[] | null;
             /** Artifactrefs */
             artifactRefs?: string[];
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
@@ -4452,6 +4456,8 @@ export interface components {
             runtimeMode?: string | null;
             /** Skillid */
             skillId?: string | null;
+            /** Taskskills */
+            taskSkills?: string[] | null;
             /** Publishmode */
             publishMode?: string | null;
             /** Startingbranch */

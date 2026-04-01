@@ -33,6 +33,7 @@ class TaskProposalTaskPreview(BaseModel):
     repository: str = Field(..., alias="repository")
     runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
     skill_id: Optional[str] = Field(None, alias="skillId")
+    task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     publish_mode: Optional[str] = Field(None, alias="publishMode")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
