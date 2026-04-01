@@ -1,62 +1,42 @@
 [
   {
-    "id": 3018862495,
-    "disposition": "addressed",
-    "rationale": "The task-detail EventSource client now accepts both named log_chunk events and default message events, so live log delivery works regardless of SSE event-name framing."
-  },
-  {
-    "id": 3018862515,
-    "disposition": "addressed",
-    "rationale": "Live Logs copy now routes through a guarded clipboard helper that skips unsupported environments and swallows rejected writes to avoid unhandled promise rejections."
-  },
-  {
-    "id": 3018862533,
-    "disposition": "addressed",
-    "rationale": "Stdout/Stderr copy now uses the same guarded clipboard helper, avoiding unhandled clipboard rejections."
-  },
-  {
-    "id": 3018862545,
-    "disposition": "addressed",
-    "rationale": "Diagnostics copy now uses the guarded clipboard helper so missing clipboard support or rejected writes do not throw."
-  },
-  {
-    "id": 3018862562,
-    "disposition": "addressed",
-    "rationale": "The task-detail UI tests now save and restore the document.hidden descriptor in afterEach so visibility-state mutations do not leak across tests."
-  },
-  {
-    "id": 3018862570,
-    "disposition": "addressed",
-    "rationale": "The task-detail UI tests now save and restore navigator.clipboard after each test, preventing clipboard mocks from leaking into later cases."
-  },
-  {
-    "id": 3018862601,
-    "disposition": "addressed",
-    "rationale": "The Phase 4 plan no longer instructs adding @types/anser and now reflects the implemented no-new-dependencies approach."
-  },
-  {
-    "id": 3018862614,
-    "disposition": "addressed",
-    "rationale": "The placeholder Phase 4 spec template was replaced with a concrete Live Logs Phase 4 specification covering stories, requirements, edge cases, and success criteria."
-  },
-  {
-    "id": 4040670337,
+    "id": 4166791990,
     "disposition": "not-applicable",
-    "rationale": "This review body is an overview summary rather than a standalone remediation item; the concrete per-file comments were classified individually."
+    "rationale": "This is a high-level walkthrough summary, not a standalone remediation item; the concrete review comments were classified individually."
   },
   {
-    "id": 4040674047,
+    "id": 4166792094,
     "disposition": "not-applicable",
-    "rationale": "This review body summarizes the two trailing-newline rendering comments, which were handled as the underlying line-specific review comments."
+    "rationale": "This issue comment aggregates the underlying token, support-root, and quoting concerns, which were classified on the individual review comments."
   },
   {
-    "id": 3018866363,
-    "disposition": "addressed",
-    "rationale": "Artifact log parsing now trims a single trailing newline before splitting so the viewer does not render an extra empty row from merged-tail content."
+    "id": 3019274135,
+    "disposition": "not-applicable",
+    "rationale": "Current launcher code defines gh_dir before the try block and returns immediately on OSError, so the reported UnboundLocalError path is no longer reachable."
   },
   {
-    "id": 3018866369,
+    "id": 3019274156,
     "disposition": "addressed",
-    "rationale": "SSE log-chunk parsing now trims a single trailing newline before splitting so live chunks do not add empty rows after each emitted line."
+    "rationale": "The launcher now derives run_root from Path(resolved_workspace_path).resolve().parent and passes that support root into _persist_gh_config, keeping credential storage aligned with the actual workspace layout."
+  },
+  {
+    "id": 4041174595,
+    "disposition": "not-applicable",
+    "rationale": "This review body is an overview summary rather than an additional actionable item."
+  },
+  {
+    "id": 3019276204,
+    "disposition": "addressed",
+    "rationale": "The test no longer uses a ghp_-prefixed token string; it now uses a neutral placeholder token that avoids secret-pattern false positives."
+  },
+  {
+    "id": 4041179579,
+    "disposition": "not-applicable",
+    "rationale": "This review body summarizes launcher comments that were classified separately and does not require its own code change."
+  },
+  {
+    "id": 3019278963,
+    "disposition": "not-applicable",
+    "rationale": "Current code already reuses the resolved workspace parent as run_root and only persists GitHub config when resolved_workspace_path is present, so the suggested cleanup is already reflected."
   }
 ]
