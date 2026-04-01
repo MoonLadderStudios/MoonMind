@@ -183,6 +183,31 @@ async def test_resume_forwards_operator_message_to_active_jules_child(monkeypatc
     assert workflow_instance._resume_requested is True
 
 
+@pytest.mark.asyncio
+async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    await workflow_instance.send_message({"message": "Please use Provider Profiles."})
+
+    mock_handle.signal.assert_awaited_once_with(
+        "operator_message",
+        {"message": "Please use Provider Profiles."},
+    )
+    assert workflow_instance._resume_requested is False
+
+
 def test_update_inputs_extracts_clarification_message_from_parameters_patch():
     workflow_instance = MoonMindRunWorkflow()
 

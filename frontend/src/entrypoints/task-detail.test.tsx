@@ -314,6 +314,243 @@ describe('Task Detail Entrypoint', () => {
       );
     });
   });
+
+  it('renders separate Intervention and Observation sections with intervention audit history', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Intervention task',
+      summary: 'Awaiting operator action',
+      status: 'waiting',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canPause: true,
+        canResume: true,
+        canApprove: true,
+        canCancel: true,
+        canReject: true,
+        canSendMessage: true,
+      },
+      interventionAudit: [
+        {
+          action: 'pause',
+          transport: 'temporal_signal',
+          summary: 'Pause requested.',
+          createdAt: '2026-03-28T00:00:05Z',
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Intervention' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
+      expect(screen.getByText(/Pause requested\./)).toBeTruthy();
+      expect(screen.getByText(/Live logs are passive observation only/i)).toBeTruthy();
+    });
+  });
+
+  it('routes Pause through the explicit signal endpoint without requiring live log fetches', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Pause task',
+      summary: 'Running',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canPause: true,
+      },
+      interventionAudit: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/signal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'awaiting_external',
+            rawState: 'awaiting_external',
+            summary: 'Execution paused.',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            signalName: 'Pause',
+            payload: {},
+          }),
+        }),
+      );
+    });
+
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/observability-summary')),
+    ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/logs/stream')),
+    ).toBe(false);
+  });
+
+  it('supports explicit send-message and reject controls outside the log viewer', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Awaiting reply',
+      summary: 'Need operator guidance',
+      status: 'waiting',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canApprove: true,
+        canResume: true,
+        canCancel: true,
+        canReject: true,
+        canSendMessage: true,
+      },
+      interventionAudit: [],
+    };
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/signal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockExecution,
+        } as Response);
+      }
+      if (url.endsWith('/cancel')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'canceled',
+            rawState: 'canceled',
+            summary: 'Rejected by operator.',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Operator message'), {
+      target: { value: 'Please use Provider Profiles.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Message' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            signalName: 'SendMessage',
+            payload: { message: 'Please use Provider Profiles.' },
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/cancel',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'reject',
+            graceful: true,
+            reason: 'Rejected by operator.',
+          }),
+        }),
+      );
+    });
+
+    confirmSpy.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -705,6 +705,83 @@ def test_signal_execution_invalid_signal_name_returns_contract_error(
     assert response.json()["detail"]["code"] == "signal_rejected"
 
 
+def test_signal_execution_routes_send_message_and_serializes_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
+    record.memo["intervention_audit"] = [
+        {
+            "action": "send_message",
+            "transport": "temporal_update",
+            "summary": "Operator message sent.",
+            "detail": "Continue with provider profiles.",
+            "createdAt": "2026-03-31T01:02:03Z",
+        }
+    ]
+    mock_service.describe_execution.return_value = record
+    mock_service.signal_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/signal",
+            json={
+                "signalName": "SendMessage",
+                "payload": {"message": "Continue with provider profiles."},
+            },
+        )
+
+    assert response.status_code == 202
+    called = mock_service.signal_execution.await_args.kwargs
+    assert called["signal_name"] == "SendMessage"
+    assert called["payload"] == {"message": "Continue with provider profiles."}
+    body = response.json()
+    assert body["actions"]["canReject"] is True
+    assert body["actions"]["canSendMessage"] is True
+    assert body["interventionAudit"][0]["action"] == "send_message"
+    assert body["interventionAudit"][0]["detail"] == "Continue with provider profiles."
+
+
+def test_cancel_execution_passes_reject_action_to_service() -> None:
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record(
+            state=MoonMindWorkflowState.AWAITING_EXTERNAL
+        )
+        rejected = _build_execution_record(state=MoonMindWorkflowState.CANCELED)
+        rejected.close_status = "canceled"
+        rejected.memo["intervention_audit"] = [
+            {
+                "action": "reject",
+                "transport": "temporal_cancel",
+                "summary": "Rejected by operator.",
+                "createdAt": "2026-03-31T01:02:03Z",
+            }
+        ]
+        service.cancel_execution.return_value = rejected
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/cancel",
+            json={
+                "action": "reject",
+                "graceful": True,
+                "reason": "Rejected by operator.",
+            },
+        )
+
+        assert response.status_code == 202
+        called = service.cancel_execution.await_args.kwargs
+        assert called["action"] == "reject"
+        assert called["graceful"] is True
+        assert called["reason"] == "Rejected by operator."
+        assert response.json()["interventionAudit"][0]["action"] == "reject"
+
+
 def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> None:
     record = SimpleNamespace(
         close_status=None,

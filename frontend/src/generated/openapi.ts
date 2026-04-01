@@ -2300,6 +2300,12 @@ export interface components {
             /** Reason */
             reason?: string | null;
             /**
+             * Action
+             * @default cancel
+             * @enum {string}
+             */
+            action: "cancel" | "reject";
+            /**
              * Graceful
              * @default true
              */
@@ -2773,6 +2779,16 @@ export interface components {
              * @default false
              */
             canCancel: boolean;
+            /**
+             * Canreject
+             * @default false
+             */
+            canReject: boolean;
+            /**
+             * Cansendmessage
+             * @default false
+             */
+            canSendMessage: boolean;
             /** Disabledreasons */
             disabledReasons?: {
                 [key: string]: string;
@@ -2939,6 +2955,7 @@ export interface components {
             /** Artifactrefs */
             artifactRefs?: string[];
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
+            interventionAudit?: components["schemas"]["ExecutionInterventionAuditEntryModel"][];
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
             redirectPath?: string | null;
@@ -3003,6 +3020,25 @@ export interface components {
             staleState: boolean;
             /** Refreshedat */
             refreshedAt?: string | null;
+        };
+        /**
+         * ExecutionInterventionAuditEntryModel
+         * @description Audit record for one explicit operator intervention.
+         */
+        ExecutionInterventionAuditEntryModel: {
+            /** Action */
+            action: string;
+            /** Transport */
+            transport: string;
+            /** Summary */
+            summary: string;
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
         };
         /**
          * ExecutionRefreshEnvelope
@@ -4160,7 +4196,7 @@ export interface components {
              * Signalname
              * @enum {string}
              */
-            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve";
+            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve" | "SendMessage";
             /** Payload */
             payload?: {
                 [key: string]: unknown;

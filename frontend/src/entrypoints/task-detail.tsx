@@ -76,10 +76,25 @@ const ExecutionDetailSchema = z
         canPause: z.boolean().optional(),
         canResume: z.boolean().optional(),
         canCancel: z.boolean().optional(),
+        canReject: z.boolean().optional(),
+        canSendMessage: z.boolean().optional(),
         disabledReasons: z.record(z.string(), z.string()).optional(),
       })
       .passthrough()
       .optional(),
+    interventionAudit: z
+      .array(
+        z
+          .object({
+            action: z.string(),
+            transport: z.string(),
+            summary: z.string(),
+            detail: z.string().nullable().optional(),
+            createdAt: z.string(),
+          })
+          .passthrough(),
+      )
+      .default([]),
   })
   .passthrough();
 
@@ -572,6 +587,147 @@ function LiveLogsPanel({
   );
 }
 
+function InterventionPanel({
+  actions,
+  busy,
+  audit,
+  onPause,
+  onResume,
+  onApprove,
+  onCancel,
+  onReject,
+  onSendMessage,
+}: {
+  actions: NonNullable<z.infer<typeof ExecutionDetailSchema>['actions']>;
+  busy: boolean;
+  audit: Array<{
+    action: string;
+    transport: string;
+    summary: string;
+    detail?: string | null | undefined;
+    createdAt: string;
+  }>;
+  onPause: () => void;
+  onResume: () => void;
+  onApprove: () => void;
+  onCancel: () => void;
+  onReject: () => void;
+  onSendMessage: (message: string) => void;
+}) {
+  const [operatorMessage, setOperatorMessage] = useState('');
+  const hasControls = Boolean(
+    actions.canPause ||
+      actions.canResume ||
+      actions.canApprove ||
+      actions.canCancel ||
+      actions.canReject ||
+      actions.canSendMessage,
+  );
+
+  const submitMessage = () => {
+    const message = operatorMessage.trim();
+    if (!message) return;
+    onSendMessage(message);
+    setOperatorMessage('');
+  };
+
+  return (
+    <section className="stack">
+      <div>
+        <h3>Intervention</h3>
+        <p className="small">
+          Controls use Temporal or provider-native APIs and do not require a live log connection.
+        </p>
+      </div>
+
+      {hasControls ? (
+        <div className="actions">
+          {actions.canPause ? (
+            <button type="button" disabled={busy} className="secondary" onClick={onPause}>
+              Pause
+            </button>
+          ) : null}
+          {actions.canResume ? (
+            <button type="button" disabled={busy} className="queue-action" onClick={onResume}>
+              Resume
+            </button>
+          ) : null}
+          {actions.canApprove ? (
+            <button type="button" disabled={busy} className="queue-action" onClick={onApprove}>
+              Approve
+            </button>
+          ) : null}
+          {actions.canReject ? (
+            <button
+              type="button"
+              disabled={busy}
+              className="queue-action queue-action-danger"
+              onClick={onReject}
+            >
+              Reject
+            </button>
+          ) : null}
+          {actions.canCancel ? (
+            <button
+              type="button"
+              disabled={busy}
+              className="queue-action queue-action-danger"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="small">No intervention controls are available for the current task state.</p>
+      )}
+
+      {actions.canSendMessage ? (
+        <div className="stack">
+          <label htmlFor="operator-message">Operator message</label>
+          <textarea
+            id="operator-message"
+            value={operatorMessage}
+            onChange={(event) => setOperatorMessage(event.target.value)}
+            rows={3}
+            placeholder="Send an explicit operator message without using the log viewer."
+          />
+          <div className="actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !operatorMessage.trim()}
+              onClick={submitMessage}
+            >
+              Send Message
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="stack">
+        <h4>Intervention History</h4>
+        {audit.length === 0 ? (
+          <p className="small">No intervention actions recorded yet.</p>
+        ) : (
+          <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {audit.map((entry, index) => (
+              <li key={`${entry.createdAt}-${entry.action}-${index}`} className="card">
+                <strong>{entry.summary}</strong>
+                <div className="small">{formatWhen(entry.createdAt)}</div>
+                <div className="small">
+                  <code>{entry.transport}</code>
+                </div>
+                {entry.detail ? <p className="small">{entry.detail}</p> : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function StaticLogPanel({
   apiBase,
   taskRunId,
@@ -792,12 +948,50 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const signalMutation = useMutation({
+    mutationFn: async ({
+      signalName,
+      payload: signalPayload,
+    }: {
+      signalName: string;
+      payload?: Record<string, unknown>;
+    }) => {
+      const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/signal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          signalName,
+          payload: signalPayload ?? {},
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: invalidate,
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const cancelMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({
+      action = 'cancel',
+      graceful = true,
+      reason,
+    }: {
+      action?: 'cancel' | 'reject';
+      graceful?: boolean;
+      reason?: string;
+    }) => {
       const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          action,
+          graceful,
+          ...(reason ? { reason } : {}),
+        }),
       });
       if (!response.ok) {
         const text = await response.text();
@@ -824,27 +1018,55 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const onPause = () => {
     setActionError(null);
-    updateMutation.mutate({ updateName: 'Pause' });
+    signalMutation.mutate({ signalName: 'Pause', payload: {} });
   };
 
   const onResume = () => {
     setActionError(null);
-    updateMutation.mutate({ updateName: 'Resume' });
+    signalMutation.mutate({ signalName: 'Resume', payload: {} });
   };
 
   const onApprove = () => {
     setActionError(null);
-    updateMutation.mutate({ updateName: 'Approve' });
+    signalMutation.mutate({ signalName: 'Approve', payload: {} });
+  };
+
+  const onSendMessage = (message: string) => {
+    setActionError(null);
+    signalMutation.mutate({ signalName: 'SendMessage', payload: { message } });
   };
 
   const onCancel = () => {
     setActionError(null);
     if (!window.confirm('Cancel this task?')) return;
-    cancelMutation.mutate();
+    cancelMutation.mutate({ action: 'cancel', graceful: true });
+  };
+
+  const onReject = () => {
+    setActionError(null);
+    if (!window.confirm('Reject this task?')) return;
+    cancelMutation.mutate({
+      action: 'reject',
+      graceful: true,
+      reason: 'Rejected by operator.',
+    });
   };
 
   const actions = execution?.actions;
-  const busy = updateMutation.isPending || cancelMutation.isPending;
+  const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
+  const hasTaskActions = Boolean(actions?.canSetTitle || actions?.canRerun);
+  const hasInterventionSection = Boolean(
+    actions &&
+      (
+        actions.canPause ||
+        actions.canResume ||
+        actions.canApprove ||
+        actions.canCancel ||
+        actions.canReject ||
+        actions.canSendMessage ||
+        (execution?.interventionAudit?.length ?? 0) > 0
+      ),
+  );
 
   return (
     <div className="stack">
@@ -956,11 +1178,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {actionsOn && actions ? (
+          {actionsOn && actions && hasTaskActions ? (
             <section className="stack">
               <div>
-                <h3>Actions</h3>
-                <p className="small">Only actions valid for the current task state are shown.</p>
+                <h3>Task Actions</h3>
+                <p className="small">Workflow editing actions stay separate from intervention controls.</p>
               </div>
               <div className="actions">
                 {actions.canSetTitle ? (
@@ -968,38 +1190,27 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     Rename
                   </button>
                 ) : null}
-                {actions.canPause ? (
-                  <button type="button" disabled={busy} className="secondary" onClick={onPause}>
-                    Pause
-                  </button>
-                ) : null}
-                {actions.canResume ? (
-                  <button type="button" disabled={busy} className="queue-action" onClick={onResume}>
-                    Resume
-                  </button>
-                ) : null}
-                {actions.canApprove ? (
-                  <button type="button" disabled={busy} className="queue-action" onClick={onApprove}>
-                    Approve
-                  </button>
-                ) : null}
                 {actions.canRerun ? (
                   <button type="button" disabled={busy} className="secondary" onClick={onRerun}>
                     Rerun
                   </button>
                 ) : null}
-                {actions.canCancel ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    className="queue-action queue-action-danger"
-                    onClick={onCancel}
-                  >
-                    Cancel
-                  </button>
-                ) : null}
               </div>
             </section>
+          ) : null}
+
+          {actionsOn && actions && hasInterventionSection ? (
+            <InterventionPanel
+              actions={actions}
+              busy={busy}
+              audit={execution.interventionAudit || []}
+              onPause={onPause}
+              onResume={onResume}
+              onApprove={onApprove}
+              onCancel={onCancel}
+              onReject={onReject}
+              onSendMessage={onSendMessage}
+            />
           ) : null}
 
           <section className="stack">
@@ -1101,6 +1312,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           </section>
 
           <section className="stack">
+            <div>
+              <h3>Observation</h3>
+              <p className="small">
+                Live logs are passive observation only. Use the Intervention panel for control actions.
+              </p>
+            </div>
             {logStreamingEnabled ? (
               resolvedTaskRunId ? (
                 <>

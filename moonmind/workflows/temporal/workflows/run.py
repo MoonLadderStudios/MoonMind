@@ -2070,6 +2070,18 @@ class MoonMindRunWorkflow:
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot approve a completed workflow.")
 
+    @workflow.update(name="SendMessage")
+    async def send_message(self, payload: dict[str, Any] | None = None) -> None:
+        await self._forward_operator_message_to_active_child(payload)
+        self._update_search_attributes()
+
+    @send_message.validator
+    def validate_send_message(self, payload: dict[str, Any] | None = None) -> None:
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot send a message to a completed workflow.")
+        if self._extract_clarification_message(payload) is None:
+            raise ValueError("message is required when sending an operator message.")
+
     @workflow.update(name="Cancel")
     def cancel(self, reason: Optional[str] = None) -> None:
         self._cancel_requested = True
