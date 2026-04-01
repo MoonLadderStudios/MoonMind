@@ -774,7 +774,7 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     """When launched as root for claude_code runtime, the process should:
     1. chown the full run workspace root to app:app so the app user can write
        both repo files and support artifacts
-    2. Use runuser -u app -- with an app login-shaped env block
+    2. Use runuser -u app -- with an app login-shaped env block via env=
     """
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
@@ -853,16 +853,86 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert runuser_call is not None, "runuser was not used for privilege dropping"
     assert runuser_call[1:4] == ("-u", "app", "--"), f"Unexpected runuser args: {runuser_call[1:4]}"
 
-    # Verify env vars are passed as "KEY=VALUE" arguments to env
-    env_start_idx = runuser_call.index("env")
-    env_args = runuser_call[env_start_idx + 1:]
-    assert "MY_CUSTOM_VAR=test-value" in env_args
-    assert "HOME=/home/app" in env_args
-    assert "USER=app" in env_args
-    assert "LOGNAME=app" in env_args
+    runuser_kwargs = next(
+        (kwargs for args, kwargs in captured_calls if args and args[0] == "runuser"),
+        None,
+    )
+    assert runuser_kwargs is not None, "runuser kwargs were not captured"
 
-    # Verify the original command follows the env args (model/effort added by build_command)
+    env_kwargs = runuser_kwargs.get("env")
+    assert isinstance(env_kwargs, dict)
+    assert env_kwargs["MY_CUSTOM_VAR"] == "test-value"
+    assert env_kwargs["HOME"] == "/home/app"
+    assert env_kwargs["USER"] == "app"
+    assert env_kwargs["LOGNAME"] == "app"
+
+    # Verify the original command follows the runuser prefix (model/effort added by build_command)
     cmd_start_idx = runuser_call.index("claude")
     actual_cmd = runuser_call[cmd_start_idx:]
     assert actual_cmd[0] == "claude"
     assert "-p" in actual_cmd or "--dangerously-skip-permissions" in actual_cmd
+
+
+@pytest.mark.asyncio
+async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp_path, monkeypatch):
+    captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 8888) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        captured_calls.append((args, kwargs))
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        if cmd[:2] == ("chown", "-R"):
+            chown_calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+
+    shared_root = tmp_path / "shared-workspaces"
+    workspace_root = shared_root / "repo"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".git").mkdir()
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={"MY_CUSTOM_VAR": "test-value"},
+        passthrough_env_keys=[],
+    )
+    request = _make_request()
+
+    await launcher.launch(
+        run_id="root-run",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+
+    assert len(chown_calls) == 1
+    assert chown_calls[0][-1] == str(workspace_root)
