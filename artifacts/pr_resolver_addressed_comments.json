@@ -1,42 +1,42 @@
 [
   {
-    "id": 4166791990,
-    "disposition": "not-applicable",
-    "rationale": "This is a high-level walkthrough summary, not a standalone remediation item; the concrete review comments were classified individually."
-  },
-  {
-    "id": 4166792094,
-    "disposition": "not-applicable",
-    "rationale": "This issue comment aggregates the underlying token, support-root, and quoting concerns, which were classified on the individual review comments."
-  },
-  {
-    "id": 3019274135,
-    "disposition": "not-applicable",
-    "rationale": "Current launcher code defines gh_dir before the try block and returns immediately on OSError, so the reported UnboundLocalError path is no longer reachable."
-  },
-  {
-    "id": 3019274156,
+    "id": 3020103893,
     "disposition": "addressed",
-    "rationale": "The launcher now derives run_root from Path(resolved_workspace_path).resolve().parent and passes that support root into _persist_gh_config, keeping credential storage aligned with the actual workspace layout."
+    "rationale": "Made runtime_id field required in dashboard Create Profile form."
   },
   {
-    "id": 4041174595,
-    "disposition": "not-applicable",
-    "rationale": "This review body is an overview summary rather than an additional actionable item."
-  },
-  {
-    "id": 3019276204,
+    "id": 3020103926,
     "disposition": "addressed",
-    "rationale": "The test no longer uses a ghp_-prefixed token string; it now uses a neutral placeholder token that avoids secret-pattern false positives."
+    "rationale": "Replaced falsy || fallback with Number.isFinite check to preserve 0 for cooldown_after_429_seconds."
   },
   {
-    "id": 4041179579,
-    "disposition": "not-applicable",
-    "rationale": "This review body summarizes launcher comments that were classified separately and does not require its own code change."
+    "id": 3020134721,
+    "disposition": "addressed",
+    "rationale": "Removed _RUNTIME_ALIASES translation shim. Added codex_cli and claude_code as first-class keys in runtime lookup dicts so all callers can use canonical system-wide IDs directly."
   },
   {
-    "id": 3019278963,
+    "id": 3020134725,
+    "disposition": "addressed",
+    "rationale": "Added default_model and model_overrides to provider_profile_list activity payload so adapter receives profile-level defaults."
+  },
+  {
+    "id": 4167857686,
+    "disposition": "addressed",
+    "rationale": "Optimized seed query to select only profile_id and default_model columns. Used explicit UPDATE for backfilling rows. Updated docstring to mention backfill behavior."
+  },
+  {
+    "id": 4167857371,
     "disposition": "not-applicable",
-    "rationale": "Current code already reuses the resolved workspace parent as run_root and only persists GitHub config when resolved_workspace_path is present, so the suggested cleanup is already reflected."
+    "rationale": "Qodo review summary comment — informational only, no action required."
+  },
+  {
+    "id": 4167885648,
+    "disposition": "not-applicable",
+    "rationale": "Gemini bot error message — informational only, no action required."
+  },
+  {
+    "id": 4042027242,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR overview summary comment — informational only, individual issues addressed by other comments."
   }
 ]

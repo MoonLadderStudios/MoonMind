@@ -14,20 +14,22 @@ DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
     "codex": "gpt-5.4",
+    "codex_cli": "gpt-5.4",
     "gemini_cli": "gemini-3.1-pro-preview",
     "claude": "Sonnet 4.6",
+    "claude_code": "Sonnet 4.6",
 }
 _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
     "codex": "high",
+    "codex_cli": "high",
 }
-_RUNTIME_ALIASES: dict[str, str] = {
-    "codex_cli": "codex",
-    "claude_code": "claude",
-}
+
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "codex": ("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
+    "codex_cli": ("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
     "gemini_cli": ("MOONMIND_GEMINI_MODEL", "GEMINI_MODEL"),
     "claude": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
+    "claude_code": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
     "jules": ("MOONMIND_JULES_MODEL", "JULES_MODEL"),
 }
 _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
@@ -36,8 +38,14 @@ _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
         "CODEX_MODEL_REASONING_EFFORT",
         "MODEL_REASONING_EFFORT",
     ),
+    "codex_cli": (
+        "MOONMIND_CODEX_EFFORT",
+        "CODEX_MODEL_REASONING_EFFORT",
+        "MODEL_REASONING_EFFORT",
+    ),
     "gemini_cli": ("MOONMIND_GEMINI_EFFORT", "GEMINI_REASONING_EFFORT"),
     "claude": ("MOONMIND_CLAUDE_EFFORT", "CLAUDE_REASONING_EFFORT"),
+    "claude_code": ("MOONMIND_CLAUDE_EFFORT", "CLAUDE_REASONING_EFFORT"),
     "jules": ("MOONMIND_JULES_EFFORT", "JULES_REASONING_EFFORT"),
 }
 
@@ -69,7 +77,6 @@ def resolve_runtime_defaults(
     """Return default model/effort values for a normalized runtime."""
 
     runtime_key = (_clean_optional_string(runtime) or DEFAULT_TASK_RUNTIME).lower()
-    runtime_key = _RUNTIME_ALIASES.get(runtime_key, runtime_key)
     resolved_env = env if env is not None else os.environ
 
     if runtime_key == "codex" and workflow_settings is not None:

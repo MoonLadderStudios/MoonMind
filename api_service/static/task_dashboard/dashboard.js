@@ -9454,8 +9454,8 @@
                 </label>
                 <label>
                   Runtime ID
-                  <input type="text" name="runtime_id" maxlength="80"
-                         placeholder="e.g. gemini_cli, codex_cli, claude_code" />
+                  <input type="text" name="runtime_id" maxlength="80" required
+                         placeholder="e.g. gemini_cli, codex, claude" />
                 </label>
                 <label>
                   Provider ID
@@ -10012,8 +10012,14 @@
           secret_refs,
           env_template,
           clear_env_keys,
-          max_parallel_runs: Number(formData.get("max_parallel_runs")) || 1,
-          cooldown_after_429_seconds: Number(formData.get("cooldown_after_429_seconds")) || 900,
+          max_parallel_runs: (() => {
+            const val = Number(formData.get("max_parallel_runs"));
+            return Number.isFinite(val) ? val : 1;
+          })(),
+          cooldown_after_429_seconds: (() => {
+            const val = Number(formData.get("cooldown_after_429_seconds"));
+            return Number.isFinite(val) ? val : 900;
+          })(),
           rate_limit_policy: String(formData.get("rate_limit_policy") || "backoff"),
           enabled: Boolean(formData.get("enabled")),
         };
