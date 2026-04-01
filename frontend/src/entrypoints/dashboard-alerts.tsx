@@ -9,6 +9,12 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
+interface ProviderProfileResponse {
+  profile_id: string;
+  credential_source: string;
+  enabled: boolean;
+}
+
 /** Slugs stored in Managed Secrets (often match env var names after import). */
 const PROVIDER_KEY_SLUGS = [
   'ANTHROPIC_API_KEY',
@@ -23,7 +29,7 @@ function hasActiveSlug(items: SecretMetadata[], slugs: readonly string[]): boole
 }
 
 function DashboardAlerts() {
-  const { data: secretsData, isLoading } = useQuery<SecretsListResponse>({
+  const { data: secretsData, isLoading: secretsLoading } = useQuery<SecretsListResponse>({
     queryKey: ['secrets-alerts'],
     queryFn: async () => {
       const response = await fetch('/api/v1/secrets', {
@@ -36,11 +42,34 @@ function DashboardAlerts() {
     },
   });
 
-  if (isLoading || !secretsData) {
+  const { data: profilesData, isLoading: profilesLoading } = useQuery<ProviderProfileResponse[]>({
+    queryKey: ['provider-profiles-alerts'],
+    queryFn: async () => {
+      const response = await fetch('/api/v1/provider-profiles', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch provider profiles');
+      }
+      return response.json();
+    },
+  });
+
+  if (secretsLoading || profilesLoading || !secretsData || !profilesData) {
     return null;
   }
 
-  const hasProviderKey = hasActiveSlug(secretsData.items, PROVIDER_KEY_SLUGS);
+  const hasProviderSecret = secretsData.items.some(
+    (s) =>
+      s.status === 'active' &&
+      (PROVIDER_KEY_SLUGS.includes(s.slug as any) || s.slug.endsWith('_API_KEY'))
+  );
+
+  const hasOauthVolume = profilesData.some(
+    (p) => p.enabled && p.credential_source === 'oauth_volume'
+  );
+
+  const hasProviderKey = hasProviderSecret || hasOauthVolume;
   const hasGithub = hasActiveSlug(secretsData.items, GITHUB_TOKEN_SLUGS);
 
   const needsAiKey = !hasProviderKey;
