@@ -11,10 +11,11 @@ export function SkillProvenanceBadge({
 }: SkillProvenanceBadgeProps) {
   const hasExplicitSkills = Array.isArray(taskSkills) && taskSkills.length > 0;
   
+  
   return (
-    <div className="card mt-4" style={{ backgroundColor: '#fdfdfd', border: '1px solid #e0e0e0', padding: '1rem', borderRadius: '8px' }}>
-      <h3 style={{ marginTop: 0, fontSize: '1rem' }}>Agent Skill Provenance</h3>
-      <dl className="queue-card-fields" style={{ marginBottom: 0 }}>
+    <div className="card mt-4 bg-gray-50 border border-gray-200 p-4 rounded-lg">
+      <h3 className="mt-0 text-base">Agent Skill Provenance</h3>
+      <dl className="queue-card-fields mb-0">
         <div>
           <dt>Explicit Selection</dt>
           <dd>{hasExplicitSkills ? taskSkills.join(', ') : 'None'}</dd>
@@ -27,7 +28,7 @@ export function SkillProvenanceBadge({
           <dt>Resolved Snapshot Ref</dt>
           <dd>
             {resolvedSkillsetRef ? (
-              <code className="small" style={{ wordBreak: 'break-all' }}>{resolvedSkillsetRef}</code>
+              <code className="small break-all">{resolvedSkillsetRef}</code>
             ) : (
               <span className="small text-muted">No snapshot bound for this run.</span>
             )}

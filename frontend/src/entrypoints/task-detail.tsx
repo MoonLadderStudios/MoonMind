@@ -44,6 +44,7 @@ const ExecutionDetailSchema = z
     model: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
+    targetBranch: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),

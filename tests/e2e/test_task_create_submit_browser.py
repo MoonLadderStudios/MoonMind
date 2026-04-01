@@ -69,7 +69,7 @@ def server():
     try:
         asyncio.run(_init_db())
     except Exception as e:
-        print(f"Schema init failed: {e}")
+        pytest.fail(f"Schema init failed: {e}")
 
     main_app.dependency_overrides[get_async_session] = lambda: in_memory_session_maker()
 

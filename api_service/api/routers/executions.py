@@ -1033,7 +1033,7 @@ async def _create_execution_from_task_request(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 async def _create_execution_from_manifest_request(
@@ -1088,7 +1088,7 @@ async def _create_execution_from_manifest_request(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 async def _get_owned_execution(
@@ -1831,7 +1831,7 @@ async def record_integration_poll(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1872,7 +1872,7 @@ async def signal_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1904,7 +1904,7 @@ async def cancel_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1960,7 +1960,7 @@ async def reschedule_execution(
         await service._session.commit()
         await service._session.refresh(record)
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -2036,7 +2036,7 @@ async def rerun_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 __all__ = ["router"]

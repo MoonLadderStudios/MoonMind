@@ -383,7 +383,6 @@ class ExecutionModel(BaseModel):
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     repository: Optional[str] = Field(None, alias="repository")
-    repository: Optional[str] = Field(None, alias="repository")
     publish_mode: Optional[str] = Field(None, alias="publishMode")
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")

@@ -1,6 +1,6 @@
 # Requirements Traceability
 
-| Requirement | Implementation Task | Validation Strategy |
+| DOC-REQ ID | Implementation Task | Validation Strategy |
 |---|---|---|
 | **DOC-REQ-001** | Task 3: Task Submission UI Elements | E2E Browser Test clicking UI components for selection. |
 | **DOC-REQ-002** | Task 2: Task Details Snapshot Representation | `task-detail.test.tsx` DOM inspection testing. |
