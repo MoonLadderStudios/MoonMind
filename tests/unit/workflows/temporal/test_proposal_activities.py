@@ -58,9 +58,9 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         title = res_long[0]["title"]
         # Max length of internally generated title is 180 (excluding '[run_quality] ' prefix added later)
         # So the candidate["title"] should be len("[run_quality] ") + 180 = 14 + 180 = 194
-        self.assertTrue(len(title) <= 194)
-        self.assertTrue(title.endswith("(12345678)"))
-        self.assertTrue(title.startswith("[run_quality] Follow-up: AAA"))
+        self.assertLessEqual(len(title), 194)
+        self.assertEqual(title[-10:], "(12345678)")
+        self.assertEqual(title[:28], "[run_quality] Follow-up: AAA")
 
 
 
