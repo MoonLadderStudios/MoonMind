@@ -550,14 +550,42 @@ class ManagedRuntimeLauncher:
             env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
             env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env_overrides,
-            cwd=resolved_workspace_path,
-        )
+        # The claude CLI refuses --dangerously-skip-permissions when running as root
+        # (security restriction). For claude_code runtime, drop to the app user.
+        _run_as_root = os.geteuid() == 0
+        _is_claude_code = profile.runtime_id == "claude_code"
+        _needs_priv_drop = _run_as_root and _is_claude_code
+
+        # Transfer workspace ownership to the app user so it can write files
+        # (e.g. git commits, tool artifacts).  Git clone above runs as root,
+        # so the repo dir is owned by root and the app user would be denied writes.
+        if _needs_priv_drop and resolved_workspace_path is not None:
+            await self._run_checked_command(
+                "chown", "-R", "app:app", resolved_workspace_path,
+            )
+
+        if _needs_priv_drop:
+            # Use runuser so we can pass env via env= parameter (avoids embedding
+            # secrets in the command-line argv).  runuser -u preserves the target
+            # user's login environment (HOME, USER, etc.) which claude CLI expects.
+            process = await asyncio.create_subprocess_exec(
+                "runuser", "-u", "app", "--",
+                "env", *[f"{k}={v}" for k, v in env_overrides.items()],
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=resolved_workspace_path,
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_overrides,
+                cwd=resolved_workspace_path,
+            )
 
         record = ManagedRunRecord(
             run_id=run_id,
