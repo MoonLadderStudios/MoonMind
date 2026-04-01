@@ -772,8 +772,9 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:
-    1. chown the workspace to app:app so the app user can write files
-    2. Use runuser -u app -- env=... to drop privileges while preserving env
+    1. chown the full run workspace root to app:app so the app user can write
+       both repo files and support artifacts
+    2. Use runuser -u app -- with an app login-shaped env block
     """
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
@@ -836,10 +837,13 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
         workspace_path=str(workspace_root),
     )
 
-    # Verify chown was called
+    run_root = workspace_root.parent
+
+    # Verify chown was called on the full run root, not just repo/
     assert len(chown_calls) == 1, f"Expected 1 chown call, got {len(chown_calls)}"
     chown_call = chown_calls[0]
     assert "app:app" in chown_call
+    assert str(run_root) in chown_call
 
     # Verify runuser was used instead of direct subprocess exec
     runuser_call = next(
@@ -853,6 +857,9 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     env_start_idx = runuser_call.index("env")
     env_args = runuser_call[env_start_idx + 1:]
     assert "MY_CUSTOM_VAR=test-value" in env_args
+    assert "HOME=/home/app" in env_args
+    assert "USER=app" in env_args
+    assert "LOGNAME=app" in env_args
 
     # Verify the original command follows the env args (model/effort added by build_command)
     cmd_start_idx = runuser_call.index("claude")
