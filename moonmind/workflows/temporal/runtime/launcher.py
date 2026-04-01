@@ -63,6 +63,28 @@ class ManagedRuntimeLauncher:
         root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
         return Path(root).resolve() / "workspaces"
 
+    def _resolve_workspace_ownership_root(
+        self,
+        *,
+        resolved_workspace_path: str | None,
+        run_id: str,
+    ) -> str | None:
+        if not resolved_workspace_path:
+            return None
+
+        resolved_path = Path(resolved_workspace_path).resolve()
+        run_root = resolved_path.parent
+
+        if (
+            resolved_path.name == "repo"
+            and run_root.name == run_id
+            and run_root.parent.name == "workspaces"
+        ):
+            return str(run_root)
+        if resolved_path.name == run_id and resolved_path.parent.name == "workspaces":
+            return str(resolved_path)
+        return str(resolved_path)
+
     def _find_existing_workspace_repo(self, *, exclude_run_id: str) -> str | None:
         workspace_root = self._workspace_root()
         if not workspace_root.exists():
@@ -556,25 +578,35 @@ class ManagedRuntimeLauncher:
         _is_claude_code = profile.runtime_id == "claude_code"
         _needs_priv_drop = _run_as_root and _is_claude_code
 
-        # Transfer workspace ownership to the app user so it can write files
-        # (e.g. git commits, tool artifacts).  Git clone above runs as root,
-        # so the repo dir is owned by root and the app user would be denied writes.
+        # Transfer the full run workspace root to the app user so it can write
+        # both the repo checkout and support files materialized alongside it
+        # (for example .moonmind/GH_CONFIG_DIR and active skill projections).
+        # Chowning only the repo subtree leaves root-owned support paths behind
+        # and the dropped user can hang or fail before producing any output.
         if _needs_priv_drop and resolved_workspace_path is not None:
+            ownership_root = self._resolve_workspace_ownership_root(
+                resolved_workspace_path=resolved_workspace_path,
+                run_id=run_id,
+            )
             await self._run_checked_command(
-                "chown", "-R", "app:app", resolved_workspace_path,
+                "chown", "-R", "app:app", ownership_root,
             )
 
         if _needs_priv_drop:
-            # Use runuser so we can pass env via env= parameter (avoids embedding
-            # secrets in the command-line argv).  runuser -u preserves the target
-            # user's login environment (HOME, USER, etc.) which claude CLI expects.
+            # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass
+            # an explicit env block, so seed the target-user login context
+            # explicitly before launching Claude Code.
+            env_overrides["HOME"] = "/home/app"
+            env_overrides["USER"] = "app"
+            env_overrides["LOGNAME"] = "app"
+            # Use runuser with env= so secrets do not appear in process argv.
             process = await asyncio.create_subprocess_exec(
                 "runuser", "-u", "app", "--",
-                "env", *[f"{k}={v}" for k, v in env_overrides.items()],
                 *cmd,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env_overrides,
                 cwd=resolved_workspace_path,
             )
         else:
