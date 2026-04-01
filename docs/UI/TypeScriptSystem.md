@@ -345,7 +345,7 @@ Recommended scripts:
 
 ### Authoritative builds (correctness)
 
-- **CI** runs typecheck, lint, and frontend tests, then **`npm run ui:clean-dist`**, **`npm run ui:build`**, and **`npm run ui:verify-manifest`**, followed by OpenAPI type checks as applicable. The workflow may upload **`mission-control-dist`** as an artifact.
+- **CI** first runs **`npm run generate:check`** to verify checked-in generated assets are synchronized, then runs typecheck, lint, frontend tests, **`npm run ui:clean-dist`**, **`npm run ui:build`**, and **`npm run ui:verify-manifest`**. The workflow may upload **`mission-control-dist`** as an artifact.
 - **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, production Tailwind (`dashboard:css:min`), `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
 - **Shared `dashboard.css`:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** (and templates / static dashboard JS) so utility classes used in React are emitted even when **`dist/` does not exist yet**—which is exactly the state during `dashboard:css:min` in Docker. Do not rely on scanning Vite output alone. See [`docs/UI/MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2.
 - **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the task dashboard router instead of an empty content area.
@@ -354,7 +354,7 @@ Recommended scripts:
 
 Tracking `dist/` in git helps **fresh clones** and local bootstrap when Node has not been run yet.
 
-The **Sync Vite dist** GitHub Action may commit refreshed `dist/` for **same-repo** branches when relevant paths change. That workflow is a **developer convenience**, not the correctness gate. It does **not** run **`dashboard:css`**; if you add Tailwind utilities in TSX, regenerate and commit `dashboard.css` separately (or rely on CI/Docker, which already runs Tailwind). It does **not** run for fork PRs; do **not** “fix” that with **`pull_request_target`** and write access to untrusted code.
+The **Sync Vite dist** GitHub Action may commit refreshed `dist/` for **same-repo** branches when relevant paths change. That workflow is a **developer convenience**, not the correctness gate. It does **not** run **`npm run generate`**; if you add Tailwind utilities in TSX or change frontend-consumed API contracts, regenerate and commit the checked-in generated assets separately. It does **not** run for fork PRs; do **not** “fix” that with **`pull_request_target`** and write access to untrusted code.
 
 ### Fork pull requests
 
@@ -456,13 +456,16 @@ If an escape hatch is temporarily required during migration, it must be localize
 
 Generated types should be created from MoonMind’s OpenAPI schema.
 
-Recommended flow:
+Canonical flow:
 
-1. export the FastAPI OpenAPI schema during development or CI
-2. generate TypeScript types into `frontend/src/generated/openapi.ts`
-3. use those generated types as the baseline shape for API requests and responses
+1. run `npm run generate` to refresh checked-in generated frontend assets
+2. let `tools/generate_openapi_types.py` export the FastAPI OpenAPI schema to a temporary file
+3. generate TypeScript types into `frontend/src/generated/openapi.ts`
+4. use those generated types as the baseline shape for API requests and responses
 
 This reduces backend/frontend drift for core payloads.
+
+`npm run generate:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` and `api_service/static/task_dashboard/dashboard.css` stay synchronized with their sources.
 
 ## 10.4 Domain Types vs Generated Types
 

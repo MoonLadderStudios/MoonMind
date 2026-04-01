@@ -1,47 +1,62 @@
 [
   {
-    "id": 3017279894,
+    "id": 3018862495,
     "disposition": "addressed",
-    "rationale": "Fixed logic error by checking selector.include and selector.sets properly."
+    "rationale": "The task-detail EventSource client now accepts both named log_chunk events and default message events, so live log delivery works regardless of SSE event-name framing."
   },
   {
-    "id": 3017279923,
+    "id": 3018862515,
     "disposition": "addressed",
-    "rationale": "Optimized DeploymentSkillLoader to filter by slug."
+    "rationale": "Live Logs copy now routes through a guarded clipboard helper that skips unsupported environments and swallows rejected writes to avoid unhandled promise rejections."
   },
   {
-    "id": 3017279934,
+    "id": 3018862533,
     "disposition": "addressed",
-    "rationale": "Removed unused imports."
+    "rationale": "Stdout/Stderr copy now uses the same guarded clipboard helper, avoiding unhandled clipboard rejections."
   },
   {
-    "id": 3017280011,
+    "id": 3018862545,
     "disposition": "addressed",
-    "rationale": "Removed unused local get_session variable in the test."
+    "rationale": "Diagnostics copy now uses the guarded clipboard helper so missing clipboard support or rejected writes do not throw."
   },
   {
-    "id": 3017295486,
+    "id": 3018862562,
     "disposition": "addressed",
-    "rationale": "Corrected typing for async_session_maker."
+    "rationale": "The task-detail UI tests now save and restore the document.hidden descriptor in afterEach so visibility-state mutations do not leak across tests."
   },
   {
-    "id": 3017295522,
+    "id": 3018862570,
     "disposition": "addressed",
-    "rationale": "Sorted final_skills by skill_name to ensure determinism."
+    "rationale": "The task-detail UI tests now save and restore navigator.clipboard after each test, preventing clipboard mocks from leaking into later cases."
   },
   {
-    "id": 3017295538,
+    "id": 3018862601,
+    "disposition": "addressed",
+    "rationale": "The Phase 4 plan no longer instructs adding @types/anser and now reflects the implemented no-new-dependencies approach."
+  },
+  {
+    "id": 3018862614,
+    "disposition": "addressed",
+    "rationale": "The placeholder Phase 4 spec template was replaced with a concrete Live Logs Phase 4 specification covering stories, requirements, edge cases, and success criteria."
+  },
+  {
+    "id": 4040670337,
     "disposition": "not-applicable",
-    "rationale": "Duplicate of 3017279923, addressed there."
+    "rationale": "This review body is an overview summary rather than a standalone remediation item; the concrete per-file comments were classified individually."
   },
   {
-    "id": 3017295556,
+    "id": 4040674047,
     "disposition": "not-applicable",
-    "rationale": "Duplicate of 3017279934, addressed there."
+    "rationale": "This review body summarizes the two trailing-newline rendering comments, which were handled as the underlying line-specific review comments."
   },
   {
-    "id": 3017295574,
+    "id": 3018866363,
     "disposition": "addressed",
-    "rationale": "Added execution link to the artifact creation call."
+    "rationale": "Artifact log parsing now trims a single trailing newline before splitting so the viewer does not render an extra empty row from merged-tail content."
+  },
+  {
+    "id": 3018866369,
+    "disposition": "addressed",
+    "rationale": "SSE log-chunk parsing now trims a single trailing newline before splitting so live chunks do not add empty rows after each emitted line."
   }
 ]

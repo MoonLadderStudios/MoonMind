@@ -131,6 +131,7 @@ Build flow:
 - Output: `api_service/static/task_dashboard/dashboard.css`
 
 Do not hand-edit `dashboard.css` during normal development.
+When frontend-consumed API contracts or Tailwind-backed dashboard markup change, use `npm run generate` as the canonical refresh path so `dashboard.css` and generated frontend API types stay in sync together.
 
 ### 5.3 Token-First Theming
 
@@ -692,7 +693,7 @@ The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, *
 
 1. Confirm `tailwind.config.cjs` `content` includes templates, `api_service/static/task_dashboard/**/*.js`, and `./frontend/src/**/*.{js,jsx,ts,tsx}`.
 2. Avoid dynamic utility class construction in JS; use semantic classes.
-3. Confirm CSS was rebuilt (`npm run dashboard:css:min`).
+3. Confirm generated assets were refreshed (`npm run generate`), or at minimum rebuild the shared stylesheet with `npm run dashboard:css:min`.
 
 ### `tailwindcss: command not found`
 

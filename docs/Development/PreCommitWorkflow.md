@@ -10,6 +10,8 @@ The current hook set is defined in `.pre-commit-config.yaml` and runs:
 - `isort --profile=black`
 - `ruff --fix`
 
+Generated frontend assets are validated separately. `pre-commit` does not run the asset pipeline because the repository wrappers invoke `pre-commit run --all-files`, and forcing full Tailwind/OpenAPI generation on every wrapper-driven test pass would add unnecessary latency. Use `npm run generate` to refresh checked-in generated assets and `npm run generate:check` to verify they are in sync.
+
 ## Current Project Behavior
 
 ### PowerShell Test Wrappers
@@ -64,8 +66,9 @@ pre-commit install
 
 1. Run `pre-commit run --all-files`
 2. Review and stage any files rewritten by the hooks
-3. Run `./tools/test_unit.sh` for the canonical unit-test pass
-4. Run targeted integration or end-to-end scripts only when your change needs them
+3. If your change touches dashboard styling inputs or frontend-consumed API schemas, run `npm run generate:check`
+4. Run `./tools/test_unit.sh` for the canonical unit-test pass
+5. Run targeted integration or end-to-end scripts only when your change needs them
 
 If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.
 
@@ -100,8 +103,10 @@ That is expected by default. `./tools/test_unit.sh` switches to the Docker-backe
 ## Related Files
 
 - `.pre-commit-config.yaml`
+- `package.json`
 - `tools/test_unit.sh`
 - `tools/test_unit_docker.sh`
+- `tools/generate_openapi_types.py`
 - `tools/test-unit.ps1`
 - `tools/test-integration.ps1`
 - `tools/test-e2e.ps1`

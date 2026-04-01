@@ -209,6 +209,32 @@ async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<stri
   return resp.text();
 }
 
+/** Fetch specific static stream (stdout or stderr) */
+async function fetchStream(apiBase: string, taskRunId: string, stream: 'stdout' | 'stderr'): Promise<string> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return '';
+    throw new Error(`Stream ${stream} fetch failed: ${resp.status}`);
+  }
+  return resp.text();
+}
+
+/** Fetch diagnostics JSON */
+async function fetchDiagnostics(apiBase: string, taskRunId: string): Promise<string> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return '';
+    throw new Error(`Diagnostics fetch failed: ${resp.status}`);
+  }
+  return resp.text();
+}
+
 /** Fetch the observability summary for a task run. */
 async function fetchObservabilitySummary(
   apiBase: string,
@@ -236,6 +262,65 @@ const TERMINAL_RUN_STATUSES = new Set([
   'timed_out',
 ]);
 
+function usePageVisibility() {
+  const [isVisible, setIsVisible] = useState(!document.hidden);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsVisible(!document.hidden);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  return isVisible;
+}
+
+type LogLine = {
+  id: string;
+  text: string;
+  stream: 'stdout' | 'stderr' | 'system' | 'unknown';
+};
+
+function splitLogText(content: string): string[] {
+  if (!content) return [];
+  const normalized = content.endsWith('\n') ? content.slice(0, -1) : content;
+  return normalized ? normalized.split('\n') : [];
+}
+
+function copyTextToClipboard(text: string): void {
+  if (
+    typeof navigator === 'undefined' ||
+    !navigator.clipboard ||
+    typeof navigator.clipboard.writeText !== 'function'
+  ) {
+    return;
+  }
+  try {
+    const maybePromise = navigator.clipboard.writeText(text);
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      void maybePromise.catch(() => {});
+    }
+  } catch {
+    // Ignore synchronous clipboard failures for now; the UI should stay stable.
+  }
+}
+
+function parseArtifactToLines(content: string): LogLine[] {
+  const lines = splitLogText(content);
+  let currentStream: LogLine['stream'] = 'unknown';
+
+  return lines.map((line, i) => {
+    if (line.startsWith('--- stdout ---')) currentStream = 'stdout';
+    else if (line.startsWith('--- stderr ---')) currentStream = 'stderr';
+    else if (line.startsWith('--- system ---')) currentStream = 'system';
+
+    return { id: `artifact-${i}`, text: line, stream: currentStream };
+  });
+}
+
 function LiveLogsPanel({
   apiBase,
   taskRunId,
@@ -245,8 +330,10 @@ function LiveLogsPanel({
   taskRunId: string;
   isTerminal: boolean;
 }) {
-  const [logContent, setLogContent] = useState<string>('');
+  const [logContent, setLogContent] = useState<LogLine[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
+  const [expanded, setExpanded] = useState(false);
+  const isVisible = usePageVisibility();
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -259,88 +346,112 @@ function LiveLogsPanel({
 
   // Reset log state whenever we switch to a different task run.
   useEffect(() => {
-    setLogContent('');
+    setLogContent([]);
     lastSeqRef.current = null;
     setViewerState('starting');
   }, [taskRunId]);
 
-  // Phase 2 fetch sequence: summary -> artifact tail -> (optional) SSE
+  // Query for observability summary
+  const summaryQuery = useQuery({
+    queryKey: ['observability-summary', taskRunId],
+    queryFn: () => fetchObservabilitySummary(apiBase, taskRunId),
+    enabled: !!taskRunId && expanded,
+    // The summary indicates stream availability; refetch occasionally if not terminal
+    staleTime: 1000 * 10,
+  });
+
+  // Query for the artifact-backed tail (runs after summary resolves)
+  const tailQuery = useQuery({
+    queryKey: ['task-run-tail', taskRunId],
+    queryFn: () => fetchMergedTail(apiBase, taskRunId),
+    enabled: !!taskRunId && expanded && summaryQuery.isSuccess,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // Keep viewerState in sync with query boundaries
   useEffect(() => {
-    if (!taskRunId) return;
+    if (!expanded) {
+      setViewerState('starting');
+      return;
+    }
+    if (tailQuery.isError) {
+      setViewerState('error');
+    } else if (summaryQuery.isSuccess && tailQuery.isSuccess) {
+      const summary = summaryQuery.data;
+      const runIsTerminal = isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+      const supportsStreaming = summary?.supportsLiveStreaming ?? false;
+
+      if (!supportsStreaming) {
+        setViewerState(tailQuery.data ? 'ended' : 'not_available');
+      } else if (runIsTerminal) {
+        setViewerState('ended');
+      }
+    }
+  }, [expanded, summaryQuery.isSuccess, summaryQuery.data, tailQuery.isError, tailQuery.isSuccess, tailQuery.data]);
+
+  // Sync tail content into the local log buffer when tail fetch completes.
+  useEffect(() => {
+    if (tailQuery.isSuccess && tailQuery.data) {
+      setLogContent((prev) => {
+        if (lastSeqRef.current !== null) return prev;
+        return parseArtifactToLines(tailQuery.data);
+      });
+    }
+  }, [tailQuery.isSuccess, tailQuery.data]);
+
+  // Connect to SSE only after tail succeeds, if streaming is supported and active
+  useEffect(() => {
+    if (!taskRunId || !expanded || !summaryQuery.isSuccess || !tailQuery.isSuccess || !isVisible) return;
+
+    const summary = summaryQuery.data;
+    const runIsTerminal = isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+    const supportsStreaming = summary?.supportsLiveStreaming ?? false;
+
+    if (runIsTerminal || !supportsStreaming) return;
 
     let cancelled = false;
 
-    async function loadObservabilityAndMaybeLive() {
-      // Step 1: Fetch observability summary
-      const summary = await fetchObservabilitySummary(apiBase, taskRunId);
+    const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
+    const since = nextSince != null ? `?since=${nextSince}` : '';
+    const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
+    const es = new EventSource(url, { withCredentials: true });
+    esRef.current = es;
 
+    es.onopen = () => {
+      if (!cancelled) setViewerState('live');
+    };
+
+    const handleLogChunk = (event: MessageEvent) => {
       if (cancelled) return;
-
-      // Step 2: Fetch artifact-backed merged tail; this must succeed before SSE
-      let tailContent;
       try {
-        tailContent = await fetchMergedTail(apiBase, taskRunId);
+        const data = JSON.parse(event.data) as { sequence: number; text: string; stream?: string };
+        lastSeqRef.current = data.sequence;
+
+        setLogContent((prev) => {
+          const lines = splitLogText(data.text);
+          const mapped: LogLine[] = lines.map((l, i) => ({
+            id: `live-${data.sequence}-${i}`,
+            text: l,
+            stream: (data.stream as LogLine['stream']) || 'unknown',
+          }));
+          return [...prev, ...mapped];
+        });
       } catch {
-        // Tail fetch failed — set error state but keep whatever content we have
-        setViewerState('error');
-        return;
+        // ignore malformed events
       }
+    };
 
+    es.onmessage = handleLogChunk;
+    es.addEventListener('log_chunk', handleLogChunk);
+
+    es.onerror = () => {
+      es.close();
+      esRef.current = null;
       if (cancelled) return;
-
-      if (tailContent) {
-        setLogContent(tailContent);
-      }
-
-      // Determine viewer state from backend summary
-      const runIsTerminal =
-        isTerminalRef.current ||
-        (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
-
-      if (runIsTerminal) {
-        setViewerState('ended');
-        return;
-      }
-
-      const supportsStreaming = summary?.supportsLiveStreaming ?? false;
-      if (!supportsStreaming) {
-        // Artifact-backed only — no live stream available
-        setViewerState(tailContent ? 'ended' : 'not_available');
-        return;
-      }
-
-      // Step 3: Connect to live SSE only if active + streaming-capable
-      const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
-      const since = nextSince != null ? `?since=${nextSince}` : '';
-      const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
-      const es = new EventSource(url, { withCredentials: true });
-      esRef.current = es;
-
-      es.onopen = () => {
-        if (!cancelled) setViewerState('live');
-      };
-
-      es.addEventListener('log_chunk', (event: MessageEvent) => {
-        if (cancelled) return;
-        try {
-          const data = JSON.parse(event.data) as { sequence: number; text: string };
-          lastSeqRef.current = data.sequence;
-          setLogContent((prev) => prev + data.text);
-        } catch {
-          // ignore malformed events
-        }
-      });
-
-      es.onerror = () => {
-        es.close();
-        esRef.current = null;
-        if (cancelled) return;
-        // Degrade gracefully: show what we have from the artifact tail
-        setViewerState(isTerminalRef.current ? 'ended' : 'error');
-      };
-    }
-
-    void loadObservabilityAndMaybeLive();
+      // Degrade gracefully
+      setViewerState(isTerminalRef.current ? 'ended' : 'error');
+    };
 
     return () => {
       cancelled = true;
@@ -349,7 +460,7 @@ function LiveLogsPanel({
         esRef.current = null;
       }
     };
-  }, [apiBase, taskRunId]);
+  }, [apiBase, taskRunId, expanded, isVisible, summaryQuery.isSuccess, summaryQuery.data, tailQuery.isSuccess]);
 
   // Close the stream once the task reaches a terminal state.
   useEffect(() => {
@@ -381,30 +492,229 @@ function LiveLogsPanel({
       ? '(no log output available yet)'
       : '(waiting for output…)';
 
+  const [wrapLines, setWrapLines] = useState(true);
+
+  const handleCopy = () => {
+    if (logContent.length === 0) return;
+    copyTextToClipboard(logContent.map((line) => line.text).join('\n'));
+  };
+
+  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`;
+
   return (
-    <div className="stack">
-      <p className="small">
+    <details
+      className="stack"
+      open={expanded}
+    >
+      <summary
+        onClick={(e) => {
+          e.preventDefault();
+          setExpanded((prev) => !prev);
+        }}
+        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Live Logs</span>
+          {expanded && (
+            <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }} onClick={(e) => e.stopPropagation()}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+                <span className="small">Wrap lines</span>
+              </label>
+              <button className="secondary small" onClick={handleCopy}>Copy</button>
+              <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+            </div>
+          )}
+        </div>
+      </summary>
+      <div className="stack">
+        <p className="small">
         Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
       </p>
       <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-        <pre
+        <div
           style={{
             background: '#111',
             color: '#e8e8e8',
             padding: '0.75rem',
             fontSize: '0.7rem',
             lineHeight: 1.4,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
+            whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
+            wordBreak: wrapLines ? 'break-all' : 'normal',
             borderRadius: '4px',
             margin: 0,
+            fontFamily: 'monospace'
           }}
         >
-          {logContent === '' ? emptyLabel : logContent}
-        </pre>
+          {logContent.length === 0 ? (
+            <div>{emptyLabel}</div>
+          ) : (
+            logContent.map((line) => (
+              <div 
+                key={line.id} 
+                data-stream={line.stream}
+                style={{
+                  borderLeft: line.stream === 'stdout' ? '2px solid #3b82f6' : 
+                              line.stream === 'stderr' ? '2px solid #ef4444' : 
+                              line.stream === 'system' ? '2px solid #22c55e' : '2px solid transparent',
+                  paddingLeft: '6px',
+                  // dim system messages
+                  opacity: line.stream === 'system' ? 0.7 : 1
+                }}
+              >
+                {line.text}
+              </div>
+            ))
+          )}
+        </div>
         <div ref={bottomRef} />
       </div>
     </div>
+    </details>
+  );
+}
+
+function StaticLogPanel({
+  apiBase,
+  taskRunId,
+  stream
+}: {
+  apiBase: string;
+  taskRunId: string;
+  stream: 'stdout' | 'stderr';
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [wrapLines, setWrapLines] = useState(true);
+
+  const streamQuery = useQuery({
+    queryKey: ['task-run-stream', taskRunId, stream],
+    queryFn: () => fetchStream(apiBase, taskRunId, stream),
+    enabled: !!taskRunId && expanded,
+    retry: false,
+  });
+
+  const title = stream === 'stdout' ? 'Stdout' : 'Stderr';
+
+  const handleCopy = () => {
+    if (!streamQuery.data) return;
+    copyTextToClipboard(streamQuery.data);
+  };
+
+  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`;
+
+  return (
+    <details className="stack" open={expanded}>
+      <summary
+        onClick={(e) => {
+          e.preventDefault();
+          setExpanded((prev) => !prev);
+        }}
+        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{title}</span>
+          {expanded && (
+            <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }} onClick={(e) => e.stopPropagation()}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+                <span className="small">Wrap lines</span>
+              </label>
+              <button className="secondary small" onClick={handleCopy}>Copy</button>
+              <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+            </div>
+          )}
+        </div>
+      </summary>
+      <div className="stack">
+        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          <pre
+            style={{
+              background: '#111',
+              color: '#e8e8e8',
+              padding: '0.75rem',
+              fontSize: '0.7rem',
+              lineHeight: 1.4,
+              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
+              wordBreak: wrapLines ? 'break-all' : 'normal',
+              borderRadius: '4px',
+              margin: 0,
+            }}
+          >
+            {streamQuery.isLoading ? 'Loading...' : streamQuery.isError ? `Error loading ${stream}` : streamQuery.data || `(no ${stream} output)`}
+          </pre>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function DiagnosticsPanel({
+  apiBase,
+  taskRunId
+}: {
+  apiBase: string;
+  taskRunId: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [wrapLines, setWrapLines] = useState(true);
+
+  const diagQuery = useQuery({
+    queryKey: ['task-run-diagnostics', taskRunId],
+    queryFn: () => fetchDiagnostics(apiBase, taskRunId),
+    enabled: !!taskRunId && expanded,
+    retry: false,
+  });
+
+  const handleCopy = () => {
+    if (!diagQuery.data) return;
+    copyTextToClipboard(diagQuery.data);
+  };
+
+  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`;
+
+  return (
+    <details className="stack" open={expanded}>
+      <summary
+        onClick={(e) => {
+          e.preventDefault();
+          setExpanded((prev) => !prev);
+        }}
+        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Diagnostics</span>
+          {expanded && (
+            <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }} onClick={(e) => e.stopPropagation()}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+                <span className="small">Wrap lines</span>
+              </label>
+              <button className="secondary small" onClick={handleCopy}>Copy</button>
+              <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+            </div>
+          )}
+        </div>
+      </summary>
+      <div className="stack">
+        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          <pre
+            style={{
+              background: '#111',
+              color: '#e8e8e8',
+              padding: '0.75rem',
+              fontSize: '0.7rem',
+              lineHeight: 1.4,
+              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
+              wordBreak: wrapLines ? 'break-all' : 'normal',
+              borderRadius: '4px',
+              margin: 0,
+            }}
+          >
+            {diagQuery.isLoading ? 'Loading...' : diagQuery.isError ? 'Error loading diagnostics' : diagQuery.data || '(no diagnostics output)'}
+          </pre>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -797,21 +1107,31 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           </section>
 
           <section className="stack">
-            <h3>Live Logs</h3>
             {logTailingEnabled ? (
               resolvedTaskRunId ? (
-                <LiveLogsPanel
-                  apiBase={payload.apiBase}
-                  taskRunId={resolvedTaskRunId}
-                  isTerminal={TERMINAL_STATES.has(execution.rawState || execution.state || '')}
-                />
+                <>
+                  <LiveLogsPanel
+                    apiBase={payload.apiBase}
+                    taskRunId={resolvedTaskRunId}
+                    isTerminal={TERMINAL_STATES.has(execution.rawState || execution.state || '')}
+                  />
+                  <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stdout" />
+                  <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stderr" />
+                  <DiagnosticsPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} />
+                </>
               ) : (
-                <p className="small">
-                  Live log tailing requires a task run id. Waiting for the task to start executing...
-                </p>
+                <>
+                  <h3>Live Logs</h3>
+                  <p className="small">
+                    Live log tailing requires a task run id. Waiting for the task to start executing...
+                  </p>
+                </>
               )
             ) : (
-              <p className="small">Live log tailing is disabled in the server dashboard config.</p>
+              <>
+                <h3>Live Logs</h3>
+                <p className="small">Live log tailing is disabled in the server dashboard config.</p>
+              </>
             )}
           </section>
 
