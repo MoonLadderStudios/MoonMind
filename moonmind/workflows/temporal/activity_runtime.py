@@ -2602,9 +2602,13 @@ class TemporalProposalActivities:
         short_id = workflow_id.split("-")[-1] if "-" in workflow_id else workflow_id[-8:]
         run_suffix = f" ({short_id})" if short_id else ""
 
-        max_title_len = 200
-        title_body = first_line[: max_title_len - len(title_prefix) - len(run_suffix)]
+        max_title_len = 180
+        budget = max(0, max_title_len - len(title_prefix) - len(run_suffix))
+        title_body = first_line[:budget]
         title = f"{title_prefix}{title_body}{run_suffix}"
+        
+        if len(title) > max_title_len:
+            title = title[:max_title_len]
 
         summary = (
             f"Automatic follow-up proposal generated from workflow {workflow_id}. "

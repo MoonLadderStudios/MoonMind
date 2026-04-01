@@ -23,6 +23,46 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         result = await activities.proposal_generate(None)
         self.assertEqual(result, [])
 
+    async def test_proposal_generate_title_formatting(self) -> None:
+        activities = TemporalProposalActivities()
+
+        # Test normal instructions with varying workflow IDs
+        req_normal = {
+            "workflow_id": "test-wf-12345",
+            "parameters": {"instructions": "Implement feature X"}
+        }
+        res_normal = await activities.proposal_generate(req_normal)
+        self.assertEqual(len(res_normal), 1)
+        self.assertEqual(
+            res_normal[0]["title"],
+            "[run_quality] Follow-up: Implement feature X (12345)"
+        )
+
+        req_uuid = {
+            "workflow_id": "8e3b0e11-4a1d-40c9-94fc-0d3f2a1b9c8e",
+            "parameters": {"instructions": "Fix bug in Y"}
+        }
+        res_uuid = await activities.proposal_generate(req_uuid)
+        self.assertEqual(
+            res_uuid[0]["title"],
+            "[run_quality] Follow-up: Fix bug in Y (0d3f2a1b9c8e)"
+        )
+
+        # Test extremely long instructions (truncation)
+        long_instr = "A" * 300
+        req_long = {
+            "workflow_id": "very-long-id-12345678",
+            "parameters": {"instructions": long_instr}
+        }
+        res_long = await activities.proposal_generate(req_long)
+        title = res_long[0]["title"]
+        # Max length of internally generated title is 180 (excluding '[run_quality] ' prefix added later)
+        # So the candidate["title"] should be len("[run_quality] ") + 180 = 14 + 180 = 194
+        self.assertTrue(len(title) <= 194)
+        self.assertTrue(title.endswith("(12345678)"))
+        self.assertTrue(title.startswith("[run_quality] Follow-up: AAA"))
+
+
 
 class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
     async def test_empty_candidates_returns_zeroes(self) -> None:
