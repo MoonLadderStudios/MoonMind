@@ -326,12 +326,29 @@ async def jules_get_auto_answer_config_activity(_args: list | None = None) -> di
     }
 
 
+@activity.defn(name="repo.create_pr")
+async def repo_create_pr_activity(payload: dict) -> dict:
+    """Create a PR via GitHub REST API (provider-agnostic)."""
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    svc = GitHubService()
+    result = await svc.create_pull_request(
+        repo=payload.get("repo") or "",
+        head=payload.get("head") or "",
+        base=payload.get("base") or "",
+        title=payload.get("title") or "",
+        body=payload.get("body") or "",
+    )
+    return result.model_dump(by_alias=True)
+
+
 __all__ = [
     "jules_answer_question_activity",
     "jules_cancel_activity",
     "jules_fetch_result_activity",
     "jules_get_auto_answer_config_activity",
     "jules_list_activities_activity",
+    "repo_create_pr_activity",
     "repo_merge_pr_activity",
     "jules_send_message_activity",
     "jules_start_activity",

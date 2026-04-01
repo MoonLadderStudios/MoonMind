@@ -72,36 +72,38 @@ Make the activity boundary the only place allowed to normalize or reject runtime
 
 ### Tasks
 
-* [ ] Review `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` schema constraints and confirm they cover all currently needed fields.
-* [ ] Add or tighten small shared helpers for activity-side contract validation:
+* [x] Review `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` schema constraints and confirm they cover all currently needed fields.
+* [x] Add or tighten small shared helpers for activity-side contract validation:
 
-  * [ ] “build canonical start handle”
-  * [ ] “build canonical status”
-  * [ ] “build canonical result”
-  * [ ] “raise UnsupportedStatus on unknown provider/runtime state”
-* [ ] Add one shared contract-enforcement helper per activity family if useful:
+  * [x] “build canonical start handle”
+  * [x] “build canonical status”
+  * [x] “build canonical result”
+  * [x] “raise UnsupportedStatus on unknown provider/runtime state”
+* [x] Add one shared contract-enforcement helper per activity family if useful:
 
-  * [ ] external provider activity helper
-  * [ ] managed runtime activity helper
-* [ ] Standardize metadata usage:
+  * [x] external provider activity helper
+  * [x] managed runtime activity helper
+* [x] Standardize metadata usage:
 
-  * [ ] `providerStatus`
-  * [ ] `normalizedStatus`
-  * [ ] `externalUrl`
-  * [ ] provider/runtime-specific extras in `metadata` only
-* [ ] Prohibit provider-shaped top-level fields from crossing the workflow boundary:
+  * [x] `providerStatus`
+  * [x] `normalizedStatus`
+  * [x] `externalUrl`
+  * [x] provider/runtime-specific extras in `metadata` only
+* [x] Prohibit provider-shaped top-level fields from crossing the workflow boundary:
 
-  * [ ] `external_id`
-  * [ ] `tracking_ref`
-  * [ ] `provider_status`
-  * [ ] raw status dicts
-* [ ] Add tests that assert malformed shapes fail at the activity boundary, not later in workflow code.
+  * [x] `external_id`
+  * [x] `tracking_ref`
+  * [x] `provider_status`
+  * [x] raw status dicts
+* [x] Add tests that assert malformed shapes fail at the activity boundary, not later in workflow code.
 
 ### Deliverables
 
-* shared contract-validation helpers
-* failing tests for non-canonical payloads
-* explicit contract-boundary enforcement
+* [x] shared contract-validation helpers
+* [x] failing tests for non-canonical payloads
+* [x] explicit contract-boundary enforcement
+
+> **Phase 1 Deliverables completed**: Added canonical factory helpers (`build_canonical_status`, etc.) and contract boundary enforcement to `agent_runtime_models.py`.
 
 ---
 
