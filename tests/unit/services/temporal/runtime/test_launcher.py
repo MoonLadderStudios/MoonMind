@@ -239,6 +239,35 @@ def test_persist_gh_config_skips_without_workspace():
     assert "GH_CONFIG_DIR" not in env
 
 
+def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
+    run_root = tmp_path / "run-1"
+    repo_root = run_root / "repo"
+    git_dir = repo_root / ".git"
+    git_dir.mkdir(parents=True)
+    git_config = git_dir / "config"
+    git_config.write_text(
+        "[core]\n\trepositoryformatversion = 0\n",
+        encoding="utf-8",
+    )
+
+    env = {"GITHUB_TOKEN": "ghp_supportroot789", "PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(repo_root),
+        support_root=str(run_root),
+    )
+
+    hosts = run_root / ".moonmind" / "gh" / "hosts.yml"
+    cred_store = run_root / ".moonmind" / "gh" / "git-credentials"
+    assert hosts.exists()
+    assert cred_store.exists()
+    assert not (repo_root / ".moonmind").exists()
+    assert env["GH_CONFIG_DIR"] == str(run_root / ".moonmind" / "gh")
+
+    updated_config = git_config.read_text()
+    assert str(cred_store) in updated_config
+
+
 def test_persist_gh_config_writes_git_credential_helper(tmp_path):
     """When a .git/config exists, _persist_gh_config injects a credential
     helper pointing to a git-credentials store file."""
