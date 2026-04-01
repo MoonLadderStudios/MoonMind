@@ -200,6 +200,25 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(attachmentTarget.endpoint, "/api/executions");
 })();
 
+(function testMapTaskRuntimeToAuthProfileRuntimeIdAcceptsCanonicalRuntimeIds() {
+  assert.strictEqual(
+    typeof helpers.mapTaskRuntimeToAuthProfileRuntimeId,
+    "function",
+  );
+  assert.strictEqual(
+    helpers.mapTaskRuntimeToAuthProfileRuntimeId("claude_code"),
+    "claude_code",
+  );
+  assert.strictEqual(
+    helpers.mapTaskRuntimeToAuthProfileRuntimeId("codex_cli"),
+    "codex_cli",
+  );
+  assert.strictEqual(
+    helpers.mapTaskRuntimeToAuthProfileRuntimeId("gemini_cli"),
+    "gemini_cli",
+  );
+})();
+
 
 
 (function testValidatePrimaryStepSubmissionAllowsInstructionsOrExplicitSkill() {

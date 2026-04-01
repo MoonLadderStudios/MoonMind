@@ -164,6 +164,13 @@ def _route_handlers(
                     "account_label": "Gemini Default",
                 }
             ]
+        elif runtime_id == "claude_code":
+            items = [
+                {
+                    "profile_id": "profile:claude-default",
+                    "account_label": "Claude Default",
+                }
+            ]
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -419,6 +426,25 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
         assert option_labels == [
             "Default (system chooses)",
             "Gemini Default",
+        ]
+
+        page.select_option('select[name="runtime"]', "claude_code")
+        page.wait_for_function(
+            """
+            () => {
+                const select = document.querySelector('select[name="providerProfile"]');
+                if (!select) {
+                    return false;
+                }
+                const labels = Array.from(select.options).map((option) => option.textContent?.trim() || "");
+                return labels.length === 2 && labels[1] === "Claude Default";
+            }
+            """
+        )
+        option_labels = provider_select.locator("option").all_text_contents()
+        assert option_labels == [
+            "Default (system chooses)",
+            "Claude Default",
         ]
         browser.close()
 

@@ -295,7 +295,9 @@
       gemini: "gemini_cli",
       gemini_cli: "gemini_cli",
       claude: "claude_code",
+      claude_code: "claude_code",
       codex: "codex_cli",
+      codex_cli: "codex_cli",
     };
     const m = String(mode || "").trim().toLowerCase();
     return runtimeMap[m] || "";
@@ -3020,6 +3022,7 @@
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
       validateSubmitRuntime,
+      mapTaskRuntimeToAuthProfileRuntimeId,
       applyElementVisibility,
       persistSubmitDraftsToStorage,
       submitDraftController,
