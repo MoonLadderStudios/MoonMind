@@ -70,6 +70,8 @@ def _build_task_preview(
     publish_mode = publish.get("mode")
     starting_branch = git.get("startingBranch")
     target_branch = git.get("targetBranch")
+    raw_skills = task.get("skills") or payload.get("skills")
+    task_skills = raw_skills if isinstance(raw_skills, list) else None
     instructions = task.get("instructions") or payload.get("instruction")
 
     runtime_value = (
@@ -93,6 +95,7 @@ def _build_task_preview(
         repository=repository,
         runtimeMode=runtime_value,
         skillId=skill_value,
+        taskSkills=task_skills,
         publishMode=publish_value,
         startingBranch=starting_value,
         targetBranch=target_branch_value,

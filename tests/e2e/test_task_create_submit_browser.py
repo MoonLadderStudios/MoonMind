@@ -11,9 +11,10 @@ import uvicorn
 
 from api_service.api.routers.task_dashboard import _resolve_user_dependency_overrides
 from api_service.db.base import get_async_session
-from api_service.db.models import User
+from api_service.db.models import User, Base
 from api_service.main import app as main_app
 from moonmind.config.settings import settings
+import asyncio
 
 if not os.getenv("RUN_E2E_TESTS"):
     pytest.skip("E2E tests disabled", allow_module_level=True)
@@ -42,6 +43,7 @@ def server():
     test_user = User(id=uuid.uuid4(), email="test@example.com")
     original_overrides = dict(main_app.dependency_overrides)
 
+    from sqlalchemy.pool import StaticPool
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     for dependency in _resolve_user_dependency_overrides():
@@ -49,11 +51,26 @@ def server():
             lambda test_user=test_user: test_user
         )
 
-    in_memory_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    in_memory_engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        echo=False
+    )
     in_memory_session_maker = async_sessionmaker(
         bind=in_memory_engine,
         expire_on_commit=False,
     )
+    
+    async def _init_db():
+        async with in_memory_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            
+    try:
+        asyncio.run(_init_db())
+    except Exception as e:
+        print(f"Schema init failed: {e}")
+
     main_app.dependency_overrides[get_async_session] = lambda: in_memory_session_maker()
 
     port = _reserve_free_port()
@@ -116,8 +133,10 @@ def _route_handlers(
             ),
         )
 
+    create_requests = []
     def _mock_create(route):
         calls["create"] += 1
+        create_requests.append(route.request.post_data_json)
         time.sleep(create_delay_seconds)
         route.fulfill(
             status=create_status,
@@ -179,7 +198,7 @@ def _route_handlers(
     page.route(f"{base_url}/api/v1/provider-profiles*", _mock_provider_profiles)
     page.route(f"{base_url}/api/executions", _mock_create)
     page.route(f"{base_url}/api/executions/*", _mock_detail)
-    return calls
+    return calls, create_requests
 
 
 def _read_submit_label(page):
@@ -209,7 +228,7 @@ def test_submit_create_flows_to_task_detail(server):
         browser = p.chromium.launch()
         page = browser.new_page()
         job_id = "11111111-1111-4111-8111-111111111111"
-        calls = _route_handlers(
+        calls, create_requests = _route_handlers(
             page,
             base_url=base_url,
             create_status=201,
@@ -224,6 +243,7 @@ def test_submit_create_flows_to_task_detail(server):
             "Run end-to-end regression flow.",
         )
         page.fill('input[name="repository"]', "MoonLadderStudios/MoonMind")
+        page.fill('input[name="skill"]', "speckit-orchestrate")
 
         submit_button = page.locator("#queue-submit-form button[type='submit']")
         original_label = _read_submit_label(page)
@@ -236,6 +256,10 @@ def test_submit_create_flows_to_task_detail(server):
         page.wait_for_url(f"**/tasks/queue/{job_id}")
         assert page.url.endswith(f"/tasks/queue/{job_id}")
         assert calls["create"] == 1
+        
+        create_payload = create_requests[0]
+        assert create_payload["payload"]["task"]["skills"] == ["speckit-orchestrate"]
+
         browser.close()
 
 
@@ -244,7 +268,7 @@ def test_submit_error_restores_label(server):
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        calls = _route_handlers(
+        calls, _ = _route_handlers(
             page,
             base_url=base_url,
             create_status=500,
