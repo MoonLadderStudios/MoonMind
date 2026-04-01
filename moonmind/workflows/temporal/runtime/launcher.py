@@ -546,15 +546,22 @@ class ManagedRuntimeLauncher:
         _is_claude_code = profile.runtime_id == "claude_code"
         _needs_priv_drop = _run_as_root and _is_claude_code
 
-        if _needs_priv_drop:
-            # Build inline env string for su -c (it doesn't inherit parent env)
-            env_str = " ".join(
-                f"{shlex.quote(k)}={shlex.quote(v)}"
-                for k, v in env_overrides.items()
+        # Transfer workspace ownership to the app user so it can write files
+        # (e.g. git commits, tool artifacts).  Git clone above runs as root,
+        # so the repo dir is owned by root and the app user would be denied writes.
+        if _needs_priv_drop and resolved_workspace_path is not None:
+            await self._run_checked_command(
+                "chown", "-R", "app:app", resolved_workspace_path,
             )
-            full_cmd_str = f"{env_str} {shlex.join(cmd)}"
+
+        if _needs_priv_drop:
+            # Use runuser so we can pass env via env= parameter (avoids embedding
+            # secrets in the command-line argv).  runuser -u preserves the target
+            # user's login environment (HOME, USER, etc.) which claude CLI expects.
             process = await asyncio.create_subprocess_exec(
-                "su", "app", "-c", full_cmd_str,
+                "runuser", "-u", "app", "--",
+                "env", *[f"{k}={v}" for k, v in env_overrides.items()],
+                *cmd,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

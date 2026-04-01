@@ -1,4 +1,5 @@
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -716,3 +717,95 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
     assert captured_env["ANTHROPIC_AUTH_TOKEN"] == "resolved-minimax-token"
     assert "MANAGED_API_KEY_REF" not in captured_env
     assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env
+
+
+@pytest.mark.asyncio
+async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
+    """When launched as root for claude_code runtime, the process should:
+    1. chown the workspace to app:app so the app user can write files
+    2. Use runuser -u app -- env=... to drop privileges while preserving env
+    """
+    captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 7777) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        captured_calls.append((args, kwargs))
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        # Capture chown calls so we can verify the workspace ownership transfer
+        if cmd[:2] == ("chown", "-R"):
+            chown_calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+
+    # Simulate running as root (euid == 0)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+
+    # Create a workspace with a .git directory to satisfy chown
+    workspace_root = tmp_path / "workspaces" / "root-run" / "repo"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".git").mkdir()
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={"MY_CUSTOM_VAR": "test-value"},
+        passthrough_env_keys=[],
+    )
+    request = _make_request()
+
+    record, process, _endpoints, _cleanup = await launcher.launch(
+        run_id="root-run",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+
+    # Verify chown was called
+    assert len(chown_calls) == 1, f"Expected 1 chown call, got {len(chown_calls)}"
+    chown_call = chown_calls[0]
+    assert "app:app" in chown_call
+
+    # Verify runuser was used instead of direct subprocess exec
+    runuser_call = next(
+        (args for args, _ in captured_calls if args[0] == "runuser"),
+        None
+    )
+    assert runuser_call is not None, "runuser was not used for privilege dropping"
+    assert runuser_call[1:4] == ("-u", "app", "--"), f"Unexpected runuser args: {runuser_call[1:4]}"
+
+    # Verify env vars are passed as "KEY=VALUE" arguments to env
+    env_start_idx = runuser_call.index("env")
+    env_args = runuser_call[env_start_idx + 1:]
+    assert "MY_CUSTOM_VAR=test-value" in env_args
+
+    # Verify the original command follows the env args (model/effort added by build_command)
+    cmd_start_idx = runuser_call.index("claude")
+    actual_cmd = runuser_call[cmd_start_idx:]
+    assert actual_cmd[0] == "claude"
+    assert "-p" in actual_cmd or "--dangerously-skip-permissions" in actual_cmd
