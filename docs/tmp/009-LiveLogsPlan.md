@@ -252,20 +252,20 @@ Make sure logging remains passive observation while intervention uses explicit w
 
 ### Tasks
 
-- [ ] Audit the current UI and backend for places where live output and intervention are coupled.
-- [ ] Remove assumptions that a live log session implies shell access or operator control access.
-- [ ] Define the Intervention panel or controls separately from the log viewer.
-- [ ] Ensure Pause/Resume/Cancel/Approve/Reject/Send Message actions route through Temporal signals/updates or provider-native adapters rather than terminal transport.
-- [ ] Ensure intervention actions are logged/audited separately from stdout/stderr.
-- [ ] Ensure the live log viewer can show future inline system annotations without becoming an intervention mechanism itself.
-- [ ] Add tests verifying intervention actions do not require a live log connection.
-- [ ] Update UI language to clearly distinguish observation from control.
+- [x] Audit the current UI and backend for places where live output and intervention are coupled.
+- [x] Remove assumptions that a live log session implies shell access or operator control access.
+- [x] Define the Intervention panel or controls separately from the log viewer.
+- [x] Ensure Pause/Resume/Cancel/Approve/Reject/Send Message actions route through Temporal signals/updates or provider-native adapters rather than terminal transport.
+- [x] Ensure intervention actions are logged/audited separately from stdout/stderr.
+- [x] Ensure the live log viewer can show future inline system annotations without becoming an intervention mechanism itself.
+- [x] Add tests verifying intervention actions do not require a live log connection.
+- [x] Update UI language to clearly distinguish observation from control.
 
 ### Exit criteria
 
-- [ ] Managed-run logs are a passive observability surface only.
-- [ ] Intervention is explicit, auditable, and transport-independent.
-- [ ] No managed-run operator action depends on a terminal embed or log session attachment.
+- [x] Managed-run logs are a passive observability surface only.
+- [x] Intervention is explicit, auditable, and transport-independent.
+- [x] No managed-run operator action depends on a terminal embed or log session attachment.
 
 ---
 

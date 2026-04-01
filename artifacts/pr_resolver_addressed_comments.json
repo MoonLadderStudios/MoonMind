@@ -1,187 +1,72 @@
 [
   {
-    "id": 3018862495,
-    "disposition": "addressed",
-    "rationale": "The task-detail EventSource client now accepts both named log_chunk events and default message events, so live log delivery works regardless of SSE event-name framing."
-  },
-  {
-    "id": 3018862515,
-    "disposition": "addressed",
-    "rationale": "Live Logs copy now routes through a guarded clipboard helper that skips unsupported environments and swallows rejected writes to avoid unhandled promise rejections."
-  },
-  {
-    "id": 3018862533,
-    "disposition": "addressed",
-    "rationale": "Stdout/Stderr copy now uses the same guarded clipboard helper, avoiding unhandled clipboard rejections."
-  },
-  {
-    "id": 3018862545,
-    "disposition": "addressed",
-    "rationale": "Diagnostics copy now uses the guarded clipboard helper so missing clipboard support or rejected writes do not throw."
-  },
-  {
-    "id": 3018862562,
-    "disposition": "addressed",
-    "rationale": "The task-detail UI tests now save and restore the document.hidden descriptor in afterEach so visibility-state mutations do not leak across tests."
-  },
-  {
-    "id": 3018862570,
-    "disposition": "addressed",
-    "rationale": "The task-detail UI tests now save and restore navigator.clipboard after each test, preventing clipboard mocks from leaking into later cases."
-  },
-  {
-    "id": 3018862601,
-    "disposition": "addressed",
-    "rationale": "The Phase 4 plan no longer instructs adding @types/anser and now reflects the implemented no-new-dependencies approach."
-  },
-  {
-    "id": 3018862614,
-    "disposition": "addressed",
-    "rationale": "The placeholder Phase 4 spec template was replaced with a concrete Live Logs Phase 4 specification covering stories, requirements, edge cases, and success criteria."
-  },
-  {
-    "id": 4040670337,
+    "id": 4168047741,
     "disposition": "not-applicable",
-    "rationale": "This review body is an overview summary rather than a standalone remediation item; the concrete per-file comments were classified individually."
+    "rationale": "This Qodo issue comment is a walkthrough summary of the PR rather than a distinct remediation item."
   },
   {
-    "id": 4040674047,
+    "id": 4168047863,
     "disposition": "not-applicable",
-    "rationale": "This review body summarizes the two trailing-newline rendering comments, which were handled as the underlying line-specific review comments."
+    "rationale": "This Qodo review body duplicates the underlying line comments that were classified individually in the ledger."
   },
   {
-    "id": 3018866363,
+    "id": 3020262663,
     "disposition": "addressed",
-    "rationale": "Artifact log parsing now trims a single trailing newline before splitting so the viewer does not render an extra empty row from merged-tail content."
+    "rationale": "SendMessage now accepts only the canonical top-level message field, and the new tests reject fallback alias payloads so the contract stays fail-fast."
   },
   {
-    "id": 3018866369,
-    "disposition": "addressed",
-    "rationale": "SSE log-chunk parsing now trims a single trailing newline before splitting so live chunks do not add empty rows after each emitted line."
-  },
-  {
-    "id": 4167658037,
+    "id": 4042198613,
     "disposition": "not-applicable",
-    "rationale": "This Qodo issue comment is a high-level review summary; the concrete line comments and review bodies were classified individually."
+    "rationale": "This review entry is a high-level summary rather than an additional actionable comment."
   },
   {
-    "id": 4167658098,
+    "id": 3020275500,
+    "disposition": "addressed",
+    "rationale": "WorkflowEnvironment-based tests now invoke SendMessage through the real Temporal update boundary and cover both success and degraded invalid-input behavior."
+  },
+  {
+    "id": 3020275503,
+    "disposition": "addressed",
+    "rationale": "The service and workflow now share the same canonical SendMessage contract, so nested and alias payload shapes no longer diverge between layers."
+  },
+  {
+    "id": 3020290079,
+    "disposition": "addressed",
+    "rationale": "Update-backed intervention failures now report Temporal update failed, matching the actual transport used by the service."
+  },
+  {
+    "id": 3020290121,
+    "disposition": "addressed",
+    "rationale": "Pause intervention audit entries now record temporal_update as the transport."
+  },
+  {
+    "id": 3020290138,
+    "disposition": "addressed",
+    "rationale": "Resume intervention audit entries now record temporal_update as the transport."
+  },
+  {
+    "id": 3020290167,
+    "disposition": "addressed",
+    "rationale": "Approve intervention audit entries now record temporal_update as the transport."
+  },
+  {
+    "id": 3020290183,
+    "disposition": "addressed",
+    "rationale": "SendMessage intervention audit entries now record temporal_update as the transport."
+  },
+  {
+    "id": 3020290201,
+    "disposition": "addressed",
+    "rationale": "MoonMind.Run intervention updates are now rejected on the generic update path so pause, resume, approve, and cancel go through the single audited signal or cancel endpoints."
+  },
+  {
+    "id": 3020290220,
+    "disposition": "addressed",
+    "rationale": "The multiline assert_awaited_once_with call was reformatted with Black-compliant indentation."
+  },
+  {
+    "id": 4042228694,
     "disposition": "not-applicable",
-    "rationale": "This Qodo code-review summary duplicates the actionable per-file comments that were tracked separately in the ledger."
-  },
-  {
-    "id": 3019932431,
-    "disposition": "addressed",
-    "rationale": "Merged-log spool rendering now iterates incrementally through the spool with decode replacement instead of using read_text().splitlines() in the request path."
-  },
-  {
-    "id": 3019932432,
-    "disposition": "addressed",
-    "rationale": "The merged logs endpoint now streams synthesized spool and artifact-fallback content incrementally instead of materializing the full response in memory."
-  },
-  {
-    "id": 4041846491,
-    "disposition": "not-applicable",
-    "rationale": "This review body is an overview summary rather than a distinct remediation item; the specific backend and frontend comments were handled directly."
-  },
-  {
-    "id": 3019932433,
-    "disposition": "not-applicable",
-    "rationale": "Virtualized rendering remains an explicit follow-up tracked outside this Phase 4 PR; this pass fixes the blocking correctness, memory, and interaction issues without broadening scope to a new viewer dependency."
-  },
-  {
-    "id": 3019949235,
-    "disposition": "addressed",
-    "rationale": "The canonical Live Logs doc now points implementation tracking at docs/tmp/009-LiveLogsPlan.md and no longer embeds an implementation-status checklist."
-  },
-  {
-    "id": 3019949237,
-    "disposition": "addressed",
-    "rationale": "Remaining docs and spec references now use logStreamingEnabled and MOONMIND_LOG_STREAMING_ENABLED consistently."
-  },
-  {
-    "id": 3019949239,
-    "disposition": "addressed",
-    "rationale": "Merged log synthesis now streams spool and fallback artifact content incrementally, removing the whole-spool and whole-response memory spike."
-  },
-  {
-    "id": 3019949243,
-    "disposition": "addressed",
-    "rationale": "SSE connections without a since cursor now start at the current spool tail so the client does not replay already-rendered merged history on initial open or early reconnect."
-  },
-  {
-    "id": 3019951947,
-    "disposition": "addressed",
-    "rationale": "The spool reader now opens files with errors='replace' and is consumed through incremental streaming helpers rather than synchronous full-file reads in the request path."
-  },
-  {
-    "id": 3019952000,
-    "disposition": "addressed",
-    "rationale": "The synthesized merged-log path now yields chunks incrementally for both spool-backed and artifact-fallback output instead of building a single in-memory bytes payload."
-  },
-  {
-    "id": 3019952025,
-    "disposition": "addressed",
-    "rationale": "Live Logs wrap, copy, and download controls now render outside the summary element so using them does not toggle the details panel."
-  },
-  {
-    "id": 3019952059,
-    "disposition": "addressed",
-    "rationale": "Stdout and Stderr controls now render outside the summary element so wrap, copy, and download interactions do not collapse the panel."
-  },
-  {
-    "id": 3019952091,
-    "disposition": "addressed",
-    "rationale": "Diagnostics controls now render outside the summary element so operator interactions do not trigger the details toggle."
-  },
-  {
-    "id": 3019952113,
-    "disposition": "addressed",
-    "rationale": "The merged logs endpoint now serves spool-backed synthesis for active runs even when stdout and stderr artifact refs have not been persisted yet."
-  },
-  {
-    "id": 4041865644,
-    "disposition": "not-applicable",
-    "rationale": "This review body is a PR overview summary; the concrete rule-violation and bug comments were tracked individually."
-  },
-  {
-    "id": 4166791990,
-    "disposition": "not-applicable",
-    "rationale": "This is a high-level walkthrough summary, not a standalone remediation item; the concrete review comments were classified individually."
-  },
-  {
-    "id": 4166792094,
-    "disposition": "not-applicable",
-    "rationale": "This issue comment aggregates the underlying token, support-root, and quoting concerns, which were classified on the individual review comments."
-  },
-  {
-    "id": 3019274135,
-    "disposition": "not-applicable",
-    "rationale": "Current launcher code defines gh_dir before the try block and returns immediately on OSError, so the reported UnboundLocalError path is no longer reachable."
-  },
-  {
-    "id": 3019274156,
-    "disposition": "addressed",
-    "rationale": "The launcher now derives run_root from Path(resolved_workspace_path).resolve().parent and passes that support root into _persist_gh_config, keeping credential storage aligned with the actual workspace layout."
-  },
-  {
-    "id": 4041174595,
-    "disposition": "not-applicable",
-    "rationale": "This review body is an overview summary rather than an additional actionable item."
-  },
-  {
-    "id": 3019276204,
-    "disposition": "addressed",
-    "rationale": "The test no longer uses a ghp_-prefixed token string; it now uses a neutral placeholder token that avoids secret-pattern false positives."
-  },
-  {
-    "id": 4041179579,
-    "disposition": "not-applicable",
-    "rationale": "This review body summarizes launcher comments that were classified separately and does not require its own code change."
-  },
-  {
-    "id": 3019278963,
-    "disposition": "not-applicable",
-    "rationale": "Current code already reuses the resolved workspace parent as run_root and only persists GitHub config when resolved_workspace_path is present, so the suggested cleanup is already reflected."
+    "rationale": "This review entry is a PR overview summary and does not add separate actionable feedback beyond the concrete line comments."
   }
 ]
