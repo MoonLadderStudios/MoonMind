@@ -1205,6 +1205,32 @@ class SecuritySettings(BaseSettings):
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
         None, alias="ENCRYPTION_MASTER_KEY"
     )
+    CORS_ALLOWED_ORIGINS: Annotated[tuple[str, ...], NoDecode] = Field(
+        ("http://localhost:3000", "http://localhost:5000"),
+        validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS", "ALLOWED_ORIGINS"),
+        description="Allowed origins for CORS (comma-separated).",
+    )
+
+    @field_validator("CORS_ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, value: Optional[str | Sequence[str]]) -> tuple[str, ...]:
+        """Allow comma-delimited strings for CORS origins."""
+        if value is None:
+            return ("http://localhost:3000", "http://localhost:5000")
+
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            raw_items = (value,)
+
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+        if not items:
+            return ("http://localhost:3000", "http://localhost:5000")
+        return tuple(dict.fromkeys(items))
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
