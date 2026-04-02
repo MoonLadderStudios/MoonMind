@@ -36,7 +36,7 @@ This plan covers:
 
 This plan does **not** cover implementing the OAuth browser terminal itself beyond preserving the boundary that OAuth remains separate from run logging.
 
-## Known current state (as of 2026-03-31)
+## Known current state (as of 2026-04-01)
 
 This section captures an honest snapshot of the implementation, to prevent future confusion about what is and is not done:
 
@@ -44,13 +44,53 @@ Canonical architecture and operator-visible contract text lives in [`docs/Manage
 
 - **Done**: Durable stdout/stderr/diagnostics artifact production is substantially implemented in the managed runtime supervisor.
 - **Done**: Data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) exist and are populated.
-- **Done**: Observability read APIs (summary, tail endpoints, downloads, diagnostics) are consumed by the Mission Control task detail page.
+- **Done**: Observability read APIs (summary, tail endpoints, downloads, diagnostics) are consumed by the Mission Control task detail page through durable `taskRunId` resolution from execution detail.
 - **Done**: The runtime supervisor emits live log records into the shared append-only spool transport consumed by the API SSE endpoint.
 - **Done**: The launcher persists `liveStreamCapable` for workspace-backed managed runs so summary metadata truthfully reports stream availability.
 - **Done**: Live log sequence assignment is one run-global namespace across stdout/stderr/system, so reconnect-by-sequence now matches the API contract.
 - **Partial**: The merged endpoint now prefers chronological synthesis from spool metadata; historical runs without spool metadata still degrade to labeled artifact concatenation with a warning.
 - **Done**: Historical runs that only persisted legacy `logArtifactRef` now degrade through the merged-log endpoint instead of any session-viewer path.
-- **Partial**: The full Mission Control observability panel is implemented on the task detail page, but the preferred `react-virtuoso` / `anser` rendering baseline remains a follow-up rather than part of the current implementation.
+- **Done**: The full Mission Control observability panel now handles delayed managed-run attachment, launch-failed states, binding-missing states, and owner-visible authorization failures without falling back to the Temporal run id.
+
+## Completed implementation slice that made Mission Control live logs functional
+
+This slice completed the contract that was previously blocking real Mission Control usage:
+
+### Workstream A - Complete
+
+- `ManagedRunRecord` now persists `workflow_id`.
+- Managed launch now saves the managed run record before binding it back to the execution.
+- The managed launch path now binds the parent logical `MoonMind.Run` workflow id so Mission Control resolves the correct live-log record for task detail.
+- `/api/executions/{workflowId}` now derives `taskRunId` from the durable managed-run store when the memo/search-attribute path does not already provide it.
+
+### Workstream B - Complete
+
+- Mission Control no longer falls back to the Temporal run id as a fake task-run id.
+- The task-detail page now distinguishes waiting-for-launch, launch-failed, binding-missing, and authorization-failed observability states.
+- When a delayed `taskRunId` appears, the page automatically attaches the live-log panel and immediately proceeds through summary and merged-tail retrieval.
+
+### Workstream C - Complete
+
+- `/api/task-runs/*` observability routes now allow both superusers and the owning execution user, matching the surrounding Mission Control visibility model.
+- The React panel now surfaces 403 authorization failures with explicit operator-facing copy instead of silently degrading to an empty log view.
+
+### Workstream D - Complete
+
+- Backend coverage now includes a long-running managed-runtime integration test that simulates real streaming output while the process is still active.
+- Browser-facing coverage now exercises delayed `taskRunId` attachment and the Mission Control state transitions that were previously missing.
+
+### Workstream E - Finish the remaining viewer and rollout hardening after the contract works
+
+Workstreams A-D are complete. The remaining work is optional hardening and presentation polish:
+
+- adopt the planned `react-virtuoso` viewer baseline for long logs,
+- adopt `anser` for ANSI rendering,
+- complete Phase 7 response-time / large-log validation,
+- remove any "done" markings in this tmp plan that still depend on the above contract being proven in Mission Control.
+
+### Status
+
+Workstreams A-D are complete. The feature is now functional in Mission Control when the updated backend and frontend are deployed together.
 
 ---
 
@@ -371,11 +411,11 @@ This order gives Mission Control a usable artifact-backed viewer before SSE live
 
 The Live Logs implementation is done when all of the following are true:
 
-- [ ] Every managed run produces durable stdout, stderr, and diagnostics artifacts.
-- [ ] Mission Control can display artifact-backed log tails and diagnostics for completed runs.
-- [ ] Mission Control can live-follow active runs through MoonMind-owned streaming fed by actual supervised runtime output.
+- [x] Every managed run produces durable stdout, stderr, and diagnostics artifacts.
+- [x] Mission Control can display artifact-backed log tails and diagnostics for completed runs.
+- [x] Mission Control can live-follow active runs through MoonMind-owned streaming fed by actual supervised runtime output.
 - [x] Managed-run log viewing no longer depends on `tmate`, `web_ro`, or terminal embedding.
-- [ ] Intervention is separate from logging in both UI and backend contracts.
-- [ ] `xterm.js` remains limited to OAuth/interactive auth terminal flows.
+- [x] Intervention is separate from logging in both UI and backend contracts.
+- [x] `xterm.js` remains limited to OAuth/interactive auth terminal flows.
 - [x] Legacy session-based observability for managed-run logs has been removed or cleanly deprecated.
-- [ ] The live stream transport works across the supervisor-to-API process boundary.
+- [x] The live stream transport works across the supervisor-to-API process boundary.

@@ -776,6 +776,7 @@ class MoonMindAgentRun:
                     # The profile_fetcher dispatches to the provider_profile.list
                     # activity on the artifacts fleet.
                     wf_id = workflow.info().workflow_id
+                    task_workflow_id = parent_info.workflow_id if parent_info else wf_id
 
                     async def _profile_fetcher(**kw):
                         return await self._execute_routed_activity(
@@ -808,7 +809,10 @@ class MoonMindAgentRun:
                     async def _run_launcher(**kw):
                         return await self._execute_routed_activity(
                             "agent_runtime.launch",
-                            kw.get("payload", {}),
+                            {
+                                **kw.get("payload", {}),
+                                "workflow_id": task_workflow_id,
+                            },
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 

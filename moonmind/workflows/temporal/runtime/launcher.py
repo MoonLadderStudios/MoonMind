@@ -440,6 +440,7 @@ class ManagedRuntimeLauncher:
         self,
         *,
         run_id: str,
+        workflow_id: str | None = None,
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
@@ -454,6 +455,9 @@ class ManagedRuntimeLauncher:
         """
         existing = self._store.load(run_id)
         if existing is not None and existing.status not in TERMINAL_AGENT_RUN_STATES:
+            if workflow_id and not existing.workflow_id:
+                existing.workflow_id = str(workflow_id).strip()
+                self._store.save(existing)
             return existing, None, []
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
@@ -621,6 +625,7 @@ class ManagedRuntimeLauncher:
 
         record = ManagedRunRecord(
             run_id=run_id,
+            workflow_id=str(workflow_id).strip() or None,
             agent_id=request.agent_id,
             runtime_id=profile.runtime_id,
             status="launching",

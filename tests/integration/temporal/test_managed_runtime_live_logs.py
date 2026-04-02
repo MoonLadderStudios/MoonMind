@@ -9,9 +9,21 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-import pytest
+from types import SimpleNamespace
+from uuid import uuid4
 
-from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from api_service.api.routers.task_runs import router as task_runs_router
+from api_service.auth_providers import get_current_user
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    ManagedRunRecord,
+    ManagedRuntimeProfile,
+)
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
@@ -356,3 +368,105 @@ async def test_supervisor_with_none_stdout_stderr_completes(tmp_path: Path):
     assert result.status == "completed"
     diag_artifact = artifact_root / run_id / "diagnostics.json"
     assert diag_artifact.exists(), "diagnostics.json was not written"
+
+
+@pytest.mark.asyncio
+async def test_long_running_launch_is_visible_through_observability_routes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    agent_jobs_root = tmp_path / "agent_jobs"
+    store_root = agent_jobs_root / "managed_runs"
+    artifact_root = agent_jobs_root / "artifacts"
+    workspace = tmp_path / "workspace"
+    store_root.mkdir(parents=True)
+    artifact_root.mkdir(parents=True)
+    workspace.mkdir()
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(agent_jobs_root))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(agent_jobs_root))
+
+    store = ManagedRunStore(store_root)
+    storage = _StubArtifactStorage(artifact_root)
+    streamer = RuntimeLogStreamer(storage)
+    supervisor = ManagedRunSupervisor(store, streamer)
+    launcher = ManagedRuntimeLauncher(store)
+
+    run_id = str(uuid4())
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="test-agent",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        workspaceSpec={},
+        parameters={},
+    )
+    profile = ManagedRuntimeProfile(
+        runtimeId="test_runtime",
+        profileId="profile-1",
+        commandTemplate=[
+            "python3",
+            "-c",
+            (
+                "import sys,time; "
+                "print('alpha', flush=True); "
+                "time.sleep(0.4); "
+                "print('beta', flush=True); "
+                "time.sleep(0.4); "
+                "print('omega', flush=True)"
+            ),
+        ],
+        workspaceMode="shared",
+    )
+
+    record, process, cleanup_paths = await launcher.launch(
+        run_id=run_id,
+        workflow_id="mm:wf-live-1",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    assert process is not None
+    assert record.workflow_id == "mm:wf-live-1"
+
+    supervise_task = asyncio.create_task(
+        supervisor.supervise(
+            run_id=run_id,
+            process=process,
+            timeout_seconds=30,
+            cleanup_paths=cleanup_paths,
+        )
+    )
+
+    app = FastAPI()
+    app.include_router(task_runs_router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=uuid4(),
+        email="admin@example.com",
+        is_superuser=True,
+    )
+
+    try:
+        spool_path = workspace / "live_streams.spool"
+        for _ in range(40):
+            if spool_path.exists() and "alpha" in spool_path.read_text(encoding="utf-8"):
+                break
+            await asyncio.sleep(0.05)
+
+        with TestClient(app) as client:
+            summary = client.get(f"/api/task-runs/{run_id}/observability-summary")
+            assert summary.status_code == 200
+            summary_body = summary.json()["summary"]
+            assert summary_body["supportsLiveStreaming"] is True
+            assert summary_body["liveStreamStatus"] == "available"
+
+            merged = client.get(f"/api/task-runs/{run_id}/logs/merged")
+            assert merged.status_code == 200
+            assert merged.headers["x-merged-order-source"] == "spool"
+            assert "alpha" in merged.text
+
+        final = await asyncio.wait_for(supervise_task, timeout=10)
+        assert final.status == "completed"
+        assert store.find_latest_for_workflow("mm:wf-live-1") is not None
+    finally:
+        app.dependency_overrides.clear()

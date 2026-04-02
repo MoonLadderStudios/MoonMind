@@ -393,6 +393,7 @@ class ManagedRunRecord(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     run_id: str = Field(..., alias="runId", min_length=1)
+    workflow_id: str | None = Field(None, alias="workflowId")
     agent_id: str = Field(..., alias="agentId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     status: AgentRunState = Field(..., alias="status")
@@ -419,6 +420,10 @@ class ManagedRunRecord(BaseModel):
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedRunRecord":
         self.run_id = _require_non_blank(self.run_id, field_name="runId")
+        if self.workflow_id is not None:
+            self.workflow_id = _require_non_blank(
+                self.workflow_id, field_name="workflowId"
+            )
         self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
         self.runtime_id = _require_non_blank(
             self.runtime_id, field_name="runtimeId"

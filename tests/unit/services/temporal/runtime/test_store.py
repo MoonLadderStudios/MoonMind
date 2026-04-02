@@ -16,7 +16,7 @@ def _make_record(run_id: str = "test-run-1", status: str = "running") -> Managed
 
 def test_save_and_load_round_trip(tmp_path):
     store = ManagedRunStore(tmp_path)
-    record = _make_record()
+    record = _make_record().model_copy(update={"workflow_id": "mm:wf-1"})
     store.save(record)
 
     loaded = store.load("test-run-1")
@@ -25,6 +25,7 @@ def test_save_and_load_round_trip(tmp_path):
     assert loaded.agent_id == "agent-1"
     assert loaded.runtime_id == "codex-cli"
     assert loaded.status == "running"
+    assert loaded.workflow_id == "mm:wf-1"
 
 
 def test_load_missing_returns_none(tmp_path):
@@ -60,6 +61,63 @@ def test_list_active(tmp_path):
     active = store.list_active()
     active_ids = {r.run_id for r in active}
     assert active_ids == {"run-1", "run-3"}
+
+
+def test_find_latest_for_workflow_prefers_newest_active_run(tmp_path):
+    store = ManagedRunStore(tmp_path)
+    started_at = datetime.now(tz=UTC)
+
+    store.save(
+        _make_record("run-old-terminal", "completed").model_copy(
+            update={
+                "workflow_id": "mm:wf-1",
+                "started_at": started_at,
+                "finished_at": started_at,
+            }
+        )
+    )
+    store.save(
+        _make_record("run-new-active", "running").model_copy(
+            update={
+                "workflow_id": "mm:wf-1",
+                "started_at": started_at.replace(microsecond=started_at.microsecond + 1),
+            }
+        )
+    )
+
+    found = store.find_latest_for_workflow("mm:wf-1")
+
+    assert found is not None
+    assert found.run_id == "run-new-active"
+
+
+def test_find_latest_for_workflow_returns_latest_terminal_when_no_active_exists(tmp_path):
+    store = ManagedRunStore(tmp_path)
+    started_at = datetime.now(tz=UTC)
+
+    store.save(
+        _make_record("run-first", "completed").model_copy(
+            update={
+                "workflow_id": "mm:wf-1",
+                "started_at": started_at,
+                "finished_at": started_at,
+            }
+        )
+    )
+    store.save(
+        _make_record("run-second", "failed").model_copy(
+            update={
+                "workflow_id": "mm:wf-1",
+                "started_at": started_at.replace(microsecond=started_at.microsecond + 1),
+                "finished_at": started_at.replace(microsecond=started_at.microsecond + 2),
+            }
+        )
+    )
+
+    found = store.find_latest_for_workflow("mm:wf-1")
+
+    assert found is not None
+    assert found.run_id == "run-second"
 
 
 def test_path_traversal_rejected(tmp_path):

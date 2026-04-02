@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
@@ -59,6 +60,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
@@ -498,6 +500,32 @@ def _serialize_execution(
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
     )
+
+
+def _managed_run_store_root() -> str:
+    return os.path.join(
+        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+        "managed_runs",
+    )
+
+
+def _resolve_task_run_id_from_managed_store(workflow_id: str) -> str | None:
+    normalized_workflow_id = str(workflow_id or "").strip()
+    if not normalized_workflow_id:
+        return None
+    try:
+        store = ManagedRunStore(_managed_run_store_root())
+        record = store.find_latest_for_workflow(normalized_workflow_id)
+    except Exception:
+        logger.warning(
+            "Failed to resolve managed task run id for workflow %s from run store",
+            normalized_workflow_id,
+            exc_info=True,
+        )
+        return None
+    if record is None:
+        return None
+    return str(record.run_id or "").strip() or None
 
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
@@ -1629,7 +1657,12 @@ async def describe_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
-    return _serialize_execution(record)
+    execution = _serialize_execution(record)
+    if not execution.task_run_id:
+        task_run_id = _resolve_task_run_id_from_managed_store(execution.workflow_id)
+        if task_run_id:
+            execution = execution.model_copy(update={"task_run_id": task_run_id})
+    return execution
 
 
 @router.post(
