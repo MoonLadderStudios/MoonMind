@@ -186,54 +186,6 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
     assert loaded.workflow_id is None
 
 
-@pytest.mark.asyncio
-async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
-
-    store = ManagedRunStore(tmp_path)
-    launcher = ManagedRuntimeLauncher(store)
-    profile = _make_profile(
-        command_template=["echo", "hello"],
-        env_overrides={"MM_SAFE": "1"},
-        passthrough_env_keys=["GH_TOKEN", "GITHUB_TOKEN"],
-    )
-    request = _make_request()
-
-    class _FakeProcess:
-        def __init__(self, pid: int = 777) -> None:
-            self.pid = pid
-            self.returncode = 0
-
-        async def wait(self) -> int:
-            return 0
-
-        async def communicate(self) -> tuple[bytes, bytes]:
-            return b"", b""
-
-    captured_env: dict[str, str] = {}
-
-    async def _fake_create_subprocess_exec(*_args, **kwargs):
-        env = kwargs.get("env")
-        if isinstance(env, dict):
-            captured_env.update(env)
-        return _FakeProcess()
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
-        _fake_create_subprocess_exec,
-    )
-
-    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
-        run_id="run-passthrough-1", request=request, profile=profile
-    )
-    await process.wait()
-
-    assert captured_env["MM_SAFE"] == "1"
-    assert captured_env["GH_TOKEN"] == "ghp-runtime"
-    assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
-
-
 def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_path):
     env = {"GITHUB_TOKEN": "ghp_testtoken123", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(

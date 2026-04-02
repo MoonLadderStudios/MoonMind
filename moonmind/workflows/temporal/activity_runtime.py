@@ -2145,10 +2145,7 @@ class TemporalAgentRuntimeActivities:
             if hasattr(result, "diagnostics_ref"):
                 result.diagnostics_ref = summary_ref.artifact_id
             return result
-        except BaseException as exc:
-            import asyncio as _asyncio
-            if isinstance(exc, _asyncio.CancelledError):
-                raise
+        except Exception as exc:
             logger.warning(
                 "agent_runtime.publish_artifacts failed to write summary artifact",
                 exc_info=True,
