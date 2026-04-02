@@ -419,7 +419,7 @@ async def test_long_running_launch_is_visible_through_observability_routes(
         workspaceMode="shared",
     )
 
-    record, process, cleanup_paths = await launcher.launch(
+    record, process, cleanup_paths, deferred_cleanup_paths = await launcher.launch(
         run_id=run_id,
         workflow_id="mm:wf-live-1",
         request=request,
@@ -435,6 +435,7 @@ async def test_long_running_launch_is_visible_through_observability_routes(
             process=process,
             timeout_seconds=30,
             cleanup_paths=cleanup_paths,
+            deferred_cleanup_paths=deferred_cleanup_paths,
         )
     )
 

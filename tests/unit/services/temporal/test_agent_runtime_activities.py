@@ -109,6 +109,26 @@ async def test_cancel_handles_supervisor_error_gracefully():
 
 
 @pytest.mark.asyncio
+async def test_cancel_cleanup_failures_do_not_raise():
+    mock_supervisor = MagicMock()
+    mock_supervisor.cancel = AsyncMock()
+    mock_launcher = MagicMock()
+    mock_launcher.cleanup_run_support = AsyncMock(
+        side_effect=RuntimeError("cleanup failed")
+    )
+
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=mock_launcher,
+        run_supervisor=mock_supervisor,
+    )
+
+    await activities.agent_runtime_cancel({"agent_kind": "managed", "run_id": "run-2"})
+
+    mock_supervisor.cancel.assert_awaited_once_with("run-2")
+    mock_launcher.cleanup_run_support.assert_awaited_once_with("run-2")
+
+
+@pytest.mark.asyncio
 async def test_cancel_without_supervisor_updates_store():
     mock_store = MagicMock()
 
@@ -157,7 +177,7 @@ async def test_cancel_handles_none_request():
 async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch():
     mock_launcher = MagicMock()
     mock_launcher.launch = AsyncMock(
-        return_value=(SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"}), None, [])
+        return_value=(SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"}), None, [], [])
     )
     mock_launcher.cleanup_run_support = AsyncMock()
     mock_supervisor = MagicMock()
@@ -207,7 +227,7 @@ async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
     launch_record = SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"})
     mock_launcher = MagicMock()
     mock_launcher.launch = AsyncMock(
-        return_value=(launch_record, _FakeProcess(), ["/tmp/cleanup.file"])
+        return_value=(launch_record, _FakeProcess(), [], ["/tmp/cleanup.file"])
     )
     mock_launcher.cleanup_run_support = AsyncMock()
     mock_supervisor = MagicMock()
@@ -253,3 +273,52 @@ async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
         deferred_cleanup_paths=["/tmp/cleanup.file"],
     )
     mock_launcher.cleanup_run_support.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_launch_cleans_deferred_support_when_supervisor_fails():
+    class _FakeProcess:
+        stdout = None
+        stderr = None
+
+    launch_record = SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"})
+    mock_launcher = MagicMock()
+    mock_launcher.launch = AsyncMock(
+        return_value=(launch_record, _FakeProcess(), [], ["/tmp/cleanup.file"])
+    )
+    mock_launcher.cleanup_run_support = AsyncMock()
+    mock_supervisor = MagicMock()
+    mock_supervisor.supervise = AsyncMock(side_effect=RuntimeError("supervise failed"))
+
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=mock_launcher,
+        run_supervisor=mock_supervisor,
+    )
+
+    await activities.agent_runtime_launch(
+        {
+            "run_id": "run-cleanup-2",
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex_cli",
+                "executionProfileRef": "default",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+            },
+            "profile": {
+                "runtimeId": "codex_cli",
+                "commandTemplate": ["codex", "exec"],
+                "defaultModel": "gpt-5.3-codex",
+                "defaultEffort": "medium",
+                "defaultTimeoutSeconds": 3600,
+                "workspaceMode": "tempdir",
+                "envOverrides": {},
+            },
+        }
+    )
+
+    [task] = list(activities._supervision_tasks)
+    await task
+
+    mock_launcher.cleanup_run_support.assert_awaited_once_with("run-cleanup-2")
+    mock_supervisor.cleanup_deferred_run_files.assert_called_once_with("run-cleanup-2")

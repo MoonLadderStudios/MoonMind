@@ -2035,7 +2035,7 @@ class TemporalAgentRuntimeActivities:
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 
         # Idempotency check handled in launcher
-        record, process, cleanup_paths = await self._run_launcher.launch(
+        record, process, cleanup_paths, deferred_cleanup_paths = await self._run_launcher.launch(
             run_id=run_id,
             workflow_id=workflow_id or None,
             request=request,
@@ -2066,13 +2066,14 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     process=process,
                     timeout_seconds=timeout_seconds,
-                    cleanup_paths=None,
-                    deferred_cleanup_paths=cleanup_paths,
+                    cleanup_paths=cleanup_paths or None,
+                    deferred_cleanup_paths=deferred_cleanup_paths or None,
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception:
                 logger.error("Supervisor failed for run %s", run_id, exc_info=True)
+                await self._cleanup_managed_run_publish_support_best_effort(run_id)
                 return
 
 
@@ -2186,6 +2187,34 @@ class TemporalAgentRuntimeActivities:
             "agent_runtime request must be a mapping or run_id string"
         )
 
+    async def _cleanup_run_support_best_effort(self, run_id: str) -> None:
+        if self._run_launcher is None:
+            return
+        try:
+            await self._run_launcher.cleanup_run_support(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to cleanup run launcher support for run_id %s",
+                run_id,
+                exc_info=True,
+            )
+
+    def _cleanup_deferred_run_files_best_effort(self, run_id: str) -> None:
+        if self._run_supervisor is None:
+            return
+        try:
+            self._run_supervisor.cleanup_deferred_run_files(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to cleanup deferred run files for run_id %s",
+                run_id,
+                exc_info=True,
+            )
+
+    async def _cleanup_managed_run_publish_support_best_effort(self, run_id: str) -> None:
+        await self._cleanup_run_support_best_effort(run_id)
+        self._cleanup_deferred_run_files_best_effort(run_id)
+
     async def agent_runtime_status(
         self,
         request: Any = None,
@@ -2277,8 +2306,8 @@ class TemporalAgentRuntimeActivities:
             workflow_id=f"agent_runtime_activity:{run_id}",
             run_store=self._run_store,
         )
-        result = await adapter.fetch_result(run_id)
         try:
+            result = await adapter.fetch_result(run_id)
             record = self._run_store.load(run_id)
             if record is not None:
                 result = self._maybe_enrich_gemini_failure_result(
@@ -2308,10 +2337,7 @@ class TemporalAgentRuntimeActivities:
 
             return result_dict
         finally:
-            if self._run_launcher is not None:
-                await self._run_launcher.cleanup_run_support(run_id)
-            if self._run_supervisor is not None:
-                self._run_supervisor.cleanup_deferred_run_files(run_id)
+            await self._cleanup_managed_run_publish_support_best_effort(run_id)
 
     @staticmethod
     def _is_generic_process_exit_summary(summary: str | None) -> bool:
@@ -2758,35 +2784,22 @@ class TemporalAgentRuntimeActivities:
             agent_kind, run_id = "unknown", str(request)
 
         if agent_kind == "managed":
-            if self._run_supervisor is not None:
-                try:
-                    await self._run_supervisor.cancel(str(run_id))
-                    if self._run_launcher is not None:
-                        await self._run_launcher.cleanup_run_support(str(run_id))
+            run_id = str(run_id)
+            try:
+                if self._run_supervisor is not None:
+                    await self._run_supervisor.cancel(run_id)
                     logger.info(
                         "agent_runtime.cancel completed for managed run %s",
                         run_id,
                     )
-                    return
-                except Exception:
+                else:
                     logger.warning(
-                        "agent_runtime.cancel failed for managed run %s",
+                        "agent_runtime.cancel called for managed run %s but no supervisor configured",
                         run_id,
-                        exc_info=True,
                     )
-                    if self._run_launcher is not None:
-                        await self._run_launcher.cleanup_run_support(str(run_id))
-                    return
-            else:
-                logger.warning(
-                    "agent_runtime.cancel called for managed run %s but no supervisor configured",
-                    run_id,
-                )
-                # Fall through to store-based cancel if possible
-                if self._run_store is not None:
-                    try:
+                    if self._run_store is not None:
                         self._run_store.update_status(
-                            str(run_id),
+                            run_id,
                             "canceled",
                             finished_at=datetime.now(tz=UTC),
                             error_message="Canceled via activity (no supervisor)",
@@ -2795,15 +2808,15 @@ class TemporalAgentRuntimeActivities:
                             "agent_runtime.cancel marked run %s as cancelled in store",
                             run_id,
                         )
-                        if self._run_launcher is not None:
-                            await self._run_launcher.cleanup_run_support(str(run_id))
-                    except Exception:
-                        logger.warning(
-                            "agent_runtime.cancel store update failed for %s",
-                            run_id,
-                            exc_info=True,
-                        )
-                return
+            except Exception:
+                logger.warning(
+                    "agent_runtime.cancel failed for managed run %s",
+                    run_id,
+                    exc_info=True,
+                )
+            finally:
+                await self._cleanup_run_support_best_effort(run_id)
+            return
 
         # External or unknown agent kind
         logger.warning(

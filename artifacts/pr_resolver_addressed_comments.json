@@ -1,18 +1,57 @@
 [
-  {"id": 4173667316, "disposition": "not-applicable", "rationale": "Qodo summary comment only; actionable items were tracked and handled in the specific review threads below."},
-  {"id": 4173667395, "disposition": "not-applicable", "rationale": "Qodo rollup duplicates the individual review comments that were classified separately in this ledger."},
-  {"id": 3025237771, "disposition": "addressed", "rationale": "describe_execution now offloads managed-run store lookup with asyncio.to_thread in api_service/api/routers/executions.py."},
-  {"id": 3025237791, "disposition": "addressed", "rationale": "The async execution route now moves blocking managed-run filesystem lookup off the event loop via asyncio.to_thread."},
-  {"id": 3025237797, "disposition": "addressed", "rationale": "ManagedRunStore now reads JSON with explicit UTF-8 encoding in moonmind/workflows/temporal/runtime/store.py."},
-  {"id": 3025237807, "disposition": "addressed", "rationale": "Store tests now use timedelta arithmetic instead of replace(microsecond=...) to avoid overflow flakes."},
-  {"id": 3025237810, "disposition": "addressed", "rationale": "The second timestamp-overflow test case was updated to use timedelta-based increments as well."},
-  {"id": 3025237824, "disposition": "addressed", "rationale": "The long-running live-logs integration test now uses a larger timeout budget and clearer spool-file timeout diagnostics."},
-  {"id": 3025237828, "disposition": "not-applicable", "rationale": "This is a follow-up refactor suggestion, not a correctness blocker for the live-logs PR. The current fix set kept the review scoped to blocking issues."},
-  {"id": 4047689197, "disposition": "not-applicable", "rationale": "Copilot review summary only; the actionable file-level comments were classified individually."},
-  {"id": 3025241411, "disposition": "addressed", "rationale": "api_service/api/routers/executions.py now imports asyncio for the to_thread call used in describe_execution."},
-  {"id": 4047692558, "disposition": "not-applicable", "rationale": "Gemini review summary only; the actionable review comments were handled individually."},
-  {"id": 3025241417, "disposition": "addressed", "rationale": "The managed-run taskRunId fallback is now executed through asyncio.to_thread to avoid blocking the API event loop."},
-  {"id": 3025241420, "disposition": "addressed", "rationale": "The task-detail missing-binding state logic now returns binding_missing for progressed running executions and waiting_for_launch for pre-launch ones."},
-  {"id": 3025243150, "disposition": "addressed", "rationale": "MoonMind.AgentRun now gates the parent-workflow binding payload behind a Temporal patch id and adds coverage for the new-path binding plus legacy replay-safe branch presence."},
-  {"id": 3025243152, "disposition": "addressed", "rationale": "ManagedRuntimeLauncher now normalizes nullable workflow_id with str(workflow_id or '').strip() or None and includes a regression test for None."}
+  {
+    "id": 4048475305,
+    "disposition": "addressed",
+    "rationale": "Refactored managed cancel/fetch cleanup into shared best-effort helpers so cleanup is centralized instead of duplicated across branches."
+  },
+  {
+    "id": 3026010089,
+    "disposition": "addressed",
+    "rationale": "Managed cancel cleanup now runs through a single try/finally path, eliminating duplicated cleanup_run_support calls."
+  },
+  {
+    "id": 4174804984,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot walkthrough only; it did not request a concrete additional change."
+  },
+  {
+    "id": 4174805058,
+    "disposition": "addressed",
+    "rationale": "Split immediate materializer cleanup from deferred publish support cleanup and added failure-safe cleanup coverage for the fetch-result path."
+  },
+  {
+    "id": 3026026696,
+    "disposition": "addressed",
+    "rationale": "Launcher now returns immediate cleanup paths separately from deferred publish support so secret-bearing materializer files are deleted on process exit."
+  },
+  {
+    "id": 3026026704,
+    "disposition": "addressed",
+    "rationale": "Supervisor failure in the background task now triggers best-effort launcher/deferred cleanup before returning."
+  },
+  {
+    "id": 3026026714,
+    "disposition": "addressed",
+    "rationale": "adapter.fetch_result(run_id) now executes inside the try/finally so cleanup still runs when result fetching raises."
+  },
+  {
+    "id": 3026026726,
+    "disposition": "addressed",
+    "rationale": "Fetch-result cleanup is now best-effort and cannot override a successful activity result; both cleanup steps are attempted independently."
+  },
+  {
+    "id": 3026026740,
+    "disposition": "addressed",
+    "rationale": "agent_runtime_cancel treats launcher cleanup as best-effort, so cleanup failures no longer mask cancel behavior."
+  },
+  {
+    "id": 3026026756,
+    "disposition": "addressed",
+    "rationale": "The fetch-result regression suite now asserts cleanup has not run before the publish step, covering the ordering regression directly."
+  },
+  {
+    "id": 4048491601,
+    "disposition": "not-applicable",
+    "rationale": "Informational PR overview only; no additional action item beyond the inline comments."
+  }
 ]
