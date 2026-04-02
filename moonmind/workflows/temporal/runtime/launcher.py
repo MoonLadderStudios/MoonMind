@@ -29,6 +29,8 @@ _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 logger = logging.getLogger(__name__)
 
+_LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
+
 
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
@@ -516,6 +518,28 @@ class ManagedRuntimeLauncher:
         """Stop any in-memory runtime support services for the run."""
         await self._github_auth_brokers.stop(run_id)
 
+    def _reset_live_log_spool(self, workspace_path: str | None) -> None:
+        """Remove any stale workspace spool file before a new managed run starts."""
+
+        if not workspace_path:
+            return
+
+        spool_path = Path(workspace_path) / _LIVE_LOG_SPOOL_FILENAME
+        try:
+            if spool_path.is_dir():
+                logger.warning(
+                    "Skipping live log spool reset because %s is a directory",
+                    spool_path,
+                )
+                return
+            spool_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning(
+                "Failed to reset live log spool at %s",
+                spool_path,
+                exc_info=True,
+            )
+
     def build_command(
         self,
         profile: ManagedRuntimeProfile,
@@ -619,6 +643,7 @@ class ManagedRuntimeLauncher:
         profile.command_template = mat_cmd
 
         cmd = self.build_command(profile, request, strategy=strategy)
+        self._reset_live_log_spool(resolved_workspace_path)
         
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex).

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -117,15 +118,56 @@ def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]
             yield payload
 
 
-def _spool_contains_renderable_chunks(workspace_path: str | None) -> bool:
-    return next(_iter_spool_chunks(workspace_path), None) is not None
+def _coerce_utc_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
-def _iter_spool_rendered_content(workspace_path: str | None) -> Iterator[bytes]:
+def _iter_run_spool_chunks(
+    workspace_path: str | None,
+    *,
+    started_at: object = None,
+) -> Iterator[dict[str, object]]:
+    run_started_at = _coerce_utc_datetime(started_at)
+    for payload in _iter_spool_chunks(workspace_path):
+        if run_started_at is not None:
+            chunk_started_at = _coerce_utc_datetime(payload.get("timestamp"))
+            if chunk_started_at is not None and chunk_started_at < run_started_at:
+                continue
+        yield payload
+
+
+def _spool_contains_renderable_chunks(
+    workspace_path: str | None,
+    *,
+    started_at: object = None,
+) -> bool:
+    return next(
+        _iter_run_spool_chunks(workspace_path, started_at=started_at),
+        None,
+    ) is not None
+
+
+def _iter_spool_rendered_content(
+    workspace_path: str | None,
+    *,
+    started_at: object = None,
+) -> Iterator[bytes]:
     current_stream: str | None = None
     emitted_any = False
 
-    for chunk in _iter_spool_chunks(workspace_path):
+    for chunk in _iter_run_spool_chunks(workspace_path, started_at=started_at):
         stream = str(chunk.get("stream", "system"))
         text = str(chunk.get("text", ""))
         if stream != current_stream:
@@ -368,8 +410,15 @@ async def stream_task_run_log(
         if target_ref is None:
             artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
             workspace_path = getattr(record, "workspace_path", None)
-            if _spool_contains_renderable_chunks(workspace_path):
-                content_stream = _iter_spool_rendered_content(workspace_path)
+            started_at = getattr(record, "started_at", None)
+            if _spool_contains_renderable_chunks(
+                workspace_path,
+                started_at=started_at,
+            ):
+                content_stream = _iter_spool_rendered_content(
+                    workspace_path,
+                    started_at=started_at,
+                )
                 order_source = "spool"
             else:
                 stdout_path = _resolve_safe_artifact_path(
