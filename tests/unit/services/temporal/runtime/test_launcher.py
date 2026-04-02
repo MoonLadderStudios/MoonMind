@@ -151,7 +151,7 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process, _cleanup = await launcher.launch(
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
@@ -172,7 +172,7 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process, _cleanup = await launcher.launch(
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-none-workflow",
         workflow_id=None,
         request=request,
@@ -224,7 +224,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _cleanup = await launcher.launch(
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-passthrough-1", request=request, profile=profile
     )
     await process.wait()
@@ -443,13 +443,13 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     request = _make_request()
 
     # First launch
-    record, process, _cleanup = await launcher.launch(
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
 
     # Second launch with same run_id returns existing record (idempotent)
-    existing, exc_process, _cleanup2 = await launcher.launch(
+    existing, exc_process, _cleanup2, _deferred_cleanup2 = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     assert existing.run_id == "run-1"
@@ -481,7 +481,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _cleanup = await launcher.launch(
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-2",
         request=request,
         profile=profile,
@@ -565,7 +565,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    record, process, _cleanup = await launcher.launch(
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="workspace-run-1",
         request=request,
         profile=profile,
@@ -654,7 +654,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _cleanup = await launcher.launch(
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="workspace-run-existing-branch",
         request=request,
         profile=profile,
@@ -775,7 +775,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _cleanup = await launcher.launch(
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-env-layer-1", request=request, profile=profile
     )
     await process.wait()
@@ -850,7 +850,7 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         _fake_resolve,
     )
 
-    _record, process, _cleanup = await launcher.launch(
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-managed-api-key-1", request=request, profile=profile
     )
     await process.wait()
@@ -927,7 +927,7 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
         _fake_resolve,
     )
 
-    _record, process, _cleanup = await launcher.launch(
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-github-secret-ref-1", request=request, profile=profile
     )
     await process.wait()
@@ -1005,7 +1005,7 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     )
     request = _make_request()
 
-    _, _, _ = await launcher.launch(
+    _, _, _, _ = await launcher.launch(
         run_id="root-run",
         request=request,
         profile=profile,

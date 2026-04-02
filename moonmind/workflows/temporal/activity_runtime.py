@@ -2033,7 +2033,7 @@ class TemporalAgentRuntimeActivities:
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 
         # Idempotency check handled in launcher
-        record, process, cleanup_paths = await self._run_launcher.launch(
+        record, process, cleanup_paths, deferred_cleanup_paths = await self._run_launcher.launch(
             run_id=run_id,
             workflow_id=workflow_id or None,
             request=request,
@@ -2064,15 +2064,15 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     process=process,
                     timeout_seconds=timeout_seconds,
-                    cleanup_paths=cleanup_paths,
+                    cleanup_paths=cleanup_paths or None,
+                    deferred_cleanup_paths=deferred_cleanup_paths or None,
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception:
                 logger.error("Supervisor failed for run %s", run_id, exc_info=True)
+                await self._cleanup_managed_run_publish_support_best_effort(run_id)
                 return
-            finally:
-                await self._run_launcher.cleanup_run_support(run_id)
 
 
 
@@ -2084,15 +2084,15 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_publish_artifacts(
         self,
-        result: AgentRunResult | None = None,
+        result: Any = None,
         /,
-    ) -> AgentRunResult | None:
+    ) -> Any:
         """Publish agent-run outputs back to artifact storage.
 
         Writes a summary JSON artifact containing the run result metadata
         (output refs, summary, failure class) via the artifact service.
-        Returns a typed ``AgentRunResult`` enriched with a ``diagnostics_ref``
-        pointing to the persisted summary artifact.
+        Returns the result enriched with a ``diagnostics_ref`` pointing to
+        the persisted summary artifact.
         """
         if result is None:
             return result
@@ -2103,13 +2103,21 @@ class TemporalAgentRuntimeActivities:
             )
             return result
 
+        # Normalize to dict
+        if isinstance(result, Mapping):
+            result_dict = dict(result)
+        elif hasattr(result, "model_dump"):
+            result_dict = result.model_dump(mode="json", by_alias=True)
+        else:
+            result_dict = {"raw": str(result)}
+
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
-            "summary": result.summary or "",
-            "output_refs": list(result.output_refs or []),
-            "failure_class": result.failure_class,
-            "provider_error_code": result.provider_error_code,
-            "metrics": dict(result.metrics or {}),
+            "summary": result_dict.get("summary") or result_dict.get("raw", ""),
+            "output_refs": result_dict.get("output_refs") or result_dict.get("outputRefs") or [],
+            "failure_class": result_dict.get("failure_class") or result_dict.get("failureClass"),
+            "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
+            "metrics": result_dict.get("metrics") or {},
         }
 
         try:
@@ -2123,9 +2131,20 @@ class TemporalAgentRuntimeActivities:
                     "labels": ["agent_runtime", "result"],
                 },
             )
-            # Enrich result with the diagnostics ref using model_copy to
-            # preserve the typed contract (no in-place mutation).
-            return result.model_copy(update={"diagnostics_ref": summary_ref.artifact_id})
+            # Enrich result with the diagnostics ref
+            if isinstance(result, Mapping):
+                enriched = dict(result)
+                if "diagnosticsRef" in enriched:
+                    enriched["diagnosticsRef"] = summary_ref.artifact_id
+                else:
+                    enriched["diagnostics_ref"] = summary_ref.artifact_id
+                # Remove snake_case if alias is present to avoid Pydantic validation errors
+                if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
+                    del enriched["diagnostics_ref"]
+                return enriched
+            if hasattr(result, "diagnostics_ref"):
+                result.diagnostics_ref = summary_ref.artifact_id
+            return result
         except Exception:
             logger.warning(
                 "agent_runtime.publish_artifacts failed to write summary artifact",
@@ -2166,6 +2185,34 @@ class TemporalAgentRuntimeActivities:
             "agent_runtime request must be a mapping or run_id string"
         )
 
+    async def _cleanup_run_support_best_effort(self, run_id: str) -> None:
+        if self._run_launcher is None:
+            return
+        try:
+            await self._run_launcher.cleanup_run_support(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to cleanup run launcher support for run_id %s",
+                run_id,
+                exc_info=True,
+            )
+
+    def _cleanup_deferred_run_files_best_effort(self, run_id: str) -> None:
+        if self._run_supervisor is None:
+            return
+        try:
+            self._run_supervisor.cleanup_deferred_run_files(run_id)
+        except Exception:
+            logger.warning(
+                "Failed to cleanup deferred run files for run_id %s",
+                run_id,
+                exc_info=True,
+            )
+
+    async def _cleanup_managed_run_publish_support_best_effort(self, run_id: str) -> None:
+        await self._cleanup_run_support_best_effort(run_id)
+        self._cleanup_deferred_run_files_best_effort(run_id)
+
     async def agent_runtime_status(
         self,
         request: Any = None,
@@ -2183,28 +2230,28 @@ class TemporalAgentRuntimeActivities:
             )
         run_id, agent_id = self._agent_runtime_request_identifiers(request)
 
-        try:
-            from temporalio import activity
+        from temporalio import activity
+        if activity.in_activity():
             activity.heartbeat(f"Checking status for run_id {run_id}")
-        except RuntimeError:
-            pass  # Not in an activity context (e.g. unit tests)
 
         record = self._run_store.load(run_id)
         if record is None:
-            return AgentRunStatus(
+            status = AgentRunStatus(
                 runId=run_id,
                 agentKind="managed",
                 agentId=agent_id,
                 status="running",
             )
+            return status
 
-        return AgentRunStatus(
+        status = AgentRunStatus(
             runId=record.run_id,
             agentKind="managed",
             agentId=record.agent_id or agent_id,
             status=record.status,
             metadata={"runtimeId": record.runtime_id},
         )
+        return status
 
     async def agent_runtime_fetch_result(
         self,
@@ -2217,9 +2264,6 @@ class TemporalAgentRuntimeActivities:
         agent's work branch to the remote **before** returning the result.
         This is deterministic (the workflow awaits this activity) instead of
         the old fire-and-forget pattern that could silently lose pushes.
-
-        Returns a canonical typed ``AgentRunResult`` directly so workflow code
-        receives a well-typed Pydantic model rather than a plain dict.
         """
         if self._run_store is None:
             raise TemporalActivityRuntimeError(
@@ -2266,35 +2310,40 @@ class TemporalAgentRuntimeActivities:
             workflow_id=f"agent_runtime_activity:{run_id}",
             run_store=self._run_store,
         )
-        result = await adapter.fetch_result(run_id)
-        record = self._run_store.load(run_id)
-        if record is not None:
-            result = self._maybe_enrich_gemini_failure_result(
-                result=result,
-                record=record,
-            )
+        try:
+            result = await adapter.fetch_result(run_id)
+            record = self._run_store.load(run_id)
+            if record is not None:
+                result = self._maybe_enrich_gemini_failure_result(
+                    result=result,
+                    record=record,
+                )
 
-        # Build merged metadata from the typed result, then enrich with
-        # push/PR URL info using model_copy to preserve the typed contract.
-        meta = dict(result.metadata or {})
+            # Build merged metadata from the typed result, then enrich with
+            # push/PR URL info using model_copy to preserve the typed contract.
+            meta = dict(result.metadata or {})
 
-        # Push the agent's work branch if publish_mode requires it and the
-        # agent completed without failure.
-        if result.failure_class is None and publish_mode != "none":
-            push_info = await self._push_workspace_branch(run_id, target_branch=target_branch)
-            meta.update(push_info)
+            # Push the agent's work branch if publish_mode requires it and the
+            # agent completed without failure.
+            if result.failure_class is None and publish_mode != "none":
+                push_info = await self._push_workspace_branch(
+                    run_id, target_branch=target_branch
+                )
+                meta.update(push_info)
 
-        # Enrich result with pull_request_url detected from workspace git
-        # state (CLI stdout may not always surface PR URLs reliably).
-        if result.failure_class is None:
-            pr_url = self._detect_pr_url_from_workspace(run_id)
-            if pr_url:
-                meta["pull_request_url"] = pr_url
+            # Enrich result with pull_request_url detected from workspace git
+            # state (CLI stdout may not always surface PR URLs reliably).
+            if result.failure_class is None:
+                pr_url = self._detect_pr_url_from_workspace(run_id)
+                if pr_url:
+                    meta["pull_request_url"] = pr_url
 
-        if meta:
-            result = result.model_copy(update={"metadata": meta})
+            if meta:
+                result = result.model_copy(update={"metadata": meta})
 
-        return result
+            return result
+        finally:
+            await self._cleanup_managed_run_publish_support_best_effort(run_id)
 
     @staticmethod
     def _is_generic_process_exit_summary(summary: str | None) -> bool:
@@ -2731,9 +2780,6 @@ class TemporalAgentRuntimeActivities:
         For managed runs, delegates to the ``ManagedRunSupervisor`` to
         terminate the subprocess.  For external runs, logs the request
         (external cancel must go through the provider adapter).
-
-        Returns a canonical typed ``AgentRunStatus`` with ``status='canceled'``
-        in all cases (matching the external provider cancel contract).
         """
         if isinstance(request, Mapping):
             agent_kind = request.get("agent_kind", "unknown")
@@ -2746,36 +2792,29 @@ class TemporalAgentRuntimeActivities:
         run_id_str = str(run_id)
 
         if agent_kind == "managed":
-            if self._run_supervisor is not None:
-                try:
-                    await self._run_supervisor.cancel(run_id_str)
-                    logger.info(
-                        "agent_runtime.cancel completed for managed run %s",
-                        run_id,
-                    )
-                except Exception as exc:
-                    import asyncio as _asyncio
-                    if isinstance(exc, _asyncio.CancelledError):
-                        raise
-                    logger.warning(
-                        "agent_runtime.cancel failed for managed run %s",
-                        run_id,
-                        exc_info=True,
-                    )
-                return AgentRunStatus(
-                    runId=run_id_str,
-                    agentKind="managed",
-                    agentId="managed",
-                    status="canceled",
-                )
-            else:
-                logger.warning(
-                    "agent_runtime.cancel called for managed run %s but no supervisor configured",
-                    run_id,
-                )
-                # Fall through to store-based cancel if possible
-                if self._run_store is not None:
+            try:
+                if self._run_supervisor is not None:
                     try:
+                        await self._run_supervisor.cancel(run_id_str)
+                        logger.info(
+                            "agent_runtime.cancel completed for managed run %s",
+                            run_id_str,
+                        )
+                    except Exception as exc:
+                        import asyncio as _asyncio
+                        if isinstance(exc, _asyncio.CancelledError):
+                            raise
+                        logger.warning(
+                            "agent_runtime.cancel supervisor failed for managed run %s",
+                            run_id_str,
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "agent_runtime.cancel called for managed run %s but no supervisor configured",
+                        run_id_str,
+                    )
+                    if self._run_store is not None:
                         self._run_store.update_status(
                             run_id_str,
                             "canceled",
@@ -2784,26 +2823,29 @@ class TemporalAgentRuntimeActivities:
                         )
                         logger.info(
                             "agent_runtime.cancel marked run %s as cancelled in store",
-                            run_id,
+                            run_id_str,
                         )
-                    except Exception:
-                        logger.warning(
-                            "agent_runtime.cancel store update failed for %s",
-                            run_id,
-                            exc_info=True,
-                        )
-                return AgentRunStatus(
-                    runId=run_id_str,
-                    agentKind="managed",
-                    agentId="managed",
-                    status="canceled",
+            except Exception:
+                logger.warning(
+                    "agent_runtime.cancel store update failed for managed run %s",
+                    run_id_str,
+                    exc_info=True,
                 )
+            finally:
+                await self._cleanup_run_support_best_effort(run_id_str)
 
-        # External or unknown agent kind — best-effort cancel status
+            return AgentRunStatus(
+                runId=run_id_str,
+                agentKind="managed",
+                agentId="managed",
+                status="canceled",
+            )
+
+        # External or unknown agent kind
         logger.warning(
             "agent_runtime.cancel called for %s/%s — external cancel requires provider adapter",
             agent_kind,
-            run_id,
+            run_id_str,
         )
         return AgentRunStatus(
             runId=run_id_str,
