@@ -1,7 +1,14 @@
 {
-  "_DataTable-fd6LTmDa.js": {
-    "file": "assets/DataTable-fd6LTmDa.js",
+  "_DataTable-BJ66qh3g.js": {
+    "file": "assets/DataTable-BJ66qh3g.js",
     "name": "DataTable",
+    "imports": [
+      "_mountPage-BvSZ22Ix.js"
+    ]
+  },
+  "_PageSizeSelector-CL2UEVG7.js": {
+    "file": "assets/PageSizeSelector-CL2UEVG7.js",
+    "name": "PageSizeSelector",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
     ]
@@ -24,6 +31,10 @@
       "assets/mountPage-BLUzMZxz.css"
     ]
   },
+  "_navigation-CRIwDiyQ.js": {
+    "file": "assets/navigation-CRIwDiyQ.js",
+    "name": "navigation"
+  },
   "entrypoints/dashboard-alerts.tsx": {
     "file": "assets/dashboard-alerts-6MU7gdmG.js",
     "name": "dashboard-alerts",
@@ -34,42 +45,44 @@
     ]
   },
   "entrypoints/manifest-submit.tsx": {
-    "file": "assets/manifest-submit-CbmgULta.js",
+    "file": "assets/manifest-submit-B2UEe1s0.js",
     "name": "manifest-submit",
     "src": "entrypoints/manifest-submit.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-BvSZ22Ix.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_navigation-CRIwDiyQ.js"
     ]
   },
   "entrypoints/manifests.tsx": {
-    "file": "assets/manifests-IgOVbR9u.js",
+    "file": "assets/manifests-DsEm60NG.js",
     "name": "manifests",
     "src": "entrypoints/manifests.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_DataTable-fd6LTmDa.js"
+      "_DataTable-BJ66qh3g.js"
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-D0D7sNq6.js",
+    "file": "assets/proposals-ClGz-DgU.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
+      "_PageSizeSelector-CL2UEVG7.js",
       "_executionStatusPillClasses-B9JE78AA.js"
     ]
   },
   "entrypoints/schedules.tsx": {
-    "file": "assets/schedules-Bvr10tyH.js",
+    "file": "assets/schedules-B-cxQAvi.js",
     "name": "schedules",
     "src": "entrypoints/schedules.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_DataTable-fd6LTmDa.js"
+      "_DataTable-BJ66qh3g.js"
     ]
   },
   "entrypoints/settings.tsx": {
@@ -82,7 +95,7 @@
     ]
   },
   "entrypoints/skills.tsx": {
-    "file": "assets/skills-CDj-f6Yx.js",
+    "file": "assets/skills-CX8GBUd9.js",
     "name": "skills",
     "src": "entrypoints/skills.tsx",
     "isEntry": true,
@@ -91,12 +104,13 @@
     ]
   },
   "entrypoints/task-create.tsx": {
-    "file": "assets/task-create-CVtC_LpR.js",
+    "file": "assets/task-create-B1ZuH24H.js",
     "name": "task-create",
     "src": "entrypoints/task-create.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-BvSZ22Ix.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_navigation-CRIwDiyQ.js"
     ]
   },
   "entrypoints/task-detail.tsx": {
@@ -119,12 +133,13 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-A7CvROe_.js",
+    "file": "assets/tasks-list-C2T2Y8Db.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
+      "_PageSizeSelector-CL2UEVG7.js",
       "_executionStatusPillClasses-B9JE78AA.js"
     ]
   }

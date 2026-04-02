@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1.4
-ARG CODEX_CLI_VERSION=0.104.0
-ARG AGENT_KIT_VERSION=0.4.0
-ARG CLAUDE_CLI_VERSION=2.1.50
-# Build the shared runtime image with Codex/Spec Kit/Gemini/Claude CLIs
+ARG CODEX_CLI_VERSION=latest
+ARG CLAUDE_CLI_VERSION=latest
+# Build the shared runtime image with Codex/Gemini/Claude CLIs
 # by default so the API and Temporal workers can run from the
 # same image tag. Disable selectively in test-only or constrained builds.
 ARG INSTALL_CODEX_CLI=true
@@ -20,7 +19,6 @@ FROM node:22-bookworm AS tooling-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ARG CODEX_CLI_VERSION
-ARG AGENT_KIT_VERSION
 ARG INSTALL_CODEX_CLI=true
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG INSTALL_TEST_DEPS
@@ -55,7 +53,7 @@ COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local
 # binaries there can detect it during the npm install process.
 RUN mkdir -p /usr/local/vendor
 
-# Install Codex and Spec Kit CLIs globally so binaries can be copied to the
+# Install Codex, Gemini, and Claude CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # If the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
@@ -66,9 +64,6 @@ RUN mkdir -p /usr/local/vendor
 RUN /bin/bash -euo pipefail <<'BASH'
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
-esac
-case "${AGENT_KIT_VERSION}" in
-    (""|*[!0-9A-Za-z._-]*) echo "Invalid AGENT_KIT_VERSION: ${AGENT_KIT_VERSION}" >&2; exit 1;;
 esac
 case "${GEMINI_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid GEMINI_CLI_VERSION: ${GEMINI_CLI_VERSION}" >&2; exit 1;;
@@ -83,14 +78,6 @@ stub_codex() {
                    "echo \"codex stub: package unavailable during image build\" >&2" \
                    "exit 0" > /usr/local/bin/codex
     chmod +x /usr/local/bin/codex
-}
-stub_agentkit() {
-    mkdir -p /usr/local/lib/node_modules/@githubnext/spec-kit
-    printf 'spec-kit stub installed during fallback.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
-    printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"spec-kit stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/agentkit
-    chmod +x /usr/local/bin/agentkit
 }
 stub_gemini() {
     mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
@@ -110,9 +97,8 @@ stub_claude() {
 }
 
 if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
-    echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2
+    echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex install and using stubs" >&2
     stub_codex
-    stub_agentkit
     npm cache clean --force || true
 else
     # Try installing Codex from public registry (OpenAI)
@@ -135,11 +121,6 @@ EOF
         chmod +x /usr/local/bin/codex
     fi
 
-    # Try installing Spec Kit (Github Next) - might fail if private/no token
-    if ! npm install -g @githubnext/spec-kit@"${AGENT_KIT_VERSION}"; then
-        echo "Warning: Failed to install Spec Kit; installing stub" >&2
-        stub_agentkit
-    fi
 fi
 
 if [ "${INSTALL_GEMINI_CLI}" != "true" ]; then
@@ -180,10 +161,6 @@ if [ ! -f /usr/local/lib/node_modules/@openai/codex/LICENSE ]; then
     mkdir -p /usr/local/lib/node_modules/@openai/codex
     touch /usr/local/lib/node_modules/@openai/codex/LICENSE
 fi
-if [ ! -f /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE ]; then
-    mkdir -p /usr/local/lib/node_modules/@githubnext/spec-kit
-    touch /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
-fi
 if [ ! -f /usr/local/lib/node_modules/@google/gemini-cli/LICENSE ]; then
     mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
     touch /usr/local/lib/node_modules/@google/gemini-cli/LICENSE
@@ -196,7 +173,7 @@ fi
 npm cache clean --force || true
 BASH
 
-# Fail the build early if the Codex or Spec Kit CLI binaries are missing or
+# Fail the build early if the Codex CLI binary is missing or
 # broken. Pre-create ~/.gemini so `gemini --version` can persist registry state.
 RUN mkdir -p "${HOME}/.gemini" \
     && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
@@ -205,7 +182,6 @@ RUN mkdir -p "${HOME}/.gemini" \
         fi; \
     fi \
     && codex --version \
-    && agentkit --version \
     && gemini --version \
     && claude --version
 
@@ -237,7 +213,6 @@ RUN rm -rf /build/api_service/static/task_dashboard/dist \
 FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
-ARG AGENT_KIT_VERSION
 ARG INSTALL_TEST_DEPS
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
@@ -250,31 +225,28 @@ ARG INSTALL_CLAUDE_CLI
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
-    AGENT_KIT_VERSION=${AGENT_KIT_VERSION} \
     PATH="/usr/local/bin:${PATH}"
 
 WORKDIR /app
 
-# Copy Codex and Spec Kit artifacts from the tooling builder so the runtime
+# Copy Codex and Gemini/Claude artifacts from the tooling builder so the runtime
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
-COPY --from=tooling-builder /usr/local/bin/agentkit /usr/local/bin/agentkit
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
-RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/spec-kit /usr/share/licenses/gemini-cli /usr/share/licenses/claude-cli
+RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/gemini-cli /usr/share/licenses/claude-cli
 
 COPY --from=tooling-builder /usr/local/lib/node_modules/@openai/codex/LICENSE /usr/share/licenses/codex-cli/LICENSE
-COPY --from=tooling-builder /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE /usr/share/licenses/spec-kit/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@google/gemini-cli/LICENSE /usr/share/licenses/gemini-cli/LICENSE
 COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE /usr/share/licenses/claude-cli/LICENSE
 
 # Install system packages required by the Python service along with the
-# Node.js runtime libraries that the bundled Codex and Spec Kit binaries rely on.
+# Node.js runtime libraries that the bundled CLIs rely on.
 RUN apt-get update && \
     apt-get install -y \
         build-essential \
@@ -310,7 +282,7 @@ RUN apt-get update && \
 # CLIs remain executable from its PATH.
 # Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude && \
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/gemini /usr/local/bin/claude && \
     mkdir -p /home/app/.gemini && chown app:app /home/app/.gemini
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
@@ -318,7 +290,7 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
     HOME=/home/app \
     PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
-    sh -c 'codex --version && agentkit --version && gemini --version && claude --version && rg --version'
+    sh -c 'codex --version && gemini --version && claude --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals and managed sandbox defaults. The template is merged into the

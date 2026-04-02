@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -85,9 +85,10 @@ async def test_fetch_result_maps_gemini_quota_report_to_integration_error(
     activities = TemporalAgentRuntimeActivities(run_store=run_store)
     result = await activities.agent_runtime_fetch_result({"run_id": "gemini-run-1"})
 
-    assert result["failureClass"] == "integration_error"
-    assert result["providerErrorCode"] == "quota_exhausted"
-    assert "exhausted your capacity" in result["summary"].lower()
+    assert isinstance(result, AgentRunResult)
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "quota_exhausted"
+    assert "exhausted your capacity" in result.summary.lower()
 
 
 async def test_fetch_result_returns_structured_provider_error_from_record(
@@ -116,9 +117,10 @@ async def test_fetch_result_returns_structured_provider_error_from_record(
         {"run_id": "gemini-run-structured-429"}
     )
 
-    assert result["failureClass"] == "integration_error"
-    assert result["providerErrorCode"] == "429"
-    assert result["summary"] == "Gemini API rate limit exceeded"
+    assert isinstance(result, AgentRunResult)
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.summary == "Gemini API rate limit exceeded"
 
 
 async def test_fetch_result_keeps_non_generic_failure_summary(
@@ -159,9 +161,10 @@ async def test_fetch_result_keeps_non_generic_failure_summary(
     activities = TemporalAgentRuntimeActivities(run_store=run_store)
     result = await activities.agent_runtime_fetch_result({"run_id": "gemini-run-2"})
 
-    assert result["failureClass"] == "execution_error"
-    assert result["summary"] == "pr-resolver reported blocked state"
-    assert result["providerErrorCode"] is None
+    assert isinstance(result, AgentRunResult)
+    assert result.failure_class == "execution_error"
+    assert result.summary == "pr-resolver reported blocked state"
+    assert result.provider_error_code is None
 
 
 async def test_fetch_result_maps_gemini_rate_limit_to_429(
@@ -202,9 +205,10 @@ async def test_fetch_result_maps_gemini_rate_limit_to_429(
     activities = TemporalAgentRuntimeActivities(run_store=run_store)
     result = await activities.agent_runtime_fetch_result({"run_id": "gemini-run-429"})
 
-    assert result["failureClass"] == "integration_error"
-    assert result["providerErrorCode"] == "429"
-    assert "rate limit" in result["summary"].lower()
+    assert isinstance(result, AgentRunResult)
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert "rate limit" in result.summary.lower()
 
 
 async def test_fetch_result_prefers_report_with_matching_run_workspace(
@@ -271,8 +275,9 @@ async def test_fetch_result_prefers_report_with_matching_run_workspace(
     activities = TemporalAgentRuntimeActivities(run_store=run_store)
     result = await activities.agent_runtime_fetch_result({"run_id": run_id})
 
-    assert result["failureClass"] == "integration_error"
-    assert result["providerErrorCode"] == "quota_exhausted"
+    assert isinstance(result, AgentRunResult)
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "quota_exhausted"
 
 
 async def test_fetch_result_uses_diagnostics_when_report_missing(
@@ -327,6 +332,7 @@ async def test_fetch_result_uses_diagnostics_when_report_missing(
     activities = TemporalAgentRuntimeActivities(run_store=run_store)
     result = await activities.agent_runtime_fetch_result({"run_id": run_id})
 
-    assert result["failureClass"] == "integration_error"
-    assert result["providerErrorCode"] == "429"
-    assert "429" in result["summary"]
+    assert isinstance(result, AgentRunResult)
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert "429" in result.summary
