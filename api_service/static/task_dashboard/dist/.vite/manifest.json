@@ -24,6 +24,10 @@
       "assets/mountPage-BLUzMZxz.css"
     ]
   },
+  "_navigation-Bw6-xYF1.js": {
+    "file": "assets/navigation-Bw6-xYF1.js",
+    "name": "navigation"
+  },
   "entrypoints/dashboard-alerts.tsx": {
     "file": "assets/dashboard-alerts-6MU7gdmG.js",
     "name": "dashboard-alerts",
@@ -34,12 +38,13 @@
     ]
   },
   "entrypoints/manifest-submit.tsx": {
-    "file": "assets/manifest-submit-CbmgULta.js",
+    "file": "assets/manifest-submit-BGVhrrVZ.js",
     "name": "manifest-submit",
     "src": "entrypoints/manifest-submit.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-BvSZ22Ix.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_navigation-Bw6-xYF1.js"
     ]
   },
   "entrypoints/manifests.tsx": {
@@ -82,7 +87,7 @@
     ]
   },
   "entrypoints/skills.tsx": {
-    "file": "assets/skills-CDj-f6Yx.js",
+    "file": "assets/skills-CX8GBUd9.js",
     "name": "skills",
     "src": "entrypoints/skills.tsx",
     "isEntry": true,
@@ -91,12 +96,13 @@
     ]
   },
   "entrypoints/task-create.tsx": {
-    "file": "assets/task-create-CVtC_LpR.js",
+    "file": "assets/task-create-hY2r1MRI.js",
     "name": "task-create",
     "src": "entrypoints/task-create.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-BvSZ22Ix.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_navigation-Bw6-xYF1.js"
     ]
   },
   "entrypoints/task-detail.tsx": {
