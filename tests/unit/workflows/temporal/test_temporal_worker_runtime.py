@@ -8,6 +8,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
     MoonMindRun,
+    _build_agent_runtime_deps,
     _enforce_codex_config_for_managed_fleet,
     _build_runtime_planner,
     _build_runtime_activities,
@@ -165,6 +166,22 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
             parameters={},
             snapshot=snapshot,
         )
+
+
+def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+
+    store, supervisor, _launcher = _build_agent_runtime_deps()
+
+    assert store.store_root == tmp_path / "managed_runs"
+    assert supervisor._log_streamer._storage._root == artifacts_root
+    assert artifacts_root.is_dir()
+    assert not (artifacts_root / "artifacts").exists()
 
 
 def _make_snapshot():

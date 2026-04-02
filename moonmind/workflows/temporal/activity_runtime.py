@@ -24,6 +24,7 @@ from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
+from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -127,10 +128,7 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 
 
 def _managed_runtime_artifact_root() -> Path:
-    root = Path(os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"))
-    if root.name != "artifacts":
-        root = root / "artifacts"
-    return root
+    return managed_runtime_artifact_root()
 
 
 class TemporalActivityRuntimeError(RuntimeError):
