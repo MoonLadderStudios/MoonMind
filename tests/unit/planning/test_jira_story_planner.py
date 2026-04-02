@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from requests.exceptions import HTTPError
@@ -139,8 +139,10 @@ def test_call_llm_invalid_json(monkeypatch):
     with patch(
         "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
     ):
-        with pytest.raises(JiraStoryPlannerError):
+        with pytest.raises(JiraStoryPlannerError) as excinfo:
             planner._call_llm(prompt)
+
+    assert "Invalid JSON from LLM" in str(excinfo.value)
 
 
 def test_call_llm_json_code_block(monkeypatch):
@@ -439,3 +441,78 @@ def test_plan_logs_metrics(monkeypatch, caplog):
     assert record.prompt_hash == expected_hash
     assert record.created_issue_keys == ["PROJ-1"]
     assert isinstance(record.latency, float)
+
+
+def test_call_llm_story_validation_error(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+    prompt = planner._build_prompt("plan")
+
+    # Valid JSON array, but objects miss required 'description' and 'issue_type'
+    response_text = '[{"summary": "Missing fields"}]'
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = _mock_gemini_response(response_text)
+
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
+        with pytest.raises(JiraStoryPlannerError) as excinfo:
+            planner._call_llm(prompt)
+
+    assert "Story validation failed" in str(excinfo.value)
+
+
+def test_call_llm_no_text(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+    prompt = planner._build_prompt("plan")
+
+    mock_model = MagicMock()
+    # Mock response with candidates but no text parts
+    response_mock = MagicMock()
+    candidate_mock = MagicMock()
+    candidate_mock.content.parts = []
+    response_mock.candidates = [candidate_mock]
+    # Ensure hasattr(response, "text") is False or it returns None
+    del response_mock.text
+
+    mock_model.generate_content.return_value = response_mock
+
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
+        with pytest.raises(JiraStoryPlannerError) as excinfo:
+            planner._call_llm(prompt)
+
+    assert "LLM returned no text content" in str(excinfo.value)
+
+
+def test_call_llm_extraction_error(monkeypatch):
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
+    monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
+    monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+
+    planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
+    prompt = planner._build_prompt("plan")
+
+    mock_model = MagicMock()
+    # Mock response that raises an exception when candidates is accessed
+    response_mock = MagicMock()
+    type(response_mock).candidates = PropertyMock(
+        side_effect=Exception("Extraction failed")
+    )
+    mock_model.generate_content.return_value = response_mock
+
+    with patch(
+        "moonmind.planning.jira_story_planner.get_google_model", return_value=mock_model
+    ):
+        with pytest.raises(JiraStoryPlannerError) as excinfo:
+            planner._call_llm(prompt)
+
+    assert "Invalid LLM response format" in str(excinfo.value)
