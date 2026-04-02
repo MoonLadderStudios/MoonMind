@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -199,7 +199,7 @@ async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch(
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_launch_cleans_launcher_support_after_supervision():
+async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
     class _FakeProcess:
         stdout = None
         stderr = None
@@ -245,5 +245,11 @@ async def test_agent_runtime_launch_cleans_launcher_support_after_supervision():
     [task] = list(activities._supervision_tasks)
     await task
 
-    mock_supervisor.supervise.assert_awaited_once()
-    mock_launcher.cleanup_run_support.assert_awaited_once_with("run-cleanup-1")
+    mock_supervisor.supervise.assert_awaited_once_with(
+        run_id="run-cleanup-1",
+        process=ANY,
+        timeout_seconds=3600,
+        cleanup_paths=None,
+        deferred_cleanup_paths=["/tmp/cleanup.file"],
+    )
+    mock_launcher.cleanup_run_support.assert_not_awaited()
