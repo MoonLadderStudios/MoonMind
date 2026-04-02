@@ -294,6 +294,8 @@ async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
     await process.wait()
 
     assert not spool_path.exists()
+
+
 def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_path):
     env = {"GITHUB_TOKEN": "ghp_testtoken123", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(

@@ -644,7 +644,7 @@ class ManagedRuntimeLauncher:
 
         cmd = self.build_command(profile, request, strategy=strategy)
         self._reset_live_log_spool(resolved_workspace_path)
-        
+
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex).
         if resolved_workspace_path is not None and strategy is not None:

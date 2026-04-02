@@ -122,13 +122,11 @@ def _coerce_utc_datetime(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
-    text = str(value or "").strip()
-    if not text:
+    if not value:
         return None
 
-    normalized = text.replace("Z", "+00:00")
     try:
-        parsed = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(str(value).strip())
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
@@ -140,11 +138,13 @@ def _iter_run_spool_chunks(
     started_at: object = None,
 ) -> Iterator[dict[str, object]]:
     run_started_at = _coerce_utc_datetime(started_at)
+    filtering = run_started_at is not None
     for payload in _iter_spool_chunks(workspace_path):
-        if run_started_at is not None:
+        if filtering:
             chunk_started_at = _coerce_utc_datetime(payload.get("timestamp"))
             if chunk_started_at is not None and chunk_started_at < run_started_at:
                 continue
+            filtering = False
         yield payload
 
 
