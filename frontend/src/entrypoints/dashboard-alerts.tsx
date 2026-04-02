@@ -9,10 +9,21 @@ interface SecretsListResponse {
   items: SecretMetadata[];
 }
 
+interface ProviderProfileResponse {
+  profile_id: string;
+  credential_source: string;
+  enabled: boolean;
+}
+
 /** Slugs stored in Managed Secrets (often match env var names after import). */
 const PROVIDER_KEY_SLUGS = [
-  'ANTHROPIC_API_KEY',
+  'GOOGLE_API_KEY',
+  'GEMINI_API_KEY',
   'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CODEX_API_KEY',
   'MINIMAX_API_KEY',
 ] as const;
 
@@ -23,8 +34,8 @@ function hasActiveSlug(items: SecretMetadata[], slugs: readonly string[]): boole
 }
 
 function DashboardAlerts() {
-  const { data: secretsData, isLoading } = useQuery<SecretsListResponse>({
-    queryKey: ['secrets-alerts'],
+  const { data: secretsData, isLoading: secretsLoading } = useQuery<SecretsListResponse>({
+    queryKey: ['secrets'],
     queryFn: async () => {
       const response = await fetch('/api/v1/secrets', {
         headers: { Accept: 'application/json' },
@@ -36,11 +47,34 @@ function DashboardAlerts() {
     },
   });
 
-  if (isLoading || !secretsData) {
+  const { data: profilesData } = useQuery<ProviderProfileResponse[]>({
+    queryKey: ['provider-profiles'],
+    queryFn: async () => {
+      const response = await fetch('/api/v1/provider-profiles', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch provider profiles');
+      }
+      return response.json();
+    },
+  });
+
+  if (secretsLoading || !secretsData) {
     return null;
   }
 
-  const hasProviderKey = hasActiveSlug(secretsData.items, PROVIDER_KEY_SLUGS);
+  const hasProviderSecret = secretsData.items.some(
+    (s) =>
+      s.status === 'active' &&
+      (PROVIDER_KEY_SLUGS as readonly string[]).includes(s.slug)
+  );
+
+  const hasOauthVolume = profilesData
+    ? profilesData.some((p) => p.enabled && p.credential_source === 'oauth_volume')
+    : false;
+
+  const hasProviderKey = hasProviderSecret || hasOauthVolume;
   const hasGithub = hasActiveSlug(secretsData.items, GITHUB_TOKEN_SLUGS);
 
   const needsAiKey = !hasProviderKey;

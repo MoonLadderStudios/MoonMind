@@ -6254,6 +6254,7 @@
               ? { requiredCapabilities: taskSkillRequiredCapabilities }
               : {}),
           },
+          ...(normalizedTaskTool.name && normalizedTaskTool.name !== "auto" ? { skills: [normalizedTaskTool.name] } : {}),
           ...(Object.keys(skillArgs).length > 0 ? { inputs: skillArgs } : {}),
           proposeTasks,
           runtime: {

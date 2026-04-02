@@ -254,7 +254,7 @@ def _ensure_submit_enabled() -> None:
 
 
 def _serialize_execution(
-    record, *, include_artifact_refs: bool = True
+    record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
 ) -> ExecutionModel:
     temporal_status = "running"
     close_status = _enum_value(record.close_status)
@@ -364,6 +364,12 @@ def _serialize_execution(
     task_payload = params.get("task")
     if not isinstance(task_payload, dict):
         task_payload = {}
+        
+    resolved_skillset_ref = str(params.get("resolvedSkillsetRef") or params.get("resolved_skillset_ref") or "").strip() or None
+    
+    # task_skills can be passed explicitly via task payload
+    raw_task_skills = task_payload.get("skills")
+    task_skills = raw_task_skills if isinstance(raw_task_skills, list) else None
 
     git_payload = task_payload.get("git")
     if not isinstance(git_payload, dict):
@@ -423,6 +429,8 @@ def _serialize_execution(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+    is_admin = _is_execution_admin(user)
+
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,
@@ -461,6 +469,8 @@ def _serialize_execution(
         target_branch=target_branch,
         repository=repository,
         publish_mode=publish_mode,
+        resolved_skillset_ref=resolved_skillset_ref,
+        task_skills=task_skills,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),
@@ -468,15 +478,15 @@ def _serialize_execution(
             manifest_status,
             "manifest_artifact_ref",
             getattr(record, "manifest_ref", None),
-        ),
+        ) if is_admin else None,
         plan_artifact_ref=_manifest_attr(manifest_status, "plan_artifact_ref"),
         summary_artifact_ref=_manifest_attr(manifest_status, "summary_artifact_ref"),
         run_index_artifact_ref=_manifest_attr(
             manifest_status, "run_index_artifact_ref"
-        ),
+        ) if is_admin else None,
         checkpoint_artifact_ref=_manifest_attr(
             manifest_status, "checkpoint_artifact_ref"
-        ),
+        ) if is_admin else None,
         requested_by=_manifest_attr(manifest_status, "requested_by"),
         execution_policy=_manifest_attr(manifest_status, "execution_policy"),
         phase=_manifest_attr(manifest_status, "phase"),
@@ -1052,7 +1062,7 @@ async def _create_execution_from_task_request(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 async def _create_execution_from_manifest_request(
@@ -1107,7 +1117,7 @@ async def _create_execution_from_manifest_request(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 async def _get_owned_execution(
@@ -1399,7 +1409,7 @@ async def create_execution(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.get("", response_model=ExecutionListResponse)
@@ -1512,7 +1522,7 @@ async def list_executions(
                     if not hasattr(record_obj, "updated_at"):
                         record_obj.updated_at = datetime.now(UTC)
                     items.append(
-                        _serialize_execution(record_obj, include_artifact_refs=False)
+                        _serialize_execution(record_obj, include_artifact_refs=False, user=user)
                     )
 
             new_token_str = None
@@ -1576,7 +1586,7 @@ async def list_executions(
 
     return ExecutionListResponse(
         items=[
-            _serialize_execution(item, include_artifact_refs=False)
+            _serialize_execution(item, include_artifact_refs=False, user=user)
             for item in result.items
         ],
         next_page_token=result.next_page_token,
@@ -1658,7 +1668,7 @@ async def describe_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
-    execution = _serialize_execution(record)
+    execution = _serialize_execution(record, user=user)
     if not execution.task_run_id:
         task_run_id = await asyncio.to_thread(
             _resolve_task_run_id_from_managed_store,
@@ -1722,7 +1732,7 @@ async def update_execution(
 
     return UpdateExecutionResponse(
         **update_result,
-        execution=_serialize_execution(refreshed_record),
+        execution=_serialize_execution(refreshed_record, user=user),
         refresh=ExecutionRefreshEnvelope(
             patched_execution=True,
             list_stale=True,
@@ -1821,7 +1831,7 @@ async def configure_integration_monitoring(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1858,7 +1868,7 @@ async def record_integration_poll(
             },
         ) from exc
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1899,7 +1909,7 @@ async def signal_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1931,7 +1941,7 @@ async def cancel_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -1987,7 +1997,7 @@ async def reschedule_execution(
         await service._session.commit()
         await service._session.refresh(record)
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 @router.post(
@@ -2063,7 +2073,7 @@ async def rerun_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
-    return _serialize_execution(record)
+    return _serialize_execution(record, user=user)
 
 
 __all__ = ["router"]
