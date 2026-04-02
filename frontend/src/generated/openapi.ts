@@ -1389,6 +1389,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/manifests/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Manifest Submit Route
+         * @description Serve the React-powered manifest submit page.
+         */
+        get: operations["task_manifest_submit_route_tasks_manifests_new_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/tasks-list": {
         parameters: {
             query?: never;
@@ -1461,6 +1481,66 @@ export interface paths {
          * @description Serve the React-powered settings page.
          */
         get: operations["task_settings_route_tasks_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Create Route
+         * @description Serve the React-powered task create page.
+         */
+        get: operations["task_create_route_tasks_new_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Create Alias Route
+         * @description Serve the React-powered task create alias page.
+         */
+        get: operations["task_create_alias_route_tasks_create_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Skills Route
+         * @description Serve the React-powered skills page.
+         */
+        get: operations["task_skills_route_tasks_skills_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8109,6 +8189,26 @@ export interface operations {
             };
         };
     };
+    task_manifest_submit_route_tasks_manifests_new_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
     task_tasks_list_route_tasks_tasks_list_get: {
         parameters: {
             query?: never;
@@ -8170,6 +8270,66 @@ export interface operations {
         };
     };
     task_settings_route_tasks_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_create_route_tasks_new_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_create_alias_route_tasks_create_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    task_skills_route_tasks_skills_get: {
         parameters: {
             query?: never;
             header?: never;
