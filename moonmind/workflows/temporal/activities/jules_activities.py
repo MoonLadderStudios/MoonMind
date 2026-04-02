@@ -329,7 +329,18 @@ async def jules_get_auto_answer_config_activity(_args: list | None = None) -> di
 @activity.defn(name="repo.create_pr")
 async def repo_create_pr_activity(payload: dict) -> dict:
     """Create a PR via GitHub REST API (provider-agnostic)."""
+    import re
     from pydantic import BaseModel, Field, ValidationError
+
+    _SECRET_PATTERNS = [
+        re.compile(r"ghp_[A-Za-z0-9_]{36,}"),
+        re.compile(r"github_pat_[A-Za-z0-9_]{22,}"),
+        re.compile(r"AIza[A-Za-z0-9_\\-]{35}"),
+        re.compile(r"ATATT[A-Za-z0-9_\\-]{10,}"),
+        re.compile(r"AKIA[A-Z0-9]{16}"),
+        re.compile(r"sk-[A-Za-z0-9]{20,}"),
+        re.compile(r"-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY-----"),
+    ]
 
     class _CreatePRPayload(BaseModel):
         repo: str = Field(min_length=1)
@@ -344,6 +355,10 @@ async def repo_create_pr_activity(payload: dict) -> dict:
         raise ValueError(
             f"Invalid payload for repo_create_pr_activity: {exc}"
         ) from exc
+
+    for pattern in _SECRET_PATTERNS:
+        if pattern.search(validated.title) or pattern.search(validated.body):
+            raise ValueError("PR title or body contains potential secret material. Request blocked.")
 
     from moonmind.workflows.adapters.github_service import GitHubService
 

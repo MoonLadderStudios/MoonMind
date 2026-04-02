@@ -1583,24 +1583,30 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_status(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
-        external_id = payload
+        run_id = payload
         if isinstance(payload, Mapping):
-            external_id = payload.get("external_id") or payload.get("run_id")
-        return await jules_status_activity(external_id)
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.status requires a non-empty run_id string")
+        return await jules_status_activity(run_id.strip())
 
     async def integration_jules_fetch_result(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
-        external_id = payload
+        run_id = payload
         if isinstance(payload, Mapping):
-            external_id = payload.get("external_id") or payload.get("run_id")
-        return await jules_fetch_result_activity(external_id)
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.fetch_result requires a non-empty run_id string")
+        return await jules_fetch_result_activity(run_id.strip())
 
     async def integration_jules_cancel(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_cancel_activity
-        external_id = payload
+        run_id = payload
         if isinstance(payload, Mapping):
-            external_id = payload.get("external_id") or payload.get("run_id")
-        return await jules_cancel_activity(external_id)
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.cancel requires a non-empty run_id string")
+        return await jules_cancel_activity(run_id.strip())
 
     async def repo_create_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
@@ -1619,7 +1625,9 @@ class TemporalIntegrationActivities:
         session_id = payload
         if isinstance(payload, Mapping):
             session_id = payload.get("session_id") or payload.get("sessionId")
-        return await jules_list_activities_activity(session_id)
+        if not session_id or not isinstance(session_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.list_activities requires a non-empty session_id string")
+        return await jules_list_activities_activity(session_id.strip())
 
     async def integration_jules_answer_question(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_answer_question_activity
@@ -1648,28 +1656,47 @@ class TemporalIntegrationActivities:
 
     async def integration_codex_cloud_status(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_status_activity
-        external_id = payload
+        run_id = payload
         if isinstance(payload, Mapping):
-            external_id = payload.get("external_id") or payload.get("run_id")
-        return await codex_cloud_status_activity(external_id)
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.codex_cloud.status requires a non-empty run_id string")
+        return await codex_cloud_status_activity(run_id.strip())
 
     async def integration_codex_cloud_fetch_result(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_fetch_result_activity
-        external_id = payload
+        run_id = payload
         if isinstance(payload, Mapping):
-            external_id = payload.get("external_id") or payload.get("run_id")
-        return await codex_cloud_fetch_result_activity(external_id)
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.codex_cloud.fetch_result requires a non-empty run_id string")
+        return await codex_cloud_fetch_result_activity(run_id.strip())
 
     async def integration_codex_cloud_cancel(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_cancel_activity
-        external_id = payload
+        run_id = payload
         if isinstance(payload, Mapping):
-            external_id = payload.get("external_id") or payload.get("run_id")
-        return await codex_cloud_cancel_activity(external_id)
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.codex_cloud.cancel requires a non-empty run_id string")
+        return await codex_cloud_cancel_activity(run_id.strip())
 
     async def integration_openclaw_execute(self, request, /, **kwargs):
         from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
-        return await openclaw_execute_activity(request)
+        from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+        request_payload = request
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(request, activity_type="integration.openclaw.execute")
+            if not request_payload:
+                raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
+            req = AgentExecutionRequest.model_validate(request_payload)
+        elif isinstance(request, AgentExecutionRequest):
+            req = request
+        else:
+            raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
+            
+        return await openclaw_execute_activity(req)
 
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""
