@@ -236,7 +236,7 @@ class TestCodexCliProperties:
 
     def test_default_command_template(self) -> None:
         assert CodexCliStrategy().default_command_template == [
-            "codex", "exec", "--full-auto",
+            "codex", "exec", "--sandbox", "danger-full-access",
         ]
 
     def test_default_auth_mode(self) -> None:

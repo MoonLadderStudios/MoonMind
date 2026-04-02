@@ -28,7 +28,7 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
 
     @property
     def default_command_template(self) -> list[str]:
-        return ["codex", "exec", "--full-auto"]
+        return ["codex", "exec", "--sandbox", "danger-full-access"]
 
     def build_command(
         self,
