@@ -47,16 +47,18 @@ All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-
 - Preserve cancel semantics during the dependency wait: canceling the dependent run cancels only that run, not the prerequisites.
 - Pause/resume semantics: check `self._paused` after the dependency wait resolves, consistent with the existing pause gate pattern.
 
-## Phase 3 - Finish Summary And Read Model Metadata
+## Phase 3 - Finish Summary And Read Model Metadata ✅ COMPLETE
 
-- Extend `reports/run_summary.json` with dependency outcome data:
-  - declared dependency IDs
-  - whether a dependency wait occurred
-  - dependency wait duration
-  - resolution outcome (success vs dependency failure)
-  - failed dependency ID when applicable
-- Include dependency presence metadata in workflow memo (for list/detail surfaces).
-- Ensure execution serialization can surface dependency metadata cleanly for the detail page.
+- [x] Extend `reports/run_summary.json` with dependency outcome data:
+  - [x] declared dependency IDs
+  - [x] whether a dependency wait occurred
+  - [x] dependency wait duration
+  - [x] resolution outcome (success vs dependency failure)
+  - [x] failed dependency ID when applicable
+- [x] Include dependency presence metadata in workflow memo (for list/detail surfaces).
+- [x] Ensure execution serialization can surface dependency metadata cleanly for the detail page.
+
+All Phase 3 requirements verified complete as of 2026-03-29.
 
 ## Phase 4 - Mission Control Create And Detail UX
 
@@ -74,4 +76,3 @@ All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-
 - Verify Continue-As-New behavior preserves dependency context.
 - Confirm list and detail pages remain performant with dependency metadata present.
 - Document operator guidance for dependency limits, failure semantics, and known v1 non-goals.
-

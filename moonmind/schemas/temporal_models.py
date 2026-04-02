@@ -411,6 +411,14 @@ class ExecutionModel(BaseModel):
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+    has_dependencies: bool = Field(False, alias="hasDependencies")
+    dependency_wait_occurred: bool = Field(False, alias="dependencyWaitOccurred")
+    dependency_wait_duration_ms: Optional[int] = Field(
+        None, alias="dependencyWaitDurationMs"
+    )
+    dependency_resolution: Optional[str] = Field(None, alias="dependencyResolution")
+    failed_dependency_id: Optional[str] = Field(None, alias="failedDependencyId")
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
