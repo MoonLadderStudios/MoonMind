@@ -2753,7 +2753,10 @@ class TemporalAgentRuntimeActivities:
                         "agent_runtime.cancel completed for managed run %s",
                         run_id,
                     )
-                except Exception:
+                except Exception as exc:
+                    import asyncio as _asyncio
+                    if isinstance(exc, _asyncio.CancelledError):
+                        raise
                     logger.warning(
                         "agent_runtime.cancel failed for managed run %s",
                         run_id,

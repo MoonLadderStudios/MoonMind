@@ -1279,7 +1279,9 @@ class MoonMindAgentRun:
 
                 )
 
-                if isinstance(enriched_result, dict):
+                if isinstance(enriched_result, AgentRunResult):
+                    self.final_result = enriched_result
+                elif isinstance(enriched_result, dict):
                     # Handle duplicate aliases from older history events
                     if "diagnosticsRef" in enriched_result and "diagnostics_ref" in enriched_result:
                         del enriched_result["diagnostics_ref"]

@@ -7,11 +7,9 @@ agent_runtime_publish_artifacts return typed Pydantic contracts
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -262,3 +260,57 @@ async def test_fetch_result_missing_run_id_raises_error(tmp_path: Path) -> None:
 
     with pytest.raises(TemporalActivityRuntimeError):
         await activities.agent_runtime_fetch_result({"agent_id": "codex_cli"})
+
+
+# ---------------------------------------------------------------------------
+# Boundary & Serialization tests
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta
+from temporalio import workflow
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+
+@workflow.defn(name="AgentRuntimeStatusBoundaryTest")
+class AgentRuntimeStatusBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> AgentRunStatus:
+        return await workflow.execute_activity(
+            "agent_runtime.status",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+async def test_agent_runtime_status_temporal_boundary(tmp_path: Path) -> None:
+    """Validate Temporal boundary serialization for typed Pydantic return matches contract."""
+    from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="boundary-1", status="completed")
+
+    activities_impl = TemporalAgentRuntimeActivities(run_store=store)
+    from temporalio import activity
+
+    @activity.defn(name="agent_runtime.status")
+    async def _agent_runtime_status_wrapper(request: dict) -> AgentRunStatus:
+        return await activities_impl.agent_runtime_status(request)
+
+    handlers = [_agent_runtime_status_wrapper]
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue",
+            workflows=[AgentRuntimeStatusBoundaryTest],
+            activities=handlers,
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimeStatusBoundaryTest.run,
+                {"run_id": "boundary-1", "agent_id": "codex_cli"},
+                id="boundary-test-status",
+                task_queue="boundary-test-queue",
+            )
+
+            assert isinstance(result, AgentRunStatus)
+            assert result.status == "completed"

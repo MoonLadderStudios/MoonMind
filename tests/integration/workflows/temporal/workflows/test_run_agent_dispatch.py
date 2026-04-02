@@ -32,18 +32,24 @@ from moonmind.workflows.temporal.activity_catalog import (
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.schemas.agent_runtime_models import AgentRunResult, AgentRunStatus
 
 
 # ── Mock activities ──
 
 @activity.defn(name="agent_runtime.publish_artifacts")
-async def mock_publish_artifacts(result: dict) -> dict:
+async def mock_publish_artifacts(result: AgentRunResult | None = None) -> AgentRunResult | None:
     return result
 
 
 @activity.defn(name="agent_runtime.cancel")
-async def mock_cancel(request: dict) -> None:
-    pass
+async def mock_cancel(request: dict) -> AgentRunStatus:
+    return AgentRunStatus(
+        runId=request.get("run_id", "unknown"),
+        agentKind=request.get("agent_kind", "unknown"),
+        agentId="managed",
+        status="canceled"
+    )
 
 
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
