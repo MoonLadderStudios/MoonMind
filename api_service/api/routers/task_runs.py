@@ -30,10 +30,12 @@ def _get_agent_runtime_store_root() -> str:
     )
 
 def _get_agent_runtime_artifacts_root() -> str:
-    return os.path.join(
-        os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"),
-        "artifacts",
+    root = Path(
+        os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs")
     )
+    if root.name != "artifacts":
+        root = root / "artifacts"
+    return str(root)
 
 
 def _enum_value(value: object) -> object:
