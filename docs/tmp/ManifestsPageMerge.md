@@ -149,4 +149,4 @@ The nicest behavior would be:
 
 If you want the most elegant version for MoonMind as it exists today, I would choose **#1**.
 
-If you want, I can next turn this into a concrete redesign plan for the Mission Control manifests page, including suggested sections, control layout, and the specific route/component changes in `dashboard.js`.
+If you want, I can next turn this into a concrete redesign plan for the Mission Control manifests page, including suggested sections, control layout, and the specific route/component changes in the React entrypoints.

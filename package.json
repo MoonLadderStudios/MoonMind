@@ -10,10 +10,7 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dashboard:css": "node ./node_modules/tailwindcss/lib/cli.js -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css",
-    "dashboard:css:min": "node ./node_modules/tailwindcss/lib/cli.js -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --minify",
-    "dashboard:css:watch": "node ./node_modules/tailwindcss/lib/cli.js -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --watch",
-    "generate": "npm run dashboard:css:min && npm run api:types",
+    "generate": "npm run ui:clean-dist && npm run ui:build && npm run api:types",
     "ui:dev": "vite --config frontend/vite.config.ts",
     "ui:clean-dist": "node -e \"require('node:fs').rmSync(require('node:path').join('api_service','static','task_dashboard','dist'),{recursive:true,force:true})\"",
     "ui:build": "vite build --config frontend/vite.config.ts",

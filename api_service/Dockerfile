@@ -223,15 +223,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -
 COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
 COPY frontend/ /build/frontend/
 # Tailwind scans these paths for class usage (see tailwind.config.cjs content[])
-COPY api_service/templates/task_dashboard.html /build/api_service/templates/task_dashboard.html
+COPY api_service/templates/react_dashboard.html /build/api_service/templates/react_dashboard.html
 COPY api_service/templates/_navigation.html /build/api_service/templates/_navigation.html
-COPY api_service/static/task_dashboard/ /build/api_service/static/task_dashboard/
 COPY tools/verify_vite_manifest.py /build/tools/verify_vite_manifest.py
 
 # Always rebuild dist from source; do not rely on committed chunks surviving partial copies.
 RUN rm -rf /build/api_service/static/task_dashboard/dist \
     && npm ci \
-    && npm run dashboard:css:min \
     && npm run ui:build \
     && python3 /build/tools/verify_vite_manifest.py
 

@@ -91,18 +91,10 @@ if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then
 fi
 
 if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
-if command -v node >/dev/null 2>&1; then
-    for test_file in \
-        tests/task_dashboard/test_task_layouts.js \
-        tests/task_dashboard/test_temporal_dashboard.js \
-        tests/task_dashboard/test_submit_runtime.js \
-        tests/task_dashboard/test_temporal_detail_runtime.js \
-        tests/task_dashboard/test_temporal_run_history.js
-    do
-        node "$test_file"
-    done
+if command -v npm >/dev/null 2>&1; then
+    npm run ui:test
 else
-    echo "Error: node is required to run dashboard runtime tests." >&2
+    echo "Error: npm is required to run frontend unit tests." >&2
     exit 127
 fi
 fi

@@ -1,11 +1,11 @@
 # TypeScript System
 
-Status: **Design Draft**
+Status: **Active**
 Owners: MoonMind Engineering
 Last Updated: 2026-03-28
 Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/TaskArchitecture.md`
 
-**Implementation tracking:** [`docs/tmp/remaining-work/UI-TypeScriptSystem.md`](../tmp/remaining-work/UI-TypeScriptSystem.md)
+**Implementation tracking:** [`docs/tmp/063-UI-TypeScriptSystem.md`](../tmp/063-UI-TypeScriptSystem.md)
 
 ---
 
@@ -346,8 +346,8 @@ Recommended scripts:
 ### Authoritative builds (correctness)
 
 - **CI** first runs **`npm run generate:check`** to verify checked-in generated assets are synchronized, then runs typecheck, lint, frontend tests, **`npm run ui:clean-dist`**, **`npm run ui:build`**, and **`npm run ui:verify-manifest`**. The workflow may upload **`mission-control-dist`** as an artifact.
-- **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, production Tailwind (`dashboard:css:min`), `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
-- **Shared `dashboard.css`:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** (and templates / static dashboard JS) so utility classes used in React are emitted even when **`dist/` does not exist yet**—which is exactly the state during `dashboard:css:min` in Docker. Do not rely on scanning Vite output alone. See [`docs/UI/MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2.
+- **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
+- **Shared Mission Control CSS:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** plus the shared React shell templates so the frontend-owned stylesheet imported from `frontend/src/styles/mission-control.css` emits the utilities used by React routes even when **`dist/` does not exist yet**. Do not rely on scanning Vite output alone. See [`docs/UI/MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2.
 - **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the task dashboard router instead of an empty content area.
 
 ### Committed `dist/` (convenience only)
@@ -465,7 +465,7 @@ Canonical flow:
 
 This reduces backend/frontend drift for core payloads.
 
-`npm run generate:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` and `api_service/static/task_dashboard/dashboard.css` stay synchronized with their sources.
+`npm run generate:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` and the checked-in Mission Control `dist/` output stay synchronized with their sources.
 
 ## 10.4 Domain Types vs Generated Types
 
@@ -656,7 +656,7 @@ If multiple pages need boot payloads, add a small backend helper layer so payloa
 
 ## 15. Incremental adoption
 
-The frontend moves toward **Vite + React + TypeScript** under FastAPI-owned routes: foundation tooling (`frontend/`), a first typed vertical slice, then feature-by-feature migration, then retirement of the monolithic dashboard entrypoint. Sequencing, constraints, and page-level status belong in [`docs/tmp/remaining-work/UI-TypeScriptSystem.md`](../tmp/remaining-work/UI-TypeScriptSystem.md).
+Mission Control now runs on **Vite + React + TypeScript** under FastAPI-owned routes. Historical migration sequencing and completion status live in [`docs/tmp/063-UI-TypeScriptSystem.md`](../tmp/063-UI-TypeScriptSystem.md).
 
 ---
 
