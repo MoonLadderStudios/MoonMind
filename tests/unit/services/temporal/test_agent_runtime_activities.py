@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
@@ -27,9 +28,10 @@ async def test_publish_artifacts_returns_none_result_unchanged():
 @pytest.mark.asyncio
 async def test_publish_artifacts_no_service_returns_unchanged():
     activities = TemporalAgentRuntimeActivities(artifact_service=None)
-    input_result = {"summary": "done", "output_refs": ["ref1"]}
+    input_result = AgentRunResult(summary="done", output_refs=["ref1"])
     result = await activities.agent_runtime_publish_artifacts(input_result)
-    assert result == input_result
+    assert isinstance(result, AgentRunResult)
+    assert result.summary == "done"
 
 
 @pytest.mark.asyncio
@@ -43,11 +45,11 @@ async def test_publish_artifacts_writes_summary_artifact():
     mock_service.write_complete = AsyncMock(return_value=mock_completed)
 
     activities = TemporalAgentRuntimeActivities(artifact_service=mock_service)
-    input_result = {
-        "summary": "Completed successfully",
-        "output_refs": ["ref1", "ref2"],
-        "failure_class": None,
-    }
+    input_result = AgentRunResult(
+        summary="Completed successfully",
+        output_refs=["ref1", "ref2"],
+        failure_class=None,
+    )
 
     with patch(
         "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
@@ -58,8 +60,9 @@ async def test_publish_artifacts_writes_summary_artifact():
 
         result = await activities.agent_runtime_publish_artifacts(input_result)
 
-    assert result["diagnostics_ref"] == "art-456"
-    assert result["summary"] == "Completed successfully"
+    assert isinstance(result, AgentRunResult)
+    assert result.diagnostics_ref == "art-456"
+    assert result.summary == "Completed successfully"
     mock_write.assert_called_once()
 
 
@@ -68,7 +71,7 @@ async def test_publish_artifacts_handles_write_failure_gracefully():
     mock_service = MagicMock()
 
     activities = TemporalAgentRuntimeActivities(artifact_service=mock_service)
-    input_result = {"summary": "test", "output_refs": []}
+    input_result = AgentRunResult(summary="test", output_refs=[])
 
     with patch(
         "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
@@ -77,7 +80,8 @@ async def test_publish_artifacts_handles_write_failure_gracefully():
         result = await activities.agent_runtime_publish_artifacts(input_result)
 
     # Should return the original result even if write fails
-    assert result == input_result
+    assert isinstance(result, AgentRunResult)
+    assert result.summary == "test"
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +134,12 @@ async def test_cancel_handles_external_kind_gracefully():
 
 @pytest.mark.asyncio
 async def test_cancel_handles_unknown_kind_gracefully():
+    from moonmind.schemas.agent_runtime_models import AgentRunStatus
     activities = TemporalAgentRuntimeActivities()
-    # Should not raise
-    await activities.agent_runtime_cancel({"agent_kind": "unknown", "run_id": "run-5"})
+    # Should not raise — returns AgentRunStatus best-effort
+    result = await activities.agent_runtime_cancel({"agent_kind": "unknown", "run_id": "run-5"})
+    assert isinstance(result, AgentRunStatus)
+    assert result.status == "canceled"
 
 
 @pytest.mark.asyncio
@@ -148,9 +155,12 @@ async def test_cancel_handles_tuple_request():
 
 @pytest.mark.asyncio
 async def test_cancel_handles_none_request():
+    from moonmind.schemas.agent_runtime_models import AgentRunStatus
     activities = TemporalAgentRuntimeActivities()
-    # Should not raise
-    await activities.agent_runtime_cancel(None)
+    # Should not raise — returns AgentRunStatus best-effort for None/unknown kind
+    result = await activities.agent_runtime_cancel(None)
+    assert isinstance(result, AgentRunStatus)
+    assert result.status == "canceled"
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
+from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
@@ -437,13 +438,6 @@ class TestFetchResultPushIntegration:
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
 
-        mock_result = MagicMock()
-        mock_result.failure_class = None
-        mock_result.model_dump.return_value = {
-            "summary": "done",
-            "metadata": {},
-        }
-
         with (
             patch.object(
                 activities, "_push_workspace_branch",
@@ -459,15 +453,18 @@ class TestFetchResultPushIntegration:
             ) as MockAdapter,
         ):
             adapter_instance = MockAdapter.return_value
-            adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
+            adapter_instance.fetch_result = AsyncMock(return_value=AgentRunResult(
+                summary="done",
+                failure_class=None,
+            ))
 
             result = await activities.agent_runtime_fetch_result(
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
             )
 
         mock_push.assert_called_once_with("run-1", target_branch=None)
-        assert result["metadata"]["push_status"] == "pushed"
-        assert result["metadata"]["push_branch"] == "my-branch"
+        assert result.metadata["push_status"] == "pushed"
+        assert result.metadata["push_branch"] == "my-branch"
 
     @pytest.mark.asyncio
     async def test_fetch_result_skips_push_when_publish_mode_none(self):
@@ -544,13 +541,6 @@ class TestFetchResultPushIntegration:
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
 
-        mock_result = MagicMock()
-        mock_result.failure_class = None
-        mock_result.model_dump.return_value = {
-            "summary": "done",
-            "metadata": {},
-        }
-
         with (
             patch.object(
                 activities, "_push_workspace_branch",
@@ -570,14 +560,17 @@ class TestFetchResultPushIntegration:
             ) as MockAdapter,
         ):
             adapter_instance = MockAdapter.return_value
-            adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
+            adapter_instance.fetch_result = AsyncMock(return_value=AgentRunResult(
+                summary="done",
+                failure_class=None,
+            ))
 
             result = await activities.agent_runtime_fetch_result(
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
             )
 
-        assert result["metadata"]["push_status"] == "failed"
-        assert result["metadata"]["push_error"] == "remote: Permission denied"
+        assert result.metadata["push_status"] == "failed"
+        assert result.metadata["push_error"] == "remote: Permission denied"
 
     @pytest.mark.asyncio
     async def test_fetch_result_defaults_publish_mode_none(self):

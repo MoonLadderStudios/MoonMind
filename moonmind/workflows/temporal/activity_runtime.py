@@ -2084,15 +2084,15 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_publish_artifacts(
         self,
-        result: Any = None,
+        result: AgentRunResult | None = None,
         /,
-    ) -> Any:
+    ) -> AgentRunResult | None:
         """Publish agent-run outputs back to artifact storage.
 
         Writes a summary JSON artifact containing the run result metadata
         (output refs, summary, failure class) via the artifact service.
-        Returns the result enriched with a ``diagnostics_ref`` pointing to
-        the persisted summary artifact.
+        Returns a typed ``AgentRunResult`` enriched with a ``diagnostics_ref``
+        pointing to the persisted summary artifact.
         """
         if result is None:
             return result
@@ -2103,21 +2103,13 @@ class TemporalAgentRuntimeActivities:
             )
             return result
 
-        # Normalize to dict
-        if isinstance(result, Mapping):
-            result_dict = dict(result)
-        elif hasattr(result, "model_dump"):
-            result_dict = result.model_dump(mode="json", by_alias=True)
-        else:
-            result_dict = {"raw": str(result)}
-
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
-            "summary": result_dict.get("summary") or result_dict.get("raw", ""),
-            "output_refs": result_dict.get("output_refs") or result_dict.get("outputRefs") or [],
-            "failure_class": result_dict.get("failure_class") or result_dict.get("failureClass"),
-            "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
-            "metrics": result_dict.get("metrics") or {},
+            "summary": result.summary or "",
+            "output_refs": list(result.output_refs or []),
+            "failure_class": result.failure_class,
+            "provider_error_code": result.provider_error_code,
+            "metrics": dict(result.metrics or {}),
         }
 
         try:
@@ -2131,20 +2123,9 @@ class TemporalAgentRuntimeActivities:
                     "labels": ["agent_runtime", "result"],
                 },
             )
-            # Enrich result with the diagnostics ref
-            if isinstance(result, Mapping):
-                enriched = dict(result)
-                if "diagnosticsRef" in enriched:
-                    enriched["diagnosticsRef"] = summary_ref.artifact_id
-                else:
-                    enriched["diagnostics_ref"] = summary_ref.artifact_id
-                # Remove snake_case if alias is present to avoid Pydantic validation errors
-                if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
-                    del enriched["diagnostics_ref"]
-                return enriched
-            if hasattr(result, "diagnostics_ref"):
-                result.diagnostics_ref = summary_ref.artifact_id
-            return result
+            # Enrich result with the diagnostics ref using model_copy to
+            # preserve the typed contract (no in-place mutation).
+            return result.model_copy(update={"diagnostics_ref": summary_ref.artifact_id})
         except Exception:
             logger.warning(
                 "agent_runtime.publish_artifacts failed to write summary artifact",
@@ -2189,47 +2170,56 @@ class TemporalAgentRuntimeActivities:
         self,
         request: Any = None,
         /,
-    ) -> dict[str, Any]:
-        """Read the latest managed run status via activity execution."""
+    ) -> AgentRunStatus:
+        """Read the latest managed run status via activity execution.
+
+        Returns a canonical typed ``AgentRunStatus`` directly so that workflow
+        code and the ``_coerce_managed_status_payload`` helper both receive a
+        well-typed Pydantic model rather than a plain dict.
+        """
         if self._run_store is None:
             raise TemporalActivityRuntimeError(
                 "run_store is required for agent_runtime.status"
             )
         run_id, agent_id = self._agent_runtime_request_identifiers(request)
 
-        from temporalio import activity
-        activity.heartbeat(f"Checking status for run_id {run_id}")
+        try:
+            from temporalio import activity
+            activity.heartbeat(f"Checking status for run_id {run_id}")
+        except RuntimeError:
+            pass  # Not in an activity context (e.g. unit tests)
 
         record = self._run_store.load(run_id)
         if record is None:
-            status = AgentRunStatus(
+            return AgentRunStatus(
                 runId=run_id,
                 agentKind="managed",
                 agentId=agent_id,
                 status="running",
             )
-            return status.model_dump(mode="json", by_alias=True)
 
-        status = AgentRunStatus(
+        return AgentRunStatus(
             runId=record.run_id,
             agentKind="managed",
             agentId=record.agent_id or agent_id,
             status=record.status,
             metadata={"runtimeId": record.runtime_id},
         )
-        return status.model_dump(mode="json", by_alias=True)
 
     async def agent_runtime_fetch_result(
         self,
         request: Any = None,
         /,
-    ) -> dict[str, Any]:
+    ) -> AgentRunResult:
         """Read one managed run result via activity execution.
 
         When *publish_mode* is not ``"none"``, this activity also pushes the
         agent's work branch to the remote **before** returning the result.
         This is deterministic (the workflow awaits this activity) instead of
         the old fire-and-forget pattern that could silently lose pushes.
+
+        Returns a canonical typed ``AgentRunResult`` directly so workflow code
+        receives a well-typed Pydantic model rather than a plain dict.
         """
         if self._run_store is None:
             raise TemporalActivityRuntimeError(
@@ -2283,8 +2273,10 @@ class TemporalAgentRuntimeActivities:
                 result=result,
                 record=record,
             )
-        result_dict = result.model_dump(mode="json", by_alias=True)
-        meta = dict(result_dict.get("metadata") or {})
+
+        # Build merged metadata from the typed result, then enrich with
+        # push/PR URL info using model_copy to preserve the typed contract.
+        meta = dict(result.metadata or {})
 
         # Push the agent's work branch if publish_mode requires it and the
         # agent completed without failure.
@@ -2300,9 +2292,9 @@ class TemporalAgentRuntimeActivities:
                 meta["pull_request_url"] = pr_url
 
         if meta:
-            result_dict["metadata"] = meta
+            result = result.model_copy(update={"metadata": meta})
 
-        return result_dict
+        return result
 
     @staticmethod
     def _is_generic_process_exit_summary(summary: str | None) -> bool:
@@ -2733,12 +2725,15 @@ class TemporalAgentRuntimeActivities:
         self,
         request: Any = None,
         /,
-    ) -> None:
+    ) -> AgentRunStatus:
         """Best-effort cancel of an in-flight agent run.
 
         For managed runs, delegates to the ``ManagedRunSupervisor`` to
         terminate the subprocess.  For external runs, logs the request
         (external cancel must go through the provider adapter).
+
+        Returns a canonical typed ``AgentRunStatus`` with ``status='canceled'``
+        in all cases (matching the external provider cancel contract).
         """
         if isinstance(request, Mapping):
             agent_kind = request.get("agent_kind", "unknown")
@@ -2748,22 +2743,28 @@ class TemporalAgentRuntimeActivities:
         else:
             agent_kind, run_id = "unknown", str(request)
 
+        run_id_str = str(run_id)
+
         if agent_kind == "managed":
             if self._run_supervisor is not None:
                 try:
-                    await self._run_supervisor.cancel(str(run_id))
+                    await self._run_supervisor.cancel(run_id_str)
                     logger.info(
                         "agent_runtime.cancel completed for managed run %s",
                         run_id,
                     )
-                    return
                 except Exception:
                     logger.warning(
                         "agent_runtime.cancel failed for managed run %s",
                         run_id,
                         exc_info=True,
                     )
-                    return
+                return AgentRunStatus(
+                    runId=run_id_str,
+                    agentKind="managed",
+                    agentId="managed",
+                    status="canceled",
+                )
             else:
                 logger.warning(
                     "agent_runtime.cancel called for managed run %s but no supervisor configured",
@@ -2773,7 +2774,7 @@ class TemporalAgentRuntimeActivities:
                 if self._run_store is not None:
                     try:
                         self._run_store.update_status(
-                            str(run_id),
+                            run_id_str,
                             "canceled",
                             finished_at=datetime.now(tz=UTC),
                             error_message="Canceled via activity (no supervisor)",
@@ -2788,13 +2789,24 @@ class TemporalAgentRuntimeActivities:
                             run_id,
                             exc_info=True,
                         )
-                return
+                return AgentRunStatus(
+                    runId=run_id_str,
+                    agentKind="managed",
+                    agentId="managed",
+                    status="canceled",
+                )
 
-        # External or unknown agent kind
+        # External or unknown agent kind — best-effort cancel status
         logger.warning(
             "agent_runtime.cancel called for %s/%s — external cancel requires provider adapter",
             agent_kind,
             run_id,
+        )
+        return AgentRunStatus(
+            runId=run_id_str,
+            agentKind="external",
+            agentId=str(agent_kind) if str(agent_kind) else "external",
+            status="canceled",
         )
 
 
