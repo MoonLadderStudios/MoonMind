@@ -400,6 +400,11 @@ class ManagedRuntimeLauncher:
         )
 
     @staticmethod
+    def _format_git_config_value(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    @staticmethod
     def _persist_gh_config(
         env: dict[str, str],
         workspace_path: str | None,
@@ -462,7 +467,10 @@ class ManagedRuntimeLauncher:
         git_config_lines = [
             "# moonmind-managed-git-config\n",
             "[safe]\n",
-            f"\tdirectory = {resolved_workspace}\n",
+            (
+                "\tdirectory = "
+                f"{ManagedRuntimeLauncher._format_git_config_value(resolved_workspace)}\n"
+            ),
         ]
         if git_helper_path is not None:
             git_helper_command = shlex.quote(str(git_helper_path))
@@ -754,7 +762,11 @@ class ManagedRuntimeLauncher:
                 try:
                     os.remove(path)
                 except OSError:
-                    pass
+                    self._logger.debug(
+                        "Best-effort cleanup failed for support path %s",
+                        path,
+                        exc_info=True,
+                    )
             raise
 
         record = ManagedRunRecord(

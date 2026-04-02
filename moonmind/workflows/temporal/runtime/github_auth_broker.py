@@ -33,10 +33,12 @@ class GitHubAuthBrokerHandle:
         try:
             await self.serve_task
         except asyncio.CancelledError:
+            # Task cancellation is expected here during shutdown.
             pass
         try:
             os.remove(self.socket_path)
         except OSError:
+            # Socket removal is best-effort cleanup; shutdown should continue.
             pass
 
 
@@ -57,10 +59,12 @@ class GitHubAuthBrokerManager:
         await self.stop(run_id)
 
         path = Path(socket_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
         try:
             path.unlink()
         except FileNotFoundError:
+            # It's fine if the socket file does not exist yet.
             pass
 
         async def _handle_client(
@@ -100,6 +104,7 @@ class GitHubAuthBrokerManager:
                     pass
 
         server = await asyncio.start_unix_server(_handle_client, path=str(path))
+        os.chmod(path, 0o600)
         serve_task = asyncio.create_task(server.serve_forever())
         handle = GitHubAuthBrokerHandle(
             run_id=run_id,

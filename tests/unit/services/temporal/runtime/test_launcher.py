@@ -236,7 +236,7 @@ def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_pat
     gitconfig_text = gitconfig.read_text(encoding="utf-8")
     assert "[safe]" in gitconfig_text
     assert "[credential]" in gitconfig_text
-    assert f"\tdirectory = {tmp_path.resolve()}" in gitconfig_text
+    assert f'\tdirectory = "{tmp_path.resolve()}"' in gitconfig_text
     assert "ghp_testtoken123" not in gh_wrapper.read_text(encoding="utf-8")
     assert "ghp_testtoken123" not in git_helper.read_text(encoding="utf-8")
     assert "ghp_testtoken123" not in gitconfig_text
@@ -248,7 +248,7 @@ def test_persist_gh_config_writes_safe_directory_without_token(tmp_path):
     gitconfig = tmp_path / ".moonmind" / "gitconfig"
     assert gitconfig.exists()
     assert "[safe]" in gitconfig.read_text(encoding="utf-8")
-    assert f"\tdirectory = {tmp_path.resolve()}" in gitconfig.read_text(
+    assert f'\tdirectory = "{tmp_path.resolve()}"' in gitconfig.read_text(
         encoding="utf-8"
     )
     assert "GH_CONFIG_DIR" not in env
@@ -307,7 +307,7 @@ def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
 
     updated_config = git_config.read_text()
     assert str(git_helper) in updated_config
-    assert f"\tdirectory = {repo_root.resolve()}" in gitconfig.read_text(
+    assert f'\tdirectory = "{repo_root.resolve()}"' in gitconfig.read_text(
         encoding="utf-8"
     )
 
@@ -401,8 +401,8 @@ def test_persist_gh_config_quotes_helper_path_when_store_has_spaces(tmp_path):
 def test_persist_gh_config_writes_git_identity_to_global_config(tmp_path):
     env = {
         "PATH": "/usr/bin",
-        "GIT_AUTHOR_NAME": "Nate Sticco",
-        "GIT_AUTHOR_EMAIL": "nsticco@gmail.com",
+        "GIT_AUTHOR_NAME": "Test User",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
     }
 
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
@@ -410,8 +410,8 @@ def test_persist_gh_config_writes_git_identity_to_global_config(tmp_path):
     gitconfig = tmp_path / ".moonmind" / "gitconfig"
     text = gitconfig.read_text(encoding="utf-8")
     assert "[user]" in text
-    assert "\tname = Nate Sticco" in text
-    assert "\temail = nsticco@gmail.com" in text
+    assert "\tname = Test User" in text
+    assert "\temail = test@example.com" in text
 
 
 @pytest.mark.asyncio
