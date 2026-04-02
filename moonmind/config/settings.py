@@ -1254,6 +1254,13 @@ class GitHubSettings(BaseSettings):
     """GitHub settings"""
 
     github_token: Optional[str] = Field(None, alias="GITHUB_TOKEN")
+    github_token_secret_ref: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices(
+            "GITHUB_TOKEN_SECRET_REF",
+            "WORKFLOW_GITHUB_TOKEN_SECRET_REF",
+        ),
+    )
     github_repos: Optional[str] = Field(
         None, alias="GITHUB_REPOS"
     )  # Comma-delimited string of repositories

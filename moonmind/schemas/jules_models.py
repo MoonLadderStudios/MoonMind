@@ -55,7 +55,11 @@ def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
     normalized = str(raw_status or "").strip().lower()
     if not normalized:
         return "unknown"
-    return _JULES_STATUS_MAP.get(normalized, "unknown")
+    mapped = _JULES_STATUS_MAP.get(normalized)
+    if mapped is None:
+        from moonmind.schemas.agent_runtime_models import raise_unsupported_status
+        raise_unsupported_status(raw_status or "")
+    return mapped
 
 
 class GitHubRepoContext(BaseModel):
