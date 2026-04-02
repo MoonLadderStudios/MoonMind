@@ -64,6 +64,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./.agents:/app/.agents:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
+      - agent_workspaces:/work/agent_jobs:ro
       - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:

@@ -45,3 +45,22 @@ def test_docker_compose_has_temporal_worker_auto_start_configured():
         assert (
             "sleep" not in command_var
         ), f"Worker '{fleet}' must not be configured to sleep. Found: {command_var}"
+
+
+def test_api_service_mounts_agent_runtime_workspace_volume():
+    """Mission Control observability must read managed-run records from agent_workspaces."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text())
+    services = compose_data.get("services", {})
+    api_service = services.get("api")
+    assert isinstance(api_service, dict), "api service is missing from docker-compose.yaml"
+
+    volumes = api_service.get("volumes", [])
+    assert isinstance(volumes, list), "api service volumes must be a list"
+    assert (
+        "agent_workspaces:/work/agent_jobs:ro" in volumes
+    ), "api service must mount agent_workspaces at /work/agent_jobs so observability APIs can read managed-run records"
