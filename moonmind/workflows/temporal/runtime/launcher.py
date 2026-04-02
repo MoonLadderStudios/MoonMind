@@ -560,7 +560,12 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
-        ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, list[str]]:
+    ) -> tuple[
+        ManagedRunRecord,
+        asyncio.subprocess.Process | None,
+        list[str],
+        list[str],
+    ]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
@@ -574,7 +579,7 @@ class ManagedRuntimeLauncher:
             if workflow_id and not existing.workflow_id:
                 existing.workflow_id = str(workflow_id or "").strip() or None
                 self._store.save(existing)
-            return existing, None, []
+            return existing, None, [], []
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)
@@ -687,6 +692,7 @@ class ManagedRuntimeLauncher:
 
         github_token = await self._resolve_github_token_for_launch(env_overrides)
         cleanup_paths: list[str] = list(materializer.generated_files)
+        deferred_cleanup_paths: list[str] = []
         github_socket_path: str | None = None
         real_gh_path = shutil.which("gh")
         process: asyncio.subprocess.Process
@@ -701,12 +707,12 @@ class ManagedRuntimeLauncher:
                     token=github_token,
                     socket_path=github_socket_path,
                 )
-                cleanup_paths.append(github_socket_path)
+                deferred_cleanup_paths.append(github_socket_path)
                 env_overrides.pop("GITHUB_TOKEN", None)
                 env_overrides.pop("GH_TOKEN", None)
 
             if resolved_workspace_path is not None:
-                cleanup_paths.extend(
+                deferred_cleanup_paths.extend(
                     self._persist_gh_config(
                         env_overrides,
                         resolved_workspace_path,
@@ -762,7 +768,7 @@ class ManagedRuntimeLauncher:
                 )
         except Exception:
             await self.cleanup_run_support(run_id)
-            for path in cleanup_paths:
+            for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:
                     os.remove(path)
                 except OSError:
@@ -785,4 +791,4 @@ class ManagedRuntimeLauncher:
             live_stream_capable=bool(resolved_workspace_path),
         )
         self._store.save(record)
-        return record, process, cleanup_paths
+        return record, process, cleanup_paths, deferred_cleanup_paths
