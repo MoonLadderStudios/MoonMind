@@ -1,11 +1,16 @@
-import pytest
 from datetime import datetime, timedelta, timezone
+import asyncio
+
+import pytest
 
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    DEPENDENCY_GATE_PATCH,
+    MoonMindRunWorkflow,
+)
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":
@@ -174,3 +179,217 @@ async def test_run_workflow_invalid_scheduled_for(mock_run_environment):
                 await handle.result()
             
             assert "Invalid scheduled_for format" in str(excinfo.value.cause)
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_waits_on_dependencies_before_planning(
+    mock_run_environment,
+    monkeypatch,
+):
+    call_order: list[tuple[str, str | tuple[str, ...]]] = []
+
+    class _ImmediateHandle:
+        def __init__(self, workflow_id: str) -> None:
+            self._workflow_id = workflow_id
+
+        async def result(self) -> None:
+            call_order.append(("dependency", self._workflow_id))
+
+    async def fake_planning_stage(*args, **kwargs):
+        call_order.append(("planning", "started"))
+        return "ref-123"
+
+    async def fake_execution_stage(*args, **kwargs):
+        call_order.append(("execution", "started"))
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: _ImmediateHandle(workflow_id),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-dep-order",
+            workflows=[MoonMindRunWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindRunWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.Run",
+                    "initial_parameters": {"task": {"dependsOn": ["dep-1", "dep-2"]}},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-dep-order",
+                task_queue="test-task-queue-dep-order",
+            )
+
+            result = await handle.result()
+
+    assert result["status"] == "success"
+    dependency_indexes = [
+        idx for idx, call in enumerate(call_order) if call[0] == "dependency"
+    ]
+    planning_index = next(
+        idx for idx, call in enumerate(call_order) if call[0] == "planning"
+    )
+    assert dependency_indexes
+    assert max(dependency_indexes) < planning_index
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
+    mock_run_environment,
+    monkeypatch,
+):
+    dependency_released = asyncio.Event()
+    planning_started = asyncio.Event()
+
+    class _BlockingHandle:
+        async def result(self) -> None:
+            await dependency_released.wait()
+
+    async def fake_planning_stage(*args, **kwargs):
+        planning_started.set()
+        return "ref-123"
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: _BlockingHandle(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-dep-pause",
+            workflows=[MoonMindRunWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindRunWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.Run",
+                    "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-dep-pause",
+                task_queue="test-task-queue-dep-pause",
+            )
+
+            await asyncio.sleep(0.1)
+            await handle.execute_update("Pause")
+            dependency_released.set()
+            await asyncio.sleep(0.1)
+
+            status = await handle.query("get_status")
+            assert status.get("paused") is True
+            assert planning_started.is_set() is False
+
+            await handle.execute_update("Resume")
+            result = await handle.result()
+
+    assert result["status"] == "success"
+    assert planning_started.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_dependency_cancel_interrupts_wait(
+    mock_run_environment,
+    monkeypatch,
+):
+    dependency_started = asyncio.Event()
+    keep_waiting = asyncio.Event()
+
+    class _BlockingHandle:
+        async def result(self) -> None:
+            dependency_started.set()
+            await keep_waiting.wait()
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: _BlockingHandle(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-dep-cancel",
+            workflows=[MoonMindRunWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindRunWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.Run",
+                    "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-dep-cancel",
+                task_queue="test-task-queue-dep-cancel",
+            )
+
+            await asyncio.wait_for(dependency_started.wait(), timeout=5)
+            await handle.execute_update("Cancel")
+            result = await handle.result()
+
+    assert result["status"] == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_dependency_gate_unpatched_skips_wait(
+    mock_run_environment,
+    monkeypatch,
+):
+    handle_calls: list[str] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: handle_calls.append(workflow_id),
+    )
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-dep-unpatched",
+            workflows=[MoonMindRunWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindRunWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.Run",
+                    "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-dep-unpatched",
+                task_queue="test-task-queue-dep-unpatched",
+            )
+
+            result = await handle.result()
+
+    assert result["status"] == "success"
+    assert handle_calls == []
