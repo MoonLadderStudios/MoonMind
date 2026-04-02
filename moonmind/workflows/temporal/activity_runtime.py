@@ -1685,7 +1685,6 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
         from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-        request_payload = request
         if isinstance(request, Mapping):
             request_payload = _coerce_activity_request(request, activity_type="integration.openclaw.execute")
             if not request_payload:
