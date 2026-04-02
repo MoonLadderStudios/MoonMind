@@ -135,7 +135,7 @@ describe('Task Detail Entrypoint', () => {
       status: 'running',
       state: 'executing',
       createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
+      updatedAt: '2026-03-28T00:00:00Z',
       actions: {},
     };
 
@@ -243,7 +243,7 @@ describe('Task Detail Entrypoint', () => {
       status: 'running',
       state: 'executing',
       createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
+      updatedAt: '2026-03-28T00:00:00Z',
       actions: {},
     };
 
@@ -1073,7 +1073,7 @@ describe('LiveLogsPanel', () => {
             ? {
                 ...activeExecution,
                 taskRunId: undefined,
-                updatedAt: '2026-03-28T00:00:02Z',
+                updatedAt: '2026-03-28T00:00:00Z',
               }
             : activeExecution,
       } as Response);
@@ -1128,7 +1128,7 @@ describe('LiveLogsPanel', () => {
         json: async () => ({
           ...activeExecution,
           taskRunId: undefined,
-          updatedAt: '2026-03-28T00:00:00Z',
+          updatedAt: '2026-03-28T00:00:02Z',
         }),
       } as Response);
     });

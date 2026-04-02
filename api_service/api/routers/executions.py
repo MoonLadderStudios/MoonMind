@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Mapping
@@ -1659,7 +1660,10 @@ async def describe_execution(
         )
     execution = _serialize_execution(record)
     if not execution.task_run_id:
-        task_run_id = _resolve_task_run_id_from_managed_store(execution.workflow_id)
+        task_run_id = await asyncio.to_thread(
+            _resolve_task_run_id_from_managed_store,
+            execution.workflow_id,
+        )
         if task_run_id:
             execution = execution.model_copy(update={"task_run_id": task_run_id})
     return execution

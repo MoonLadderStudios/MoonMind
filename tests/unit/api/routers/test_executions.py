@@ -981,9 +981,15 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
     }
     service.describe_execution.return_value = record
 
+    to_thread_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    async def _fake_to_thread(func: object, /, *args: object, **kwargs: object) -> str:
+        to_thread_calls.append((func, args, kwargs))
+        return "550e8400-e29b-41d4-a716-446655440000"
+
     with patch(
-        "api_service.api.routers.executions._resolve_task_run_id_from_managed_store",
-        return_value="550e8400-e29b-41d4-a716-446655440000",
+        "api_service.api.routers.executions.asyncio.to_thread",
+        new=_fake_to_thread,
     ):
         response = test_client.get("/api/executions/mm:wf-1")
 
@@ -991,6 +997,7 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
     assert (
         response.json()["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
     )
+    assert len(to_thread_calls) == 1
 
 
 def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:

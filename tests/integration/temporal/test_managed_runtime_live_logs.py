@@ -448,10 +448,30 @@ async def test_long_running_launch_is_visible_through_observability_routes(
 
     try:
         spool_path = workspace / "live_streams.spool"
-        for _ in range(40):
-            if spool_path.exists() and "alpha" in spool_path.read_text(encoding="utf-8"):
-                break
-            await asyncio.sleep(0.05)
+        timeout_seconds = 15.0
+        poll_interval = 0.1
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        last_contents: str | None = None
+        while True:
+            if spool_path.exists():
+                last_contents = spool_path.read_text(encoding="utf-8")
+                if "alpha" in last_contents:
+                    break
+            if loop.time() >= deadline:
+                if spool_path.exists():
+                    size = spool_path.stat().st_size
+                    snippet = (last_contents or "")[-500:]
+                    raise AssertionError(
+                        f"Timed out waiting for 'alpha' in spool file {spool_path} "
+                        f"after {timeout_seconds:.1f}s. File exists with size {size} bytes. "
+                        f"Last 500 bytes of contents:\n{snippet}"
+                    )
+                raise AssertionError(
+                    f"Timed out waiting for spool file {spool_path} to appear "
+                    f"after {timeout_seconds:.1f}s; file does not exist."
+                )
+            await asyncio.sleep(poll_interval)
 
         with TestClient(app) as client:
             summary = client.get(f"/api/task-runs/{run_id}/observability-summary")

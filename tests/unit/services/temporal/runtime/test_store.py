@@ -1,5 +1,5 @@
 import pytest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -80,7 +80,7 @@ def test_find_latest_for_workflow_prefers_newest_active_run(tmp_path):
         _make_record("run-new-active", "running").model_copy(
             update={
                 "workflow_id": "mm:wf-1",
-                "started_at": started_at.replace(microsecond=started_at.microsecond + 1),
+                "started_at": started_at + timedelta(microseconds=1),
             }
         )
     )
@@ -108,8 +108,8 @@ def test_find_latest_for_workflow_returns_latest_terminal_when_no_active_exists(
         _make_record("run-second", "failed").model_copy(
             update={
                 "workflow_id": "mm:wf-1",
-                "started_at": started_at.replace(microsecond=started_at.microsecond + 1),
-                "finished_at": started_at.replace(microsecond=started_at.microsecond + 2),
+                "started_at": started_at + timedelta(microseconds=1),
+                "finished_at": started_at + timedelta(microseconds=2),
             }
         )
     )

@@ -91,6 +91,7 @@ DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
+MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -776,7 +777,10 @@ class MoonMindAgentRun:
                     # The profile_fetcher dispatches to the provider_profile.list
                     # activity on the artifacts fleet.
                     wf_id = workflow.info().workflow_id
-                    task_workflow_id = parent_info.workflow_id if parent_info else wf_id
+                    if parent_info and workflow.patched(MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID):
+                        task_workflow_id = parent_info.workflow_id
+                    else:
+                        task_workflow_id = wf_id
 
                     async def _profile_fetcher(**kw):
                         return await self._execute_routed_activity(

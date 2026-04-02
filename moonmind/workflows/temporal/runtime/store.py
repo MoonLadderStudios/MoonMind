@@ -48,7 +48,7 @@ class ManagedRunStore:
             dir=str(path.parent), suffix=".tmp"
         )
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             os.replace(tmp_path, str(path))
         except BaseException:
@@ -64,7 +64,7 @@ class ManagedRunStore:
         path = self._resolve_path(run_id)
         if not path.exists():
             return None
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return ManagedRunRecord(**data)
 
     def update_status(
@@ -93,7 +93,7 @@ class ManagedRunStore:
         records: list[ManagedRunRecord] = []
         for path in self.store_root.glob("*.json"):
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 record = ManagedRunRecord(**data)
                 if record.status not in TERMINAL_AGENT_RUN_STATES:
                     records.append(record)
@@ -115,7 +115,7 @@ class ManagedRunStore:
         candidates: list[ManagedRunRecord] = []
         for path in self.store_root.glob("*.json"):
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 record = ManagedRunRecord(**data)
             except (json.JSONDecodeError, ValueError):
                 continue

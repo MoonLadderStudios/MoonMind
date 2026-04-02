@@ -76,6 +76,7 @@ _COMMON_AGENT_RUN_ACTIVITIES = [
 @_activity.defn(name="agent_runtime.launch")
 async def mock_agent_runtime_launch(request: dict) -> dict:
     """Simulate launching a managed agent container."""
+    _managed_launch_requests.append(dict(request))
     return {
         "container_id": "test-container-001",
         "status": "running",
@@ -107,6 +108,8 @@ _COMMON_AGENT_RUN_ACTIVITIES.extend([
     mock_agent_runtime_status,
     mock_agent_runtime_fetch_result,
 ])
+
+_managed_launch_requests: list[dict] = []
 
 
 
@@ -406,6 +409,63 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                 await parent_handle.cancel()
                 with pytest.raises(WorkflowFailureError):
                     await parent_handle.result()
+
+
+@pytest.mark.asyncio
+async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histories():
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
+            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+                request = AgentExecutionRequest(
+                    agent_kind="managed",
+                    agent_id="test-agent",
+                    execution_profile_ref="default-managed",
+                    correlation_id="corr-parent-bind",
+                    idempotency_key="idem-parent-bind",
+                )
+
+                manager_id = "auth-profile-manager:test-agent"
+                await env.client.start_workflow(
+                    MockProviderProfileManager.run,
+                    {"runtime_id": "test-agent"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+
+                parent_handle = await env.client.start_workflow(
+                    TestAgentRunParent.run,
+                    request,
+                    id="test-parent-managed-binding",
+                    task_queue="agent-run-task-queue",
+                )
+                child_handle = env.client.get_workflow_handle(
+                    "test-parent-managed-binding:child"
+                )
+
+                for _ in range(30):
+                    if _managed_launch_requests:
+                        break
+                    await asyncio.sleep(0.1)
+
+                assert _managed_launch_requests, "managed launch activity was not invoked"
+                assert _managed_launch_requests[-1]["workflow_id"] == "test-parent-managed-binding"
+
+                await child_handle.signal(
+                    MoonMindAgentRun.completion_signal,
+                    {"summary": "Success"},
+                )
+
+                result = await parent_handle.result()
+
+                assert isinstance(result, AgentRunResult)
+                assert result.summary == "Success"
 
 
 

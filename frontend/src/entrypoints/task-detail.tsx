@@ -923,7 +923,7 @@ function inferMissingTaskRunState(execution: z.infer<typeof ExecutionDetailSchem
   }
 
   if (lifecycleState === 'executing' || lifecycleState === 'running') {
-    return hasProgress ? 'waiting_for_launch' : 'binding_missing';
+    return hasProgress ? 'binding_missing' : 'waiting_for_launch';
   }
 
   return 'waiting_for_launch';
