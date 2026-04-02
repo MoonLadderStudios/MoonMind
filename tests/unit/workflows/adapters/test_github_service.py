@@ -72,6 +72,50 @@ async def test_create_pr_missing_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
+    """Secret-ref fallback should be used when raw env token is absent."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        return_value=_mock_response(201, {"html_url": "https://github.com/o/r/pull/43"})
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings.github,
+        "github_token_secret_ref",
+        "db://github-pat",
+    )
+
+    async def _fake_resolve(secret_ref: str) -> str:
+        assert secret_ref == "db://github-pat"
+        return "resolved-gh-token"
+
+    with (
+        patch(
+            "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+            return_value=mock_client,
+        ),
+        patch(
+            "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+            side_effect=_fake_resolve,
+        ),
+    ):
+        svc = GitHubService()
+        result = await svc.create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert result.created is True
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer resolved-gh-token"
+
+
+@pytest.mark.asyncio
 async def test_create_pr_http_error(monkeypatch):
     """HTTP 422 from GitHub should return created=False."""
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")

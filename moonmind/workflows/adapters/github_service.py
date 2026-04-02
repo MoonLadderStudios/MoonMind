@@ -77,9 +77,33 @@ class GitHubService:
         return match.group(1), match.group(2), match.group(3)
 
     @staticmethod
-    def resolve_github_token(explicit_token: str | None = None) -> str:
-        """Return a GitHub token from the explicit arg or ``GITHUB_TOKEN`` env."""
-        return (explicit_token or os.environ.get("GITHUB_TOKEN", "")).strip()
+    async def resolve_github_token(
+        explicit_token: str | None = None,
+    ) -> tuple[str, str | None]:
+        """Resolve a GitHub token from explicit input, env, or secret ref."""
+        token = str(explicit_token or os.environ.get("GITHUB_TOKEN", "")).strip()
+        if token:
+            return token, None
+
+        from moonmind.config.settings import settings
+        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+            resolve_managed_api_key_reference,
+        )
+
+        secret_ref = str(
+            getattr(settings.github, "github_token_secret_ref", "") or ""
+        ).strip()
+        if not secret_ref:
+            return "", None
+
+        try:
+            return await resolve_managed_api_key_reference(secret_ref), None
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve GitHub token secret ref",
+                exc_info=True,
+            )
+            return "", f"GITHUB token secret ref could not be resolved: {exc}"
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
@@ -103,11 +127,12 @@ class GitHubService:
     ) -> CreatePRResult:
         """Create a GitHub pull request via REST API."""
 
-        token = self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(github_token)
         if not token:
             return CreatePRResult(
                 created=False,
-                summary="GITHUB_TOKEN is not configured; cannot create PR.",
+                summary=resolution_error
+                or "GITHUB_TOKEN is not configured; cannot create PR.",
             )
 
         api_url = f"https://api.github.com/repos/{repo}/pulls"
@@ -176,12 +201,13 @@ class GitHubService:
             )
 
         owner, repo, pr_number = parsed
-        token = self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(github_token)
         if not token:
             return MergePRResult(
                 pr_url=pr_url,
                 merged=False,
-                summary="GITHUB_TOKEN is not configured; cannot merge PR.",
+                summary=resolution_error
+                or "GITHUB_TOKEN is not configured; cannot merge PR.",
             )
 
         api_url = (
@@ -257,11 +283,12 @@ class GitHubService:
             return False, f"Could not parse PR URL: {pr_url}"
 
         owner, repo, pr_number = parsed
-        token = self.resolve_github_token(github_token)
+        token, resolution_error = await self.resolve_github_token(github_token)
         if not token:
             return (
                 False,
-                "GITHUB_TOKEN is not configured; cannot update PR base.",
+                resolution_error
+                or "GITHUB_TOKEN is not configured; cannot update PR base.",
             )
 
         api_url = (

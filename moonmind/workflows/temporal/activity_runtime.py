@@ -3298,6 +3298,19 @@ class TemporalAgentRuntimeActivities:
             return None
 
     @staticmethod
+    def _workspace_git_command(workspace: str, *args: str) -> list[str]:
+        """Build a git command that trusts the run workspace explicitly."""
+        resolved_workspace = str(Path(workspace).resolve())
+        return [
+            "git",
+            "-c",
+            f"safe.directory={resolved_workspace}",
+            "-C",
+            resolved_workspace,
+            *args,
+        ]
+
+    @staticmethod
     def _report_matches_record(path: Path, record: ManagedRunRecord) -> bool:
         """Best-effort run discriminator for Gemini error reports."""
         try:
@@ -3346,7 +3359,9 @@ class TemporalAgentRuntimeActivities:
         workspace = record.workspace_path
         try:
             branch_proc = await _asyncio.create_subprocess_exec(
-                "git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD",
+                *self._workspace_git_command(
+                    workspace, "rev-parse", "--abbrev-ref", "HEAD",
+                ),
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
             )
@@ -3376,7 +3391,9 @@ class TemporalAgentRuntimeActivities:
                 }
 
             push_proc = await _asyncio.create_subprocess_exec(
-                "git", "-C", workspace, "push", "-u", "origin", current_branch,
+                *self._workspace_git_command(
+                    workspace, "push", "-u", "origin", current_branch,
+                ),
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
             )
@@ -3406,8 +3423,12 @@ class TemporalAgentRuntimeActivities:
             base_ref = f"origin/{target_branch or 'main'}"
             try:
                 count_proc = await _asyncio.create_subprocess_exec(
-                    "git", "-C", workspace,
-                    "rev-list", "--count", f"{base_ref}..{current_branch}",
+                    *self._workspace_git_command(
+                        workspace,
+                        "rev-list",
+                        "--count",
+                        f"{base_ref}..{current_branch}",
+                    ),
                     stdout=_asyncio.subprocess.PIPE,
                     stderr=_asyncio.subprocess.PIPE,
                 )
@@ -3480,7 +3501,9 @@ class TemporalAgentRuntimeActivities:
         try:
             # Get the current branch in the workspace
             branch_result = subprocess.run(
-                ["git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
+                self._workspace_git_command(
+                    workspace, "rev-parse", "--abbrev-ref", "HEAD",
+                ),
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -3526,7 +3549,9 @@ class TemporalAgentRuntimeActivities:
         import subprocess
 
         result = subprocess.run(
-            ["git", "-C", workspace, "remote", "get-url", "origin"],
+            TemporalAgentRuntimeActivities._workspace_git_command(
+                workspace, "remote", "get-url", "origin",
+            ),
             capture_output=True,
             text=True,
             timeout=10,

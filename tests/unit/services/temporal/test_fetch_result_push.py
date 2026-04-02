@@ -168,6 +168,43 @@ class TestPushWorkspaceBranch:
         assert "push_error" not in result
 
     @pytest.mark.asyncio
+    async def test_push_marks_workspace_safe_for_git_commands(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+        workspace = "/work/agent_jobs/run-1/repo"
+
+        async def _mock_exec(*args, **kwargs):
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            command = list(args)
+            if "rev-parse" in command:
+                proc.communicate = AsyncMock(return_value=(b"feature/safe-branch\n", b""))
+                proc.returncode = 0
+            elif "push" in command:
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        assert len(recorded_calls) == 3
+        for call in recorded_calls:
+            command = list(call)
+            assert command[:5] == [
+                "git",
+                "-c",
+                f"safe.directory={workspace}",
+                "-C",
+                workspace,
+            ]
+
+    @pytest.mark.asyncio
     async def test_push_failure(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)

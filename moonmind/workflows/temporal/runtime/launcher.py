@@ -328,72 +328,139 @@ class ManagedRuntimeLauncher:
         return str(repo_path)
 
     @staticmethod
+    async def _resolve_github_token_for_launch(env: dict[str, str]) -> str | None:
+        token = str(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN") or "").strip()
+        if token:
+            return token
+
+        from moonmind.config.settings import settings as _mm_settings
+        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+            resolve_managed_api_key_reference,
+        )
+
+        secret_ref = str(
+            getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
+        ).strip()
+        if not secret_ref:
+            return None
+
+        try:
+            return await resolve_managed_api_key_reference(secret_ref)
+        except Exception:
+            logger.warning(
+                "Failed to resolve GitHub token secret ref for managed runtime launch",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
     def _persist_gh_config(
         env: dict[str, str],
         workspace_path: str | None,
         *,
         support_root: str | None = None,
     ) -> None:
-        """Write ``gh`` file-based auth so ``gh`` works even when AI CLIs
-        strip secret env vars from tool-call subprocesses.
+        """Persist workspace-scoped git/gh support config for managed runs.
 
-        Sets ``GH_CONFIG_DIR`` in *env* to a per-workspace directory
-        containing ``hosts.yml`` with the GitHub token.
+        The generated support files give agent subprocesses a stable git view
+        of the workspace even when they sanitize environment variables before
+        spawning tool commands. In particular this writes:
 
-        Also injects a git credential helper into the workspace's
-        ``.git/config`` so that ``git push`` can authenticate even when
-        env vars like ``GITHUB_TOKEN`` are stripped from tool-call
-        subprocesses (e.g. Claude Code, Gemini CLI).  Writing into
-        ``.git/config`` is robust because git always reads this file
-        regardless of the subprocess environment.
+        - ``GH_CONFIG_DIR`` hosts config when a GitHub token is available
+        - ``GIT_CONFIG_GLOBAL`` with ``safe.directory`` for the workspace
+        - optional credential-helper and git identity settings
+        - optional repo-local credential helper for tools that ignore
+          ``GIT_CONFIG_GLOBAL`` but still read ``.git/config``
         """
-        token = env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
-        if not token or not workspace_path:
+        if not workspace_path:
             return
-        gh_root = Path(support_root or workspace_path)
-        gh_dir = gh_root / ".moonmind" / "gh"
+
+        resolved_workspace = str(Path(workspace_path).resolve())
+        token = str(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN") or "").strip()
+        git_name = str(
+            env.get("GIT_AUTHOR_NAME") or env.get("GIT_COMMITTER_NAME") or ""
+        ).strip()
+        git_email = str(
+            env.get("GIT_AUTHOR_EMAIL") or env.get("GIT_COMMITTER_EMAIL") or ""
+        ).strip()
+
+        support_dir = Path(support_root or workspace_path) / ".moonmind"
+        gh_dir = support_dir / "gh"
+        git_config_path = support_dir / "gitconfig"
+        cred_store_path = gh_dir / "git-credentials"
+
         try:
-            gh_dir.mkdir(parents=True, exist_ok=True)
-            hosts_path = gh_dir / "hosts.yml"
-            hosts_path.write_text(
-                f"github.com:\n"
-                f"  oauth_token: {token}\n"
-                f"  git_protocol: https\n",
-                encoding="utf-8",
-            )
-            hosts_path.chmod(0o600)
-            env["GH_CONFIG_DIR"] = str(gh_dir)
+            support_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
-            logger.debug("Failed to persist gh config", exc_info=True)
+            logger.debug("Failed to create managed runtime git support dir", exc_info=True)
             return
 
-        # Inject git credential helper into .git/config so git push works
-        # even when the AI CLI strips env vars from tool-call subprocesses.
-        try:
-            git_config_path = Path(workspace_path) / ".git" / "config"
-            if not git_config_path.exists():
-                return
+        if token:
+            try:
+                gh_dir.mkdir(parents=True, exist_ok=True)
+                hosts_path = gh_dir / "hosts.yml"
+                hosts_path.write_text(
+                    f"github.com:\n"
+                    f"  oauth_token: {token}\n"
+                    f"  git_protocol: https\n",
+                    encoding="utf-8",
+                )
+                hosts_path.chmod(0o600)
+                cred_store_path.write_text(
+                    f"https://x-access-token:{token}@github.com\n",
+                    encoding="utf-8",
+                )
+                cred_store_path.chmod(0o600)
+                env["GH_CONFIG_DIR"] = str(gh_dir)
+                env.setdefault("GIT_TERMINAL_PROMPT", "0")
+            except OSError:
+                logger.debug("Failed to persist gh config", exc_info=True)
+                token = ""
 
-            # Write a git-credential-store file with the token
-            cred_store_path = gh_dir / "git-credentials"
-            cred_store_path.write_text(
-                f"https://x-access-token:{token}@github.com\n",
-                encoding="utf-8",
-            )
-            cred_store_path.chmod(0o600)
+        try:
+            git_config_lines = [
+                "# moonmind-managed-git-config\n",
+                "[safe]\n",
+                f"\tdirectory = {resolved_workspace}\n",
+            ]
+            if token:
+                git_config_lines.extend(
+                    [
+                        "[credential]\n",
+                        f'\thelper = store --file="{cred_store_path}"\n',
+                    ]
+                )
+            if git_name or git_email:
+                git_config_lines.append("[user]\n")
+                if git_name:
+                    git_config_lines.append(f"\tname = {git_name}\n")
+                if git_email:
+                    git_config_lines.append(f"\temail = {git_email}\n")
+            git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
+            git_config_path.chmod(0o600)
+            env["GIT_CONFIG_GLOBAL"] = str(git_config_path)
+        except OSError:
+            logger.debug("Failed to persist git global config", exc_info=True)
+
+        try:
+            if not token:
+                return
+            repo_git_config_path = Path(workspace_path) / ".git" / "config"
+            if not repo_git_config_path.exists():
+                return
 
             # Append credential helper config to .git/config if not already
             # present.  We check for our marker to avoid duplicating on
             # idempotent re-launches.
             marker = "# moonmind-credential-helper"
-            existing_config = git_config_path.read_text(encoding="utf-8")
+            existing_config = repo_git_config_path.read_text(encoding="utf-8")
             if marker not in existing_config:
                 credential_section = (
                     f"\n{marker}\n"
                     f"[credential]\n"
                     f'\thelper = store --file="{cred_store_path}"\n'
                 )
-                git_config_path.write_text(
+                repo_git_config_path.write_text(
                     existing_config + credential_section,
                     encoding="utf-8",
                 )
@@ -548,6 +615,11 @@ class ManagedRuntimeLauncher:
 
         if strategy is not None:
             env_overrides = strategy.shape_environment(env_overrides, profile)
+
+        github_token = await self._resolve_github_token_for_launch(env_overrides)
+        if github_token:
+            env_overrides.setdefault("GITHUB_TOKEN", github_token)
+            env_overrides.setdefault("GH_TOKEN", github_token)
 
         for key in profile.passthrough_env_keys:
             value = os.environ.get(key)
