@@ -4919,6 +4919,33 @@
     const providerProfileSelect = form.querySelector('select[name="providerProfile"]');
     let applyQueueDraftProviderProfileOnce = true;
     let providerProfileFetchToken = 0;
+    const providerProfileDefaultModelByRuntime = {};
+
+    const resolveProfileRuntimeKey = (runtimeMode) => {
+      const mappedRuntimeId = mapTaskRuntimeToAuthProfileRuntimeId(runtimeMode);
+      return (
+        String(
+          mappedRuntimeId || normalizeRuntimeIdentifier(runtimeMode) || runtimeMode || "",
+        ).trim().toLowerCase()
+      );
+    };
+
+    const getSelectedProviderProfileDefaultModel = (runtimeMode) => {
+      if (!providerProfileSelect) {
+        return "";
+      }
+      const runtimeKey = resolveProfileRuntimeKey(runtimeMode);
+      if (!runtimeKey) {
+        return "";
+      }
+      const selectedProfileId = String(providerProfileSelect.value || "").trim();
+      if (!selectedProfileId) {
+        return "";
+      }
+      const defaultsForRuntime =
+        providerProfileDefaultModelByRuntime[runtimeKey] || {};
+      return String(defaultsForRuntime[selectedProfileId] || "").trim();
+    };
 
     const refreshProviderProfileOptions = async (runtimeMode) => {
       if (!providerProfileWrap || !providerProfileSelect) {
@@ -4938,6 +4965,8 @@
         }
         return;
       }
+      const runtimeKey = resolveProfileRuntimeKey(runtimeMode);
+      providerProfileDefaultModelByRuntime[runtimeKey] = {};
       const previousSelection = String(providerProfileSelect.value || "").trim();
       providerProfileWrap.classList.remove("hidden");
       if (providerProfileHint) {
@@ -4960,16 +4989,20 @@
         }
         const list = Array.isArray(profiles) ? profiles : [];
         const options = ['<option value="">Default (system chooses)</option>'];
+        const defaultsForRuntime = {};
         list.forEach((profile) => {
           const pid = String(profile.profile_id || "").trim();
           if (!pid) {
             return;
           }
+          const defaultModel = String(profile.default_model || "").trim();
+          defaultsForRuntime[pid] = defaultModel;
           const label = String(profile.account_label || "").trim() || pid;
           options.push(
             `<option value="${escapeHtml(pid)}">${escapeHtml(label)}</option>`,
           );
         });
+        providerProfileDefaultModelByRuntime[runtimeKey] = defaultsForRuntime;
         providerProfileSelect.innerHTML = options.join("");
         const desired = String(previousSelection || "").trim();
         let pickId = desired;
@@ -4983,6 +5016,7 @@
         ) {
           providerProfileSelect.value = pickId;
         }
+        applyRuntimeDefaults(runtimeMode);
       } catch (_error) {
         console.warn("submit form: could not load provider profiles", _error);
         providerProfileWrap.classList.add("hidden");
@@ -5076,6 +5110,10 @@
         nextDefaultModel = "";
         nextDefaultEffort = "";
       } else {
+        const profileDefaultModel = getSelectedProviderProfileDefaultModel(runtimeKey);
+        if (profileDefaultModel) {
+          nextDefaultModel = profileDefaultModel;
+        }
         if (modelInputElement.value.trim() === activeDefaultModel) {
           modelInputElement.value = nextDefaultModel;
         }
@@ -5121,11 +5159,20 @@
         activeWorkerRuntime = nextRuntime;
         applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime);
-        void refreshProviderProfileOptions(nextRuntime);
+        void refreshProviderProfileOptions(nextRuntime).then(() => {
+          applyRuntimeDefaults(nextRuntime);
+        });
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
       });
-      void refreshProviderProfileOptions(runtimeSelect.value);
+      void refreshProviderProfileOptions(runtimeSelect.value).then(() => {
+        applyRuntimeDefaults(runtimeSelect.value);
+      });
+    }
+    if (providerProfileSelect) {
+      providerProfileSelect.addEventListener("change", () => {
+        applyRuntimeDefaults(runtimeSelect?.value || defaultTaskRuntime);
+      });
     }
     form.addEventListener("input", scheduleWorkerDraftPersist);
     form.addEventListener("change", scheduleWorkerDraftPersist);
