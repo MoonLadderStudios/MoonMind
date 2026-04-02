@@ -1700,38 +1700,20 @@ class MoonMindRunWorkflow:
             task_node = parameters.get("task")
             task = task_node if isinstance(task_node, dict) else {}
             policy = task.get("proposalPolicy")
+            policy_payload: dict[str, Any] = {}
             if isinstance(policy, dict):
                 from moonmind.workflows.tasks.task_contract import TaskProposalPolicy
 
                 try:
                     parsed_policy = TaskProposalPolicy.model_validate(policy)
-                    max_items_dict = parsed_policy.max_items or {}
-                    max_items_val = max_items_dict.get(
-                        "project", parameters.get("proposalMaxItems", 10)
+                    policy_payload = parsed_policy.model_dump(
+                        by_alias=True,
+                        exclude_none=True,
                     )
-
-                    policy_payload = {
-                        "max_items": max_items_val,
-                        "targets": parsed_policy.targets
-                        or parameters.get("proposalTargets", "project"),
-                        "default_runtime": parsed_policy.default_runtime
-                        or parameters.get("proposalDefaultRuntime"),
-                    }
                 except Exception as exc:
                     self._get_logger().warning(
                         "Failed to validate task.proposalPolicy: %s", exc
                     )
-                    policy_payload = {
-                        "max_items": parameters.get("proposalMaxItems", 10),
-                        "targets": parameters.get("proposalTargets", "project"),
-                        "default_runtime": parameters.get("proposalDefaultRuntime"),
-                    }
-            else:
-                policy_payload = {
-                    "max_items": parameters.get("proposalMaxItems", 10),
-                    "targets": parameters.get("proposalTargets", "project"),
-                    "default_runtime": parameters.get("proposalDefaultRuntime"),
-                }
             origin = {
                 "source": "workflow",
                 "workflow_id": workflow.info().workflow_id,

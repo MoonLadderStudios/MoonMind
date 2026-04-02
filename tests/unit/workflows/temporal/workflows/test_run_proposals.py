@@ -88,12 +88,56 @@ async def test_run_proposals_stage_propagates_policy(
     
     submit_payload = captured[1][1]
     policy_payload = submit_payload["policy"]
-    assert policy_payload["max_items"] == 5
+    assert policy_payload["maxItems"] == {"project": 5}
     assert policy_payload["targets"] == ["project"]
-    assert policy_payload["default_runtime"] == "claude"
-    
+    assert policy_payload["defaultRuntime"] == "claude"
+
     assert mock_run_workflow._proposals_generated == 1
     assert mock_run_workflow._proposals_submitted == 1
+
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        def _to_serializable(obj: Any) -> Any:
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            if hasattr(obj, "dict"):
+                return obj.dict()
+            return str(obj)
+
+        dumped = json.loads(json.dumps(payload, default=_to_serializable))
+        captured.append((activity_type, dumped))
+        if activity_type == "proposal.generate":
+            return [{"title": "Generated proposal 1"}]
+        if activity_type == "proposal.submit":
+            return {"submitted_count": 1}
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={
+            "repo": "org/repo",
+            "proposeTasks": True,
+            "proposalMaxItems": 8,
+            "proposalTargets": "moonmind",
+            "proposalDefaultRuntime": "gemini_cli",
+        }
+    )
+
+    assert len(captured) == 2
+    submit_payload = captured[1][1]
+    assert submit_payload["policy"] == {}
 
 
 @pytest.mark.asyncio

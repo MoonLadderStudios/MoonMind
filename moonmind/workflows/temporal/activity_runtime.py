@@ -1813,8 +1813,50 @@ class TemporalProposalActivities:
         run_id: str = origin.get("temporal_run_id") or ""
         trigger_repo: str = origin.get("trigger_repo") or ""
 
-        max_items = int(policy.get("max_items", 10))
-        default_runtime = policy.get("default_runtime")
+        from moonmind.workflows.tasks.task_contract import (
+            TaskProposalPolicy,
+            build_effective_proposal_policy,
+        )
+
+        parsed_policy: TaskProposalPolicy | None = None
+        if isinstance(policy, Mapping) and policy:
+            try:
+                parsed_policy = TaskProposalPolicy.model_validate(policy)
+            except Exception as exc:
+                logger.warning("proposal.submit: invalid proposal policy: %s", exc)
+
+        effective_policy = build_effective_proposal_policy(
+            policy=parsed_policy,
+            default_targets=getattr(
+                settings.task_proposals,
+                "proposal_targets_default",
+                "project",
+            ),
+            default_max_items_project=getattr(
+                settings.task_proposals,
+                "max_items_project_default",
+                3,
+            ),
+            default_max_items_moonmind=getattr(
+                settings.task_proposals,
+                "max_items_moonmind_default",
+                2,
+            ),
+            default_moonmind_severity_floor=getattr(
+                settings.task_proposals,
+                "moonmind_severity_floor_default",
+                "high",
+            ),
+            severity_vocabulary=getattr(
+                settings.task_proposals,
+                "severity_vocabulary",
+                None,
+            ),
+        )
+        default_runtime = parsed_policy.default_runtime if parsed_policy else None
+        moonmind_repo = str(
+            getattr(settings.task_proposals, "moonmind_ci_repository", "") or ""
+        ).strip()
         generated_count = len(candidates)
         submitted_count = 0
         errors: list[str] = []
@@ -1850,7 +1892,7 @@ class TemporalProposalActivities:
             ctx = _wrap()
 
         async with ctx as service:
-            for candidate in candidates[:max_items]:
+            for candidate in candidates:
                 if not isinstance(candidate, Mapping):
                     errors.append("skipped non-object candidate")
                     continue
@@ -1878,6 +1920,18 @@ class TemporalProposalActivities:
                             payload_node["task"] = {
                                 "runtime": {"mode": default_runtime}
                             }
+
+                payload_node = stamped_request.get("payload")
+                target_repo = ""
+                if isinstance(payload_node, Mapping):
+                    target_repo = str(payload_node.get("repository") or "").strip()
+                is_moonmind_target = bool(moonmind_repo) and target_repo == moonmind_repo
+                if is_moonmind_target:
+                    if not effective_policy.consume_moonmind_slot():
+                        continue
+                else:
+                    if not effective_policy.consume_project_slot():
+                        continue
 
                 try:
                     if service is not None:
