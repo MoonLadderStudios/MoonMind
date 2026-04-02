@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence, get_type_hints
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
@@ -2827,7 +2827,8 @@ class TemporalAgentRuntimeActivities:
 def _build_activity_wrapper(
     func: Callable[..., Any],
 ) -> Callable[[Any, Any], Awaitable[Any]]:
-    params = list(inspect.signature(func).parameters.values())
+    original_signature = inspect.signature(func)
+    params = list(original_signature.parameters.values())
     non_self_params = params[1:] if params else []
     accepts_positional_request = bool(non_self_params) and non_self_params[0].kind in {
         inspect.Parameter.POSITIONAL_ONLY,
@@ -2848,6 +2849,29 @@ def _build_activity_wrapper(
         if accepts_request_keyword or accepts_var_kwargs:
             return await func(self, request=request)
         return await func(self, request)
+
+    if all(
+        param.kind is not inspect.Parameter.KEYWORD_ONLY for param in non_self_params
+    ):
+        annotation_globals = dict(func.__globals__)
+        try:
+            from moonmind.schemas.temporal_activity_models import (
+                ArtifactReadInput,
+                ArtifactWriteCompleteInput,
+            )
+
+            annotation_globals.setdefault("ArtifactReadInput", ArtifactReadInput)
+            annotation_globals.setdefault(
+                "ArtifactWriteCompleteInput", ArtifactWriteCompleteInput
+            )
+        except ImportError:
+            pass
+
+        _wrapper.__signature__ = original_signature  # type: ignore[attr-defined]
+        _wrapper.__annotations__ = get_type_hints(
+            func,
+            globalns=annotation_globals,
+        )
 
     return _wrapper
 

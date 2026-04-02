@@ -13,7 +13,7 @@ Goal: make activity boundaries **explicit, typed, and reviewable** so serializat
 | Phase | State | Notes |
 | ----- | ----- | ----- |
 | **1 — Standards and binary policy** | **Complete** | `moonmind/schemas/temporal_activity_models.py` (Pydantic v2, `Base64Bytes`, `ArtifactWriteCompleteInput`, `ArtifactReadInput` / `ArtifactReadOutput`, `PlanGenerateInput`, etc.); `moonmind/workflows/temporal/typed_execution.py` overload-backed `execute_typed_activity`. |
-| **2 — Activity definitions and worker wiring** | **In progress** | `plan.generate` entry in `activity_runtime.py` validates legacy dicts through `PlanGenerateInput` with an explicit fallback path (dual-read). `artifact.write_complete` / `artifact.read` handlers in `moonmind/workflows/temporal/artifacts.py` still take **loose keyword args** (e.g. payload as bytes, str, or legacy `list[int]`) rather than the Pydantic models at the public activity stub. |
+| **2 — Activity definitions and worker wiring** | **Complete** | Artifact activity handlers continue to dual-read legacy dict payloads through `ArtifactWriteCompleteInput` / `ArtifactReadInput`, and the worker binding layer now preserves typed handler signatures so Temporal sees the public model contract instead of an untyped wrapper. |
 | **3 — Workflow call sites** | **Partial** | Planning in `moonmind/workflows/temporal/workflows/run.py` passes `PlanGenerateInput` via `execute_typed_activity`. Many other paths still use `workflow.execute_activity(..., { ... })` (e.g. `artifact.write_complete`, `artifact.read`). |
 | **4 — Expansion and guardrails** | **Mostly pending** | Schema unit tests exist (`tests/schemas/test_temporal_activity_models.py`); planning-stage tests assert `PlanGenerateInput` shape. Broader workflow-boundary round-trip, replay/in-flight compatibility cases, and activity catalog model table updates for all high-risk activities are still open. |
 
@@ -36,12 +36,12 @@ Goal: make activity boundaries **explicit, typed, and reviewable** so serializat
 
 ### Phase 2: Refactor activity definitions and worker wiring
 
-- [ ] 1. Update `moonmind/workflows/temporal/artifacts.py`, `activity_runtime.py`, and related registration so activities accept the typed models at the **public activity boundary**, then map to internal services. Keep **activity type strings** unchanged.
-- [ ] 2. **Compatibility:** For in-flight workflows still sending legacy `dict` or legacy shapes, choose and document one cutover approach:
+- [x] 1. Update `moonmind/workflows/temporal/artifacts.py`, `activity_runtime.py`, and related registration so activities accept the typed models at the **public activity boundary**, then map to internal services. Keep **activity type strings** unchanged.
+- [x] 2. **Compatibility:** For in-flight workflows still sending legacy `dict` or legacy shapes, choose and document one cutover approach:
   - Prefer **narrow adapters** / **dual-read** at the activity entry (accept legacy `dict` + new model): `dict | Model` → validate into `Model`, with explicit branches for deprecated keys/shapes; or
   - **Versioned activity names / explicit migration window** when the *workflow* must emit a new shape and old histories must replay safely.
   - Greenfield-only if environments have no in-flight runs.
-- [ ] 3. Retain or narrow **defensive coercion** only as long as documented replay/history compatibility requires it. Add **replay / workflow-boundary** coverage when payload shapes change (not only isolated unit tests).
+- [x] 3. Retain or narrow **defensive coercion** only as long as documented replay/history compatibility requires it. Add **replay / workflow-boundary** coverage when payload shapes change (not only isolated unit tests).
 
 ### Phase 3: Refactor workflow call sites
 
