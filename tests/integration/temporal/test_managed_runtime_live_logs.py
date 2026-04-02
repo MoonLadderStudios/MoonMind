@@ -489,5 +489,15 @@ async def test_long_running_launch_is_visible_through_observability_routes(
         final = await asyncio.wait_for(supervise_task, timeout=10)
         assert final.status == "completed"
         assert store.find_latest_for_workflow("mm:wf-live-1") is not None
+
+        with TestClient(app) as client:
+            stdout_response = client.get(f"/api/task-runs/{run_id}/logs/stdout")
+            assert stdout_response.status_code == 200
+            assert "alpha" in stdout_response.text
+            assert "omega" in stdout_response.text
+
+            diagnostics_response = client.get(f"/api/task-runs/{run_id}/diagnostics")
+            assert diagnostics_response.status_code == 200
+            assert '"stdout"' in diagnostics_response.text
     finally:
         app.dependency_overrides.clear()

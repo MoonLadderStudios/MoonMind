@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
 from moonmind.observability.transport import SpoolLogReader
@@ -30,10 +31,7 @@ def _get_agent_runtime_store_root() -> str:
     )
 
 def _get_agent_runtime_artifacts_root() -> str:
-    return os.path.join(
-        os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"),
-        "artifacts",
-    )
+    return str(managed_runtime_artifact_root())
 
 
 def _enum_value(value: object) -> object:

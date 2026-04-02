@@ -77,6 +77,7 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
 logger = logging.getLogger(__name__)
@@ -462,10 +463,7 @@ def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, 
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_runs",
     )
-    artifact_root = os.path.join(
-        os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"),
-        "artifacts",
-    )
+    artifact_root = str(managed_runtime_artifact_root())
     os.makedirs(store_root, exist_ok=True)
     os.makedirs(artifact_root, exist_ok=True)
 
