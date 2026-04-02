@@ -1,5 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock
+from datetime import datetime, timezone
 
 import pytest
 
@@ -7,7 +8,10 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    STATE_WAITING_ON_DEPENDENCIES,
+    MoonMindRunWorkflow,
+)
 
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
@@ -353,3 +357,92 @@ def test_update_inputs_extracts_clarification_message_from_parameters_patch():
     )
 
     assert message == "Use the Workers page copy for now."
+
+
+@pytest.mark.asyncio
+async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    memo_updates: list[dict[str, object]] = []
+
+    class _Handle:
+        async def result(self) -> None:
+            return None
+
+    async def fake_wait_condition(predicate, timeout=None):
+        while not predicate():
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: _Handle(),
+    )
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
+
+    assert workflow_instance._state == STATE_WAITING_ON_DEPENDENCIES
+    assert workflow_instance._dependency_workflow_ids == ["dep-1", "dep-2"]
+    assert workflow_instance._waiting_reason is None
+    assert any(
+        memo.get("waiting_reason") == "dependency_wait" for memo in memo_updates
+    )
+    assert any(
+        memo.get("dependency_workflow_ids") == ["dep-1", "dep-2"]
+        for memo in memo_updates
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+
+    class _Handle:
+        async def result(self) -> None:
+            raise RuntimeError("prerequisite failed")
+
+    async def fake_wait_condition(predicate, timeout=None):
+        while not predicate():
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: _Handle(),
+    )
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    with pytest.raises(ValueError, match="dep-1"):
+        await workflow_instance._wait_for_dependencies(["dep-1"])
