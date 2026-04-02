@@ -234,29 +234,66 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
 
 
-def test_persist_gh_config_writes_hosts_yml(tmp_path):
+def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_path):
     env = {"GITHUB_TOKEN": "ghp_testtoken123", "PATH": "/usr/bin"}
-    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
-    hosts = tmp_path / ".moonmind" / "gh" / "hosts.yml"
-    assert hosts.exists()
-    content = hosts.read_text()
-    assert "ghp_testtoken123" in content
-    assert "github.com" in content
-    assert env["GH_CONFIG_DIR"] == str(tmp_path / ".moonmind" / "gh")
-    assert (hosts.stat().st_mode & 0o777) == 0o600
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(tmp_path),
+        github_socket_path="/tmp/github-auth.sock",
+        real_gh_path="/usr/bin/gh",
+    )
+    gh_wrapper = tmp_path / ".moonmind" / "bin" / "gh"
+    git_helper = tmp_path / ".moonmind" / "bin" / "git-credential-moonmind"
+    gitconfig = tmp_path / ".moonmind" / "gitconfig"
+    assert gh_wrapper.exists()
+    assert git_helper.exists()
+    assert gitconfig.exists()
+    assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["PATH"].startswith(str(tmp_path / ".moonmind" / "bin"))
+    assert "GH_CONFIG_DIR" not in env
+    assert (gh_wrapper.stat().st_mode & 0o777) == 0o700
+    assert (git_helper.stat().st_mode & 0o777) == 0o700
+    gitconfig_text = gitconfig.read_text(encoding="utf-8")
+    assert "[safe]" in gitconfig_text
+    assert "[credential]" in gitconfig_text
+    assert f'\tdirectory = "{tmp_path.resolve()}"' in gitconfig_text
+    assert "ghp_testtoken123" not in gh_wrapper.read_text(encoding="utf-8")
+    assert "ghp_testtoken123" not in git_helper.read_text(encoding="utf-8")
+    assert "ghp_testtoken123" not in gitconfig_text
 
 
-def test_persist_gh_config_skips_without_token(tmp_path):
+def test_persist_gh_config_writes_safe_directory_without_token(tmp_path):
     env = {"PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
-    assert not (tmp_path / ".moonmind" / "gh").exists()
+    gitconfig = tmp_path / ".moonmind" / "gitconfig"
+    assert gitconfig.exists()
+    assert "[safe]" in gitconfig.read_text(encoding="utf-8")
+    assert f'\tdirectory = "{tmp_path.resolve()}"' in gitconfig.read_text(
+        encoding="utf-8"
+    )
     assert "GH_CONFIG_DIR" not in env
+    assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+    assert "[credential]" not in gitconfig.read_text(encoding="utf-8")
 
 
 def test_persist_gh_config_skips_without_workspace():
-    env = {"GITHUB_TOKEN": "ghp_test"}
+    env = {"PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, None)
     assert "GH_CONFIG_DIR" not in env
+    assert "GIT_CONFIG_GLOBAL" not in env
+
+
+def test_build_github_socket_path_stays_short_for_long_workspace_paths(tmp_path):
+    support_root = tmp_path / ("nested-" * 12) / ("workspace-" * 8)
+    socket_path = ManagedRuntimeLauncher._build_github_socket_path(
+        run_id="run-github-secret-ref-1",
+        support_root=str(support_root),
+    )
+
+    assert len(socket_path.encode("utf-8")) < 80
+    assert str(support_root) not in socket_path
+    assert socket_path.endswith(".sock")
 
 
 def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
@@ -270,27 +307,34 @@ def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
         encoding="utf-8",
     )
 
-    env = {"GITHUB_TOKEN": "test-support-root-token", "PATH": "/usr/bin"}
+    env = {"PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(
         env,
         str(repo_root),
         support_root=str(run_root),
+        github_socket_path="/tmp/github-auth.sock",
+        real_gh_path="/usr/bin/gh",
     )
 
-    hosts = run_root / ".moonmind" / "gh" / "hosts.yml"
-    cred_store = run_root / ".moonmind" / "gh" / "git-credentials"
-    assert hosts.exists()
-    assert cred_store.exists()
+    gh_wrapper = run_root / ".moonmind" / "bin" / "gh"
+    git_helper = run_root / ".moonmind" / "bin" / "git-credential-moonmind"
+    gitconfig = run_root / ".moonmind" / "gitconfig"
+    assert gh_wrapper.exists()
+    assert git_helper.exists()
+    assert gitconfig.exists()
     assert not (repo_root / ".moonmind").exists()
-    assert env["GH_CONFIG_DIR"] == str(run_root / ".moonmind" / "gh")
+    assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+    assert env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
 
     updated_config = git_config.read_text()
-    assert str(cred_store) in updated_config
+    assert str(git_helper) in updated_config
+    assert f'\tdirectory = "{repo_root.resolve()}"' in gitconfig.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_persist_gh_config_writes_git_credential_helper(tmp_path):
-    """When a .git/config exists, _persist_gh_config injects a credential
-    helper pointing to a git-credentials store file."""
+    """When a .git/config exists, _persist_gh_config injects a broker helper."""
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
     git_config = git_dir / "config"
@@ -299,26 +343,22 @@ def test_persist_gh_config_writes_git_credential_helper(tmp_path):
         encoding="utf-8",
     )
 
-    env = {"GITHUB_TOKEN": "test-cred-store-token", "PATH": "/usr/bin"}
-    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+    env = {"PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(tmp_path),
+        github_socket_path="/tmp/github-auth.sock",
+    )
 
-    # gh hosts.yml should still be written
-    assert (tmp_path / ".moonmind" / "gh" / "hosts.yml").exists()
-
-    # git-credentials store file should contain the token
-    cred_store = tmp_path / ".moonmind" / "gh" / "git-credentials"
-    assert cred_store.exists()
-    cred_content = cred_store.read_text()
-    assert "test-cred-store-token" in cred_content
-    assert "github.com" in cred_content
-    assert (cred_store.stat().st_mode & 0o777) == 0o600
+    git_helper = tmp_path / ".moonmind" / "bin" / "git-credential-moonmind"
+    assert git_helper.exists()
+    assert (git_helper.stat().st_mode & 0o777) == 0o700
 
     # .git/config should have the credential helper section
     updated_config = git_config.read_text()
     assert "# moonmind-credential-helper" in updated_config
     assert "[credential]" in updated_config
-    assert "store --file=" in updated_config
-    assert str(cred_store) in updated_config
+    assert str(git_helper) in updated_config
 
 
 def test_persist_gh_config_git_credential_idempotent(tmp_path):
@@ -328,9 +368,17 @@ def test_persist_gh_config_git_credential_idempotent(tmp_path):
     git_config = git_dir / "config"
     git_config.write_text("[core]\n\tbare = false\n", encoding="utf-8")
 
-    env = {"GITHUB_TOKEN": "test-idempotent-token", "PATH": "/usr/bin"}
-    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
-    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+    env = {"PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(tmp_path),
+        github_socket_path="/tmp/github-auth.sock",
+    )
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(tmp_path),
+        github_socket_path="/tmp/github-auth.sock",
+    )
 
     updated_config = git_config.read_text()
     assert updated_config.count("# moonmind-credential-helper") == 1
@@ -338,14 +386,17 @@ def test_persist_gh_config_git_credential_idempotent(tmp_path):
 
 
 def test_persist_gh_config_skips_git_cred_without_git_dir(tmp_path):
-    """When no .git/config exists, only gh hosts.yml should be written."""
-    env = {"GITHUB_TOKEN": "test-no-gitdir-token", "PATH": "/usr/bin"}
-    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+    """When no .git/config exists, global git config still carries the helper."""
+    env = {"PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(tmp_path),
+        github_socket_path="/tmp/github-auth.sock",
+    )
 
-    # gh config should still be written
-    assert (tmp_path / ".moonmind" / "gh" / "hosts.yml").exists()
-    # But no git-credentials file since there's no .git/config
-    assert not (tmp_path / ".moonmind" / "gh" / "git-credentials").exists()
+    assert (tmp_path / ".moonmind" / "bin" / "git-credential-moonmind").exists()
+    gitconfig = tmp_path / ".moonmind" / "gitconfig"
+    assert "[credential]" in gitconfig.read_text(encoding="utf-8")
 
 
 def test_persist_gh_config_quotes_helper_path_when_store_has_spaces(tmp_path):
@@ -355,16 +406,33 @@ def test_persist_gh_config_quotes_helper_path_when_store_has_spaces(tmp_path):
     git_config = git_dir / "config"
     git_config.write_text("[core]\n\tbare = false\n", encoding="utf-8")
 
-    env = {"GITHUB_TOKEN": "test-space-path-token", "PATH": "/usr/bin"}
+    env = {"PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(
         env,
         str(run_root / "repo"),
         support_root=str(run_root),
+        github_socket_path="/tmp/github-auth.sock",
     )
 
     updated_config = git_config.read_text(encoding="utf-8")
-    assert 'helper = store --file="' in updated_config
-    assert str(run_root / ".moonmind" / "gh" / "git-credentials") in updated_config
+    assert "helper = !" in updated_config
+    assert str(run_root / ".moonmind" / "bin" / "git-credential-moonmind") in updated_config
+
+
+def test_persist_gh_config_writes_git_identity_to_global_config(tmp_path):
+    env = {
+        "PATH": "/usr/bin",
+        "GIT_AUTHOR_NAME": "Test User",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+    }
+
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+
+    gitconfig = tmp_path / ".moonmind" / "gitconfig"
+    text = gitconfig.read_text(encoding="utf-8")
+    assert "[user]" in text
+    assert "\tname = Test User" in text
+    assert "\temail = test@example.com" in text
 
 
 @pytest.mark.asyncio
@@ -774,6 +842,10 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
     monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
         _fake_resolve,
     )
@@ -786,6 +858,90 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
     assert captured_env["ANTHROPIC_AUTH_TOKEN"] == "resolved-minimax-token"
     assert "MANAGED_API_KEY_REF" not in captured_env
     assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env
+
+
+@pytest.mark.asyncio
+async def test_launch_resolves_github_token_from_secret_ref_setting(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+    request = _make_request(
+        workspace_spec={"repository": str(tmp_path / "source-repo")},
+    )
+
+    source_repo = tmp_path / "source-repo"
+    subprocess.run(["git", "init", str(source_repo)], check=True, capture_output=True)
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1002) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    async def _fake_resolve(secret_name: str) -> str:
+        assert secret_name == "db://github-pat"
+        return "resolved-github-token"
+
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings.github,
+        "github_token_secret_ref",
+        "db://github-pat",
+    )
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    _record, process, _cleanup = await launcher.launch(
+        run_id="run-github-secret-ref-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    run_root = store.store_root.parent / "workspaces" / "run-github-secret-ref-1"
+    assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GITHUB_TOKEN" not in captured_env
+    assert "GH_TOKEN" not in captured_env
+    assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
+    gitconfig = Path(captured_env["GIT_CONFIG_GLOBAL"])
+    assert gitconfig.exists()
+    assert "[credential]" in gitconfig.read_text(encoding="utf-8")
+    assert "resolved-github-token" not in gitconfig.read_text(encoding="utf-8")
+    assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
 
 @pytest.mark.asyncio
