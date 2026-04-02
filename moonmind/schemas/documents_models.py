@@ -13,6 +13,7 @@ class ConfluenceLoadRequest(BaseModel):
     )
 
     @field_validator("page_title")
+    @classmethod
     def page_title_requires_space_key(
         cls, v: Optional[str], info: ValidationInfo
     ) -> Optional[str]:

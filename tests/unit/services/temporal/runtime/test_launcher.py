@@ -190,6 +190,7 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)

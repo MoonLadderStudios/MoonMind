@@ -67,33 +67,41 @@ def _build_typed_search_attributes(
 
     pairs: list[SearchAttributePair] = []
     for key, raw_value in search_attributes.items():
-        if isinstance(raw_value, Mapping):
-            values = [raw_value]
-        elif isinstance(raw_value, Sequence) and not isinstance(
+        # Callers currently wrap everything in a list for legacy compatibility.
+        if isinstance(raw_value, Sequence) and not isinstance(
             raw_value, (str, bytes, bytearray)
         ):
             values = list(raw_value)
         else:
             values = [raw_value]
 
+        if not values or values[0] is None:
+            continue
+
+        # Temporal only supports lists for KeywordList. All other types must be unwrapped.
         if all(isinstance(v, str) for v in values):
-            key_type = (
-                SearchAttributeKey.for_keyword_list(key)
-                if len(values) > 1
-                else SearchAttributeKey.for_keyword(key)
-            )
+            if len(values) > 1:
+                key_type = SearchAttributeKey.for_keyword_list(key)
+                pairs.append(SearchAttributePair(key_type, values))
+            else:
+                key_type = SearchAttributeKey.for_keyword(key)
+                pairs.append(SearchAttributePair(key_type, values[0]))
         elif all(isinstance(v, bool) for v in values):
             key_type = SearchAttributeKey.for_bool(key)
+            pairs.append(SearchAttributePair(key_type, values[0]))
         elif all(isinstance(v, int) for v in values):
             key_type = SearchAttributeKey.for_int(key)
+            pairs.append(SearchAttributePair(key_type, values[0]))
         elif all(isinstance(v, float) for v in values):
             key_type = SearchAttributeKey.for_float(key)
+            pairs.append(SearchAttributePair(key_type, values[0]))
         elif all(isinstance(v, datetime) for v in values):
             key_type = SearchAttributeKey.for_datetime(key)
+            pairs.append(SearchAttributePair(key_type, values[0]))
         else:
+            # Fallback to keyword for unknown types, ensuring we pass a string.
             key_type = SearchAttributeKey.for_keyword(key)
-
-        pairs.append(SearchAttributePair(key_type, values))
+            pairs.append(SearchAttributePair(key_type, str(values[0])))
 
     return TypedSearchAttributes(pairs)
 

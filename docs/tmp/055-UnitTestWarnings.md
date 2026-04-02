@@ -24,7 +24,7 @@ These are standard library and dependency deprecation changes pointing to future
 
 *Phase 2 is Complete.*
 
-## Phase 3: Temporalio Configuration (Open)
+## Phase 3: Temporalio Configuration (Complete)
 - [x] **Dictionary-based Search Attributes** (~35 warnings, `DeprecationWarning`): `moonmind/workflows/temporal/client.py` now passes typed search attributes via `TypedSearchAttributes` for both workflow starts and schedule creation.
 - [x] **Pydantic V2 Converter**: `temporalio.contrib.pydantic.pydantic_data_converter` is used for Temporal client and worker runtime data conversion.
 
