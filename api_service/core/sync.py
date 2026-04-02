@@ -243,9 +243,12 @@ async def map_temporal_state_to_projection(
 async def sync_execution_projection(
     session: AsyncSession,
     desc: WorkflowExecutionDescription,
+    *,
+    payload: dict[str, Any] | None = None,
 ) -> TemporalExecutionRecord:
     """Upsert the Temporal workflow state to the local projection database."""
-    payload = await map_temporal_state_to_projection(desc)
+    if payload is None:
+        payload = await map_temporal_state_to_projection(desc)
 
     projection = await session.get(TemporalExecutionRecord, desc.id)
     previous_version = int(projection.projection_version or 0) if projection else 0
@@ -342,26 +345,48 @@ async def sync_temporal_executions_safely(
 ) -> list[Any]:
     import asyncio
 
-    async def fetch_and_sync(item):
+    from moonmind.workflows.temporal.client import fetch_workflow_execution
+
+    async def fetch_and_map(item: Any) -> tuple[Any, WorkflowExecutionDescription, dict[str, Any]] | tuple[Any, None, None]:
         try:
-            return await fetch_and_sync_execution(session, item.workflow_id, client)
+            desc = await fetch_workflow_execution(client, item.workflow_id)
+            payload = await map_temporal_state_to_projection(desc)
+            return (item, desc, payload)
         except Exception as exc:
             logger.warning(
-                "Failed to sync execution %s from Temporal: %s",
+                "Failed to fetch execution %s from Temporal: %s",
                 item.workflow_id,
                 exc,
             )
-            return item
+            return (item, None, None)
+
+    # Concurrently fetch and map Temporal state for all items
+    results = await asyncio.gather(*(fetch_and_map(item) for item in items))
 
     updated_items = []
-    for item in items:
-        updated_items.append(await fetch_and_sync(item))
+    for item, desc, payload in results:
+        if desc is None or payload is None:
+            updated_items.append(item)
+            continue
+
+        try:
+            # Sequentially sync and commit mapped state to the database
+            updated_items.append(await sync_execution_projection(session, desc, payload=payload))
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync mapped execution %s to DB: %s",
+                item.workflow_id,
+                exc,
+            )
+            updated_items.append(item)
+
     await session.commit()
     for obj in updated_items:
-        try:
-            await session.refresh(obj)
-        except Exception:
-            pass  # fallback to potentially stale but accessible attributes
+        if obj is not None and hasattr(obj, "workflow_id"):
+            try:
+                await session.refresh(obj)
+            except Exception:
+                pass  # fallback to potentially stale but accessible attributes
     return updated_items
 
 
