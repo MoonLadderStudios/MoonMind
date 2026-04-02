@@ -2,7 +2,7 @@
 
 Running the unit tests resulted in several warnings that can be broken down into the following phases to address systematically:
 
-**Current status (2026-03-27):** 2081 passed, 7 skipped, 220 warnings.
+**Current status (2026-04-02):** 2081 passed, 7 skipped, 220 warnings.
 
 ## Phase 1: Pydantic V2 Migration (Partially Complete)
 These warnings are caused by the upgrade to Pydantic V2 and require straightforward search-and-replace changes.
@@ -12,8 +12,8 @@ These warnings are caused by the upgrade to Pydantic V2 and require straightforw
 - [x] **Method Deprecations**:
   - Replace `.dict()` with `.model_dump()` in `api_service/services/profile_service.py` (line 120) and potentially in Temporalio converter code if within project bounds.
   - Replace `.parse_obj()` with `.model_validate()` where found.
-- [ ] **V1-style validators in `documents_models.py`** (~48 warnings, `PydanticDeprecatedSince20`): `moonmind/schemas/documents_models.py` still uses `@validator` (line 15) and `@root_validator` (line 24). Migrate to `@field_validator` and `@model_validator` respectively.
-- [ ] **`@model_validator(mode="after")` as classmethod** (~25 warnings, `PydanticDeprecatedSince212`): `moonmind/schemas/manifest_models.py:21` uses `mode="after"` on a classmethod (`cls`). Since Pydantic 2.12, `mode="after"` validators must be instance methods using `self`. Change the signature from `cls, model: "AuthItem"` to `self` and update the method body accordingly.
+- [x] **V1-style validators in `documents_models.py`** (~48 warnings, `PydanticDeprecatedSince20`): `moonmind/schemas/documents_models.py` now uses `@field_validator` and `@model_validator` instead of `@validator` and `@root_validator`.
+- [x] **`@model_validator(mode="after")` as classmethod** (~25 warnings, `PydanticDeprecatedSince212`): `moonmind/schemas/manifest_models.py:21` now uses an instance method (`self`) for `mode="after"` on `AuthItem`.
 
 ## Phase 2: FastAPI & Dependency Deprecations (Complete)
 These are standard library and dependency deprecation changes pointing to future breaking changes.
@@ -24,9 +24,9 @@ These are standard library and dependency deprecation changes pointing to future
 
 *Phase 2 is Complete.*
 
-## Phase 3: Temporalio Configuration (Open)
-- [ ] **Dictionary-based Search Attributes** (~35 warnings, `DeprecationWarning`): `moonmind/workflows/temporal/client.py:165` passes search attributes as a plain dict. Temporal has deprecated this in favor of `TypedSearchAttributes`. Triggered by 29 tests in `test_temporal_service.py`, 2 in `test_manifest_ingest.py`, and 4 in `test_manifests_service.py`.
-- [ ] **Pydantic V2 Converter**: `temporalio.converter` is warning about Pydantic V2 payloads. The application needs to explicitly opt into `temporalio.contrib.pydantic.pydantic_data_converter` or switch to the new temporalio data converters for Pydantic V2.
+## Phase 3: Temporalio Configuration (Complete)
+- [x] **Dictionary-based Search Attributes** (~35 warnings, `DeprecationWarning`): `moonmind/workflows/temporal/client.py` now passes typed search attributes via `TypedSearchAttributes` for both workflow starts and schedule creation.
+- [x] **Pydantic V2 Converter**: `temporalio.contrib.pydantic.pydantic_data_converter` is used for Temporal client and worker runtime data conversion.
 
 ## Phase 4: Async/Await Runtime Warnings (Complete)
 These are actual bugs in test cases or application code where asynchronous functions are ignored.
@@ -40,7 +40,7 @@ These are actual bugs in test cases or application code where asynchronous funct
 
 *Phase 5 is Complete.*
 
-## Phase 6: Incorrect `@pytest.mark.asyncio` on Sync Tests (Open)
+## Phase 6: Incorrect `@pytest.mark.asyncio` on Sync Tests (Complete)
 38 `PytestWarning`s from sync test functions that carry the `@pytest.mark.asyncio` mark (likely inherited from a class-level or module-level `pytestmark`). Remove the mark from each affected function or convert the function to `async def` if it should actually be async.
 
 Affected files and tests:

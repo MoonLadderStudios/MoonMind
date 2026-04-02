@@ -63,7 +63,7 @@ def _build_context(
 # --- discovery tests ---
 
 
-def test_list_tools_returns_three_jules_tools():
+async def test_list_tools_returns_three_jules_tools():
     registry = JulesToolRegistry()
     tools = registry.list_tools()
     names = [t.name for t in tools]
