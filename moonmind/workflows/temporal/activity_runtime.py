@@ -2084,9 +2084,9 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_publish_artifacts(
         self,
-        result: Any = None,
+        result: AgentRunResult | None = None,
         /,
-    ) -> Any:
+    ) -> AgentRunResult | None:
         """Publish agent-run outputs back to artifact storage.
 
         Writes a summary JSON artifact containing the run result metadata
@@ -2145,7 +2145,10 @@ class TemporalAgentRuntimeActivities:
             if hasattr(result, "diagnostics_ref"):
                 result.diagnostics_ref = summary_ref.artifact_id
             return result
-        except Exception:
+        except BaseException as exc:
+            import asyncio as _asyncio
+            if isinstance(exc, _asyncio.CancelledError):
+                raise
             logger.warning(
                 "agent_runtime.publish_artifacts failed to write summary artifact",
                 exc_info=True,

@@ -281,6 +281,36 @@ class AgentRuntimeStatusBoundaryTest:
             start_to_close_timeout=timedelta(minutes=1),
         )
 
+@workflow.defn(name="AgentRuntimeFetchResultBoundaryTest")
+class AgentRuntimeFetchResultBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> AgentRunResult:
+        return await workflow.execute_activity(
+            "agent_runtime.fetch_result",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+@workflow.defn(name="AgentRuntimeCancelBoundaryTest")
+class AgentRuntimeCancelBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> AgentRunStatus:
+        return await workflow.execute_activity(
+            "agent_runtime.cancel",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+@workflow.defn(name="AgentRuntimePublishArtifactsBoundaryTest")
+class AgentRuntimePublishArtifactsBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> AgentRunResult | None:
+        return await workflow.execute_activity(
+            "agent_runtime.publish_artifacts",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
 async def test_agent_runtime_status_temporal_boundary(tmp_path: Path) -> None:
     """Validate Temporal boundary serialization for typed Pydantic return matches contract."""
     from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
@@ -314,3 +344,105 @@ async def test_agent_runtime_status_temporal_boundary(tmp_path: Path) -> None:
 
             assert isinstance(result, AgentRunStatus)
             assert result.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_fetch_result_temporal_boundary(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="boundary-1", status="completed")
+
+    activities_impl = TemporalAgentRuntimeActivities(run_store=store)
+    from temporalio import activity
+
+    @activity.defn(name="agent_runtime.fetch_result")
+    async def _agent_runtime_fetch_wrapper(request: dict) -> AgentRunResult:
+        res = await activities_impl.agent_runtime_fetch_result(request)
+        if hasattr(res, "model_copy"):
+            return res.model_copy()
+        return res
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-fetch",
+            workflows=[AgentRuntimeFetchResultBoundaryTest],
+            activities=[_agent_runtime_fetch_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            with patch("moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter", autospec=True) as MockAdapter:
+                instance = MockAdapter.return_value
+                instance.fetch_result = AsyncMock(return_value=AgentRunResult(summary="ok", failure_class=None))
+
+                result = await env.client.execute_workflow(
+                    AgentRuntimeFetchResultBoundaryTest.run,
+                    {"run_id": "boundary-1", "agent_id": "claude"},
+                    id="boundary-test-fetch",
+                    task_queue="boundary-test-queue-fetch",
+                )
+
+                assert isinstance(result, AgentRunResult)
+                assert result.summary == "ok"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_cancel_temporal_boundary() -> None:
+    from unittest.mock import MagicMock
+    mock_supervisor = AsyncMock()
+    mock_supervisor.cancel = AsyncMock()
+    activities_impl = TemporalAgentRuntimeActivities(
+        run_store=MagicMock(),
+        run_supervisor=mock_supervisor,
+    )
+    from temporalio import activity
+
+    @activity.defn(name="agent_runtime.cancel")
+    async def _agent_runtime_cancel_wrapper(request: dict) -> AgentRunStatus:
+        return await activities_impl.agent_runtime_cancel(request)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-cancel",
+            workflows=[AgentRuntimeCancelBoundaryTest],
+            activities=[_agent_runtime_cancel_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimeCancelBoundaryTest.run,
+                {"run_id": "c-1", "agent_id": "c"},
+                id="boundary-test-cancel",
+                task_queue="boundary-test-queue-cancel",
+            )
+
+            assert isinstance(result, AgentRunStatus)
+            assert result.status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_publish_temporal_boundary() -> None:
+    from unittest.mock import MagicMock
+    activities_impl = TemporalAgentRuntimeActivities(run_store=MagicMock())
+    from temporalio import activity
+
+    @activity.defn(name="agent_runtime.publish_artifacts")
+    async def _agent_runtime_publish_wrapper(request: dict) -> AgentRunResult | None:
+        return await activities_impl.agent_runtime_publish_artifacts(None)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-pub",
+            workflows=[AgentRuntimePublishArtifactsBoundaryTest],
+            activities=[_agent_runtime_publish_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimePublishArtifactsBoundaryTest.run,
+                {},
+                id="boundary-test-pub",
+                task_queue="boundary-test-queue-pub",
+            )
+
+            assert result is None
