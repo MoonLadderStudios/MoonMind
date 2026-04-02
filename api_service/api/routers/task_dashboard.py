@@ -57,9 +57,6 @@ _STATIC_PATHS = {
     "skills",
 }
 
-_PATH_ALIASES = {
-    "create": "new",
-}
 # Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
 _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
     "queue",
@@ -67,6 +64,15 @@ _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
     "system",
     "workers",
     "secrets",
+}
+_DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
+    "code": "dashboard_route_not_found",
+    "message": (
+        "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
+        "/tasks/create, /tasks/new, "
+        "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+        "/tasks/schedules, /tasks/skills, or /tasks/settings."
+    ),
 }
 
 
@@ -168,9 +174,11 @@ def _is_allowed_path(path: str) -> bool:
     )
 
 
-def _normalize_dashboard_path(path: str) -> str:
-    normalized = path.strip("/")
-    return _PATH_ALIASES.get(normalized, normalized)
+def _raise_dashboard_route_not_found() -> None:
+    raise HTTPException(
+        status_code=404,
+        detail=_DASHBOARD_ROUTE_NOT_FOUND_DETAIL,
+    )
 
 
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
@@ -236,24 +244,20 @@ def _vite_assets_or_error(entrypoint: str) -> HTMLResponse | str:
         return _mission_control_ui_error_response(entrypoint, str(exc))
 
 
-def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
-    config = build_runtime_config(current_path)
-    boot_payload = generate_boot_payload("dashboard-alerts")
-    assets_html = _vite_assets_or_error("dashboard-alerts")
-    if isinstance(assets_html, HTMLResponse):
-        return assets_html
-
-    return templates.TemplateResponse(
-        request,
-        "task_dashboard.html",
-        {
-            "request": request,
-            "dashboard_config": config,
-            "current_path": current_path,
-            "boot_payload": boot_payload,
-            "assets_html": assets_html,
-        },
-    )
+def _rendered_assets_or_error(*entrypoints: str) -> HTMLResponse | str:
+    rendered_assets: list[str] = []
+    seen: set[str] = set()
+    for entrypoint in entrypoints:
+        assets_html = _vite_assets_or_error(entrypoint)
+        if isinstance(assets_html, HTMLResponse):
+            return assets_html
+        for line in assets_html.splitlines():
+            normalized = line.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            rendered_assets.append(line)
+    return "\n".join(rendered_assets)
 
 
 def _render_react_page(
@@ -265,7 +269,7 @@ def _render_react_page(
     data_wide_panel: bool = False,
 ) -> HTMLResponse:
     boot_payload = generate_boot_payload(entrypoint, initial_data=initial_data)
-    assets_html = _vite_assets_or_error(entrypoint)
+    assets_html = _rendered_assets_or_error(entrypoint, "dashboard-alerts")
     if isinstance(assets_html, HTMLResponse):
         return assets_html
 
@@ -325,6 +329,21 @@ async def task_manifests_route(
 ) -> HTMLResponse:
     """Serve the React-powered manifests page."""
     return _render_react_page(request, "manifests", "/tasks/manifests")
+
+
+@router.get("/tasks/manifests/new", response_class=HTMLResponse)
+async def task_manifest_submit_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered manifest submit page."""
+    current_path = "/tasks/manifests/new"
+    return _render_react_page(
+        request,
+        "manifest-submit",
+        current_path,
+        initial_data={"dashboardConfig": build_runtime_config(current_path)},
+    )
 
 
 @router.get("/tasks/tasks-list", response_class=HTMLResponse)
@@ -390,6 +409,45 @@ async def task_settings_route(
     )
 
 
+@router.get("/tasks/new", response_class=HTMLResponse)
+async def task_create_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered task create page."""
+    current_path = "/tasks/new"
+    return _render_react_page(
+        request,
+        "task-create",
+        current_path,
+        initial_data={"dashboardConfig": build_runtime_config(current_path)},
+    )
+
+
+@router.get("/tasks/create", response_class=HTMLResponse)
+async def task_create_alias_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered task create alias page."""
+    current_path = "/tasks/create"
+    return _render_react_page(
+        request,
+        "task-create",
+        current_path,
+        initial_data={"dashboardConfig": build_runtime_config(current_path)},
+    )
+
+
+@router.get("/tasks/skills", response_class=HTMLResponse)
+async def task_skills_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered skills page."""
+    return _render_react_page(request, "skills", "/tasks/skills")
+
+
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
 async def task_dashboard_route(
     request: Request,
@@ -398,33 +456,17 @@ async def task_dashboard_route(
 ) -> HTMLResponse:
     """Serve dashboard sub-routes from one HTML shell."""
 
-    normalized = _normalize_dashboard_path(dashboard_path)
-    if not _is_allowed_path(normalized):
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "dashboard_route_not_found",
-                "message": (
-                    "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-                    "/tasks/create, /tasks/new, "
-                    "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/skills, or /tasks/settings."
-                ),
-            },
-        )
+    normalized = dashboard_path.strip("/")
+    if not _is_allowed_path(normalized) or normalized in _STATIC_PATHS:
+        _raise_dashboard_route_not_found()
 
-    # Exclude known static paths from the task detail React shell, so they fall back to the legacy shell
-    if normalized not in _STATIC_PATHS:
-        if _is_safe_detail_segment(normalized) or any(_is_dynamic_detail(normalized, source) for source in ("proposals", "manifests", "schedules")):
-            detail_path = f"/tasks/{normalized}"
-            return _render_react_page(
-                request,
-                "task-detail",
-                detail_path,
-                initial_data={"dashboardConfig": build_runtime_config(detail_path)},
-            )
-
-    return _render_dashboard(request, f"/tasks/{normalized}")
+    detail_path = f"/tasks/{normalized}"
+    return _render_react_page(
+        request,
+        "task-detail",
+        detail_path,
+        initial_data={"dashboardConfig": build_runtime_config(detail_path)},
+    )
 
 
 @router.get("/api/tasks/skills", response_model=DashboardSkillListResponse)

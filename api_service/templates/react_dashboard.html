@@ -28,7 +28,6 @@
       root.dataset.theme = mode;
     })();
   </script>
-  <link rel="stylesheet" href="/static/task_dashboard/dashboard.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   {{ assets_html | safe }}
 </head>
@@ -52,6 +51,10 @@
       </header>
 
       {% include "_navigation.html" %}
+    </div>
+
+    <div class="dashboard-shell-constrained">
+      <div id="dashboard-alerts-root"></div>
     </div>
 
     <section class="panel{% if data_wide_panel %} panel--data-wide{% endif %}" aria-live="polite">

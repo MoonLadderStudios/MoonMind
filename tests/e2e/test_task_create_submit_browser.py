@@ -118,7 +118,7 @@ def _route_handlers(
         route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps({"items": [{"id": "speckit-orchestrate"}]}),
+            body=json.dumps({"items": {"worker": ["speckit-orchestrate"]}}),
         )
 
     def _mock_worker_pause(route):
@@ -165,7 +165,7 @@ def _route_handlers(
         runtime_id = route.request.url.split("runtime_id=", 1)[-1].split("&", 1)[0]
         runtime_id = runtime_id.replace("%5F", "_")
         items = []
-        if runtime_id == "codex":
+        if runtime_id in {"codex_cli", "codex"}:
             items = [
                 {
                     "profile_id": "profile:codex-default",
@@ -234,12 +234,19 @@ def test_submit_create_flows_to_task_detail(server):
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
-        job_id = "11111111-1111-4111-8111-111111111111"
+        workflow_id = "mm:workflow-123"
         calls, create_requests = _route_handlers(
             page,
             base_url=base_url,
             create_status=201,
-            create_body=json.dumps({"id": job_id}),
+            create_body=json.dumps(
+                {
+                    "workflowId": workflow_id,
+                    "runId": "run-123",
+                    "namespace": "moonmind",
+                    "redirectPath": f"/tasks/{workflow_id}?source=temporal",
+                }
+            ),
             create_delay_seconds=0.25,
         )
 
@@ -260,12 +267,16 @@ def test_submit_create_flows_to_task_detail(server):
         _assert_inflight_label(page, "Submitting...")
         assert _read_submit_label(page) == "Submitting..."
 
-        page.wait_for_url(f"**/tasks/queue/{job_id}")
-        assert page.url.endswith(f"/tasks/queue/{job_id}")
+        page.wait_for_url(f"**/tasks/{workflow_id}?source=temporal")
+        assert page.url.endswith(f"/tasks/{workflow_id}?source=temporal")
         assert calls["create"] == 1
         
         create_payload = create_requests[0]
-        assert create_payload["payload"]["task"]["skills"] == ["speckit-orchestrate"]
+        assert create_payload["payload"]["task"]["tool"] == {
+            "type": "skill",
+            "name": "speckit-orchestrate",
+            "version": "1.0",
+        }
 
         browser.close()
 
@@ -313,7 +324,14 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
             page,
             base_url=base_url,
             create_status=201,
-            create_body=json.dumps({"id": "unused"}),
+            create_body=json.dumps(
+                {
+                    "workflowId": "mm:unused",
+                    "runId": "run-unused",
+                    "namespace": "moonmind",
+                    "redirectPath": "/tasks/mm:unused?source=temporal",
+                }
+            ),
         )
         ordered_calls = []
 
@@ -400,7 +418,14 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
             page,
             base_url=base_url,
             create_status=201,
-            create_body=json.dumps({"id": "unused"}),
+            create_body=json.dumps(
+                {
+                    "workflowId": "mm:unused",
+                    "runId": "run-unused",
+                    "namespace": "moonmind",
+                    "redirectPath": "/tasks/mm:unused?source=temporal",
+                }
+            ),
         )
 
         page.goto(f"{base_url}/tasks/create")
@@ -485,7 +510,14 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                 page,
                 base_url=base_url,
                 create_status=201,
-                create_body=json.dumps({"id": "unused"}),
+                create_body=json.dumps(
+                    {
+                        "workflowId": "mm:unused",
+                        "runId": "run-unused",
+                        "namespace": "moonmind",
+                        "redirectPath": "/tasks/mm:unused?source=temporal",
+                    }
+                ),
             )
             artifact_calls = {"create": 0, "upload": 0, "link": 0, "execution": 0}
 
