@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
+import uuid
 
 import pytest
 
@@ -12,9 +14,9 @@ from moonmind.workflows.temporal.runtime.github_auth_broker import (
 
 
 @pytest.mark.asyncio
-async def test_github_auth_broker_serves_token_and_cleans_socket(tmp_path):
+async def test_github_auth_broker_serves_token_and_cleans_socket():
     manager = GitHubAuthBrokerManager()
-    socket_path = tmp_path / "github-auth.sock"
+    socket_path = Path("/tmp") / f"mm-gh-broker-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
 
     await manager.start(
         run_id="run-1",

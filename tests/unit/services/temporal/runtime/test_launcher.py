@@ -263,6 +263,18 @@ def test_persist_gh_config_skips_without_workspace():
     assert "GIT_CONFIG_GLOBAL" not in env
 
 
+def test_build_github_socket_path_stays_short_for_long_workspace_paths(tmp_path):
+    support_root = tmp_path / ("nested-" * 12) / ("workspace-" * 8)
+    socket_path = ManagedRuntimeLauncher._build_github_socket_path(
+        run_id="run-github-secret-ref-1",
+        support_root=str(support_root),
+    )
+
+    assert len(socket_path.encode("utf-8")) < 80
+    assert str(support_root) not in socket_path
+    assert socket_path.endswith(".sock")
+
+
 def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
     run_root = tmp_path / "run-1"
     repo_root = run_root / "repo"

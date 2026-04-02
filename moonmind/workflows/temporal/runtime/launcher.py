@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
 import shlex
 import shutil
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -65,6 +67,20 @@ class ManagedRuntimeLauncher:
     def _workspace_root() -> Path:
         root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
         return Path(root).resolve() / "workspaces"
+
+    @staticmethod
+    def _build_github_socket_path(*, run_id: str, support_root: str | None) -> str:
+        """Keep broker sockets on a short path to avoid AF_UNIX length limits."""
+        socket_root = Path("/tmp")
+        if not socket_root.is_dir():
+            socket_root = Path(tempfile.gettempdir())
+        socket_root = socket_root / "mm-gh"
+
+        material = run_id
+        if support_root:
+            material = f"{Path(support_root).resolve()}::{run_id}"
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return str(socket_root / f"{digest}.sock")
 
     def _resolve_workspace_ownership_root(
         self,
@@ -664,7 +680,10 @@ class ManagedRuntimeLauncher:
         process: asyncio.subprocess.Process
         try:
             if github_token and run_root is not None:
-                github_socket_path = str(run_root / ".moonmind" / "github-auth.sock")
+                github_socket_path = self._build_github_socket_path(
+                    run_id=run_id,
+                    support_root=str(run_root),
+                )
                 await self._github_auth_brokers.start(
                     run_id=run_id,
                     token=github_token,
