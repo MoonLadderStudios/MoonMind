@@ -292,10 +292,20 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
                 task_queue="test-task-queue-dep-pause",
             )
 
-            await asyncio.sleep(0.1)
+            for _ in range(50):
+                status = await handle.query("get_status")
+                if status.get("state") == "waiting_on_dependencies":
+                    break
+                await asyncio.sleep(0.01)
+
             await handle.execute_update("Pause")
             dependency_released.set()
-            await asyncio.sleep(0.1)
+
+            for _ in range(50):
+                status = await handle.query("get_status")
+                if status.get("paused") is True:
+                    break
+                await asyncio.sleep(0.01)
 
             status = await handle.query("get_status")
             assert status.get("paused") is True
@@ -393,3 +403,69 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
 
     assert result["status"] == "success"
     assert handle_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(
+    mock_run_environment,
+    monkeypatch,
+):
+    call_order: list[tuple[str, str | tuple[str, ...]]] = []
+
+    class _FailingHandle:
+        def __init__(self, workflow_id: str) -> None:
+            self._workflow_id = workflow_id
+
+        async def result(self) -> None:
+            call_order.append(("dependency", self._workflow_id))
+            raise RuntimeError("dependency failed")
+
+    async def fake_planning_stage(*args, **kwargs):
+        call_order.append(("planning", "started"))
+        return "ref-should-not-be-used"
+
+    async def fake_execution_stage(*args, **kwargs):
+        call_order.append(("execution", "started"))
+
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: _FailingHandle(workflow_id),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-dep-failure",
+            workflows=[MoonMindRunWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindRunWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.Run",
+                    "initial_parameters": {"task": {"dependsOn": ["dep-1"]}},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-dep-failure",
+                task_queue="test-task-queue-dep-failure",
+            )
+
+            from temporalio.client import WorkflowFailureError
+            try:
+                await handle.result()
+                assert False, "Workflow should have failed"
+            except WorkflowFailureError as exc:
+                assert "dependency failed" in str(exc.cause)
+
+    dependency_calls = [c for c in call_order if c[0] == "dependency"]
+    planning_calls = [c for c in call_order if c[0] == "planning"]
+    assert dependency_calls
+    assert not planning_calls

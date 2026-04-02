@@ -534,14 +534,25 @@ class MoonMindRunWorkflow:
             return {"status": "canceled"}
 
         self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
-        dependency_ids = self._dependency_ids_from_parameters(parameters)
-        if dependency_ids and workflow.patched(DEPENDENCY_GATE_PATCH):
-            await self._wait_for_dependencies(dependency_ids)
-            if self._cancel_requested:
-                await self._run_finalizing_stage(
-                    parameters=parameters, status="canceled", error=None
-                )
-                return {"status": "canceled"}
+        try:
+            dependency_ids = self._dependency_ids_from_parameters(parameters)
+            if dependency_ids and workflow.patched(DEPENDENCY_GATE_PATCH):
+                await self._wait_for_dependencies(dependency_ids)
+                if self._cancel_requested:
+                    await self._run_finalizing_stage(
+                        parameters=parameters, status="canceled", error=None
+                    )
+                    return {"status": "canceled"}
+        except ValueError as exc:
+            await self._run_finalizing_stage(
+                parameters=parameters, status="failed", error=str(exc)
+            )
+            self._close_status = CLOSE_STATUS_FAILED
+            self._set_state(STATE_FAILED, summary=str(exc))
+            raise exceptions.ApplicationError(
+                str(exc),
+                non_retryable=True,
+            ) from exc
         self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
 
         # Pause until unpaused

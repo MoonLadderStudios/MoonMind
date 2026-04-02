@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-04-01  
-**Feature**: [spec.md](/d:/code/MoonMind/specs/123-task-dep-phase2/spec.md)
+**Feature**: [spec.md](../spec.md)
 
 ## Content Quality
 

@@ -388,7 +388,7 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
         (),
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
-    monkeypatch.setattr(workflow, "info", workflow_info)
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
         workflow,
         "logger",
@@ -437,7 +437,7 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
         (),
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
-    monkeypatch.setattr(workflow, "info", workflow_info)
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
         workflow,
         "logger",
