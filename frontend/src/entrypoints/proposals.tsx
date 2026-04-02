@@ -188,25 +188,6 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
           <h2 className="page-title">Proposals</h2>
           <p className="page-meta">Review and manage task proposals in the queue.</p>
         </div>
-        <div className="toolbar-controls">
-          <label className="queue-inline-filter">
-            Show
-            <select
-              value={pageSize}
-              onChange={(event) => {
-                setPageSize(parsePageSize(event.target.value));
-                resetToFirstPage();
-              }}
-              aria-label="Rows per page"
-            >
-              {PAGE_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
       </div>
 
       <form className="stack" onSubmit={(event) => event.preventDefault()}>
@@ -264,6 +245,23 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
           <div className="queue-results-toolbar">
             <span className="small">{pageSummary}</span>
             <nav className="queue-pagination" aria-label="Pagination">
+              <label className="queue-inline-filter">
+                Show
+                <select
+                  value={pageSize}
+                  onChange={(event) => {
+                    setPageSize(parsePageSize(event.target.value));
+                    resetToFirstPage();
+                  }}
+                  aria-label="Rows per page"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 className="secondary queue-pagination-button"

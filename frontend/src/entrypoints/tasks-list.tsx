@@ -323,24 +323,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                 ? `Polling every ${Math.round(listPollMs / 1000)}s`
                 : 'Updates paused to keep selections stable.'}
           </span>
-          <label className="queue-inline-filter">
-            Show
-            <select
-              value={pageSize}
-              disabled={!listEnabled}
-              onChange={(event) => {
-                setPageSize(parsePageSize(event.target.value));
-                resetToFirstPage();
-              }}
-              aria-label="Rows per page"
-            >
-              {PAGE_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </div>
 
@@ -433,6 +415,24 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
           <div className="queue-results-toolbar">
             <span className="small">{pageSummary}</span>
             <nav className="queue-pagination" aria-label="Pagination">
+              <label className="queue-inline-filter">
+                Show
+                <select
+                  value={pageSize}
+                  disabled={!listEnabled}
+                  onChange={(event) => {
+                    setPageSize(parsePageSize(event.target.value));
+                    resetToFirstPage();
+                  }}
+                  aria-label="Rows per page"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 className="secondary queue-pagination-button"
