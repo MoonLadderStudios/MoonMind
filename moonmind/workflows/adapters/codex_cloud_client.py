@@ -74,7 +74,11 @@ def normalize_codex_cloud_status(raw_status: str | None) -> str:
     normalized = str(raw_status or "").strip().lower()
     if not normalized:
         return "unknown"
-    return _CODEX_CLOUD_STATUS_MAP.get(normalized, "unknown")
+    mapped = _CODEX_CLOUD_STATUS_MAP.get(normalized)
+    if mapped is None:
+        from moonmind.schemas.agent_runtime_models import raise_unsupported_status
+        raise_unsupported_status(raw_status or "")
+    return mapped
 
 
 class CodexCloudClient:

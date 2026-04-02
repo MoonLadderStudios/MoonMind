@@ -1577,635 +1577,65 @@ class TemporalIntegrationActivities:
             },
         )
 
-    async def integration_jules_start(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        principal: str | None = None,
-        parameters: Mapping[str, Any] | None = None,
-        correlation_id: str | None = None,
-        inputs_ref: ArtifactRef | str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-        idempotency_key: str | None = None,
-    ) -> IntegrationStartResult:
-        request_payload = _coerce_activity_request(
-            request, activity_type="integration.jules.start"
-        )
-        if request_payload:
-            if principal is None:
-                principal = request_payload.get("principal")
-            if parameters is None:
-                parameters = request_payload.get("parameters")
-            if correlation_id is None:
-                correlation_id = request_payload.get("correlation_id")
-            if inputs_ref is None:
-                inputs_ref = request_payload.get("inputs_ref")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
-            if idempotency_key is None:
-                idempotency_key = request_payload.get("idempotency_key")
+    async def integration_jules_start(self, request, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
+        return await jules_start_activity(request)
 
-        parameters = dict(parameters or {})
-        title_param = str(parameters.get("title") or "").strip()
-        description = str(parameters.get("description") or "").strip()
+    async def integration_jules_status(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
+        run_id = payload
+        if isinstance(payload, Mapping):
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.status requires a non-empty run_id string")
+        return await jules_status_activity(run_id.strip())
 
-        # Fallback: when dispatched from AgentRun, the task description lives
-        # in instruction_ref / instructionRef of the serialised request, not
-        # in parameters.description.
-        if not description and request_payload:
-            instruction_ref_text = (
-                request_payload.get("instruction_ref")
-                or request_payload.get("instructionRef")
-                or ""
-            )
-            if isinstance(instruction_ref_text, str):
-                description = instruction_ref_text.strip()
+    async def integration_jules_fetch_result(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
+        run_id = payload
+        if isinstance(payload, Mapping):
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.fetch_result requires a non-empty run_id string")
+        return await jules_fetch_result_activity(run_id.strip())
 
-        if not description and inputs_ref is not None:
-            if self._artifact_service is None or principal is None:
-                raise TemporalActivityRuntimeError(
-                    "integration.jules.start requires artifact_service and principal when inputs_ref is supplied"
-                )
-            _artifact, payload = await self._artifact_service.read(
-                artifact_id=_artifact_id_from_ref(inputs_ref),
-                principal=principal,
-                allow_restricted_raw=True,
-            )
-            description = payload.decode("utf-8", errors="replace")
-        if not description:
-            raise TemporalActivityRuntimeError(
-                "integration.jules.start requires parameters.description or inputs_ref"
-            )
+    async def integration_jules_cancel(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_cancel_activity
+        run_id = payload
+        if isinstance(payload, Mapping):
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.cancel requires a non-empty run_id string")
+        return await jules_cancel_activity(run_id.strip())
 
-        title = _derive_integration_title(
-            description=description,
-            fallback_title=title_param or None,
-        ) or "MoonMind Integration Task"
+    async def repo_create_pr(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+        return await repo_create_pr_activity(payload)
 
-        metadata = parameters.get("metadata")
-        if metadata is not None and not isinstance(metadata, Mapping):
-            raise TemporalActivityRuntimeError("integration metadata must be an object")
+    async def repo_merge_pr(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
+        return await repo_merge_pr_activity(payload)
 
-        metadata_payload = dict(metadata or {})
-        if correlation_id is not None and not str(correlation_id).strip():
-            raise TemporalActivityRuntimeError(
-                "integration.jules.start correlation_id must not be blank"
-            )
-        resolved_correlation_id = str(
-            correlation_id
-            or metadata_payload.get("correlationId")
-            or f"integration:jules:{title}"
-        ).strip()
-        if not resolved_correlation_id:
-            raise TemporalActivityRuntimeError(
-                "integration.jules.start requires a non-empty correlation id"
-            )
-        resolved_idempotency_key = str(
-            idempotency_key
-            or metadata_payload.get("idempotencyKey")
-            or f"jules:{resolved_correlation_id}:{title}"
-        ).strip()
-        if not resolved_idempotency_key:
-            raise TemporalActivityRuntimeError(
-                "integration.jules.start requires a non-empty idempotency key"
-            )
-        metadata_payload.setdefault("correlationId", resolved_correlation_id)
-        metadata_payload.setdefault("idempotencyKey", resolved_idempotency_key)
-        metadata_payload.setdefault("requestId", resolved_idempotency_key)
+    async def integration_jules_send_message(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_send_message_activity
+        return await jules_send_message_activity(payload)
 
-        workspace_spec = {}
-        if request_payload:
-            workspace_spec = dict(request_payload.get("workspace_spec") or request_payload.get("workspaceSpec") or {})
+    async def integration_jules_list_activities(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_list_activities_activity
+        session_id = payload
+        if isinstance(payload, Mapping):
+            session_id = payload.get("session_id") or payload.get("sessionId")
+        if not session_id or not isinstance(session_id, str):
+            raise TemporalActivityRuntimeError("integration.jules.list_activities requires a non-empty session_id string")
+        return await jules_list_activities_activity(session_id.strip())
 
-        adapter_request = AgentExecutionRequest(
-            agentKind="external",
-            agentId="jules",
-            executionProfileRef=str(
-                parameters.get("execution_profile_ref") or "profile:jules-default"
-            ),
-            correlationId=resolved_correlation_id,
-            idempotencyKey=resolved_idempotency_key,
-            instructionRef=_artifact_locator(inputs_ref),
-            inputRefs=[]
-            if inputs_ref is None
-            else [_artifact_id_from_ref(inputs_ref)],
-            workspaceSpec=workspace_spec,
-            parameters={
-                **parameters,
-                "title": title,
-                "description": description,
-                "metadata": metadata_payload,
-            },
-        )
-        handle = await self._adapter.start(adapter_request)
-        status_snapshot = self._status_snapshot(
-            str(handle.metadata.get("providerStatus") or "unknown")
-        )
-        external_url = str(handle.metadata.get("externalUrl") or "").strip() or None
+    async def integration_jules_answer_question(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_answer_question_activity
+        return await jules_answer_question_activity(payload)
 
-        tracking_ref = None
-        if self._artifact_service is not None and principal is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "taskId": handle.run_id,
-                    "status": status_snapshot.provider_status,
-                    "url": external_url,
-                    "metadata": dict(handle.metadata),
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "jules_start.json",
-                    "producer": "activity:integration.jules.start",
-                    "labels": ["integration", "jules", "tracking"],
-                },
-            )
-
-        result = IntegrationStartResult(
-            external_id=handle.run_id,
-            status=status_snapshot.provider_status,
-            tracking_ref=tracking_ref,
-            url=external_url,
-            normalized_status=status_snapshot.normalized_status,
-            provider_status=status_snapshot.provider_status,
-            callback_supported=False,
-        )
-        return result
-
-    async def integration_jules_status(
-        self,
-        request: Mapping[str, Any] | str | None = None,
-        /,
-        *,
-        external_id: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> IntegrationStatusResult:
-        request_payload: dict[str, Any] = {}
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(
-                request, activity_type="integration.jules.status"
-            )
-        elif request is not None and not isinstance(request, str):
-            raise TemporalActivityRuntimeError(
-                "integration.jules.status payload must be a JSON object or string external_id"
-            )
-
-        if request_payload:
-            if external_id is None:
-                external_id = (
-                    request_payload.get("external_id")
-                    or request_payload.get("externalId")
-                    or request_payload.get("run_id")
-                    or request_payload.get("runId")
-                )
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref") or request_payload.get(
-                    "executionRef"
-                )
-        if external_id is None and isinstance(request, str):
-            external_id = request
-
-        resolved_external_id = str(external_id or "").strip()
-        if not resolved_external_id:
-            raise TemporalActivityRuntimeError(
-                "integration.jules.status requires a non-empty external_id"
-            )
-
-        status = await self._adapter.status(resolved_external_id)
-        provider_status = str(status.metadata.get("providerStatus") or "unknown")
-        external_url = (
-            str(
-                status.metadata.get("pullRequestUrl")
-                or status.metadata.get("externalUrl")
-                or ""
-            ).strip()
-            or None
-        )
-        status_snapshot = self._status_snapshot_from_provider_and_hint(
-            provider_status=provider_status,
-            normalized_hint=status.metadata.get("normalizedStatus"),
-        )
-
-        tracking_ref = None
-        if self._artifact_service is not None and principal is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "taskId": status.run_id,
-                    "status": provider_status,
-                    "url": external_url,
-                    "metadata": dict(status.metadata),
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "jules_status.json",
-                    "producer": "activity:integration.jules.status",
-                    "labels": ["integration", "jules", "tracking"],
-                },
-            )
-
-        return IntegrationStatusResult(
-            external_id=status.run_id,
-            status=status_snapshot.provider_status,
-            tracking_ref=tracking_ref,
-            url=external_url,
-            normalized_status=status_snapshot.normalized_status,
-            provider_status=status_snapshot.provider_status,
-            terminal=status_snapshot.terminal or status.terminal,
-        )
-
-    async def integration_jules_fetch_result(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        external_id: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        request_payload = _coerce_activity_request(
-            request, activity_type="integration.jules.fetch_result"
-        )
-        if request_payload:
-            if external_id is None:
-                external_id = (
-                    request_payload.get("external_id")
-                    or request_payload.get("externalId")
-                    or request_payload.get("run_id")
-                    or request_payload.get("runId")
-                )
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref") or request_payload.get(
-                    "executionRef"
-                )
-        resolved_external_id = str(external_id or "").strip()
-        if not resolved_external_id:
-            raise TemporalActivityRuntimeError(
-                "integration.jules.fetch_result requires a non-empty external_id"
-            )
-
-        status = await self.integration_jules_status(
-            external_id=resolved_external_id,
-            principal=principal,
-            execution_ref=execution_ref,
-        )
-        output_refs: list[str] = []
-        if status.tracking_ref is not None:
-            output_refs.append(status.tracking_ref.artifact_id)
-
-        if (
-            status.normalized_status in {"failed", "canceled"}
-            and principal is not None
-            and self._artifact_service is not None
-        ):
-            failure_summary = await self._write_failure_summary_artifact(
-                principal=principal,
-                execution_ref=execution_ref,
-                external_id=resolved_external_id,
-                status=status,
-            )
-            output_refs.append(failure_summary.artifact_id)
-
-        failure_class: str | None = None
-        if status.normalized_status == "failed":
-            failure_class = "integration_error"
-        elif status.normalized_status == "canceled":
-            failure_class = "execution_error"
-
-        pull_request_url: str | None = None
-        if status.external_url:
-            pr_match = _GITHUB_PULL_REQUEST_URL_PATTERN.search(status.external_url)
-            if pr_match is not None:
-                pull_request_url = pr_match.group(0)
-
-        summary = (
-            f"Jules task {resolved_external_id} ended with provider status "
-            f"'{status.provider_status}'."
-        )
-        if pull_request_url is not None:
-            summary = (
-                f"Jules task {resolved_external_id} created pull request "
-                f"{pull_request_url} and reported provider status "
-                f"'{status.provider_status}'."
-            )
-
-        metadata: dict[str, Any] = {
-            "normalizedStatus": status.normalized_status,
-            "providerStatus": status.provider_status,
-            "terminal": status.terminal,
-        }
-        if status.external_url:
-            metadata["externalUrl"] = status.external_url
-        if pull_request_url is not None:
-            metadata["pullRequestUrl"] = pull_request_url
-
-        result = AgentRunResult(
-            outputRefs=output_refs,
-            summary=summary,
-            failureClass=failure_class,
-            providerErrorCode=status.provider_status if failure_class else None,
-            metadata=metadata,
-        )
-        return result.model_dump(mode="json", by_alias=True)
-
-    async def integration_jules_cancel(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        external_id: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> IntegrationStatusResult:
-        """Attempt best-effort cancellation of one Jules task."""
-        request_payload = _coerce_activity_request(
-            request, activity_type="integration.jules.cancel"
-        )
-        if request_payload:
-            if external_id is None:
-                external_id = (
-                    request_payload.get("external_id")
-                    or request_payload.get("externalId")
-                    or request_payload.get("run_id")
-                    or request_payload.get("runId")
-                )
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref") or request_payload.get(
-                    "executionRef"
-                )
-        resolved_external_id = str(external_id or "").strip()
-        if not resolved_external_id:
-            raise TemporalActivityRuntimeError(
-                "integration.jules.cancel requires a non-empty external_id"
-            )
-
-        adapter = self._build_adapter()
-        result = await adapter.cancel(resolved_external_id)
-
-        provider_status = str(
-            result.metadata.get("providerStatus") or ""
-        ).strip() or "canceled"
-        normalized = self._status_snapshot(provider_status)
-
-        tracking_ref: ArtifactRef | None = None
-        if self._artifact_service is not None and principal is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "activity": "integration.jules.cancel",
-                    "externalId": resolved_external_id,
-                    "providerStatus": provider_status,
-                    "normalizedStatus": normalized.normalized_status,
-                    "cancelAccepted": result.metadata.get("cancelAccepted", False),
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "jules_cancel.json",
-                    "producer": "activity:integration.jules.cancel",
-                    "labels": ["integration", "jules", "cancel"],
-                },
-            )
-
-        return IntegrationStatusResult(
-            external_id=resolved_external_id,
-            status=result.status,
-            tracking_ref=tracking_ref,
-            url=str(result.metadata.get("externalUrl") or "").strip() or None,
-            normalized_status=normalized.normalized_status,
-            provider_status=provider_status,
-            terminal=normalized.terminal,
-        )
-
-    # ------------------------------------------------------------------
-    # General-purpose repo operations (provider-agnostic)
-    # ------------------------------------------------------------------
-
-    async def repo_create_pr(
-        self, payload: dict
-    ) -> dict:
-        """Create a PR via GitHub REST API (provider-agnostic)."""
-        from moonmind.workflows.adapters.github_service import GitHubService
-
-        svc = GitHubService()
-        result = await svc.create_pull_request(
-            repo=payload.get("repo") or "",
-            head=payload.get("head") or "",
-            base=payload.get("base") or "",
-            title=payload.get("title") or "",
-            body=payload.get("body") or "",
-        )
-        return result.model_dump(by_alias=True)
-
-    async def repo_merge_pr(
-        self, payload: dict
-    ) -> dict:
-        """Merge a PR via GitHub REST API (provider-agnostic)."""
-        from moonmind.workflows.adapters.github_service import GitHubService
-
-        svc = GitHubService()
-        target_branch = payload.get("target_branch") or payload.get("targetBranch")
-        if target_branch:
-            success, summary = await svc.update_pull_request_base(
-                pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
-                new_base=target_branch,
-            )
-            if not success:
-                return {
-                    "prUrl": payload.get("pr_url") or payload.get("prUrl") or "",
-                    "merged": False,
-                    "mergeSha": None,
-                    "summary": f"Base branch update failed: {summary}",
-                }
-        result = await svc.merge_pull_request(
-            pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
-            merge_method=payload.get("merge_method") or payload.get("mergeMethod") or "merge",
-        )
-        return result.model_dump(by_alias=True)
-
-    async def integration_jules_send_message(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        session_id: str | None = None,
-        prompt: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> IntegrationStatusResult:
-        """Send a follow-up prompt to an existing Jules session.
-
-        Used for multi-step workflows: resumes the session with new
-        instructions instead of creating a new session.
-        """
-        request_payload = {}
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(
-                request, activity_type="integration.jules.send_message"
-            )
-        if request_payload:
-            if session_id is None:
-                session_id = request_payload.get("session_id")
-            if prompt is None:
-                prompt = request_payload.get("prompt")
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
-
-        if not session_id or not str(session_id).strip():
-            raise TemporalActivityRuntimeError(
-                "integration.jules.send_message requires a non-empty session_id"
-            )
-        if not prompt or not str(prompt).strip():
-            raise TemporalActivityRuntimeError(
-                "integration.jules.send_message requires a non-empty prompt"
-            )
-
-        result = await self._adapter.send_message(
-            run_id=str(session_id).strip(),
-            prompt=str(prompt).strip(),
-        )
-        status_snapshot = self._status_snapshot(
-            str(result.metadata.get("providerStatus") or "running")
-        )
-
-        tracking_ref = None
-        if self._artifact_service is not None and principal is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "activity": "integration.jules.send_message",
-                    "sessionId": session_id,
-                    "providerStatus": status_snapshot.provider_status,
-                    "normalizedStatus": status_snapshot.normalized_status,
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "jules_send_message.json",
-                    "producer": "activity:integration.jules.send_message",
-                    "labels": ["integration", "jules", "send_message"],
-                },
-            )
-
-        return IntegrationStatusResult(
-            external_id=session_id,
-            status=status_snapshot.provider_status,
-            tracking_ref=tracking_ref,
-            normalized_status=status_snapshot.normalized_status,
-            provider_status=status_snapshot.provider_status,
-        )
-
-    async def integration_jules_list_activities(
-        self,
-        *,
-        session_id: str,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Fetch session activities and extract the latest agent question."""
-        client = self._client_factory()
-        try:
-            result = await client.list_activities(session_id)
-            return result.model_dump(by_alias=True)
-        finally:
-            await client.aclose()
-
-    async def integration_jules_answer_question(
-        self,
-        *,
-        session_id: str,
-        question: str,
-        task_context: str = "",
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Orchestrate a full question-answer cycle for Jules."""
-        from moonmind.schemas.jules_models import JulesSendMessageRequest
-        from moonmind.workflows.temporal.activities.jules_activities import _generate_llm_answer
-
-        if not session_id or not question:
-            return {"answered": False, "answer": "", "error": "Missing session_id or question"}
-
-        prompt_parts = [
-            "You are answering a clarification question from Jules (an AI coding agent).",
-        ]
-        if task_context:
-            prompt_parts.append(f"Task context: {task_context}")
-        prompt_parts.extend([
-            "",
-            f"Jules's question:\n{question}",
-            "",
-            "Provide a concise, actionable answer. If the question asks about a preference or",
-            "choice, choose the most reasonable default and explain your reasoning briefly.",
-            "Do not ask follow-up questions.",
-        ])
-        clarification_prompt = "\n".join(prompt_parts)
-
-        # Dispatch to an LLM to generate the actual answer.
-        answer = await _generate_llm_answer(clarification_prompt)
-
-        client = self._client_factory()
-        try:
-            await client.send_message(
-                JulesSendMessageRequest(session_id=session_id, prompt=answer)
-            )
-            return {"answered": True, "answer": answer, "error": None}
-        except Exception as exc:
-            logger.error(
-                "Failed to send auto-answer to Jules session %s: %s",
-                session_id, exc, exc_info=True,
-            )
-            return {"answered": False, "answer": answer, "error": str(exc)}
-        finally:
-            await client.aclose()
-
-    async def integration_jules_get_auto_answer_config(
-        self,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Read auto-answer configuration from environment variables.
-
-        Raises ``ValueError`` if integer env vars contain non-integer values.
-        """
-        enabled_raw = os.environ.get("JULES_AUTO_ANSWER_ENABLED", "true").strip().lower()
-        enabled = enabled_raw not in ("false", "0", "no", "off")
-
-        max_answers_raw = os.environ.get("JULES_MAX_AUTO_ANSWERS", "3")
-        try:
-            max_answers = int(max_answers_raw)
-        except ValueError:
-            raise ValueError(
-                f"JULES_MAX_AUTO_ANSWERS must be an integer, got: {max_answers_raw!r}"
-            )
-
-        runtime = os.environ.get("JULES_AUTO_ANSWER_RUNTIME", "llm").strip() or "llm"
-
-        timeout_raw = os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300")
-        try:
-            timeout = int(timeout_raw)
-        except ValueError:
-            raise ValueError(
-                f"JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer, got: {timeout_raw!r}"
-            )
-
-        return {
-            "enabled": enabled,
-            "max_answers": max_answers,
-            "runtime": runtime,
-            "timeout_seconds": timeout,
-        }
-
-    # ---- Codex Cloud integration handlers ----
+    async def integration_jules_get_auto_answer_config(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import jules_get_auto_answer_config_activity
+        return await jules_get_auto_answer_config_activity(payload)
 
     @staticmethod
     def _build_default_codex_cloud_client() -> CodexCloudHttpClient:
@@ -2220,334 +1650,52 @@ class TemporalIntegrationActivities:
         cloud_key = os.environ.get("CODEX_CLOUD_API_KEY", "").strip()
         return CodexCloudHttpClient(base_url=cloud_url, api_key=cloud_key)
 
-    async def integration_codex_cloud_start(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        principal: str | None = None,
-        parameters: Mapping[str, Any] | None = None,
-        correlation_id: str | None = None,
-        inputs_ref: ArtifactRef | str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-        idempotency_key: str | None = None,
-    ) -> IntegrationStartResult:
-        """Start a Codex Cloud-backed run via the canonical adapter contract."""
-        request_payload = _coerce_activity_request(
-            request, activity_type="integration.codex_cloud.start"
-        )
-        if request_payload:
-            if principal is None:
-                principal = request_payload.get("principal")
-            if parameters is None:
-                parameters = request_payload.get("parameters")
-            if correlation_id is None:
-                correlation_id = request_payload.get("correlation_id")
-            if inputs_ref is None:
-                inputs_ref = request_payload.get("inputs_ref")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
-            if idempotency_key is None:
-                idempotency_key = request_payload.get("idempotency_key")
+    async def integration_codex_cloud_start(self, request, /, **kwargs):
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_start_activity
+        return await codex_cloud_start_activity(request)
 
-        parameters = dict(parameters or {})
-        title_param = str(parameters.get("title") or "").strip()
-        description = str(parameters.get("description") or "").strip()
+    async def integration_codex_cloud_status(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_status_activity
+        run_id = payload
+        if isinstance(payload, Mapping):
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.codex_cloud.status requires a non-empty run_id string")
+        return await codex_cloud_status_activity(run_id.strip())
 
-        if not description and inputs_ref is not None:
-            if self._artifact_service is None or principal is None:
-                raise TemporalActivityRuntimeError(
-                    "integration.codex_cloud.start requires artifact_service and principal when inputs_ref is supplied"
-                )
-            _artifact, payload = await self._artifact_service.read(
-                artifact_id=_artifact_id_from_ref(inputs_ref),
-                principal=principal,
-                allow_restricted_raw=True,
-            )
-            description = payload.decode("utf-8", errors="replace")
-        if not description:
-            raise TemporalActivityRuntimeError(
-                "integration.codex_cloud.start requires parameters.description or inputs_ref"
-            )
+    async def integration_codex_cloud_fetch_result(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_fetch_result_activity
+        run_id = payload
+        if isinstance(payload, Mapping):
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.codex_cloud.fetch_result requires a non-empty run_id string")
+        return await codex_cloud_fetch_result_activity(run_id.strip())
 
-        title = _derive_integration_title(
-            description=description,
-            fallback_title=title_param or None,
-        ) or "MoonMind Integration Task"
+    async def integration_codex_cloud_cancel(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_cancel_activity
+        run_id = payload
+        if isinstance(payload, Mapping):
+            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
+        if not run_id or not isinstance(run_id, str):
+            raise TemporalActivityRuntimeError("integration.codex_cloud.cancel requires a non-empty run_id string")
+        return await codex_cloud_cancel_activity(run_id.strip())
 
-        resolved_correlation_id = str(
-            correlation_id or f"integration:codex_cloud:{title}"
-        ).strip()
-        resolved_idempotency_key = str(
-            idempotency_key or f"codex_cloud:{resolved_correlation_id}:{title}"
-        ).strip()
+    async def integration_openclaw_execute(self, request, /, **kwargs):
+        from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
+        from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-        workspace_spec = {}
-        if request_payload:
-            workspace_spec = dict(request_payload.get("workspace_spec") or request_payload.get("workspaceSpec") or {})
-
-        adapter_request = AgentExecutionRequest(
-            agentKind="external",
-            agentId="codex_cloud",
-            executionProfileRef=str(
-                parameters.get("execution_profile_ref") or "profile:codex-cloud-default"
-            ),
-            correlationId=resolved_correlation_id,
-            idempotencyKey=resolved_idempotency_key,
-            instructionRef=_artifact_locator(inputs_ref),
-            inputRefs=[]
-            if inputs_ref is None
-            else [_artifact_id_from_ref(inputs_ref)],
-            workspaceSpec=workspace_spec,
-            parameters={
-                **parameters,
-                "title": title,
-                "description": description,
-            },
-        )
-        handle = await self._codex_cloud_adapter.start(adapter_request)
-        provider_status = str(handle.metadata.get("providerStatus") or "unknown")
-        external_url = str(handle.metadata.get("externalUrl") or "").strip() or None
-
-        tracking_ref = None
-        if self._artifact_service is not None and principal is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "taskId": handle.run_id,
-                    "status": provider_status,
-                    "url": external_url,
-                    "metadata": dict(handle.metadata),
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "codex_cloud_start.json",
-                    "producer": "activity:integration.codex_cloud.start",
-                    "labels": ["integration", "codex_cloud", "tracking"],
-                },
-            )
-
-        from moonmind.workflows.adapters.codex_cloud_client import normalize_codex_cloud_status
-
-        normalized = normalize_codex_cloud_status(provider_status)
-        return IntegrationStartResult(
-            external_id=handle.run_id,
-            status=provider_status,
-            tracking_ref=tracking_ref,
-            url=external_url,
-            normalized_status=normalized,
-            provider_status=provider_status,
-            callback_supported=False,
-        )
-
-    async def integration_codex_cloud_status(
-        self,
-        request: Mapping[str, Any] | str | None = None,
-        /,
-        *,
-        external_id: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> IntegrationStatusResult:
-        """Poll current status for one Codex Cloud task."""
-        request_payload: dict[str, Any] = {}
         if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(
-                request, activity_type="integration.codex_cloud.status"
-            )
-        elif request is not None and not isinstance(request, str):
-            raise TemporalActivityRuntimeError(
-                "integration.codex_cloud.status payload must be a JSON object or string external_id"
-            )
-
-        if request_payload:
-            if external_id is None:
-                external_id = request_payload.get("external_id")
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
-        elif isinstance(request, str):
-            if external_id is None:
-                external_id = request.strip()
-
-        if not external_id or not str(external_id).strip():
-            raise TemporalActivityRuntimeError(
-                "integration.codex_cloud.status requires a non-empty external_id"
-            )
-
-        status = await self._codex_cloud_adapter.status(str(external_id).strip())
-        provider_status = str(status.metadata.get("providerStatus") or "unknown")
-        external_url = str(status.metadata.get("externalUrl") or "").strip() or None
-
-        from moonmind.workflows.adapters.codex_cloud_client import normalize_codex_cloud_status
-
-        normalized = normalize_codex_cloud_status(provider_status)
-
-        tracking_ref = None
-        if self._artifact_service is not None and principal is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "taskId": status.run_id,
-                    "status": provider_status,
-                    "url": external_url,
-                    "metadata": dict(status.metadata),
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "codex_cloud_status.json",
-                    "producer": "activity:integration.codex_cloud.status",
-                    "labels": ["integration", "codex_cloud", "tracking"],
-                },
-            )
-
-        return IntegrationStatusResult(
-            external_id=status.run_id,
-            status=provider_status,
-            tracking_ref=tracking_ref,
-            url=external_url,
-            normalized_status=normalized,
-            provider_status=provider_status,
-            terminal=status.terminal,
-        )
-
-    async def integration_codex_cloud_fetch_result(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        external_id: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> tuple[ArtifactRef, ...]:
-        """Fetch terminal result for one completed Codex Cloud task."""
-        request_payload: dict[str, Any] = {}
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(
-                request, activity_type="integration.codex_cloud.fetch_result"
-            )
-
-        if request_payload:
-            if external_id is None:
-                external_id = request_payload.get("external_id")
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
-
-        if not external_id or not str(external_id).strip():
-            raise TemporalActivityRuntimeError(
-                "integration.codex_cloud.fetch_result requires a non-empty external_id"
-            )
-
-        if self._artifact_service is None:
-            raise TemporalActivityRuntimeError(
-                "integration.codex_cloud.fetch_result requires artifact storage"
-            )
-
-        status = await self.integration_codex_cloud_status(
-            request=request_payload,
-            external_id=external_id,
-            principal=principal,
-            execution_ref=execution_ref,
-        )
-        output_refs: list[ArtifactRef] = []
-        if status.tracking_ref is not None:
-            output_refs.append(status.tracking_ref)
-        return tuple(output_refs)
-
-    async def integration_codex_cloud_cancel(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-        *,
-        external_id: str | None = None,
-        principal: str | None = None,
-        execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> IntegrationStatusResult:
-        """Attempt best-effort cancellation of one Codex Cloud task."""
-        request_payload: dict[str, Any] = {}
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(
-                request, activity_type="integration.codex_cloud.cancel"
-            )
-
-        if request_payload:
-            if external_id is None:
-                external_id = request_payload.get("external_id")
-            if principal is None:
-                principal = request_payload.get("principal")
-            if execution_ref is None:
-                execution_ref = request_payload.get("execution_ref")
-
-        if not external_id or not str(external_id).strip():
-            raise TemporalActivityRuntimeError(
-                "integration.codex_cloud.cancel requires a non-empty external_id"
-            )
-
-        result = await self._codex_cloud_adapter.cancel(str(external_id).strip())
-
-        provider_status = str(
-            result.metadata.get("providerStatus") or ""
-        ).strip() or "canceled"
-
-        from moonmind.workflows.adapters.codex_cloud_client import normalize_codex_cloud_status
-
-        normalized = normalize_codex_cloud_status(provider_status)
-
-        tracking_ref: ArtifactRef | None = None
-        if self._artifact_service is not None:
-            tracking_ref = await _write_json_artifact(
-                self._artifact_service,
-                principal=principal,
-                payload={
-                    "activity": "integration.codex_cloud.cancel",
-                    "externalId": external_id,
-                    "providerStatus": provider_status,
-                    "normalizedStatus": normalized,
-                    "cancelAccepted": result.metadata.get("cancelAccepted", False),
-                },
-                execution_ref=execution_ref,
-                metadata_json={
-                    "name": "codex_cloud_cancel.json",
-                    "producer": "activity:integration.codex_cloud.cancel",
-                    "labels": ["integration", "codex_cloud", "cancel"],
-                },
-            )
-
-        return IntegrationStatusResult(
-            external_id=external_id,
-            status=result.status,
-            tracking_ref=tracking_ref,
-            url=str(result.metadata.get("externalUrl") or "").strip() or None,
-            normalized_status=normalized,
-            provider_status=provider_status,
-            terminal=result.terminal,
-        )
-
-    async def integration_openclaw_execute(
-        self,
-        request: Mapping[str, Any] | None = None,
-        /,
-    ) -> dict[str, Any]:
-        """Run one OpenClaw streaming execution; heartbeats carry stream progress."""
-
-        from moonmind.openclaw.execute import run_openclaw_execution
-
-        body = _coerce_activity_request(
-            request, activity_type="integration.openclaw.execute"
-        )
-        if not body:
-            raise TemporalActivityRuntimeError(
-                "integration.openclaw.execute requires AgentExecutionRequest payload"
-            )
-        req = AgentExecutionRequest.model_validate(body)
-        result = await run_openclaw_execution(req)
-        return result.model_dump(mode="json", by_alias=True)
-
+            request_payload = _coerce_activity_request(request, activity_type="integration.openclaw.execute")
+            if not request_payload:
+                raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
+            req = AgentExecutionRequest.model_validate(request_payload)
+        elif isinstance(request, AgentExecutionRequest):
+            req = request
+        else:
+            raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
+            
+        return await openclaw_execute_activity(req)
 
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""

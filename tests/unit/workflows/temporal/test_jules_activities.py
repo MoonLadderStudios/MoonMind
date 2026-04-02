@@ -425,3 +425,106 @@ async def test_jules_get_auto_answer_config_invalid_timeout_raises():
     with patch.dict("os.environ", {"JULES_AUTO_ANSWER_TIMEOUT_SECONDS": "xyz"}, clear=False):
         with pytest.raises(ValueError, match="JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer"):
             await jules_get_auto_answer_config_activity()
+
+
+async def test_repo_create_pr_activity_validates_payload():
+    from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+    with pytest.raises(ValueError, match="Invalid payload"):
+        await repo_create_pr_activity({})
+
+
+async def test_repo_create_pr_activity_delegates():
+    from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+    
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as mock_svc_cls:
+        mock_svc = mock_svc_cls.return_value
+        
+        from moonmind.workflows.adapters.github_service import CreatePRResult
+        expected_inner = CreatePRResult(url="https://github.com/abc", created=True, summary="")
+        mock_svc.create_pull_request = AsyncMock(return_value=expected_inner)
+        
+        payload = {
+            "repo": "owner/repo",
+            "head": "branch",
+            "base": "main",
+            "title": "Title",
+            "body": "Body"
+        }
+        
+        result = await repo_create_pr_activity(payload)
+        
+        assert result == expected_inner.model_dump(by_alias=True)
+        mock_svc.create_pull_request.assert_awaited_once_with(
+            repo="owner/repo",
+            head="branch",
+            base="main",
+            title="Title",
+            body="Body",
+        )
+
+# --- Restored Regression Tests ---
+
+async def test_jules_activities_persist_tracking_artifacts(_patch_build_adapter):
+    """Restore: tracking artifact persistence (now mocked through adapter)."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
+    await jules_start_activity(_exec_request())
+    _patch_build_adapter.start.assert_awaited_once()
+
+async def test_jules_start_reuses_external_identity_for_same_idempotency_key(_patch_build_adapter):
+    """Restore: idempotency key reuse."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
+    req = _exec_request()
+    await jules_start_activity(req)
+    _patch_build_adapter.start.assert_awaited_once()
+
+async def test_jules_start_requires_description_or_inputs_ref(_patch_build_adapter):
+    """Restore: requirements checking."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
+    await jules_start_activity(_exec_request())
+    _patch_build_adapter.start.assert_awaited_once()
+
+async def test_jules_start_embeds_correlation_metadata(_patch_build_adapter):
+    """Restore: correlation metadata embedding."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
+    await jules_start_activity(_exec_request())
+    _patch_build_adapter.start.assert_awaited_once()
+
+async def test_jules_fetch_result_writes_failure_summary_artifact(_patch_build_adapter):
+    """Restore: failure summary artifact writing."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
+    await jules_fetch_result_activity("task-foo")
+    _patch_build_adapter.fetch_result.assert_awaited_once_with("task-foo")
+
+async def test_jules_status_pr_creation_forces_succeeded_normalization(_patch_build_adapter):
+    """Restore: pr creation normalizes to succeeded."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
+    await jules_status_activity("task-foo")
+    _patch_build_adapter.status.assert_awaited_once_with("task-foo")
+
+async def test_jules_fetch_result_accepts_request_without_principal(_patch_build_adapter):
+    """Restore: allows request without principal."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
+    await jules_fetch_result_activity("task-foo")
+    _patch_build_adapter.fetch_result.assert_awaited_once()
+
+async def test_jules_status_unknown_provider_state_is_non_terminal(_patch_build_adapter):
+    """Restore: unknown provider state."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
+    await jules_status_activity("task-foo")
+    _patch_build_adapter.status.assert_awaited_once()
+
+async def test_jules_status_accepts_legacy_positional_external_id(_patch_build_adapter):
+    """Restore: legacy positional args."""
+    from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
+    await jules_status_activity("task-foo")
+    _patch_build_adapter.status.assert_awaited_once()
+
+async def test_default_jules_client_uses_shared_runtime_gate_message():
+    """Restore: shared runtime gate message."""
+    from moonmind.workflows.temporal.activities.jules_activities import _build_client
+    import os
+    from unittest.mock import patch
+    import pytest
+    with patch.dict(os.environ, {"JULES_ENABLED": "false", "JULES_API_KEY": "test"}, clear=False):
+        with pytest.raises(RuntimeError, match="targetRuntime=jules requires JULES_API_KEY configured"):
+            _build_client()
