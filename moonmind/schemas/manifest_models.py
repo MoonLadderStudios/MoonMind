@@ -19,10 +19,10 @@ class AuthItem(BaseModel):
     secretRef: Optional[SecretRef] = None
 
     @model_validator(mode="after")
-    def check_xor(cls, model: "AuthItem") -> "AuthItem":  # type: ignore[override]
-        if (model.value is None) == (model.secretRef is None):
+    def check_xor(self) -> "AuthItem":  # type: ignore[override]
+        if (self.value is None) == (self.secretRef is None):
             raise ValueError("Exactly one of value or secretRef must be provided")
-        return model
+        return self
 
 
 class Defaults(RootModel[Dict[str, Any]]):

@@ -19,18 +19,18 @@ pytestmark = [pytest.mark.asyncio]
 class TestRunStatusAwaitingFeedback:
     """T021: Verify awaiting_feedback is in RunStatus and status maps."""
 
-    def test_run_status_has_awaiting_feedback(self):
+    async def test_run_status_has_awaiting_feedback(self):
         assert hasattr(RunStatus, "awaiting_feedback")
         assert RunStatus.awaiting_feedback == "awaiting_feedback"
 
-    def test_external_status_map_has_awaiting_feedback(self):
+    async def test_external_status_map_has_awaiting_feedback(self):
         assert "awaiting_feedback" in _EXTERNAL_STATUS_TO_RUN_STATUS
         assert (
             _EXTERNAL_STATUS_TO_RUN_STATUS["awaiting_feedback"]
             == RunStatus.awaiting_feedback
         )
 
-    def test_normalize_external_status_maps_awaiting_feedback(self):
+    async def test_normalize_external_status_maps_awaiting_feedback(self):
         """awaiting_feedback from provider maps to RunStatus.awaiting_feedback."""
         result = MoonMindAgentRun._normalize_external_status(
             normalized_status="awaiting_feedback",
@@ -46,13 +46,13 @@ class TestRunStatusAwaitingFeedback:
 class TestAgentRunAutoAnswerState:
     """T021: Verify auto-answer state is initialized in __init__."""
 
-    def test_init_has_auto_answer_state(self):
+    async def test_init_has_auto_answer_state(self):
         run = MoonMindAgentRun()
         assert hasattr(run, "_answered_activity_ids")
         assert isinstance(run._answered_activity_ids, set)
         assert len(run._answered_activity_ids) == 0
 
-    def test_init_has_auto_answer_count(self):
+    async def test_init_has_auto_answer_count(self):
         run = MoonMindAgentRun()
         assert hasattr(run, "_auto_answer_count")
         assert run._auto_answer_count == 0
@@ -64,7 +64,7 @@ class TestAgentRunAutoAnswerState:
 class TestAutoAnswerMaxCycle:
     """T025: Max-cycle enforcement via _auto_answer_count."""
 
-    def test_auto_answer_count_increments(self):
+    async def test_auto_answer_count_increments(self):
         """Verify the counter can be incremented (workflow logic relies on this)."""
         run = MoonMindAgentRun()
         run._auto_answer_count += 1
@@ -72,7 +72,7 @@ class TestAutoAnswerMaxCycle:
         run._auto_answer_count += 1
         assert run._auto_answer_count == 2
 
-    def test_max_cycle_exceeds_limit(self):
+    async def test_max_cycle_exceeds_limit(self):
         """When count >= max (3), the workflow should escalate."""
         run = MoonMindAgentRun()
         run._auto_answer_count = 3
@@ -129,18 +129,18 @@ class TestAutoAnswerRunningStatusProbe:
     probe list_activities during running status to detect questions.
     """
 
-    def test_running_status_is_eligible_for_auto_answer(self):
+    async def test_running_status_is_eligible_for_auto_answer(self):
         """The auto-answer gate should include RunStatus.running."""
         eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
         assert RunStatus.running in eligible_statuses
         assert RunStatus.awaiting_feedback in eligible_statuses
 
-    def test_completed_status_is_not_eligible(self):
+    async def test_completed_status_is_not_eligible(self):
         """Terminal statuses should not trigger the auto-answer probe."""
         eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
         assert RunStatus.completed not in eligible_statuses
 
-    def test_failed_status_is_not_eligible(self):
+    async def test_failed_status_is_not_eligible(self):
         eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
         assert RunStatus.failed not in eligible_statuses
 
@@ -148,12 +148,12 @@ class TestAutoAnswerRunningStatusProbe:
 class TestAutoAnswerDeduplication:
     """T030: Deduplication via _answered_activity_ids set."""
 
-    def test_dedup_set_tracks_answered_ids(self):
+    async def test_dedup_set_tracks_answered_ids(self):
         run = MoonMindAgentRun()
         run._answered_activity_ids.add("act-1")
         assert "act-1" in run._answered_activity_ids
 
-    def test_dedup_set_prevents_re_answer(self):
+    async def test_dedup_set_prevents_re_answer(self):
         """Once an activity ID is in the set, it should be skipped."""
         run = MoonMindAgentRun()
         run._answered_activity_ids.add("act-1")
@@ -163,7 +163,7 @@ class TestAutoAnswerDeduplication:
         should_answer = act_id not in run._answered_activity_ids
         assert should_answer is False
 
-    def test_dedup_set_allows_new_ids(self):
+    async def test_dedup_set_allows_new_ids(self):
         """New activity IDs should be answerable."""
         run = MoonMindAgentRun()
         run._answered_activity_ids.add("act-1")
@@ -176,7 +176,7 @@ class TestAutoAnswerDeduplication:
 class TestOperatorMessageQueue:
     """Operator clarification replies should be queued for explicit sendMessage flows."""
 
-    def test_operator_message_signal_queues_non_empty_message(self):
+    async def test_operator_message_signal_queues_non_empty_message(self):
         run = MoonMindAgentRun()
 
         run.operator_message({"message": "Use the Provider Profiles name."})
@@ -185,7 +185,7 @@ class TestOperatorMessageQueue:
             "Use the Provider Profiles name."
         ]
 
-    def test_operator_message_signal_ignores_blank_message(self):
+    async def test_operator_message_signal_ignores_blank_message(self):
         run = MoonMindAgentRun()
 
         run.operator_message({"message": "   "})

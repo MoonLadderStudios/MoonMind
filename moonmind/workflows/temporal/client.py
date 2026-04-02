@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSearchAttributes
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
@@ -55,6 +56,46 @@ def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
         pass  # gRPC/Temporal SDK not available; fall through to string match
     # Fallback: string match on the exception message.
     return status_name.lower().replace("_", " ") in str(exc).lower()
+
+
+def _build_typed_search_attributes(
+    search_attributes: Mapping[str, Any] | None,
+) -> TypedSearchAttributes | None:
+    """Convert legacy dict-based search attributes to the typed object model."""
+    if not search_attributes:
+        return None
+
+    pairs: list[SearchAttributePair] = []
+    for key, raw_value in search_attributes.items():
+        if isinstance(raw_value, Mapping):
+            values = [raw_value]
+        elif isinstance(raw_value, Sequence) and not isinstance(
+            raw_value, (str, bytes, bytearray)
+        ):
+            values = list(raw_value)
+        else:
+            values = [raw_value]
+
+        if all(isinstance(v, str) for v in values):
+            key_type = (
+                SearchAttributeKey.for_keyword_list(key)
+                if len(values) > 1
+                else SearchAttributeKey.for_keyword(key)
+            )
+        elif all(isinstance(v, bool) for v in values):
+            key_type = SearchAttributeKey.for_bool(key)
+        elif all(isinstance(v, int) for v in values):
+            key_type = SearchAttributeKey.for_int(key)
+        elif all(isinstance(v, float) for v in values):
+            key_type = SearchAttributeKey.for_float(key)
+        elif all(isinstance(v, datetime) for v in values):
+            key_type = SearchAttributeKey.for_datetime(key)
+        else:
+            key_type = SearchAttributeKey.for_keyword(key)
+
+        pairs.append(SearchAttributePair(key_type, values))
+
+    return TypedSearchAttributes(pairs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,11 +193,13 @@ class TemporalClientAdapter:
         if not formatted_search_attributes:
             formatted_search_attributes = None
 
+        search_attributes_typed = _build_typed_search_attributes(formatted_search_attributes)
+
         start_kwargs: dict[str, Any] = {
             "id": workflow_id,
             "task_queue": task_queue,
             "memo": memo,
-            "search_attributes": formatted_search_attributes,
+            "search_attributes": search_attributes_typed,
         }
         if start_delay is not None:
             start_kwargs["start_delay"] = start_delay
@@ -393,6 +436,7 @@ class TemporalClientAdapter:
             for k, v in (search_attributes or {}).items()
         }
         formatted_sa["mm_scheduled_for"] = ["{{.ScheduleTime}}"]
+        typed_search_attributes = _build_typed_search_attributes(formatted_sa)
 
         try:
             handle = await client.create_schedule(
@@ -404,7 +448,11 @@ class TemporalClientAdapter:
                         id=make_workflow_id_template(definition_uuid),
                         task_queue=task_queue,
                         memo=memo,
-                        **({"untyped_search_attributes": formatted_sa} if formatted_sa else {}),
+                        **(
+                            {"typed_search_attributes": typed_search_attributes}
+                            if typed_search_attributes
+                            else {}
+                        ),
                     ),
                     spec=build_schedule_spec(
                         cron=cron_expression,

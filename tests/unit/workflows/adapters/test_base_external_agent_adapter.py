@@ -218,7 +218,7 @@ async def test_cancel_delegates_to_do_cancel():
 # ---------------------------------------------------------------------------
 
 
-def test_build_handle_populates_canonical_fields():
+async def test_build_handle_populates_canonical_fields():
     handle = BaseExternalAgentAdapter.build_handle(
         run_id="r1",
         agent_id="test",
@@ -232,7 +232,7 @@ def test_build_handle_populates_canonical_fields():
     assert handle.metadata["externalUrl"] == "https://example.test"
 
 
-def test_build_result_sets_failure_class_for_failed():
+async def test_build_result_sets_failure_class_for_failed():
     result = BaseExternalAgentAdapter.build_result(
         run_id="r1",
         provider_status="error",
@@ -243,7 +243,7 @@ def test_build_result_sets_failure_class_for_failed():
     assert result.provider_error_code == "error"
 
 
-def test_build_result_sets_failure_class_for_canceled():
+async def test_build_result_sets_failure_class_for_canceled():
     result = BaseExternalAgentAdapter.build_result(
         run_id="r1",
         provider_status="canceled",
@@ -253,7 +253,7 @@ def test_build_result_sets_failure_class_for_canceled():
     assert result.failure_class == "execution_error"
 
 
-def test_build_result_no_failure_for_succeeded():
+async def test_build_result_no_failure_for_succeeded():
     result = BaseExternalAgentAdapter.build_result(
         run_id="r1",
         provider_status="completed",
