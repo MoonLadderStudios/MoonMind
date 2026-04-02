@@ -6,10 +6,19 @@ import unittest
 import contextlib
 from typing import Any
 from unittest.mock import AsyncMock
+from uuid import uuid4
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
+from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalProposalActivities,
 )
+from moonmind.workflows.task_proposals.models import (
+    TaskProposalOriginSource,
+    TaskProposalStatus,
+)
+from moonmind.workflows.task_proposals.service import TaskProposalService
 
 
 class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
@@ -344,3 +353,69 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
         stamped = call_kwargs["task_create_request"]
         self.assertNotIn("task", stamped["payload"])
 
+    async def test_managed_runtime_ids_are_normalized_before_submission(self) -> None:
+        repo = AsyncMock()
+        record = SimpleNamespace(
+            id=uuid4(),
+            status=TaskProposalStatus.OPEN,
+            title="Fix bug",
+            summary="Bug in module X",
+            category="tests",
+            tags=["tests"],
+            repository="org/repo",
+            proposed_by_worker_id="worker-1",
+            proposed_by_user_id=None,
+            promoted_at=None,
+            promoted_by_user_id=None,
+            decided_by_user_id=None,
+            decision_note=None,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            origin_source=TaskProposalOriginSource.WORKFLOW,
+            origin_id=None,
+            origin_metadata={},
+            task_create_request={},
+        )
+        repo.create_proposal.return_value = record
+        service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+        service._emit_notification = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def mock_factory():
+            yield service
+
+        activities = TemporalProposalActivities(
+            proposal_service_factory=mock_factory,
+        )
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "Bug in module X",
+                "taskCreateRequest": {
+                    "type": "task",
+                    "payload": {
+                        "repository": "org/repo",
+                        "targetRuntime": "codex_cli",
+                        "task": {
+                            "instructions": "fix it",
+                            "runtime": {"mode": "claude_code"},
+                        },
+                    }
+                },
+            },
+        ]
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {},
+                "origin": {"workflow_id": "wf-1", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(result["errors"], [])
+        call_kwargs = repo.create_proposal.await_args.kwargs
+        stamped = call_kwargs["task_create_request"]
+        self.assertEqual(stamped["payload"]["targetRuntime"], "codex")
+        self.assertEqual(stamped["payload"]["task"]["runtime"]["mode"], "claude")

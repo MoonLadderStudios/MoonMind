@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 from uuid import UUID
@@ -48,6 +49,10 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
         "artifact_gap",
     }
 )
+_PROPOSAL_RUNTIME_MODE_ALIASES = {
+    "codex_cli": "codex",
+    "claude_code": "claude",
+}
 
 
 class TaskProposalError(RuntimeError):
@@ -330,7 +335,7 @@ class TaskProposalService:
     ) -> tuple[dict[str, Any], str]:
         """Validate proposal payload shape without applying runtime defaults."""
 
-        payload_for_validation = dict(payload)
+        payload_for_validation = self._normalize_proposal_runtime_payload(payload)
         task_node = payload_for_validation.get("task")
         task = dict(task_node) if isinstance(task_node, Mapping) else {}
         if not task:
@@ -373,6 +378,45 @@ class TaskProposalService:
             )
         return normalized_payload, repository
 
+    @classmethod
+    def _normalize_proposal_runtime_mode(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        lowered = value.strip().lower()
+        if not lowered:
+            return value
+        return _PROPOSAL_RUNTIME_MODE_ALIASES.get(lowered, lowered)
+
+    @classmethod
+    def _normalize_proposal_runtime_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Normalize proposal runtime ids to the task contract vocabulary."""
+
+        normalized = deepcopy(dict(payload))
+
+        for key in ("targetRuntime", "target_runtime", "runtime"):
+            if key in normalized:
+                normalized[key] = cls._normalize_proposal_runtime_mode(
+                    normalized.get(key)
+                )
+
+        task_node = normalized.get("task")
+        if not isinstance(task_node, Mapping):
+            return normalized
+
+        task = dict(task_node)
+        runtime_node = task.get("runtime")
+        if isinstance(runtime_node, Mapping):
+            runtime = dict(runtime_node)
+            if "mode" in runtime:
+                runtime["mode"] = cls._normalize_proposal_runtime_mode(
+                    runtime.get("mode")
+                )
+            task["runtime"] = runtime
+        normalized["task"] = task
+        return normalized
+
     def _prepare_task_create_request(
         self,
         request: dict[str, Any],
@@ -414,7 +458,10 @@ class TaskProposalService:
             )
         if apply_runtime_defaults:
             try:
-                parsed = CanonicalTaskPayload.model_validate(payload)
+                normalized_payload_input = self._normalize_proposal_runtime_payload(
+                    payload
+                )
+                parsed = CanonicalTaskPayload.model_validate(normalized_payload_input)
                 normalized_payload = parsed.model_dump(by_alias=True, exclude_none=True)
             except ValidationError as exc:
                 raise TaskProposalValidationError(f"Invalid task payload: {exc}") from exc
