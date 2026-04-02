@@ -53,7 +53,7 @@ COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local
 # binaries there can detect it during the npm install process.
 RUN mkdir -p /usr/local/vendor
 
-# Install Codex CLIs globally so binaries can be copied to the
+# Install Codex, Gemini, and Claude CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # If the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream

@@ -193,6 +193,15 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
     profile = _make_profile(
         command_template=["echo", "hello"],
         env_overrides={"MM_SAFE": "1"},
@@ -232,8 +241,6 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["MM_SAFE"] == "1"
     assert captured_env["GH_TOKEN"] == "ghp-runtime"
     assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
-
-
 def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_path):
     env = {"GITHUB_TOKEN": "ghp_testtoken123", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(
