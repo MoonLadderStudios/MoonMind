@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { navigateTo } from '../lib/navigation';
 import { renderWithClient } from '../utils/test-utils';
 import { TaskCreatePage } from './task-create';
+
+vi.mock('../lib/navigation', () => ({
+  navigateTo: vi.fn(),
+}));
 
 const mockPayload: BootPayload = {
   page: 'task-create',
@@ -46,6 +51,7 @@ describe('Task Create Entrypoint', () => {
 
   beforeEach(() => {
     window.history.pushState({}, 'Task Create', '/tasks/new');
+    vi.mocked(navigateTo).mockReset();
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('/api/tasks/skills')) {
@@ -161,8 +167,11 @@ describe('Task Create Entrypoint', () => {
         repository: 'MoonLadderStudios/MoonMind',
         task: {
           instructions: 'Run end-to-end regression flow.',
-          skill: 'speckit-orchestrate',
-          skills: ['speckit-orchestrate'],
+          tool: {
+            type: 'skill',
+            name: 'speckit-orchestrate',
+            version: '1.0',
+          },
           runtime: {
             mode: 'codex_cli',
             model: 'gpt-5.4',
@@ -175,8 +184,7 @@ describe('Task Create Entrypoint', () => {
       },
     });
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/tasks/mm:workflow-123');
-      expect(window.location.search).toBe('?source=temporal');
+      expect(navigateTo).toHaveBeenCalledWith('/tasks/mm:workflow-123?source=temporal');
     });
   });
 

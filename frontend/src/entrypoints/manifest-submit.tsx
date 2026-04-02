@@ -2,11 +2,7 @@ import { useState } from 'react';
 
 import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
-
-function navigateTo(path: string): void {
-  window.history.pushState({}, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
-}
+import { navigateTo } from '../lib/navigation';
 
 export function ManifestSubmitPage({ payload: _payload }: { payload: BootPayload }) {
   const [manifestName, setManifestName] = useState('');
@@ -41,6 +37,8 @@ export function ManifestSubmitPage({ payload: _payload }: { payload: BootPayload
     setIsSubmitting(true);
     setMessage(null);
     const options: Record<string, boolean | number> = {};
+    const trimmedManifestName = manifestName.trim();
+    const trimmedRegistryName = registryName.trim();
     if (dryRun) {
       options.dryRun = true;
     }
@@ -53,39 +51,52 @@ export function ManifestSubmitPage({ payload: _payload }: { payload: BootPayload
     }
 
     try {
-      const response = await fetch('/api/executions', {
+      const manifestKey =
+        sourceKind === 'registry'
+          ? trimmedRegistryName
+          : trimmedManifestName;
+
+      if (sourceKind === 'inline') {
+        const upsertResponse = await fetch(`/api/manifests/${encodeURIComponent(manifestKey)}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            content: manifestContent,
+          }),
+        });
+        if (!upsertResponse.ok) {
+          throw new Error('Failed to save manifest.');
+        }
+      }
+
+      const response = await fetch(`/api/manifests/${encodeURIComponent(manifestKey)}/runs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
         body: JSON.stringify({
-          type: 'manifest',
-          payload: {
-            manifest: {
-              name: manifestName.trim(),
-              action,
-              ...(Object.keys(options).length > 0 ? { options } : {}),
-              source:
-                sourceKind === 'registry'
-                  ? { kind: 'registry', name: registryName.trim() }
-                  : { kind: 'inline', content: manifestContent },
-              content: manifestContent,
-            },
-          },
+          action,
+          title: trimmedManifestName,
+          ...(Object.keys(options).length > 0 ? { options } : {}),
         }),
       });
       if (!response.ok) {
         throw new Error('Failed to create manifest job.');
       }
       const created = (await response.json()) as {
-        workflowId?: string;
-        redirectPath?: string;
+        execution?: {
+          workflowId?: string;
+          link?: string;
+        };
       };
       const redirectPath =
-        String(created.redirectPath || '').trim() ||
-        (created.workflowId
-          ? `/tasks/${encodeURIComponent(created.workflowId)}?source=temporal`
+        String(created.execution?.link || '').trim() ||
+        (created.execution?.workflowId
+          ? `/tasks/${encodeURIComponent(created.execution.workflowId)}?source=temporal`
           : '');
       if (!redirectPath) {
         throw new Error('Manifest was created but no redirect path was returned.');

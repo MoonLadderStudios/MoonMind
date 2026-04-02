@@ -118,7 +118,7 @@ def _route_handlers(
         route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps({"items": [{"id": "speckit-orchestrate"}]}),
+            body=json.dumps({"items": {"worker": ["speckit-orchestrate"]}}),
         )
 
     def _mock_worker_pause(route):
@@ -272,7 +272,11 @@ def test_submit_create_flows_to_task_detail(server):
         assert calls["create"] == 1
         
         create_payload = create_requests[0]
-        assert create_payload["payload"]["task"]["skills"] == ["speckit-orchestrate"]
+        assert create_payload["payload"]["task"]["tool"] == {
+            "type": "skill",
+            "name": "speckit-orchestrate",
+            "version": "1.0",
+        }
 
         browser.close()
 

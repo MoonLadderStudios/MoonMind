@@ -65,6 +65,15 @@ _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
     "workers",
     "secrets",
 }
+_DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
+    "code": "dashboard_route_not_found",
+    "message": (
+        "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
+        "/tasks/create, /tasks/new, "
+        "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+        "/tasks/schedules, /tasks/skills, or /tasks/settings."
+    ),
+}
 
 
 class CreateSkillRequest(BaseModel):
@@ -163,6 +172,15 @@ def _is_allowed_path(path: str) -> bool:
             "schedules",
         )
     )
+
+
+def _raise_dashboard_route_not_found() -> None:
+    raise HTTPException(
+        status_code=404,
+        detail=_DASHBOARD_ROUTE_NOT_FOUND_DETAIL,
+    )
+
+
 def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
     """Return auth dependencies so tests can override them consistently."""
 
@@ -439,57 +457,15 @@ async def task_dashboard_route(
     """Serve dashboard sub-routes from one HTML shell."""
 
     normalized = dashboard_path.strip("/")
-    if not _is_allowed_path(normalized):
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "dashboard_route_not_found",
-                "message": (
-                    "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-                    "/tasks/create, /tasks/new, "
-                    "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/skills, or /tasks/settings."
-                ),
-            },
-        )
+    if not _is_allowed_path(normalized) or normalized in _STATIC_PATHS:
+        _raise_dashboard_route_not_found()
 
-    if normalized in _STATIC_PATHS:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "dashboard_route_not_found",
-                "message": (
-                    "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-                    "/tasks/create, /tasks/new, "
-                    "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/skills, or /tasks/settings."
-                ),
-            },
-        )
-
-    if _is_safe_detail_segment(normalized) or any(
-        _is_dynamic_detail(normalized, source)
-        for source in ("proposals", "manifests", "schedules")
-    ):
-        detail_path = f"/tasks/{normalized}"
-        return _render_react_page(
-            request,
-            "task-detail",
-            detail_path,
-            initial_data={"dashboardConfig": build_runtime_config(detail_path)},
-        )
-
-    raise HTTPException(
-        status_code=404,
-        detail={
-            "code": "dashboard_route_not_found",
-            "message": (
-                "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-                "/tasks/create, /tasks/new, "
-                "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                "/tasks/schedules, /tasks/skills, or /tasks/settings."
-            ),
-        },
+    detail_path = f"/tasks/{normalized}"
+    return _render_react_page(
+        request,
+        "task-detail",
+        detail_path,
+        initial_data={"dashboardConfig": build_runtime_config(detail_path)},
     )
 
 

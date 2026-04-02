@@ -16,11 +16,86 @@ interface SkillsResponse {
   legacyItems?: SkillItem[];
 }
 
+const ALLOWED_MARKDOWN_TAGS = new Set([
+  'a',
+  'blockquote',
+  'br',
+  'code',
+  'em',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'li',
+  'ol',
+  'p',
+  'pre',
+  'strong',
+  'ul',
+]);
+
+function isSafeHref(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  if (value.startsWith('#') || value.startsWith('/')) {
+    return true;
+  }
+
+  try {
+    const url = new URL(value, window.location.origin);
+    return ['http:', 'https:', 'mailto:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeHtml(html: string): string {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  for (const element of Array.from(template.content.querySelectorAll('*'))) {
+    const tagName = element.tagName.toLowerCase();
+    if (!ALLOWED_MARKDOWN_TAGS.has(tagName)) {
+      element.replaceWith(document.createTextNode(element.textContent || ''));
+      continue;
+    }
+
+    for (const attribute of Array.from(element.attributes)) {
+      const attributeName = attribute.name.toLowerCase();
+      if (attributeName.startsWith('on')) {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+      if (tagName === 'a' && (attributeName === 'href' || attributeName === 'title')) {
+        continue;
+      }
+      element.removeAttribute(attribute.name);
+    }
+
+    if (tagName === 'a') {
+      const href = element.getAttribute('href');
+      if (!href || !isSafeHref(href)) {
+        element.removeAttribute('href');
+      } else {
+        element.setAttribute('rel', 'noopener noreferrer nofollow');
+      }
+    }
+  }
+
+  return template.innerHTML;
+}
+
 function renderMarkdown(markdown: string): string {
   if (window.marked && typeof window.marked.parse === 'function') {
-    return window.marked.parse(markdown);
+    return sanitizeHtml(window.marked.parse(markdown));
   }
-  return `<pre>${markdown.replace(/[&<>]/g, (value) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[value] || value))}</pre>`;
+  return sanitizeHtml(
+    `<pre>${markdown.replace(/[&<>]/g, (value) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[value] || value))}</pre>`,
+  );
 }
 
 export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {

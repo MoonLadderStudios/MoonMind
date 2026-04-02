@@ -116,4 +116,55 @@ describe('Skills Entrypoint', () => {
       expect(screen.getByText('Created from the UI.')).toBeTruthy();
     });
   });
+
+  it('sanitizes rendered markdown before injecting preview HTML', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).marked = {
+      parse() {
+        return '<h1>Unsafe</h1><p><img src="x" onerror="alert(1)"></p><a href="javascript:alert(1)">click</a>';
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/tasks/skills?includeContent=true')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ['unsafe-skill'] },
+            legacyItems: [
+              {
+                id: 'unsafe-skill',
+                markdown: '# Unsafe\n\n<img src=x onerror="alert(1)"> [click](javascript:alert(1))',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/tasks/skills')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ['unsafe-skill'] },
+            legacyItems: [],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'unsafe-skill' }));
+
+    await waitFor(() => {
+      const preview = document.querySelector('[class*="leading-7"]');
+      expect(preview?.innerHTML).not.toContain('onerror');
+      expect(preview?.innerHTML).not.toContain('javascript:alert(1)');
+      expect(preview?.innerHTML).not.toContain('<img');
+    });
+  });
 });

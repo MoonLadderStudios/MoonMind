@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
+import { navigateTo } from '../lib/navigation';
 
 const INLINE_INSTRUCTIONS_LIMIT = 8_000;
 
@@ -50,11 +51,6 @@ interface ExecutionCreateResponse {
 function readDashboardConfig(payload: BootPayload): DashboardConfig {
   const raw = payload.initialData as { dashboardConfig?: DashboardConfig } | undefined;
   return raw?.dashboardConfig ?? {};
-}
-
-function navigateTo(path: string): void {
-  window.history.pushState({}, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
 async function createInputArtifact(
@@ -242,6 +238,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     try {
       let inputArtifactRef: string | null = null;
       let submittedInstructions = instructions.trim();
+      const selectedSkill = skill.trim();
       if (submittedInstructions.length > INLINE_INSTRUCTIONS_LIMIT) {
         const artifact = await createInputArtifact(artifactCreateEndpoint, submittedInstructions);
         inputArtifactRef = artifact.artifactId;
@@ -255,7 +252,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ...(inputArtifactRef ? { inputArtifactRef } : {}),
           task: {
             instructions: submittedInstructions,
-            ...(skill.trim() ? { skill: skill.trim(), skills: [skill.trim()] } : {}),
+            ...(selectedSkill
+              ? {
+                  tool: {
+                    type: 'skill',
+                    name: selectedSkill,
+                    version: '1.0',
+                  },
+                }
+              : {}),
             runtime: {
               mode: runtime,
               model: model.trim(),
