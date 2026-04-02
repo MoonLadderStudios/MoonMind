@@ -288,9 +288,9 @@ def _build_runtime_planner():
                 if desc_source:
                     clean_desc = re.sub(r"[^a-z0-9]+", "-", desc_source.lower()).strip("-")
                     clean_desc = clean_desc[:40].strip("-")
-                    prefix = f"{clean_desc}-" if clean_desc else ""
+                    prefix = f"{clean_desc}-" if clean_desc else "task-"
                 else:
-                    prefix = ""
+                    prefix = "task-"
 
                 node_inputs["targetBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
 
