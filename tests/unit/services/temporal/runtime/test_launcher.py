@@ -166,6 +166,27 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request()
+
+    record, process, _cleanup = await launcher.launch(
+        run_id="run-none-workflow",
+        workflow_id=None,
+        request=request,
+        profile=profile,
+    )
+    await process.wait()
+
+    assert record.workflow_id is None
+    loaded = store.load("run-none-workflow")
+    assert loaded is not None
+    assert loaded.workflow_id is None
+
+
+@pytest.mark.asyncio
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")

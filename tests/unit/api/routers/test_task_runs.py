@@ -6,6 +6,7 @@ import json
 from typing import Iterator
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -138,6 +139,72 @@ def test_get_observability_summary_live_stream_unavailable_when_not_capable(
     body = response.json()["summary"]
     assert body["supportsLiveStreaming"] is False
     assert body["liveStreamStatus"] == "unavailable"
+
+
+def test_get_observability_summary_allows_owner_access() -> None:
+    owner_id = uuid4()
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=owner_id,
+        email="owner@example.com",
+        is_superuser=False,
+    )
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workflow_id = "mm:wf-1"
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.task_runs.ManagedRunStore.load",
+            return_value=mock_record,
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(owner_id))),
+            ):
+                response = test_client.get(
+                    f"/api/task-runs/{uuid4()}/observability-summary"
+                )
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["supportsLiveStreaming"] is True
+
+
+def test_get_observability_summary_forbids_cross_owner_access() -> None:
+    owner_id = uuid4()
+    other_id = uuid4()
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=other_id,
+        email="other@example.com",
+        is_superuser=False,
+    )
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workflow_id = "mm:wf-1"
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.task_runs.ManagedRunStore.load",
+            return_value=mock_record,
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(owner_id))),
+            ):
+                response = test_client.get(
+                    f"/api/task-runs/{uuid4()}/observability-summary"
+                )
+
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------

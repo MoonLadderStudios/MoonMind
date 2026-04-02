@@ -213,6 +213,23 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled',
 
 type LogViewerState = 'not_available' | 'starting' | 'live' | 'ended' | 'error';
 
+class ObservabilityRequestError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ObservabilityRequestError';
+    this.status = status;
+  }
+}
+
+function buildObservabilityRequestError(status: number): ObservabilityRequestError {
+  if (status === 403) {
+    return new ObservabilityRequestError(status, 'You do not have permission to view observability for this run.');
+  }
+  return new ObservabilityRequestError(status, `Observability request failed: ${status}`);
+}
+
 /** Fetch the plain-text merged-tail from the artifact-backed API. */
 async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<string> {
   const resp = await fetch(
@@ -221,7 +238,7 @@ async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<stri
   );
   if (!resp.ok) {
     if (resp.status === 404) return '';
-    throw new Error(`Merged tail fetch failed: ${resp.status}`);
+    throw buildObservabilityRequestError(resp.status);
   }
   return resp.text();
 }
@@ -234,7 +251,7 @@ async function fetchStream(apiBase: string, taskRunId: string, stream: 'stdout' 
   );
   if (!resp.ok) {
     if (resp.status === 404) return '';
-    throw new Error(`Stream ${stream} fetch failed: ${resp.status}`);
+    throw buildObservabilityRequestError(resp.status);
   }
   return resp.text();
 }
@@ -247,7 +264,7 @@ async function fetchDiagnostics(apiBase: string, taskRunId: string): Promise<str
   );
   if (!resp.ok) {
     if (resp.status === 404) return '';
-    throw new Error(`Diagnostics fetch failed: ${resp.status}`);
+    throw buildObservabilityRequestError(resp.status);
   }
   return resp.text();
 }
@@ -261,7 +278,10 @@ async function fetchObservabilitySummary(
     `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
     { credentials: 'include' },
   );
-  if (!resp.ok) return null;
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
   const body = (await resp.json()) as { summary: Record<string, unknown> };
   const s = body.summary;
   return {
@@ -342,10 +362,12 @@ function LiveLogsPanel({
   apiBase,
   taskRunId,
   isTerminal,
+  autoExpand = false,
 }: {
   apiBase: string;
   taskRunId: string;
   isTerminal: boolean;
+  autoExpand?: boolean;
 }) {
   const [logContent, setLogContent] = useState<LogLine[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -367,6 +389,12 @@ function LiveLogsPanel({
     lastSeqRef.current = null;
     setViewerState('starting');
   }, [taskRunId]);
+
+  useEffect(() => {
+    if (autoExpand) {
+      setExpanded(true);
+    }
+  }, [autoExpand]);
 
   // Query for observability summary
   const summaryQuery = useQuery({
@@ -517,6 +545,7 @@ function LiveLogsPanel({
   };
 
   const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`;
+  const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
 
   return (
     <details
@@ -533,6 +562,7 @@ function LiveLogsPanel({
         <span>Live Logs</span>
       </summary>
       <div className="stack">
+        {summaryErrorMessage ? <div className="notice error">{summaryErrorMessage}</div> : null}
         {expanded ? (
           <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -544,47 +574,52 @@ function LiveLogsPanel({
           </div>
         ) : null}
         <p className="small">
-        Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
-      </p>
-      <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-        <div
-          style={{
-            background: '#111',
-            color: '#e8e8e8',
-            padding: '0.75rem',
-            fontSize: '0.7rem',
-            lineHeight: 1.4,
-            whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-            wordBreak: wrapLines ? 'break-all' : 'normal',
-            borderRadius: '4px',
-            margin: 0,
-            fontFamily: 'monospace'
-          }}
-        >
-          {logContent.length === 0 ? (
-            <div>{emptyLabel}</div>
-          ) : (
-            logContent.map((line) => (
-              <div 
-                key={line.id} 
-                data-stream={line.stream}
-                style={{
-                  borderLeft: line.stream === 'stdout' ? '2px solid #3b82f6' : 
-                              line.stream === 'stderr' ? '2px solid #ef4444' : 
-                              line.stream === 'system' ? '2px solid #22c55e' : '2px solid transparent',
-                  paddingLeft: '6px',
-                  // dim system messages
-                  opacity: line.stream === 'system' ? 0.7 : 1
-                }}
-              >
-                {line.text}
-              </div>
-            ))
-          )}
+          Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
+        </p>
+        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          <div
+            style={{
+              background: '#111',
+              color: '#e8e8e8',
+              padding: '0.75rem',
+              fontSize: '0.7rem',
+              lineHeight: 1.4,
+              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
+              wordBreak: wrapLines ? 'break-all' : 'normal',
+              borderRadius: '4px',
+              margin: 0,
+              fontFamily: 'monospace',
+            }}
+          >
+            {logContent.length === 0 ? (
+              <div>{emptyLabel}</div>
+            ) : (
+              logContent.map((line) => (
+                <div
+                  key={line.id}
+                  data-stream={line.stream}
+                  style={{
+                    borderLeft:
+                      line.stream === 'stdout'
+                        ? '2px solid #3b82f6'
+                        : line.stream === 'stderr'
+                          ? '2px solid #ef4444'
+                          : line.stream === 'system'
+                            ? '2px solid #22c55e'
+                            : '2px solid transparent',
+                    paddingLeft: '6px',
+                    // dim system messages
+                    opacity: line.stream === 'system' ? 0.7 : 1,
+                  }}
+                >
+                  {line.text}
+                </div>
+              ))
+            )}
+          </div>
+          <div ref={bottomRef} />
         </div>
-        <div ref={bottomRef} />
       </div>
-    </div>
     </details>
   );
 }
@@ -870,6 +905,42 @@ function DiagnosticsPanel({
   );
 }
 
+type MissingTaskRunState = 'waiting_for_launch' | 'binding_missing' | 'launch_failed';
+
+function inferMissingTaskRunState(execution: z.infer<typeof ExecutionDetailSchema>): MissingTaskRunState {
+  const lifecycleState = (execution.rawState || execution.state || execution.status || '').toLowerCase();
+  const temporalStatus = (execution.temporalStatus || execution.closeStatus || '').toLowerCase();
+  const hasProgress = Boolean(
+    execution.startedAt ||
+      (execution.updatedAt && execution.createdAt && execution.updatedAt !== execution.createdAt),
+  );
+
+  if (
+    execution.closedAt ||
+    TERMINAL_STATES.has(lifecycleState) ||
+    TERMINAL_RUN_STATUSES.has(lifecycleState) ||
+    TERMINAL_RUN_STATUSES.has(temporalStatus)
+  ) {
+    return 'launch_failed';
+  }
+
+  if (lifecycleState === 'executing' || lifecycleState === 'running') {
+    return hasProgress ? 'binding_missing' : 'waiting_for_launch';
+  }
+
+  return 'waiting_for_launch';
+}
+
+function renderMissingTaskRunCopy(state: MissingTaskRunState): string {
+  if (state === 'launch_failed') {
+    return 'This execution ended before a managed runtime observability record was created.';
+  }
+  if (state === 'binding_missing') {
+    return 'This execution is running but has not received its managed runtime binding yet.';
+  }
+  return 'Waiting for managed runtime launch to create live logs.';
+}
+
 export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
@@ -908,11 +979,33 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const workflowId = execution?.workflowId || execution?.taskId || taskId || '';
   const runId = execution?.temporalRunId || execution?.runId || '';
   const namespace = execution?.namespace || '';
-
-  const isUuidLike = (val: string) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
   const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
-  const resolvedTaskRunId = explicitTaskRunId || (isUuidLike(runId) ? runId : '');
+  const resolvedTaskRunId = explicitTaskRunId;
+  const previousTaskRunIdRef = useRef(resolvedTaskRunId);
+  const [showTaskRunAttachNotice, setShowTaskRunAttachNotice] = useState(false);
+
+  useEffect(() => {
+    if (!resolvedTaskRunId) {
+      previousTaskRunIdRef.current = '';
+      setShowTaskRunAttachNotice(false);
+      return;
+    }
+
+    if (!previousTaskRunIdRef.current) {
+      previousTaskRunIdRef.current = resolvedTaskRunId;
+      setShowTaskRunAttachNotice(true);
+      const timeout = window.setTimeout(() => {
+        setShowTaskRunAttachNotice(false);
+      }, 250);
+      return () => window.clearTimeout(timeout);
+    }
+
+    previousTaskRunIdRef.current = resolvedTaskRunId;
+    setShowTaskRunAttachNotice(false);
+    return undefined;
+  }, [resolvedTaskRunId]);
+
+  const missingTaskRunState = execution && !resolvedTaskRunId ? inferMissingTaskRunState(execution) : null;
 
   const artifactsQuery = useQuery({
     queryKey: ['task-detail-artifacts', namespace, workflowId, runId],
@@ -1328,10 +1421,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {logStreamingEnabled ? (
               resolvedTaskRunId ? (
                 <>
+                  {showTaskRunAttachNotice ? (
+                    <p className="small">Waiting for managed runtime launch to create live logs.</p>
+                  ) : null}
                   <LiveLogsPanel
                     apiBase={payload.apiBase}
                     taskRunId={resolvedTaskRunId}
                     isTerminal={TERMINAL_STATES.has(execution.rawState || execution.state || '')}
+                    autoExpand={showTaskRunAttachNotice}
                   />
                   <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stdout" />
                   <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stderr" />
@@ -1340,9 +1437,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               ) : (
                 <>
                   <h3>Live Logs</h3>
-                  <p className="small">
-                    Live log streaming requires a task run id. Waiting for the task to start executing...
-                  </p>
+                  <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for task details...'}</p>
                 </>
               )
             ) : (

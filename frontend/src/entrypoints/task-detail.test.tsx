@@ -135,7 +135,7 @@ describe('Task Detail Entrypoint', () => {
       status: 'running',
       state: 'executing',
       createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
+      updatedAt: '2026-03-28T00:00:00Z',
       actions: {},
     };
 
@@ -230,7 +230,7 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');
   });
 
-  it('shows waiting message when no taskRunId is present', async () => {
+  it('shows launch-waiting message when no taskRunId is present yet', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -243,7 +243,7 @@ describe('Task Detail Entrypoint', () => {
       status: 'running',
       state: 'executing',
       createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
+      updatedAt: '2026-03-28T00:00:00Z',
       actions: {},
     };
 
@@ -258,7 +258,7 @@ describe('Task Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Live log streaming requires a task run id/i),
+        screen.getByText(/Waiting for managed runtime launch to create live logs/i),
       ).toBeTruthy();
     });
   });
@@ -559,6 +559,15 @@ describe('Task Detail Entrypoint', () => {
 
 describe('LiveLogsPanel', () => {
   const mockPayload: BootPayload = { page: 'task-detail', apiBase: '/api' };
+  const fastPollPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        pollIntervalsMs: { detail: 1 },
+      },
+    },
+  };
 
   const activeExecution = {
     taskId: 'wf-1',
@@ -1041,5 +1050,122 @@ describe('LiveLogsPanel', () => {
     expect(liveDetails?.hasAttribute('open')).toBe(true);
     expect(stdoutDetails?.hasAttribute('open')).toBe(true);
     expect(diagnosticsDetails?.hasAttribute('open')).toBe(true);
+  });
+
+  it('polls execution detail until taskRunId appears and then attaches observability panels', async () => {
+    let detailCalls = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => activeSummary } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => 'attached tail\n' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      detailCalls += 1;
+      return Promise.resolve({
+        ok: true,
+        json: async () =>
+          detailCalls === 1
+            ? {
+                ...activeExecution,
+                taskRunId: undefined,
+                updatedAt: '2026-03-28T00:00:00Z',
+              }
+            : activeExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={fastPollPayload} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Waiting for managed runtime launch to create live logs/i),
+      ).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/attached tail/)).toBeTruthy();
+    });
+  });
+
+  it('shows launch-failed copy when execution ends without a managed run binding', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          ...terminalExecution,
+          taskRunId: undefined,
+          updatedAt: '2026-03-28T00:00:02Z',
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/ended before a managed runtime observability record was created/i),
+      ).toBeTruthy();
+    });
+  });
+
+  it('shows binding-missing copy when execution is still running without a managed run binding', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          ...activeExecution,
+          taskRunId: undefined,
+          updatedAt: '2026-03-28T00:00:02Z',
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/has not received its managed runtime binding yet/i),
+      ).toBeTruthy();
+    });
+  });
+
+  it('shows authorization-specific copy when observability summary returns 403', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: false,
+          status: 403,
+          text: async () => 'forbidden',
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/do not have permission to view observability for this run/i),
+      ).toBeTruthy();
+    });
   });
 });

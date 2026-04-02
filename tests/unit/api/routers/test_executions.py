@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -965,6 +965,39 @@ def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
         assert payload["temporalRunId"] == "run-2"
         assert payload["latestRunView"] is True
         assert payload["continueAsNewCause"] == "manual_rerun"
+
+
+def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    record = _build_execution_record(owner_id=str(user.id))
+    record.memo = {"title": "Temporal task", "summary": "Waiting on review."}
+    record.parameters = {}
+    record.search_attributes = {
+        "mm_owner_id": str(user.id),
+        "mm_owner_type": "user",
+        "mm_entry": "run",
+    }
+    service.describe_execution.return_value = record
+
+    to_thread_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    async def _fake_to_thread(func: object, /, *args: object, **kwargs: object) -> str:
+        to_thread_calls.append((func, args, kwargs))
+        return "550e8400-e29b-41d4-a716-446655440000"
+
+    with patch(
+        "api_service.api.routers.executions.asyncio.to_thread",
+        new=_fake_to_thread,
+    ):
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    assert (
+        response.json()["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
+    )
+    assert len(to_thread_calls) == 1
 
 
 def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:

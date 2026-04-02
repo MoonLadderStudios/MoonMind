@@ -36,6 +36,65 @@ def _get_agent_runtime_artifacts_root() -> str:
     )
 
 
+def _enum_value(value: object) -> object:
+    return getattr(value, "value", value)
+
+
+def _coerce_owner_id(value: object) -> str | None:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            candidate = _coerce_owner_id(item)
+            if candidate:
+                return candidate
+        return None
+    candidate = str(value or "").strip()
+    return candidate or None
+
+
+async def _load_execution_owner_binding(
+    workflow_id: str,
+) -> tuple[str | None, str | None]:
+    from api_service.db.base import get_async_session_context
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+
+    normalized_workflow_id = str(workflow_id or "").strip()
+    if not normalized_workflow_id:
+        return None, None
+
+    async with get_async_session_context() as db:
+        record = await db.get(TemporalExecutionCanonicalRecord, normalized_workflow_id)
+        if record is None:
+            return None, None
+
+        search_attributes = dict(getattr(record, "search_attributes", None) or {})
+        owner_type = str(_enum_value(getattr(record, "owner_type", None)) or "").strip().lower()
+        owner_id = str(getattr(record, "owner_id", "") or "").strip()
+        if not owner_id:
+            owner_id = _coerce_owner_id(search_attributes.get("mm_owner_id")) or ""
+        if not owner_type:
+            owner_type = "system" if owner_id.lower() == "system" or not owner_id else "user"
+        return owner_type or None, owner_id or None
+
+
+async def _require_observability_access(record: object, user: User) -> None:
+    if getattr(user, "is_superuser", False):
+        return
+
+    workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
+    if not workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access observability for this run.",
+        )
+
+    owner_type, owner_id = await _load_execution_owner_binding(workflow_id)
+    if owner_type != "user" or owner_id != str(user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access observability for this run.",
+        )
+
+
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
         return
@@ -148,12 +207,6 @@ async def get_observability_summary(
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Fetch the observability summary for a task run from the shared agent jobs volume."""
-    if not getattr(_user, "is_superuser", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requires superuser privileges to access raw observability artifacts.",
-        )
-        
     store = ManagedRunStore(_get_agent_runtime_store_root())
     
     record = await asyncio.to_thread(store.load, str(id))
@@ -162,6 +215,7 @@ async def get_observability_summary(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Observability record not found for this task run",
         )
+    await _require_observability_access(record, _user)
 
     terminal_statuses = {"completed", "failed", "canceled", "cancelled", "timed_out"}
     run_status = getattr(record, "status", None)
@@ -199,12 +253,6 @@ async def stream_task_run_live_logs(
     _user: User = Depends(get_current_user()),
 ):
     """Serve SSE real-time stream for active runs."""
-    if not getattr(_user, "is_superuser", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requires superuser privileges to access raw observability artifacts.",
-        )
-
     store = ManagedRunStore(_get_agent_runtime_store_root())
     record = await asyncio.to_thread(store.load, str(id))
 
@@ -213,6 +261,7 @@ async def stream_task_run_live_logs(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Observability record not found for this task run",
         )
+    await _require_observability_access(record, _user)
 
     # Check if run ended => artifact fallback
     terminal_statuses = ["completed", "failed", "canceled", "cancelled", "timed_out"]
@@ -298,12 +347,6 @@ async def stream_task_run_log(
     _user: User = Depends(get_current_user()),
 ):
     """Serve stdout, stderr, or merged logs directly from the shared volume."""
-    if not getattr(_user, "is_superuser", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requires superuser privileges to access raw observability artifacts.",
-        )
-
     if stream_name not in ("stdout", "stderr", "merged"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -318,6 +361,7 @@ async def stream_task_run_log(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Observability record not found for this task run",
         )
+    await _require_observability_access(record, _user)
 
     if stream_name == "merged":
         target_ref = getattr(record, "merged_log_artifact_ref", None)
@@ -427,12 +471,6 @@ async def get_task_run_diagnostics(
     _user: User = Depends(get_current_user()),
 ):
     """Return the diagnostics.json payload for a task run."""
-    if not getattr(_user, "is_superuser", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requires superuser privileges to access raw observability artifacts.",
-        )
-
     store = ManagedRunStore(_get_agent_runtime_store_root())
     record = await asyncio.to_thread(store.load, str(id))
     
@@ -441,6 +479,7 @@ async def get_task_run_diagnostics(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Diagnostics artifact not found",
         )
+    await _require_observability_access(record, _user)
         
     artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
     artifact_path = (artifacts_root / record.diagnostics_ref).resolve()

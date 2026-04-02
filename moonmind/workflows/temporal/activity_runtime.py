@@ -2023,9 +2023,6 @@ class TemporalAgentRuntimeActivities:
         if not run_id or request_data is None or profile_data is None:
             raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
 
-        if workflow_id:
-            await self._report_task_run_binding(workflow_id, str(run_id))
-
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
@@ -2040,10 +2037,15 @@ class TemporalAgentRuntimeActivities:
         # Idempotency check handled in launcher
         record, process, cleanup_paths = await self._run_launcher.launch(
             run_id=run_id,
+            workflow_id=workflow_id or None,
             request=request,
             profile=profile,
             workspace_path=workspace_path,
         )
+
+        if workflow_id:
+            record_run_id = str(getattr(record, "run_id", "") or run_id).strip()
+            await self._report_task_run_binding(workflow_id, record_run_id)
 
         if process is None:
             # Idempotent path: run is already active, skip secondary supervision
