@@ -42,6 +42,7 @@ agent_jobs/
 # Runtime / ephemeral data (never commit)
 var/
 artifacts/
+live_streams.spool
 
 # Local saved artifacts
 /Saved/

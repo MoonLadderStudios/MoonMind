@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Iterator
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -466,6 +467,66 @@ def test_stream_task_run_log_merged_uses_spool_when_stdout_stderr_refs_are_absen
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "spool"
     assert "active run output" in response.text
+
+
+def test_stream_task_run_log_merged_filters_stale_spool_entries_from_previous_runs(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "live_streams.spool").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "sequence": 1757,
+                        "stream": "stderr",
+                        "text": "old gemini capacity error\n",
+                        "timestamp": "2026-04-02T07:17:52+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "sequence": 96,
+                        "stream": "stderr",
+                        "text": "current claude warning\n",
+                        "timestamp": "2026-04-02T22:16:37+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "sequence": 177,
+                        "stream": "stdout",
+                        "text": "current claude completion\n",
+                        "timestamp": "2026-04-02T22:26:29+00:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.workspace_path = str(workspace_path)
+    mock_record.started_at = datetime(2026, 4, 2, 22, 16, 37, tzinfo=UTC)
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "spool"
+    assert "old gemini capacity error" not in response.text
+    assert "current claude warning" in response.text
+    assert "current claude completion" in response.text
 
 
 def test_stream_task_run_log_merged_uses_prebuilt_artifact_when_available(
