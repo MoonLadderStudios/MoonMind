@@ -4,9 +4,7 @@ import { z } from 'zod';
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
-
-const PAGE_SIZE_OPTIONS = [20, 25, 50, 100] as const;
-const DEFAULT_PAGE_SIZE = 50;
+import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
 const PROPOSAL_STATUSES = ['open', 'promoted', 'dismissed'] as const;
 
@@ -36,15 +34,6 @@ const ProposalsResponseSchema = z.object({
   items: z.array(ProposalSchema),
   nextCursor: z.string().nullable().optional(),
 });
-
-
-
-function parsePageSize(raw: string | null): number {
-  const parsed = Number(raw || DEFAULT_PAGE_SIZE);
-  return PAGE_SIZE_OPTIONS.includes(parsed as (typeof PAGE_SIZE_OPTIONS)[number])
-    ? parsed
-    : DEFAULT_PAGE_SIZE;
-}
 
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -188,25 +177,6 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
           <h2 className="page-title">Proposals</h2>
           <p className="page-meta">Review and manage task proposals in the queue.</p>
         </div>
-        <div className="toolbar-controls">
-          <label className="queue-inline-filter">
-            Show
-            <select
-              value={pageSize}
-              onChange={(event) => {
-                setPageSize(parsePageSize(event.target.value));
-                resetToFirstPage();
-              }}
-              aria-label="Rows per page"
-            >
-              {PAGE_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
       </div>
 
       <form className="stack" onSubmit={(event) => event.preventDefault()}>
@@ -263,26 +233,35 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
         <div className="queue-layouts">
           <div className="queue-results-toolbar">
             <span className="small">{pageSummary}</span>
-            <nav className="queue-pagination" aria-label="Pagination">
-              <button
-                type="button"
-                className="secondary queue-pagination-button"
-                disabled={cursorStack.length === 0}
-                onClick={goPrev}
-                aria-label="Previous page"
-              >
-                <span aria-hidden="true">&larr;</span>
-              </button>
-              <button
-                type="button"
-                className="secondary queue-pagination-button"
-                disabled={!data?.nextCursor}
-                onClick={goNext}
-                aria-label="Next page"
-              >
-                <span aria-hidden="true">&rarr;</span>
-              </button>
-            </nav>
+            <div className="queue-pagination">
+              <PageSizeSelector
+                pageSize={pageSize}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  resetToFirstPage();
+                }}
+              />
+              <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
+                <button
+                  type="button"
+                  className="secondary queue-pagination-button"
+                  disabled={cursorStack.length === 0}
+                  onClick={goPrev}
+                  aria-label="Previous page"
+                >
+                  <span aria-hidden="true">&larr;</span>
+                </button>
+                <button
+                  type="button"
+                  className="secondary queue-pagination-button"
+                  disabled={!data?.nextCursor}
+                  onClick={goNext}
+                  aria-label="Next page"
+                >
+                  <span aria-hidden="true">&rarr;</span>
+                </button>
+              </nav>
+            </div>
           </div>
           {sortedItems.length === 0 ? (
             <div className="card small">No proposals found for the current filters.</div>
