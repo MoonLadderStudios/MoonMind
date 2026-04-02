@@ -1,7 +1,14 @@
 {
-  "_DataTable-D5g_KAGX.js": {
-    "file": "assets/DataTable-D5g_KAGX.js",
+  "_DataTable-_XwYQsQv.js": {
+    "file": "assets/DataTable-_XwYQsQv.js",
     "name": "DataTable",
+    "imports": [
+      "_mountPage-C2pxuJYj.js"
+    ]
+  },
+  "_PageSizeSelector-CKKPHFSU.js": {
+    "file": "assets/PageSizeSelector-CKKPHFSU.js",
+    "name": "PageSizeSelector",
     "imports": [
       "_mountPage-C2pxuJYj.js"
     ]
@@ -27,33 +34,34 @@
     ]
   },
   "entrypoints/manifests.tsx": {
-    "file": "assets/manifests-DF-eBQh7.js",
+    "file": "assets/manifests-B8PL6C9Y.js",
     "name": "manifests",
     "src": "entrypoints/manifests.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_DataTable-D5g_KAGX.js"
+      "_DataTable-_XwYQsQv.js"
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-ZWcWsv3J.js",
+    "file": "assets/proposals-gtvIflyJ.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
+      "_PageSizeSelector-CKKPHFSU.js",
       "_executionStatusPillClasses-BGDpw-qN.js"
     ]
   },
   "entrypoints/schedules.tsx": {
-    "file": "assets/schedules-D7d6hMGY.js",
+    "file": "assets/schedules-D6rG190w.js",
     "name": "schedules",
     "src": "entrypoints/schedules.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
-      "_DataTable-D5g_KAGX.js"
+      "_DataTable-_XwYQsQv.js"
     ]
   },
   "entrypoints/settings.tsx": {
@@ -85,12 +93,13 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-27kEmKO_.js",
+    "file": "assets/tasks-list-D7yGVCfB.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-C2pxuJYj.js",
+      "_PageSizeSelector-CKKPHFSU.js",
       "_executionStatusPillClasses-BGDpw-qN.js"
     ]
   }
