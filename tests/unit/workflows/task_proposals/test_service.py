@@ -131,6 +131,123 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_proposal_normalizes_managed_runtime_ids() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.QUEUE,
+        origin_id=None,
+        origin_metadata={},
+        task_create_request={},
+    )
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["Auth"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {
+                "repository": "Moon/Repo",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "instructions": "Add regression coverage",
+                    "runtime": {"mode": "claude_code"},
+                },
+            },
+        },
+        origin_source="queue",
+        origin_id=None,
+        origin_metadata={},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+    )
+
+    kwargs = repo.create_proposal.await_args.kwargs
+    assert kwargs["task_create_request"]["payload"]["targetRuntime"] == "codex"
+    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] == "claude"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_field", ["targetRuntime", "target_runtime", "runtime"])
+async def test_create_proposal_normalizes_legacy_task_runtime_fields(
+    runtime_field: str,
+) -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=TaskProposalOriginSource.QUEUE,
+        origin_id=None,
+        origin_metadata={},
+        task_create_request={},
+    )
+    repo.create_proposal.return_value = record
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+    service._emit_notification = AsyncMock()
+
+    await service.create_proposal(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["Auth"],
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Add regression coverage",
+                    runtime_field: "claude_code",
+                },
+            },
+        },
+        origin_source="queue",
+        origin_id=None,
+        origin_metadata={},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+    )
+
+    kwargs = repo.create_proposal.await_args.kwargs
+    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] == "claude"
+
+
+@pytest.mark.asyncio
 async def test_create_proposal_enforces_moonmind_metadata() -> None:
     repo = AsyncMock()
     service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -375,6 +492,101 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     assert updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
 
 
+@pytest.mark.asyncio
+async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Refactor logic",
+                    "runtime": {"mode": "gemini_cli"},
+                }
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    override_request = {
+        "type": "task",
+        "payload": {
+            "repository": "Moon/Repo",
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Refactor logic",
+                "runtime": {"mode": "claude_code"},
+            },
+        },
+    }
+
+    updated_proposal, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+        task_create_request_override=override_request,
+    )
+
+    repo.commit.assert_awaited()
+    assert updated_proposal.status is TaskProposalStatus.PROMOTED
+    assert final_request["payload"]["targetRuntime"] == "codex"
+    assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_mode_field", ["targetRuntime", "target_runtime"])
+async def test_promote_proposal_override_normalizes_runtime_mapping_aliases(
+    runtime_mode_field: str,
+) -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Refactor logic",
+                    "runtime": {"mode": "gemini_cli"},
+                }
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    override_request = {
+        "type": "task",
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Refactor logic",
+                "runtime": {runtime_mode_field: "claude_code"},
+            },
+        },
+    }
+
+    updated_proposal, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+        task_create_request_override=override_request,
+    )
+
+    repo.commit.assert_awaited()
+    assert updated_proposal.status is TaskProposalStatus.PROMOTED
+    assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
 
 
 
