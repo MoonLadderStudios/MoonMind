@@ -10,6 +10,9 @@ import logging
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -145,25 +148,122 @@ def _resolve_repo(raw_repo: str | None, task_context_path: str | None = None) ->
 
 
 def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
-    raw = _run_command(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            state,
-            "--json",
-            "number,title,headRefName,headRepositoryOwner,headRepository,isCrossRepository",
-            "--limit",
-            "100000",
-        ]
-    )
-    parsed = json.loads(raw or "[]")
-    if not isinstance(parsed, list):
-        raise RuntimeError("Unexpected `gh pr list` payload shape.")
-    return parsed
+    try:
+        raw = _run_command(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                state,
+                "--json",
+                "number,title,headRefName,headRepositoryOwner,headRepository,isCrossRepository",
+                "--limit",
+                "100000",
+            ]
+        )
+        parsed = json.loads(raw or "[]")
+        if not isinstance(parsed, list):
+            raise RuntimeError("Unexpected `gh pr list` payload shape.")
+        return parsed
+    except RuntimeError as exc:
+        try:
+            return _run_pr_list_via_public_rest(repo=repo, state=state)
+        except RuntimeError as rest_exc:
+            raise RuntimeError(
+                f"failed to list PRs with gh and public REST fallback: {exc}; {rest_exc}"
+            ) from rest_exc
+
+
+def _run_pr_list_via_public_rest(repo: str, state: str) -> list[dict[str, Any]]:
+    normalized_state = str(state or "").strip().lower()
+    if normalized_state == "merged":
+        raise RuntimeError(
+            "public REST fallback does not support state=merged; authenticate gh instead"
+        )
+    if normalized_state not in {"open", "closed"}:
+        raise RuntimeError(
+            f"unsupported PR state for public REST fallback: {normalized_state or '(blank)'}"
+        )
+
+    pulls: list[dict[str, Any]] = []
+    page = 1
+    encoded_repo = urllib.parse.quote(repo, safe="/")
+    while True:
+        url = (
+            f"https://api.github.com/repos/{encoded_repo}/pulls"
+            f"?state={normalized_state}&per_page=100&page={page}"
+        )
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "moonmind-batch-pr-resolver",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                page_payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+            message = detail or f"HTTP {exc.code}"
+            raise RuntimeError(
+                f"GitHub REST fallback request failed for {repo}: {message}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"GitHub REST fallback request failed for {repo}: {exc.reason}"
+            ) from exc
+
+        if not isinstance(page_payload, list):
+            raise RuntimeError("Unexpected GitHub REST pulls payload shape.")
+        if not page_payload:
+            break
+
+        for pr in page_payload:
+            if not isinstance(pr, dict):
+                continue
+            head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+            head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+            head_owner = (
+                head_repo.get("owner")
+                if isinstance(head_repo.get("owner"), dict)
+                else {}
+            )
+            owner_login = str(
+                head_owner.get("login")
+                or (
+                    head.get("user").get("login")
+                    if isinstance(head.get("user"), dict)
+                    else ""
+                )
+                or ""
+            ).strip()
+            head_name_with_owner = str(head_repo.get("full_name") or "").strip()
+            normalized_target = repo.strip().lower()
+            pulls.append(
+                {
+                    "number": pr.get("number"),
+                    "title": pr.get("title"),
+                    "headRefName": head.get("ref"),
+                    "headRepositoryOwner": {"login": owner_login},
+                    "headRepository": {
+                        "nameWithOwner": head_name_with_owner,
+                        "name": head_repo.get("name"),
+                    },
+                    "isCrossRepository": bool(
+                        head_name_with_owner
+                        and head_name_with_owner.lower() != normalized_target
+                    ),
+                }
+            )
+        if len(page_payload) < 100:
+            break
+        page += 1
+
+    return pulls
 
 
 def _is_local_head(pr: dict[str, Any], repo: str) -> bool:

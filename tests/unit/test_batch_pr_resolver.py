@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import runpy
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,61 @@ def test_resolve_repo_prefers_remote_over_env(monkeypatch):
     assert resolve_repo(raw_repo=None, task_context_path=None) == (
         "MoonLadderStudios/Tactics"
     )
+
+
+def test_run_pr_list_falls_back_to_public_rest_when_gh_fails(monkeypatch):
+    module = _load_module()
+    run_pr_list = module["_run_pr_list"]
+
+    def _fail_gh(_cmd: list[str]) -> str:
+        raise RuntimeError("gh auth missing")
+
+    class _FakeResponse(io.StringIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    def _fake_urlopen(request, timeout=30):
+        assert request.full_url.startswith(
+            "https://api.github.com/repos/MoonLadderStudios/MoonMind/pulls"
+        )
+        return _FakeResponse(
+            '[{"number":1146,"title":"T","head":{"ref":"feature/test","repo":{"full_name":"MoonLadderStudios/MoonMind","name":"MoonMind","owner":{"login":"MoonLadderStudios"}}}}]'
+        )
+
+    monkeypatch.setitem(run_pr_list.__globals__, "_run_command", _fail_gh)
+    monkeypatch.setattr(run_pr_list.__globals__["urllib"].request, "urlopen", _fake_urlopen)
+
+    result = run_pr_list("MoonLadderStudios/MoonMind", "open")
+
+    assert result == [
+        {
+            "number": 1146,
+            "title": "T",
+            "headRefName": "feature/test",
+            "headRepositoryOwner": {"login": "MoonLadderStudios"},
+            "headRepository": {
+                "nameWithOwner": "MoonLadderStudios/MoonMind",
+                "name": "MoonMind",
+            },
+            "isCrossRepository": False,
+        }
+    ]
+
+
+def test_run_pr_list_via_public_rest_rejects_merged():
+    module = _load_module()
+    run_pr_list_via_public_rest = module["_run_pr_list_via_public_rest"]
+
+    try:
+        run_pr_list_via_public_rest("MoonLadderStudios/MoonMind", "merged")
+    except RuntimeError as exc:
+        assert "state=merged" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for merged fallback state")
 
 
 def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
