@@ -388,6 +388,16 @@ class TaskProposalService:
         return _PROPOSAL_RUNTIME_MODE_ALIASES.get(lowered, lowered)
 
     @classmethod
+    def _normalize_proposal_runtime_mapping(
+        cls, runtime_node: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        runtime = dict(runtime_node)
+        for key in ("mode", "targetRuntime", "target_runtime"):
+            if key in runtime:
+                runtime[key] = cls._normalize_proposal_runtime_mode(runtime.get(key))
+        return runtime
+
+    @classmethod
     def _normalize_proposal_runtime_payload(
         cls, payload: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -406,14 +416,14 @@ class TaskProposalService:
             return normalized
 
         task = dict(task_node)
-        runtime_node = task.get("runtime")
-        if isinstance(runtime_node, Mapping):
-            runtime = dict(runtime_node)
-            if "mode" in runtime:
-                runtime["mode"] = cls._normalize_proposal_runtime_mode(
-                    runtime.get("mode")
-                )
-            task["runtime"] = runtime
+        for key in ("targetRuntime", "target_runtime", "runtime"):
+            if key not in task:
+                continue
+            value = task.get(key)
+            if key == "runtime" and isinstance(value, Mapping):
+                task["runtime"] = cls._normalize_proposal_runtime_mapping(value)
+                continue
+            task[key] = cls._normalize_proposal_runtime_mode(value)
         normalized["task"] = task
         return normalized
 

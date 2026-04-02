@@ -398,7 +398,7 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
                         "targetRuntime": "codex_cli",
                         "task": {
                             "instructions": "fix it",
-                            "runtime": {"mode": "claude_code"},
+                            "runtime": "claude_code",
                         },
                     }
                 },
