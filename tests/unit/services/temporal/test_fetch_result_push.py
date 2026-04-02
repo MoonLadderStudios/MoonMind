@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -55,6 +56,33 @@ def _make_subprocess_result(
     return subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr,
     )
+
+
+def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
+    store = _make_mock_store(workspace_path=str(tmp_path / "run-1" / "repo"))
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    workspace = Path(str(store.load.return_value.workspace_path))
+    (workspace.parent / ".moonmind" / "bin").mkdir(parents=True)
+
+    calls: list[dict[str, object]] = []
+
+    def _mock_run(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        if len(calls) == 1:
+            return _make_subprocess_result(stdout="feature/test-branch\n")
+        if len(calls) == 2:
+            return _make_subprocess_result(stdout="https://github.com/o/r.git\n")
+        return _make_subprocess_result(stdout='[{"url":"https://github.com/o/r/pull/1"}]\n')
+
+    with patch("subprocess.run", side_effect=_mock_run):
+        pr_url = activities._detect_pr_url_from_workspace("run-1")
+
+    assert pr_url == "https://github.com/o/r/pull/1"
+    assert len(calls) == 3
+    gh_call = calls[2]
+    gh_env = gh_call["kwargs"]["env"]
+    assert isinstance(gh_env, dict)
+    assert gh_env["PATH"].startswith(str(workspace.parent / ".moonmind" / "bin"))
 
 
 # ---------------------------------------------------------------------------

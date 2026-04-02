@@ -159,6 +159,7 @@ async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch(
     mock_launcher.launch = AsyncMock(
         return_value=(SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"}), None, [])
     )
+    mock_launcher.cleanup_run_support = AsyncMock()
     mock_supervisor = MagicMock()
 
     activities = TemporalAgentRuntimeActivities(
@@ -195,3 +196,54 @@ async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch(
         "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
     )
     assert result == {"status": "launching"}
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_launch_cleans_launcher_support_after_supervision():
+    class _FakeProcess:
+        stdout = None
+        stderr = None
+
+    launch_record = SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"})
+    mock_launcher = MagicMock()
+    mock_launcher.launch = AsyncMock(
+        return_value=(launch_record, _FakeProcess(), ["/tmp/cleanup.file"])
+    )
+    mock_launcher.cleanup_run_support = AsyncMock()
+    mock_supervisor = MagicMock()
+    mock_supervisor.supervise = AsyncMock(return_value=SimpleNamespace(status="completed"))
+
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=mock_launcher,
+        run_supervisor=mock_supervisor,
+    )
+
+    payload = {
+        "run_id": "run-cleanup-1",
+        "request": {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "executionProfileRef": "default",
+            "correlationId": "corr-1",
+            "idempotencyKey": "idem-1",
+        },
+        "profile": {
+            "runtimeId": "codex_cli",
+            "commandTemplate": ["codex", "exec"],
+            "defaultModel": "gpt-5.3-codex",
+            "defaultEffort": "medium",
+            "defaultTimeoutSeconds": 3600,
+            "workspaceMode": "tempdir",
+            "envOverrides": {},
+        },
+    }
+
+    result = await activities.agent_runtime_launch(payload)
+    assert result == {"status": "launching"}
+
+    assert len(activities._supervision_tasks) == 1
+    [task] = list(activities._supervision_tasks)
+    await task
+
+    mock_supervisor.supervise.assert_awaited_once()
+    mock_launcher.cleanup_run_support.assert_awaited_once_with("run-cleanup-1")

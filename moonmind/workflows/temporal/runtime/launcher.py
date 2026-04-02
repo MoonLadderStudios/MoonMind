@@ -10,6 +10,7 @@ import shlex
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -19,6 +20,7 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.utils.logging import SecretRedactor
 
+from .github_auth_broker import GitHubAuthBrokerManager
 from .store import ManagedRunStore
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -32,6 +34,7 @@ class ManagedRuntimeLauncher:
     def __init__(self, store: ManagedRunStore) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
+        self._github_auth_brokers = GitHubAuthBrokerManager()
 
     @staticmethod
     def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
@@ -354,29 +357,50 @@ class ManagedRuntimeLauncher:
             return None
 
     @staticmethod
+    def _write_executable_script(path: Path, content: str) -> str:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o700)
+        return str(path)
+
+    @staticmethod
+    def _render_gh_wrapper_script(*, socket_path: str, real_gh_path: str) -> str:
+        return (
+            "#!/usr/bin/env python3\n"
+            "from moonmind.workflows.temporal.runtime.github_auth_broker import run_gh_wrapper\n"
+            "\n"
+            "if __name__ == \"__main__\":\n"
+            f"    raise SystemExit(run_gh_wrapper(socket_path={socket_path!r}, real_gh_path={real_gh_path!r}))\n"
+        )
+
+    @staticmethod
+    def _render_git_credential_helper_script(*, socket_path: str) -> str:
+        return (
+            "#!/usr/bin/env python3\n"
+            "from moonmind.workflows.temporal.runtime.github_auth_broker import run_git_credential_helper\n"
+            "\n"
+            "if __name__ == \"__main__\":\n"
+            f"    raise SystemExit(run_git_credential_helper(socket_path={socket_path!r}))\n"
+        )
+
+    @staticmethod
     def _persist_gh_config(
         env: dict[str, str],
         workspace_path: str | None,
         *,
         support_root: str | None = None,
-    ) -> None:
+        github_socket_path: str | None = None,
+        real_gh_path: str | None = None,
+    ) -> list[str]:
         """Persist workspace-scoped git/gh support config for managed runs.
 
-        The generated support files give agent subprocesses a stable git view
-        of the workspace even when they sanitize environment variables before
-        spawning tool commands. In particular this writes:
-
-        - ``GH_CONFIG_DIR`` hosts config when a GitHub token is available
-        - ``GIT_CONFIG_GLOBAL`` with ``safe.directory`` for the workspace
-        - optional credential-helper and git identity settings
-        - optional repo-local credential helper for tools that ignore
-          ``GIT_CONFIG_GLOBAL`` but still read ``.git/config``
+        The generated support files give agent subprocesses a stable git/gh view
+        of the workspace without writing plaintext GitHub credentials to disk.
         """
         if not workspace_path:
-            return
+            return []
 
         resolved_workspace = str(Path(workspace_path).resolve())
-        token = str(env.get("GITHUB_TOKEN") or env.get("GH_TOKEN") or "").strip()
         git_name = str(
             env.get("GIT_AUTHOR_NAME") or env.get("GIT_COMMITTER_NAME") or ""
         ).strip()
@@ -385,87 +409,88 @@ class ManagedRuntimeLauncher:
         ).strip()
 
         support_dir = Path(support_root or workspace_path) / ".moonmind"
-        gh_dir = support_dir / "gh"
+        bin_dir = support_dir / "bin"
         git_config_path = support_dir / "gitconfig"
-        cred_store_path = gh_dir / "git-credentials"
+        cleanup_paths: list[str] = []
+        git_helper_path: Path | None = None
 
-        try:
-            support_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            logger.debug("Failed to create managed runtime git support dir", exc_info=True)
-            return
+        support_dir.mkdir(parents=True, exist_ok=True)
+        cleanup_paths.append(str(git_config_path))
 
-        if token:
-            try:
-                gh_dir.mkdir(parents=True, exist_ok=True)
-                hosts_path = gh_dir / "hosts.yml"
-                hosts_path.write_text(
-                    f"github.com:\n"
-                    f"  oauth_token: {token}\n"
-                    f"  git_protocol: https\n",
-                    encoding="utf-8",
+        if github_socket_path:
+            git_helper_path = bin_dir / "git-credential-moonmind"
+            cleanup_paths.append(
+                ManagedRuntimeLauncher._write_executable_script(
+                    git_helper_path,
+                    ManagedRuntimeLauncher._render_git_credential_helper_script(
+                        socket_path=github_socket_path,
+                    ),
                 )
-                hosts_path.chmod(0o600)
-                cred_store_path.write_text(
-                    f"https://x-access-token:{token}@github.com\n",
-                    encoding="utf-8",
+            )
+            if real_gh_path:
+                cleanup_paths.append(
+                    ManagedRuntimeLauncher._write_executable_script(
+                        bin_dir / "gh",
+                        ManagedRuntimeLauncher._render_gh_wrapper_script(
+                            socket_path=github_socket_path,
+                            real_gh_path=real_gh_path,
+                        ),
+                    )
                 )
-                cred_store_path.chmod(0o600)
-                env["GH_CONFIG_DIR"] = str(gh_dir)
-                env.setdefault("GIT_TERMINAL_PROMPT", "0")
-            except OSError:
-                logger.debug("Failed to persist gh config", exc_info=True)
-                token = ""
+            existing_path = str(env.get("PATH") or "").strip()
+            env["PATH"] = (
+                f"{bin_dir}{os.pathsep}{existing_path}" if existing_path else str(bin_dir)
+            )
+            env.setdefault("GIT_TERMINAL_PROMPT", "0")
 
-        try:
-            git_config_lines = [
-                "# moonmind-managed-git-config\n",
-                "[safe]\n",
-                f"\tdirectory = {resolved_workspace}\n",
-            ]
-            if token:
-                git_config_lines.extend(
-                    [
-                        "[credential]\n",
-                        f'\thelper = store --file="{cred_store_path}"\n',
-                    ]
-                )
-            if git_name or git_email:
-                git_config_lines.append("[user]\n")
-                if git_name:
-                    git_config_lines.append(f"\tname = {git_name}\n")
-                if git_email:
-                    git_config_lines.append(f"\temail = {git_email}\n")
-            git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
-            git_config_path.chmod(0o600)
-            env["GIT_CONFIG_GLOBAL"] = str(git_config_path)
-        except OSError:
-            logger.debug("Failed to persist git global config", exc_info=True)
+        git_config_lines = [
+            "# moonmind-managed-git-config\n",
+            "[safe]\n",
+            f"\tdirectory = {resolved_workspace}\n",
+        ]
+        if git_helper_path is not None:
+            git_helper_command = shlex.quote(str(git_helper_path))
+            git_config_lines.extend(
+                [
+                    "[credential]\n",
+                    f"\thelper = !{git_helper_command}\n",
+                ]
+            )
+        if git_name or git_email:
+            git_config_lines.append("[user]\n")
+            if git_name:
+                git_config_lines.append(f"\tname = {git_name}\n")
+            if git_email:
+                git_config_lines.append(f"\temail = {git_email}\n")
+        git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
+        git_config_path.chmod(0o600)
+        env["GIT_CONFIG_GLOBAL"] = str(git_config_path)
 
-        try:
-            if not token:
-                return
-            repo_git_config_path = Path(workspace_path) / ".git" / "config"
-            if not repo_git_config_path.exists():
-                return
+        if git_helper_path is None:
+            return cleanup_paths
 
-            # Append credential helper config to .git/config if not already
-            # present.  We check for our marker to avoid duplicating on
-            # idempotent re-launches.
-            marker = "# moonmind-credential-helper"
-            existing_config = repo_git_config_path.read_text(encoding="utf-8")
-            if marker not in existing_config:
-                credential_section = (
-                    f"\n{marker}\n"
-                    f"[credential]\n"
-                    f'\thelper = store --file="{cred_store_path}"\n'
-                )
-                repo_git_config_path.write_text(
-                    existing_config + credential_section,
-                    encoding="utf-8",
-                )
-        except OSError:
-            logger.debug("Failed to persist git credential config", exc_info=True)
+        repo_git_config_path = Path(workspace_path) / ".git" / "config"
+        if not repo_git_config_path.exists():
+            return cleanup_paths
+
+        marker = "# moonmind-credential-helper"
+        existing_config = repo_git_config_path.read_text(encoding="utf-8")
+        if marker not in existing_config:
+            git_helper_command = shlex.quote(str(git_helper_path))
+            credential_section = (
+                f"\n{marker}\n"
+                f"[credential]\n"
+                f"\thelper = !{git_helper_command}\n"
+            )
+            repo_git_config_path.write_text(
+                existing_config + credential_section,
+                encoding="utf-8",
+            )
+        return cleanup_paths
+
+    async def cleanup_run_support(self, run_id: str) -> None:
+        """Stop any in-memory runtime support services for the run."""
+        await self._github_auth_brokers.stop(run_id)
 
     def build_command(
         self,
@@ -616,23 +641,11 @@ class ManagedRuntimeLauncher:
         if strategy is not None:
             env_overrides = strategy.shape_environment(env_overrides, profile)
 
-        github_token = await self._resolve_github_token_for_launch(env_overrides)
-        if github_token:
-            env_overrides.setdefault("GITHUB_TOKEN", github_token)
-            env_overrides.setdefault("GH_TOKEN", github_token)
-
         for key in profile.passthrough_env_keys:
             value = os.environ.get(key)
             if value is None or not str(value).strip():
                 continue
             env_overrides[key] = value
-
-        if resolved_workspace_path is not None:
-            self._persist_gh_config(
-                env_overrides,
-                resolved_workspace_path,
-                support_root=str(run_root),
-            )
 
         from moonmind.config.settings import settings as _mm_settings
         _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
@@ -644,52 +657,86 @@ class ManagedRuntimeLauncher:
             env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
             env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
-        # The claude CLI refuses --dangerously-skip-permissions when running as root
-        # (security restriction). For claude_code runtime, drop to the app user.
-        _run_as_root = os.geteuid() == 0
-        _is_claude_code = profile.runtime_id == "claude_code"
-        _needs_priv_drop = _run_as_root and _is_claude_code
+        github_token = await self._resolve_github_token_for_launch(env_overrides)
+        cleanup_paths: list[str] = list(materializer.generated_files)
+        github_socket_path: str | None = None
+        real_gh_path = shutil.which("gh")
+        process: asyncio.subprocess.Process
+        try:
+            if github_token and run_root is not None:
+                github_socket_path = str(run_root / ".moonmind" / "github-auth.sock")
+                await self._github_auth_brokers.start(
+                    run_id=run_id,
+                    token=github_token,
+                    socket_path=github_socket_path,
+                )
+                cleanup_paths.append(github_socket_path)
+                env_overrides.pop("GITHUB_TOKEN", None)
+                env_overrides.pop("GH_TOKEN", None)
 
-        # Transfer the full run workspace root to the app user so it can write
-        # both the repo checkout and support files materialized alongside it
-        # (for example .moonmind/GH_CONFIG_DIR and active skill projections).
-        # Chowning only the repo subtree leaves root-owned support paths behind
-        # and the dropped user can hang or fail before producing any output.
-        if _needs_priv_drop and resolved_workspace_path is not None:
-            ownership_root = self._resolve_workspace_ownership_root(
-                resolved_workspace_path=resolved_workspace_path,
-                run_id=run_id,
-            )
-            await self._run_checked_command(
-                "chown", "-R", "app:app", ownership_root,
-            )
+            if resolved_workspace_path is not None:
+                cleanup_paths.extend(
+                    self._persist_gh_config(
+                        env_overrides,
+                        resolved_workspace_path,
+                        support_root=str(run_root),
+                        github_socket_path=github_socket_path,
+                        real_gh_path=real_gh_path,
+                    )
+                )
 
-        if _needs_priv_drop:
-            # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass
-            # an explicit env block, so seed the target-user login context
-            # explicitly before launching Claude Code.
-            env_overrides["HOME"] = "/home/app"
-            env_overrides["USER"] = "app"
-            env_overrides["LOGNAME"] = "app"
-            # Use runuser with env= so secrets do not appear in process argv.
-            process = await asyncio.create_subprocess_exec(
-                "runuser", "-u", "app", "--",
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env_overrides,
-                cwd=resolved_workspace_path,
-            )
-        else:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env_overrides,
-                cwd=resolved_workspace_path,
-            )
+            # The claude CLI refuses --dangerously-skip-permissions when running as root
+            # (security restriction). For claude_code runtime, drop to the app user.
+            _run_as_root = os.geteuid() == 0
+            _is_claude_code = profile.runtime_id == "claude_code"
+            _needs_priv_drop = _run_as_root and _is_claude_code
+
+            # Transfer the full run workspace root to the app user so it can write
+            # both repo files and launcher support artifacts beside the repo.
+            # Chowning only the repo subtree leaves root-owned support paths behind.
+            if _needs_priv_drop and resolved_workspace_path is not None:
+                ownership_root = self._resolve_workspace_ownership_root(
+                    resolved_workspace_path=resolved_workspace_path,
+                    run_id=run_id,
+                )
+                await self._run_checked_command(
+                    "chown", "-R", "app:app", ownership_root,
+                )
+
+            if _needs_priv_drop:
+                # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass
+                # an explicit env block, so seed the target-user login context
+                # explicitly before launching Claude Code.
+                env_overrides["HOME"] = "/home/app"
+                env_overrides["USER"] = "app"
+                env_overrides["LOGNAME"] = "app"
+                # Use runuser with env= so secrets do not appear in process argv.
+                process = await asyncio.create_subprocess_exec(
+                    "runuser", "-u", "app", "--",
+                    *cmd,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env_overrides,
+                    cwd=resolved_workspace_path,
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env_overrides,
+                    cwd=resolved_workspace_path,
+                )
+        except Exception:
+            await self.cleanup_run_support(run_id)
+            for path in cleanup_paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            raise
 
         record = ManagedRunRecord(
             run_id=run_id,
@@ -702,4 +749,4 @@ class ManagedRuntimeLauncher:
             live_stream_capable=bool(resolved_workspace_path),
         )
         self._store.save(record)
-        return record, process, materializer.generated_files
+        return record, process, cleanup_paths

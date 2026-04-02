@@ -2923,6 +2923,8 @@ class TemporalAgentRuntimeActivities:
             except Exception as e:
                 logger.error("Supervisor failed for run %s", run_id, exc_info=True)
                 return
+            finally:
+                await self._run_launcher.cleanup_run_support(run_id)
 
 
 
@@ -3311,6 +3313,21 @@ class TemporalAgentRuntimeActivities:
         ]
 
     @staticmethod
+    def _workspace_command_env(workspace: str) -> dict[str, str]:
+        """Build a subprocess env that exposes workspace-local command shims."""
+        env = dict(os.environ)
+        support_bin = Path(workspace).resolve().parent / ".moonmind" / "bin"
+        if support_bin.exists():
+            existing_path = str(env.get("PATH") or "").strip()
+            env["PATH"] = (
+                f"{support_bin}{os.pathsep}{existing_path}"
+                if existing_path
+                else str(support_bin)
+            )
+        env.setdefault("GIT_TERMINAL_PROMPT", "0")
+        return env
+
+    @staticmethod
     def _report_matches_record(path: Path, record: ManagedRunRecord) -> bool:
         """Best-effort run discriminator for Gemini error reports."""
         try:
@@ -3527,6 +3544,7 @@ class TemporalAgentRuntimeActivities:
                 text=True,
                 timeout=30,
                 cwd=workspace,
+                env=self._workspace_command_env(workspace),
             )
             if pr_result.returncode != 0:
                 return None
