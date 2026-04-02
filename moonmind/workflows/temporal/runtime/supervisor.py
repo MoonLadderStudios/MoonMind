@@ -50,6 +50,7 @@ class ManagedRunSupervisor:
         self._completion_callback = completion_callback
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._cleanup_paths: dict[str, tuple[str, ...]] = {}
+        self._deferred_cleanup_paths: dict[str, tuple[str, ...]] = {}
 
     async def supervise(
         self,
@@ -59,6 +60,7 @@ class ManagedRunSupervisor:
         timeout_seconds: int = 3600,
         exit_code_path: str | None = None,
         cleanup_paths: list[str] | None = None,
+        deferred_cleanup_paths: list[str] | None = None,
     ) -> ManagedRunRecord:
         """Supervise a process and track heartbeat, completion, and cleanup."""
         self._active_processes[run_id] = process
@@ -67,6 +69,9 @@ class ManagedRunSupervisor:
             registered_paths.append(exit_code_path)
         self._cleanup_paths[run_id] = tuple(
             path for path in dict.fromkeys(registered_paths) if path
+        )
+        self._deferred_cleanup_paths[run_id] = tuple(
+            path for path in dict.fromkeys(deferred_cleanup_paths or []) if path
         )
         self._store.update_status(run_id, "running")
         start_time = datetime.now(tz=UTC)
@@ -257,6 +262,7 @@ class ManagedRunSupervisor:
         process = self._active_processes.get(run_id)
         if process is None:
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
+            self._cleanup_runtime_files(self._deferred_cleanup_paths.pop(run_id, ()))
             self._store.update_status(
                 run_id,
                 "canceled",
@@ -268,6 +274,7 @@ class ManagedRunSupervisor:
         await self._terminate_process(process)
         self._active_processes.pop(run_id, None)
         self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
+        self._cleanup_runtime_files(self._deferred_cleanup_paths.pop(run_id, ()))
         self._store.update_status(
             run_id,
             "canceled",
@@ -292,9 +299,17 @@ class ManagedRunSupervisor:
                         f"Process {record.pid} not found during reconciliation"
                     ),
                 )
+                self._cleanup_runtime_files(self._cleanup_paths.pop(record.run_id, ()))
+                self._cleanup_runtime_files(
+                    self._deferred_cleanup_paths.pop(record.run_id, ())
+                )
                 reconciled.append(updated)
 
         return reconciled
+
+    def cleanup_deferred_run_files(self, run_id: str) -> None:
+        """Best-effort cleanup for runtime files needed after process exit."""
+        self._cleanup_runtime_files(self._deferred_cleanup_paths.pop(run_id, ()))
 
     @staticmethod
     async def _terminate_on_live_rate_limit(

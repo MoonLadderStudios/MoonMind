@@ -2066,15 +2066,14 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     process=process,
                     timeout_seconds=timeout_seconds,
-                    cleanup_paths=cleanup_paths,
+                    cleanup_paths=None,
+                    deferred_cleanup_paths=cleanup_paths,
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error("Supervisor failed for run %s", run_id, exc_info=True)
                 return
-            finally:
-                await self._run_launcher.cleanup_run_support(run_id)
 
 
 
@@ -2279,32 +2278,40 @@ class TemporalAgentRuntimeActivities:
             run_store=self._run_store,
         )
         result = await adapter.fetch_result(run_id)
-        record = self._run_store.load(run_id)
-        if record is not None:
-            result = self._maybe_enrich_gemini_failure_result(
-                result=result,
-                record=record,
-            )
-        result_dict = result.model_dump(mode="json", by_alias=True)
-        meta = dict(result_dict.get("metadata") or {})
+        try:
+            record = self._run_store.load(run_id)
+            if record is not None:
+                result = self._maybe_enrich_gemini_failure_result(
+                    result=result,
+                    record=record,
+                )
+            result_dict = result.model_dump(mode="json", by_alias=True)
+            meta = dict(result_dict.get("metadata") or {})
 
-        # Push the agent's work branch if publish_mode requires it and the
-        # agent completed without failure.
-        if result.failure_class is None and publish_mode != "none":
-            push_info = await self._push_workspace_branch(run_id, target_branch=target_branch)
-            meta.update(push_info)
+            # Push the agent's work branch if publish_mode requires it and the
+            # agent completed without failure.
+            if result.failure_class is None and publish_mode != "none":
+                push_info = await self._push_workspace_branch(
+                    run_id, target_branch=target_branch
+                )
+                meta.update(push_info)
 
-        # Enrich result with pull_request_url detected from workspace git
-        # state (CLI stdout may not always surface PR URLs reliably).
-        if result.failure_class is None:
-            pr_url = self._detect_pr_url_from_workspace(run_id)
-            if pr_url:
-                meta["pull_request_url"] = pr_url
+            # Enrich result with pull_request_url detected from workspace git
+            # state (CLI stdout may not always surface PR URLs reliably).
+            if result.failure_class is None:
+                pr_url = self._detect_pr_url_from_workspace(run_id)
+                if pr_url:
+                    meta["pull_request_url"] = pr_url
 
-        if meta:
-            result_dict["metadata"] = meta
+            if meta:
+                result_dict["metadata"] = meta
 
-        return result_dict
+            return result_dict
+        finally:
+            if self._run_launcher is not None:
+                await self._run_launcher.cleanup_run_support(run_id)
+            if self._run_supervisor is not None:
+                self._run_supervisor.cleanup_deferred_run_files(run_id)
 
     @staticmethod
     def _is_generic_process_exit_summary(summary: str | None) -> bool:
@@ -2754,6 +2761,8 @@ class TemporalAgentRuntimeActivities:
             if self._run_supervisor is not None:
                 try:
                     await self._run_supervisor.cancel(str(run_id))
+                    if self._run_launcher is not None:
+                        await self._run_launcher.cleanup_run_support(str(run_id))
                     logger.info(
                         "agent_runtime.cancel completed for managed run %s",
                         run_id,
@@ -2765,6 +2774,8 @@ class TemporalAgentRuntimeActivities:
                         run_id,
                         exc_info=True,
                     )
+                    if self._run_launcher is not None:
+                        await self._run_launcher.cleanup_run_support(str(run_id))
                     return
             else:
                 logger.warning(
@@ -2784,6 +2795,8 @@ class TemporalAgentRuntimeActivities:
                             "agent_runtime.cancel marked run %s as cancelled in store",
                             run_id,
                         )
+                        if self._run_launcher is not None:
+                            await self._run_launcher.cleanup_run_support(str(run_id))
                     except Exception:
                         logger.warning(
                             "agent_runtime.cancel store update failed for %s",

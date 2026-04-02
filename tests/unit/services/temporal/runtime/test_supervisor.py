@@ -233,6 +233,8 @@ async def test_cancel_cleans_registered_runtime_files(supervisor_env, tmp_path):
     _make_record(store, "run-cancel-cleanup", "running")
     cleanup_path = tmp_path / "cleanup.target"
     cleanup_path.write_text("keep", encoding="utf-8")
+    deferred_cleanup_path = tmp_path / "cleanup.deferred"
+    deferred_cleanup_path.write_text("keep", encoding="utf-8")
 
     process = await asyncio.create_subprocess_exec(
         "sleep", "60",
@@ -242,12 +244,47 @@ async def test_cancel_cleans_registered_runtime_files(supervisor_env, tmp_path):
     )
     supervisor._active_processes["run-cancel-cleanup"] = process
     supervisor._cleanup_paths["run-cancel-cleanup"] = (str(cleanup_path),)
+    supervisor._deferred_cleanup_paths["run-cancel-cleanup"] = (
+        str(deferred_cleanup_path),
+    )
 
     await supervisor.cancel("run-cancel-cleanup")
 
     loaded = store.load("run-cancel-cleanup")
     assert loaded.status == "canceled"
     assert not cleanup_path.exists()
+    assert not deferred_cleanup_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_supervise_preserves_deferred_cleanup_until_explicit_release(
+    supervisor_env, tmp_path
+):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-deferred-cleanup", "launching")
+    deferred_cleanup_path = tmp_path / "cleanup.deferred"
+    deferred_cleanup_path.write_text("keep", encoding="utf-8")
+
+    process = await asyncio.create_subprocess_exec(
+        "echo", "hello",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-deferred-cleanup",
+        process=process,
+        timeout_seconds=30,
+        deferred_cleanup_paths=[str(deferred_cleanup_path)],
+    )
+
+    assert record.status == "completed"
+    assert deferred_cleanup_path.exists()
+
+    supervisor.cleanup_deferred_run_files("run-deferred-cleanup")
+
+    assert not deferred_cleanup_path.exists()
 
 
 @pytest.mark.asyncio

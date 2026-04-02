@@ -613,3 +613,56 @@ class TestFetchResultPushIntegration:
             )
 
         mock_push.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_cleans_deferred_support_after_publish(self):
+        """Deferred auth helpers are cleaned only after fetch_result finishes."""
+        store = _make_mock_store()
+        launcher = MagicMock()
+        launcher.cleanup_run_support = AsyncMock()
+        supervisor = MagicMock()
+        activities = TemporalAgentRuntimeActivities(
+            run_store=store,
+            run_launcher=launcher,
+            run_supervisor=supervisor,
+        )
+
+        mock_result = MagicMock()
+        mock_result.failure_class = None
+        mock_result.model_dump.return_value = {
+            "summary": "done",
+            "metadata": {},
+        }
+
+        with (
+            patch.object(
+                activities, "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={"push_status": "pushed", "push_branch": "my-branch"},
+            ),
+            patch.object(
+                activities, "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch.object(
+                launcher,
+                "cleanup_run_support",
+                new_callable=AsyncMock,
+            ) as mock_cleanup_support,
+            patch.object(
+                supervisor,
+                "cleanup_deferred_run_files",
+            ) as mock_cleanup_deferred,
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            adapter_instance = MockAdapter.return_value
+            adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
+
+            await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        mock_cleanup_support.assert_awaited_once_with("run-1")
+        mock_cleanup_deferred.assert_called_once_with("run-1")
