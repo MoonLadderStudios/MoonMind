@@ -4919,15 +4919,11 @@
     const providerProfileSelect = form.querySelector('select[name="providerProfile"]');
     let applyQueueDraftProviderProfileOnce = true;
     let providerProfileFetchToken = 0;
-    const providerProfileDefaultModelByRuntime = {};
+    const providerProfileDefaultModelByRuntime = Object.create(null);
 
     const resolveProfileRuntimeKey = (runtimeMode) => {
       const mappedRuntimeId = mapTaskRuntimeToAuthProfileRuntimeId(runtimeMode);
-      return (
-        String(
-          mappedRuntimeId || normalizeRuntimeIdentifier(runtimeMode) || runtimeMode || "",
-        ).trim().toLowerCase()
-      );
+      return mappedRuntimeId || normalizeRuntimeIdentifier(runtimeMode);
     };
 
     const getSelectedProviderProfileDefaultModel = (runtimeMode) => {
@@ -4943,7 +4939,7 @@
         return "";
       }
       const defaultsForRuntime =
-        providerProfileDefaultModelByRuntime[runtimeKey] || {};
+        providerProfileDefaultModelByRuntime[runtimeKey] || Object.create(null);
       return String(defaultsForRuntime[selectedProfileId] || "").trim();
     };
 
@@ -4966,7 +4962,7 @@
         return;
       }
       const runtimeKey = resolveProfileRuntimeKey(runtimeMode);
-      providerProfileDefaultModelByRuntime[runtimeKey] = {};
+      providerProfileDefaultModelByRuntime[runtimeKey] = Object.create(null);
       const previousSelection = String(providerProfileSelect.value || "").trim();
       providerProfileWrap.classList.remove("hidden");
       if (providerProfileHint) {
@@ -4989,7 +4985,7 @@
         }
         const list = Array.isArray(profiles) ? profiles : [];
         const options = ['<option value="">Default (system chooses)</option>'];
-        const defaultsForRuntime = {};
+        const defaultsForRuntime = Object.create(null);
         list.forEach((profile) => {
           const pid = String(profile.profile_id || "").trim();
           if (!pid) {
@@ -5159,15 +5155,11 @@
         activeWorkerRuntime = nextRuntime;
         applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime);
-        void refreshProviderProfileOptions(nextRuntime).then(() => {
-          applyRuntimeDefaults(nextRuntime);
-        });
+        void refreshProviderProfileOptions(nextRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
       });
-      void refreshProviderProfileOptions(runtimeSelect.value).then(() => {
-        applyRuntimeDefaults(runtimeSelect.value);
-      });
+      void refreshProviderProfileOptions(runtimeSelect.value);
     }
     if (providerProfileSelect) {
       providerProfileSelect.addEventListener("change", () => {
