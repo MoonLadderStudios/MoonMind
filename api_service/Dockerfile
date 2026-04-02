@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=latest
 ARG CLAUDE_CLI_VERSION=latest
-# Build the shared runtime image with Codex/Spec Kit/Gemini/Claude CLIs
+# Build the shared runtime image with Codex/Gemini/Claude CLIs
 # by default so the API and Temporal workers can run from the
 # same image tag. Disable selectively in test-only or constrained builds.
 ARG INSTALL_CODEX_CLI=true
@@ -53,7 +53,7 @@ COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local
 # binaries there can detect it during the npm install process.
 RUN mkdir -p /usr/local/vendor
 
-# Install Codex and Spec Kit CLIs globally so binaries can be copied to the
+# Install Codex CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # If the packages are unavailable (for example, when the registry is private or
 # the tag is missing), fall back to lightweight stub binaries so downstream
@@ -173,7 +173,7 @@ fi
 npm cache clean --force || true
 BASH
 
-# Fail the build early if the Codex or Spec Kit CLI binaries are missing or
+# Fail the build early if the Codex CLI binary is missing or
 # broken. Pre-create ~/.gemini so `gemini --version` can persist registry state.
 RUN mkdir -p "${HOME}/.gemini" \
     && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
@@ -231,7 +231,7 @@ ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
 
 WORKDIR /app
 
-# Copy Codex and Spec Kit artifacts from the tooling builder so the runtime
+# Copy Codex and Gemini/Claude artifacts from the tooling builder so the runtime
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
@@ -248,7 +248,7 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@google/gemini-cli/LICEN
 COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE /usr/share/licenses/claude-cli/LICENSE
 
 # Install system packages required by the Python service along with the
-# Node.js runtime libraries that the bundled Codex and Spec Kit binaries rely on.
+# Node.js runtime libraries that the bundled CLIs rely on.
 RUN apt-get update && \
     apt-get install -y \
         build-essential \
