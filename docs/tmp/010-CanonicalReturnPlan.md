@@ -115,41 +115,43 @@ Make every external provider emit canonical contracts directly so `MoonMind.Agen
 
 ### Tasks
 
-* [ ] Audit each external provider integration:
+* [x] Audit each external provider integration:
 
-  * [ ] Jules
-  * [ ] Codex Cloud
-  * [ ] any other polling-style provider
-  * [ ] OpenClaw streaming path
-* [ ] For each polling-style provider, update:
+  * [x] Jules
+  * [x] Codex Cloud
+  * [x] any other polling-style provider
+  * [x] OpenClaw streaming path
+* [x] For each polling-style provider, update:
 
-  * [ ] `integration.<provider>.start`
-  * [ ] `integration.<provider>.status`
-  * [ ] `integration.<provider>.fetch_result`
-  * [ ] `integration.<provider>.cancel`
-* [ ] Ensure each provider adapter normalizes provider-native state into canonical `AgentRunState` before returning.
-* [ ] Ensure unknown provider states raise `UnsupportedStatus` at the adapter/activity boundary.
-* [ ] Remove any remaining dependence on provider-shaped return payloads from activity handlers.
-* [ ] Make `integration.<provider>.start` always return canonical `AgentRunHandle`, never a dict that needs special casing in the workflow.
-* [ ] Make `integration.<provider>.status` always return canonical `AgentRunStatus`.
-* [ ] Make `integration.<provider>.fetch_result` always return canonical `AgentRunResult`.
-* [ ] For OpenClaw:
+  * [x] `integration.<provider>.start`
+  * [x] `integration.<provider>.status`
+  * [x] `integration.<provider>.fetch_result`
+  * [x] `integration.<provider>.cancel`
+* [x] Ensure each provider adapter normalizes provider-native state into canonical `AgentRunState` before returning.
+* [x] Ensure unknown provider states raise `UnsupportedStatus` at the adapter/activity boundary.
+* [x] Remove any remaining dependence on provider-shaped return payloads from activity handlers.
+* [x] Make `integration.<provider>.start` always return canonical `AgentRunHandle`, never a dict that needs special casing in the workflow.
+* [x] Make `integration.<provider>.status` always return canonical `AgentRunStatus`.
+* [x] Make `integration.<provider>.fetch_result` always return canonical `AgentRunResult`.
+* [x] For OpenClaw:
 
-  * [ ] keep the execute-style branch
-  * [ ] ensure `integration.openclaw.execute` always returns canonical `AgentRunResult`
-  * [ ] reject raw streaming aggregate payloads that are not canonicalized
-* [ ] Add provider-specific tests:
+  * [x] keep the execute-style branch
+  * [x] ensure `integration.openclaw.execute` always returns canonical `AgentRunResult`
+  * [x] reject raw streaming aggregate payloads that are not canonicalized
+* [x] Add provider-specific tests:
 
-  * [ ] valid canonical outputs
-  * [ ] unknown status rejection
-  * [ ] metadata placement
-  * [ ] no provider-specific top-level fields leak out
+  * [x] valid canonical outputs
+  * [x] unknown status rejection
+  * [x] metadata placement
+  * [x] no provider-specific top-level fields leak out
 
 ### Deliverables
 
-* all external provider activities canonicalized
-* provider adapters become the sole owner of provider-state normalization
-* no workflow-side external payload repair needed for new histories
+* [x] all external provider activities canonicalized
+* [x] provider adapters become the sole owner of provider-state normalization
+* [x] no workflow-side external payload repair needed for new histories
+
+> **Phase 2 Deliverables completed** (PR #1126): Jules, Codex Cloud, and OpenClaw activities extracted into standalone modules (`jules_activities.py`, `codex_cloud_activities.py`, `openclaw_activities.py`). All external provider activities now return typed canonical `AgentRunHandle` / `AgentRunStatus` / `AgentRunResult`. `TemporalIntegrationActivities` forwards to these modules. Unknown provider states raise `UnsupportedStatus` at the adapter boundary.
 
 ---
 
