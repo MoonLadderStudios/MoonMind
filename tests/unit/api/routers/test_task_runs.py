@@ -278,6 +278,39 @@ def test_stream_task_run_log_returns_file_response(
     assert response.content == b"mock_log_data"
 
 
+@pytest.mark.parametrize(
+    ("env_root_name", "artifact_root_name"),
+    [
+        ("agent_jobs", "artifacts"),
+        ("artifacts", "."),
+    ],
+)
+def test_stream_task_run_log_uses_supported_artifact_root_layouts(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_root_name: str,
+    artifact_root_name: str,
+) -> None:
+    test_client, _ = client
+    env_root = tmp_path / env_root_name
+    artifacts_root = env_root if artifact_root_name == "." else env_root / artifact_root_name
+    run_dir = artifacts_root / "run"
+    run_dir.mkdir(parents=True)
+    expected_content = "stdout from durable artifact\n"
+    (run_dir / "stdout.log").write_text(expected_content, encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(env_root))
+
+    mock_record = MagicMock()
+    mock_record.stdout_artifact_ref = "run/stdout.log"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+
+    assert response.status_code == 200
+    assert response.text == expected_content
+
+
 # ---------------------------------------------------------------------------
 # Merged-tail (artifact-backed and synthesized)
 # ---------------------------------------------------------------------------
@@ -521,6 +554,39 @@ def test_get_task_run_diagnostics_returns_file_response(
     assert mock_file_response.call_args[1]["media_type"] == "application/json"
     assert response.status_code == 200
     assert response.content == b'{"mock":"diag"}'
+
+
+@pytest.mark.parametrize(
+    ("env_root_name", "artifact_root_name"),
+    [
+        ("agent_jobs", "artifacts"),
+        ("artifacts", "."),
+    ],
+)
+def test_get_task_run_diagnostics_uses_supported_artifact_root_layouts(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_root_name: str,
+    artifact_root_name: str,
+) -> None:
+    test_client, _ = client
+    env_root = tmp_path / env_root_name
+    artifacts_root = env_root if artifact_root_name == "." else env_root / artifact_root_name
+    run_dir = artifacts_root / "run"
+    run_dir.mkdir(parents=True)
+    expected_content = '{"kind":"diagnostics"}'
+    (run_dir / "diagnostics.json").write_text(expected_content, encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(env_root))
+
+    mock_record = MagicMock()
+    mock_record.diagnostics_ref = "run/diagnostics.json"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+
+    assert response.status_code == 200
+    assert response.text == expected_content
 
 # ---------------------------------------------------------------------------
 # SSE Live Streaming (Phase 3)
