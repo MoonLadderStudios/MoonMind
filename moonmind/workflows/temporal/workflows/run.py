@@ -1095,10 +1095,20 @@ class MoonMindRunWorkflow:
                     or last_node_inputs.get("branch")
                     or ""
                 )
-                base_branch = (
+                publish_payload = self._resolve_publish_payload(parameters)
+                base_branch = self._resolve_publish_base_branch(publish_payload) or (
                     ws.get("startingBranch")
                     or last_node_inputs.get("startingBranch")
                     or "main"
+                )
+                task_payload = self._mapping_value(parameters, "task")
+                pr_title = self._resolve_native_pr_title(
+                    publish_payload=publish_payload,
+                    task_payload=task_payload,
+                )
+                pr_body = self._resolve_native_pr_body(
+                    publish_payload=publish_payload,
+                    task_payload=task_payload,
                 )
 
                 push_status = agent_outputs.get("push_status", "")
@@ -1120,8 +1130,8 @@ class MoonMindRunWorkflow:
                         "repo": self._repo,
                         "head": head_branch,
                         "base": base_branch,
-                        "title": self._title or "Automated changes by MoonMind",
-                        "body": self._summary or "Automated changes by MoonMind.",
+                        "title": pr_title,
+                        "body": pr_body,
                     }
                     try:
                         create_result = await workflow.execute_activity(
@@ -1199,6 +1209,92 @@ class MoonMindRunWorkflow:
             return ""
         normalized = value.strip().lower()
         return normalized if normalized in {"none", "branch", "pr"} else ""
+
+    def _coerce_text(self, value: Any, max_words: int | None = None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            return None
+        if max_words:
+            truncated = normalized[:max_words].rstrip()
+            if len(truncated) < len(normalized):
+                return truncated
+            return truncated
+        return normalized
+
+    def _resolve_publish_payload(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
+        task_payload = self._mapping_value(parameters, "task")
+        publish_payload = self._mapping_value(parameters, "publish")
+        if publish_payload:
+            return publish_payload
+        nested_publish = task_payload.get("publish") if isinstance(task_payload, dict) else None
+        if isinstance(nested_publish, Mapping):
+            return self._json_mapping(nested_publish, path="parameters.task.publish")
+        return {}
+
+    def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
+        instructions = self._coerce_text(task_payload.get("instructions"))
+        if instructions:
+            return instructions
+        steps = task_payload.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, Mapping):
+                    continue
+                step_instructions = self._coerce_text(step.get("instructions"))
+                if step_instructions:
+                    return step_instructions
+        return None
+
+    def _resolve_native_pr_title(
+        self,
+        *,
+        publish_payload: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> str:
+        publish_title = self._coerce_text(publish_payload.get("prTitle"))
+        if publish_title:
+            return publish_title
+        explicit_title = self._coerce_text(task_payload.get("title"))
+        if explicit_title:
+            return explicit_title
+        steps = task_payload.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, Mapping):
+                    continue
+                step_title = self._coerce_text(step.get("title"))
+                if step_title:
+                    return step_title
+        task_instructions = self._coerce_text(task_payload.get("instructions"))
+        if task_instructions:
+            return task_instructions
+        if self._title:
+            return self._title
+        return "Automated changes by MoonMind"
+
+    def _resolve_native_pr_body(
+        self,
+        *,
+        publish_payload: Mapping[str, Any],
+        task_payload: Mapping[str, Any],
+    ) -> str:
+        publish_body = self._coerce_text(publish_payload.get("prBody"))
+        if publish_body:
+            return publish_body
+        default_summary = self._resolve_task_body_instructions(task_payload)
+        if default_summary:
+            return default_summary
+        if self._summary:
+            return self._summary
+        return "Automated changes by MoonMind."
+
+    def _resolve_publish_base_branch(self, publish_payload: Mapping[str, Any]) -> str | None:
+        raw_base = publish_payload.get("prBaseBranch")
+        if raw_base is None:
+            raw_base = publish_payload.get("baseBranch")
+        return self._coerce_text(raw_base)
 
     def _extract_pull_request_url(self, result: Any) -> str | None:
         outputs = self._get_from_result(result, "outputs")
