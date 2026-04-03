@@ -660,6 +660,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [proposeTasks, setProposeTasks] = useState(() => readProposeTasksPreference(defaultProposeTasks));
+  const isInitialMount = useRef(true);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('immediate');
   const [scheduledFor, setScheduledFor] = useState('');
   const [scheduleDeferredMinutes, setScheduleDeferredMinutes] = useState('');
@@ -739,6 +740,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   ]);
 
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     writeProposeTasksPreference(proposeTasks);
   }, [proposeTasks]);
 
