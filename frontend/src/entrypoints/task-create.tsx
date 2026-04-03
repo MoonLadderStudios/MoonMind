@@ -629,13 +629,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setSubmitMessage(null);
 
     try {
+      // When there is exactly one non-empty step, lift its fields into task-level
+      // inputs so the Temporal planner (which uses task-level fields for single-node
+      // runs) picks them up correctly. The multi-step path (len > 1) remains unchanged.
+      let submittedSteps: Record<string, unknown>[] | null = null;
+      let stepLiftedInstructions = '';
+      let stepLiftedSkill: { type: string; name: string; version: string } | null = null;
+      if (normalizedSteps.length === 1) {
+        // normalizedSteps[0] is guaranteed to exist here (length === 1).
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const onlyStep = normalizedSteps[0]!;
+        if (!trimmedInstructions) {
+          stepLiftedInstructions = String(onlyStep.instructions || '');
+        }
+        if (!selectedSkill && onlyStep.skill && typeof onlyStep.skill === 'object') {
+          const s = onlyStep.skill as Record<string, unknown>;
+          const skillName = String(s.id || s.name || '').trim();
+          if (skillName) {
+            stepLiftedSkill = { type: 'skill', name: skillName, version: '1.0' };
+          }
+        }
+        // Do not include steps in the payload — use task-level fields instead.
+      } else if (normalizedSteps.length > 1) {
+        submittedSteps = normalizedSteps;
+      }
+
       let inputArtifactRef: string | null = null;
-      let submittedInstructions = trimmedInstructions;
+      let submittedInstructions = trimmedInstructions || stepLiftedInstructions;
       if (submittedInstructions.length > INLINE_INSTRUCTIONS_LIMIT) {
         const artifact = await createInputArtifact(artifactCreateEndpoint, submittedInstructions);
         inputArtifactRef = artifact.artifactId;
         submittedInstructions = '';
       }
+
+      const effectiveSkill = selectedSkill
+        ? { type: 'skill', name: selectedSkill, version: '1.0' }
+        : stepLiftedSkill;
 
       const requestBody = {
         type: 'task',
@@ -644,16 +673,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ...(inputArtifactRef ? { inputArtifactRef } : {}),
           task: {
             ...(submittedInstructions ? { instructions: submittedInstructions } : {}),
-            ...(selectedSkill
+            ...(effectiveSkill
               ? {
-                  tool: {
-                    type: 'skill',
-                    name: selectedSkill,
-                    version: '1.0',
-                  },
+                  tool: effectiveSkill,
                 }
               : {}),
-            ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
+            ...(submittedSteps !== null ? { steps: submittedSteps } : {}),
             runtime: {
               mode: runtime,
               ...(model.trim() ? { model: model.trim() } : {}),
@@ -673,6 +698,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               : {}),
           },
         },
+
       };
 
       const response = await fetch(temporalCreateEndpoint, {
