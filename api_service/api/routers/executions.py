@@ -132,13 +132,19 @@ def _mark_execution_alias_usage(
     response.headers["X-MoonMind-Deprecated-Identifier"] = raw_identifier
 
 
-def _compatibility_refreshed_at(record) -> datetime:
-    updated_at = record.updated_at
-    if isinstance(updated_at, str):
-        updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-    if updated_at.tzinfo is not None:
-        return updated_at
-    return updated_at.replace(tzinfo=UTC)
+def _compatibility_refreshed_at(record, now: datetime | None = None) -> datetime:
+    refreshed_at = (
+        getattr(record, "last_synced_at", None)
+        or getattr(record, "updated_at", None)
+        or getattr(record, "started_at", None)
+        or getattr(record, "created_at", None)
+        or (now if now is not None else datetime.now(UTC))
+    )
+    if isinstance(refreshed_at, str):
+        refreshed_at = datetime.fromisoformat(refreshed_at.replace("Z", "+00:00"))
+    if refreshed_at.tzinfo is not None:
+        return refreshed_at
+    return refreshed_at.replace(tzinfo=UTC)
 
 
 def _manifest_attr(manifest_status, field: str, default=None):
@@ -1696,8 +1702,13 @@ async def list_executions(
                     from types import SimpleNamespace
 
                     record_obj = SimpleNamespace(**payload)
-                    if not hasattr(record_obj, "updated_at"):
-                        record_obj.updated_at = datetime.now(UTC)
+                    if (
+                        not hasattr(record_obj, "updated_at")
+                        or record_obj.updated_at is None
+                    ):
+                        record_obj.updated_at = (
+                            getattr(record_obj, "started_at", None) or datetime.now(UTC)
+                        )
                     items.append(
                         _serialize_execution(record_obj, include_artifact_refs=False, user=user)
                     )
@@ -1761,6 +1772,7 @@ async def list_executions(
             },
         ) from exc
 
+    now = datetime.now(UTC)
     return ExecutionListResponse(
         items=[
             _serialize_execution(item, include_artifact_refs=False, user=user)
@@ -1771,7 +1783,7 @@ async def list_executions(
         count_mode="exact",
         degraded_count=False,
         refreshed_at=max(
-            (_compatibility_refreshed_at(item) for item in result.items),
+            (_compatibility_refreshed_at(item, now=now) for item in result.items),
             default=None,
         ),
     )

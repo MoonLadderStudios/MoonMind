@@ -1,24 +1,34 @@
-from datetime import UTC, datetime
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
+import pytest
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 from api_service.core.sync import (
     map_temporal_state_to_projection,
     merged_memo_for_projection,
     merged_parameters_for_projection,
+    sync_execution_projection,
 )
 from api_service.db.models import (
     MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
+    TemporalExecutionProjectionSyncState,
+    TemporalExecutionRecord,
     TemporalExecutionOwnerType,
     TemporalWorkflowType,
 )
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def test_map_temporal_state_to_projection_success():
     start_time = datetime.now(UTC)
+    updated_at = datetime(2026, 3, 6, 12, 0, tzinfo=UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
     desc.id = "mm:123"
     desc.run_id = "run-123"
@@ -46,6 +56,7 @@ def test_map_temporal_state_to_projection_success():
     desc.search_attributes = {
         "mm_repo": MockSearchAttribute("repo-1"),
         "mm_custom": MockSearchAttribute(b'{"key": "value"}'),
+        "mm_updated_at": MockSearchAttribute(updated_at.isoformat()),
     }
 
     async def _memo() -> dict[str, object]:
@@ -69,6 +80,7 @@ def test_map_temporal_state_to_projection_success():
     assert result["step_count"] == 5
     assert result["search_attributes"]["mm_repo"] == "repo-1"
     assert result["search_attributes"]["mm_custom"] == {"key": "value"}
+    assert result["updated_at"] == updated_at
 
 
 def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_fields():
@@ -145,6 +157,148 @@ def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
     assert params.get("targetRuntime") is None
     assert params.get("model") is None
     assert params.get("effort") is None
+
+
+@pytest.mark.asyncio
+async def test_sync_execution_projection_preserves_updated_at_when_mm_updated_at_missing(
+    tmp_path,
+):
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            existing_updated_at = datetime(2026, 3, 6, 12, 0, tzinfo=UTC)
+            existing_synced_at = datetime(2026, 3, 6, 12, 1, tzinfo=UTC)
+            projection = TemporalExecutionRecord(
+                workflow_id="mm:preserve-updated-at",
+                run_id="run-1",
+                namespace="moonmind",
+                workflow_type=TemporalWorkflowType.RUN,
+                owner_id="owner-1",
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.EXECUTING,
+                close_status=None,
+                entry="run",
+                search_attributes={"mm_state": "executing", "mm_entry": "run"},
+                memo={"title": "Task"},
+                artifact_refs=[],
+                parameters={},
+                projection_version=3,
+                last_synced_at=existing_synced_at,
+                sync_state=TemporalExecutionProjectionSyncState.STALE,
+                sync_error="stale projection",
+                started_at=existing_updated_at,
+                updated_at=existing_updated_at,
+                closed_at=None,
+            )
+            session.add(projection)
+            await session.commit()
+
+            desc = Mock(spec=WorkflowExecutionDescription)
+            desc.id = projection.workflow_id
+            desc.run_id = "run-1"
+            desc.namespace = "moonmind"
+            desc.workflow_type = "MoonMind.Run"
+            desc.status = WorkflowExecutionStatus.RUNNING
+            desc.start_time = existing_updated_at
+            desc.execution_time = existing_updated_at
+            desc.close_time = None
+            desc.search_attributes = {"mm_state": "executing", "mm_entry": "run"}
+
+            async def _memo() -> dict[str, object]:
+                return {"entry": "run", "owner_id": "owner-1", "owner_type": "user"}
+
+            desc.memo = _memo
+
+            refreshed = await sync_execution_projection(session, desc)
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert _as_utc(refreshed.updated_at) == existing_updated_at
+            assert _as_utc(refreshed.last_synced_at) > existing_synced_at
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sync_execution_projection_uses_mm_updated_at_from_temporal(
+    tmp_path,
+):
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            created_at = datetime(2026, 3, 6, 12, 0, tzinfo=UTC)
+            canonical_updated_at = datetime(2026, 3, 6, 12, 5, tzinfo=UTC)
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id="mm:canonical-updated-at",
+                    run_id="run-1",
+                    namespace="moonmind",
+                    workflow_type=TemporalWorkflowType.RUN,
+                    owner_id="owner-1",
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.EXECUTING,
+                    close_status=None,
+                    entry="run",
+                    search_attributes={},
+                    memo={"title": "Task"},
+                    artifact_refs=[],
+                    parameters={},
+                    started_at=created_at,
+                    updated_at=created_at,
+                    closed_at=None,
+                )
+            )
+            await session.commit()
+
+            desc = Mock(spec=WorkflowExecutionDescription)
+            desc.id = "mm:canonical-updated-at"
+            desc.run_id = "run-1"
+            desc.namespace = "moonmind"
+            desc.workflow_type = "MoonMind.Run"
+            desc.status = WorkflowExecutionStatus.RUNNING
+            desc.start_time = created_at
+            desc.execution_time = created_at
+            desc.close_time = None
+            desc.search_attributes = {
+                "mm_state": "executing",
+                "mm_entry": "run",
+                "mm_updated_at": canonical_updated_at.isoformat(),
+            }
+
+            async def _memo() -> dict[str, object]:
+                return {"entry": "run", "owner_id": "owner-1", "owner_type": "user"}
+
+            desc.memo = _memo
+
+            refreshed = await sync_execution_projection(session, desc)
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert _as_utc(refreshed.updated_at) == canonical_updated_at
+            assert _as_utc(refreshed.last_synced_at) >= canonical_updated_at
+    finally:
+        await engine.dispose()
 
 
 def test_merged_parameters_for_projection_combines_canonical_with_memo_payload():
