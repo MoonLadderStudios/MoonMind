@@ -290,6 +290,7 @@ class MoonMindAgentRun:
         runtime_id: str,
         *,
         request_slot: bool = True,
+        execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the auth-profile-manager; auto-start it on first failure.
@@ -307,6 +308,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if execution_profile_ref:
+            signal_payload["execution_profile_ref"] = execution_profile_ref
         if profile_selector:
             signal_payload["profile_selector"] = profile_selector
         if not request_slot:
@@ -337,6 +340,7 @@ class MoonMindAgentRun:
         manager_id: str,
         runtime_id: str,
         *,
+        execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Terminate a stuck manager, start a fresh one, and re-request a slot.
@@ -359,6 +363,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if execution_profile_ref:
+            signal_payload["execution_profile_ref"] = execution_profile_ref
         if profile_selector:
             signal_payload["profile_selector"] = profile_selector
         await manager_handle.signal("request_slot", signal_payload)
@@ -659,6 +665,7 @@ class MoonMindAgentRun:
                         manager_id,
                         runtime_id,
                         request_slot=True,
+                        execution_profile_ref=request.execution_profile_ref,
                         profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
                     )
                     profile_count = await self._sync_manager_profiles(
@@ -671,6 +678,18 @@ class MoonMindAgentRun:
                             type="ProfileResolutionError",
                             non_retryable=True,
                         )
+                    if request.execution_profile_ref:
+                        requested_profile_id = str(request.execution_profile_ref).strip()
+                        if (
+                            requested_profile_id
+                            and self._profile_snapshots
+                            and requested_profile_id not in self._profile_snapshots
+                        ):
+                            raise ApplicationError(
+                                f"Provider profile '{requested_profile_id}' not found for runtime_id='{runtime_id}'",
+                                type="ProfileResolutionError",
+                                non_retryable=True,
+                            )
 
                     # Wait for an auth profile slot.
                     # Awaiting time does not count against the execution timeout;
@@ -725,6 +744,7 @@ class MoonMindAgentRun:
                                 manager_handle = await self._reset_and_request_slot(
                                     manager_id, 
                                     runtime_id,
+                                    execution_profile_ref=request.execution_profile_ref,
                                     profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
                                 )
                                 await self._sync_manager_profiles(
@@ -794,6 +814,11 @@ class MoonMindAgentRun:
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
                         }
+                        exact_profile_id = kw.get(
+                            "execution_profile_ref", request.execution_profile_ref
+                        )
+                        if exact_profile_id:
+                            payload["execution_profile_ref"] = exact_profile_id
                         if request.profile_selector:
                             payload["profile_selector"] = request.profile_selector.model_dump(by_alias=True, exclude_none=True)
                         await manager_handle.signal("request_slot", payload)

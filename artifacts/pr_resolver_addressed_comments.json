@@ -1,22 +1,32 @@
 [
   {
-    "id": 3034176610,
+    "id": 3034605043,
     "disposition": "addressed",
-    "rationale": "Fixed _client_with_mock_service to override _get_temporal_service with a lambda returning the actual mock_service instance instead of a fresh AsyncMock. Removed unused _build_mock_temporal_service function."
+    "rationale": "Switched presigned artifact PUT headers to a single Headers object so signed content-type values are not duplicated."
   },
   {
-    "id": 3034173336,
+    "id": 4057512440,
+    "disposition": "not-applicable",
+    "rationale": "Top-level bot review summary only; the actionable feedback was captured in the inline review comments below."
+  },
+  {
+    "id": 3034606279,
     "disposition": "addressed",
-    "rationale": "Refactored _client_with_mock_service to accept optional monkeypatch parameter and use monkeypatch.setenv for environment variable management when available, making tests cleaner and more idiomatic to pytest."
+    "rationale": "Implemented canonical header construction for presigned uploads, preserving one content-type header and other required signed headers."
   },
   {
-    "id": 4057082355,
-    "disposition": "not-applicable",
-    "rationale": "Informational review summary from Gemini, no specific action required beyond the addressed review comment."
+    "id": 3034606297,
+    "disposition": "addressed",
+    "rationale": "Expanded the presigned upload test to include required signed headers and assert they are forwarded without duplication."
   },
   {
-    "id": 4057086102,
+    "id": 4057513529,
     "disposition": "not-applicable",
-    "rationale": "Informational review summary from Copilot, no specific action required beyond the addressed review comment."
+    "rationale": "Overview-only review comment; no separate remediation requested beyond the inline comments already addressed."
+  },
+  {
+    "id": 4057516246,
+    "disposition": "not-applicable",
+    "rationale": "Informational approval comment stating no additional feedback."
   }
 ]

@@ -110,3 +110,73 @@ class TestEnsureManagerAutoStart:
             f"All request_slot signals must go through _ensure_manager_and_signal "
             f"for auto-start fallback."
         )
+
+    def test_ensure_manager_propagates_exact_execution_profile_ref(self):
+        """Managed runs with an explicit profile must pass it into slot acquisition."""
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "_ensure_manager_and_signal"
+            ):
+                continue
+
+            execution_profile_kw = [
+                kw for kw in node.keywords if kw.arg == "execution_profile_ref"
+            ]
+            assert len(execution_profile_kw) == 1, (
+                "_ensure_manager_and_signal must receive execution_profile_ref "
+                "so exact provider-profile selections are preserved."
+            )
+            kw_value = execution_profile_kw[0].value
+            assert isinstance(kw_value, ast.Attribute), (
+                "execution_profile_ref should be forwarded from request.execution_profile_ref"
+            )
+            assert kw_value.attr == "execution_profile_ref"
+            return
+
+        raise AssertionError(
+            "Could not find _ensure_manager_and_signal call in MoonMindAgentRun.run"
+        )
+
+    def test_manager_signal_payload_carries_execution_profile_ref(self):
+        """The auto-start helper must include execution_profile_ref in request_slot payloads."""
+        source = textwrap.dedent(
+            inspect.getsource(MoonMindAgentRun._ensure_manager_and_signal)
+        )
+        tree = ast.parse(source)
+
+        found_guard = False
+        found_payload_write = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                test = node.test
+                if isinstance(test, ast.Name) and test.id == "execution_profile_ref":
+                    found_guard = True
+                    for child in node.body:
+                        if not isinstance(child, ast.Assign):
+                            continue
+                        for target in child.targets:
+                            if not isinstance(target, ast.Subscript):
+                                continue
+                            if not (
+                                isinstance(target.value, ast.Name)
+                                and target.value.id == "signal_payload"
+                            ):
+                                continue
+                            slice_node = target.slice
+                            if isinstance(slice_node, ast.Constant) and slice_node.value == "execution_profile_ref":
+                                found_payload_write = True
+        assert found_guard, (
+            "_ensure_manager_and_signal must guard on execution_profile_ref "
+            "before shaping the request_slot payload."
+        )
+        assert found_payload_write, (
+            "_ensure_manager_and_signal must include signal_payload['execution_profile_ref'] "
+            "so the ProviderProfileManager can honor exact profile selections."
+        )

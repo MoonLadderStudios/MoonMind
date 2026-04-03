@@ -79,6 +79,7 @@ class SlotRequestPayload(TypedDict):
 
     requester_workflow_id: str
     runtime_id: str
+    execution_profile_ref: str | None
 
 
 class SlotReleasePayload(TypedDict):
@@ -202,6 +203,7 @@ class PendingRequest:
 
     requester_workflow_id: str
     runtime_id: str
+    execution_profile_ref: str | None = None
     profile_selector: Optional[dict[str, Any]] = None
 
 
@@ -268,6 +270,7 @@ class MoonMindProviderProfileManagerWorkflow:
             PendingRequest(
                 requester_workflow_id=payload["requester_workflow_id"],
                 runtime_id=payload.get("runtime_id", self._runtime_id or ""),
+                execution_profile_ref=payload.get("execution_profile_ref"),
                 profile_selector=payload.get("profile_selector"),
             )
         )
@@ -331,6 +334,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 {
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
+                    "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                 }
                 for r in self._pending_requests
@@ -425,6 +429,7 @@ class MoonMindProviderProfileManagerWorkflow:
             PendingRequest(
                 requester_workflow_id=req.get("requester_workflow_id", ""),
                 runtime_id=req.get("runtime_id", ""),
+                execution_profile_ref=req.get("execution_profile_ref"),
                 profile_selector=req.get("profile_selector"),
             )
             for req in pending_data
@@ -531,7 +536,10 @@ class MoonMindProviderProfileManagerWorkflow:
                     leases_changed = True
                 continue
 
-            profile = self._find_available_profile(req.profile_selector)
+            profile = self._find_available_profile(
+                selector=req.profile_selector,
+                execution_profile_ref=req.execution_profile_ref,
+            )
             if profile and profile.reserve(req.requester_workflow_id, now):
                 leases_changed = True
                 try:
@@ -554,8 +562,37 @@ class MoonMindProviderProfileManagerWorkflow:
         if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
 
-    def _find_available_profile(self, selector: Optional[dict[str, Any]] = None) -> Optional[ProfileSlotState]:
+    def _find_available_profile(
+        self,
+        selector: Optional[dict[str, Any]] = None,
+        execution_profile_ref: str | None = None,
+    ) -> Optional[ProfileSlotState]:
         """Find the best available profile matching the selector."""
+        exact_profile_id = str(execution_profile_ref or "").strip()
+        if exact_profile_id:
+            exact_profile = self._profiles.get(exact_profile_id)
+            if exact_profile is None or not exact_profile.is_available():
+                return None
+
+            if selector:
+                if selector.get("providerId") and exact_profile.provider_id != selector.get("providerId"):
+                    return None
+                if (
+                    selector.get("runtimeMaterializationMode")
+                    and exact_profile.runtime_materialization_mode != selector.get("runtimeMaterializationMode")
+                ):
+                    return None
+
+                tags_any = selector.get("tagsAny", [])
+                if tags_any and not set(tags_any).intersection(set(exact_profile.tags)):
+                    return None
+
+                tags_all = selector.get("tagsAll", [])
+                if tags_all and not set(tags_all).issubset(set(exact_profile.tags)):
+                    return None
+
+            return exact_profile
+
         eligible_profiles: list[ProfileSlotState] = []
         for profile in self._profiles.values():
             if not profile.is_available():
@@ -714,6 +751,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 {
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
+                    "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                 }
                 for r in self._pending_requests
