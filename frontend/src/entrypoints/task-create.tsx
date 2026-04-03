@@ -511,22 +511,37 @@ async function createInputArtifact(
   body: string,
   repository: string,
 ): Promise<{ artifactId: string }> {
-  const createResponse = await fetch(createEndpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      content_type: 'application/json; charset=utf-8',
-      size_bytes: new TextEncoder().encode(body).length,
-      metadata: {
-        label: 'Submitted Task Input',
-        repository: repository || null,
-        source: 'task-dashboard-submit',
+  let createResponse: Response;
+  try {
+    createResponse = await fetch(createEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
       },
-    }),
-  });
+      body: JSON.stringify({
+        content_type: 'application/json; charset=utf-8',
+        size_bytes: new TextEncoder().encode(body).length,
+        metadata: {
+          label: 'Submitted Task Input',
+          repository: repository || null,
+          source: 'task-dashboard-submit',
+        },
+      }),
+    });
+  } catch (error) {
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      console.error('[TaskCreate] Network failure during artifact creation.', {
+        endpoint: createEndpoint,
+        possibleCauses: 'API service unreachable, CORS block, or network issue.',
+      });
+      throw new Error(
+        `Failed to reach the artifact creation API (endpoint: ${createEndpoint}). ` +
+        'The API service may be unreachable or a CORS policy is blocking the request.',
+      );
+    }
+    throw error;
+  }
   if (!createResponse.ok) {
     throw new Error(await responseErrorMessage(createResponse, 'Failed to create input artifact.'));
   }
@@ -540,13 +555,28 @@ async function createInputArtifact(
     throw new Error('Artifact upload details were incomplete.');
   }
 
-  const uploadResponse = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-    body,
-  });
+  let uploadResponse: Response;
+  try {
+    uploadResponse = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body,
+    });
+  } catch (error) {
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      console.error('[TaskCreate] Network failure during artifact content upload.', {
+        uploadUrl,
+        possibleCauses: 'Storage service (Minio) unreachable or CORS block.',
+      });
+      throw new Error(
+        `Failed to upload artifact content (upload URL: ${uploadUrl}). ` +
+        'The storage service may be unreachable. Verify that Minio/S3 is running and accessible.',
+      );
+    }
+    throw error;
+  }
   if (!uploadResponse.ok) {
     throw new Error(await responseErrorMessage(uploadResponse, 'Failed to upload task input artifact content.'));
   }
@@ -615,20 +645,37 @@ async function linkInputArtifact(artifactId: string, execution: ExecutionCreateR
   if (!artifactId || !workflowId || !runId || !namespace) {
     return;
   }
-  const response = await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/links`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      namespace,
-      workflow_id: workflowId,
-      run_id: runId,
-      link_type: 'input.instructions',
-      label: 'Submitted Task Input',
-    }),
-  });
+  const linkEndpoint = `/api/artifacts/${encodeURIComponent(artifactId)}/links`;
+  let response: Response;
+  try {
+    response = await fetch(linkEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        namespace,
+        workflow_id: workflowId,
+        run_id: runId,
+        link_type: 'input.instructions',
+        label: 'Submitted Task Input',
+      }),
+    });
+  } catch (error) {
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      console.error('[TaskCreate] Network failure during artifact linking.', {
+        endpoint: linkEndpoint,
+        artifactId,
+        possibleCauses: 'API service unreachable, CORS block, or network issue.',
+      });
+      throw new Error(
+        `Failed to reach the artifact linking API (endpoint: ${linkEndpoint}). ` +
+        'The API service may be unreachable or a CORS policy is blocking the request.',
+      );
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new Error(await responseErrorMessage(response, 'Failed to link input artifact to execution.'));
   }
@@ -1595,7 +1642,29 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       navigateTo(redirectPath);
     } catch (error) {
-      setSubmitMessage(error instanceof Error ? error.message : 'Failed to create task.');
+      // Detect network-level fetch failures (TypeError: "Failed to fetch")
+      // and log additional diagnostics to help troubleshoot.
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        console.error('[TaskCreate] Network-level fetch failure during task creation.', {
+          endpoint: temporalCreateEndpoint,
+          errorName: error.name,
+          errorMessage: error.message,
+          possibleCauses: [
+            'API service may be unreachable or not running',
+            'CORS policy is blocking the request (check browser devtools Network tab for CORS errors)',
+            'Network connectivity issue or proxy misconfiguration',
+            'TLS/SSL certificate error (if using HTTPS)',
+          ].join('; '),
+        });
+        setSubmitMessage(
+          'Failed to reach the task creation API. ' +
+          `Endpoint: ${temporalCreateEndpoint}. ` +
+          'This usually means the API service is unreachable, a CORS policy is blocking the request, ' +
+          'or there is a network connectivity issue. Check the browser console for more details.',
+        );
+      } else {
+        setSubmitMessage(error instanceof Error ? error.message : 'Failed to create task.');
+      }
     } finally {
       setIsSubmitting(false);
     }
