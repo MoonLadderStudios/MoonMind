@@ -10,7 +10,16 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
-from api_service.db.models import Base
+from api_service.db.models import (
+    Base,
+    TemporalArtifact,
+    TemporalArtifactEncryption,
+    TemporalArtifactRedactionLevel,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactStatus,
+    TemporalArtifactStorageBackend,
+    TemporalArtifactUploadMode,
+)
 from api_service.main import app
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -22,6 +31,31 @@ def _reset_dependency_overrides():
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
+
+
+async def _create_uploaded_artifact(
+    artifact_id: str,
+    *,
+    status: TemporalArtifactStatus = TemporalArtifactStatus.COMPLETE,
+) -> str:
+    async with db_base.async_session_maker() as session:
+        session.add(
+            TemporalArtifact(
+                artifact_id=artifact_id,
+                content_type="application/json; charset=utf-8",
+                size_bytes=128,
+                storage_key=f"tests/{artifact_id}.json",
+                storage_backend=TemporalArtifactStorageBackend.S3,
+                encryption=TemporalArtifactEncryption.NONE,
+                status=status,
+                retention_class=TemporalArtifactRetentionClass.STANDARD,
+                redaction_level=TemporalArtifactRedactionLevel.NONE,
+                upload_mode=TemporalArtifactUploadMode.SINGLE_PUT,
+                metadata_json={"label": "Contract test input"},
+            )
+        )
+        await session.commit()
+    return artifact_id
 
 
 @pytest.mark.asyncio
@@ -597,6 +631,9 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
             transport=transport,
             base_url="http://testserver",
         ) as client:
+            input_artifact_ref = await _create_uploaded_artifact(
+                "art_01TESTCONTRACTINPUT000000000",
+            )
             create_response = await client.post(
                 "/api/executions",
                 json={
@@ -614,7 +651,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
                                 "model": "gpt-5.3-codex",
                                 "effort": "high",
                             },
-                            "inputArtifactRef": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "inputArtifactRef": input_artifact_ref,
                             "publish": {"mode": "branch"},
                         },
                     },
@@ -628,11 +665,75 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
             assert body["legacyRunId"] is None
             assert body["redirectPath"] == f"/tasks/{body['taskId']}?source=temporal"
             assert body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
-            assert body["memo"]["input_ref"] == "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            assert body["memo"]["input_ref"] == input_artifact_ref
             assert (
                 body["memo"]["summary"]
                 == "Implement Temporal submit redirect coverage."
             )
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
+
+
+@pytest.mark.asyncio
+async def test_task_shaped_create_rejects_pending_upload_input_artifact(tmp_path):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_contract_pending_input.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            artifact_id = await _create_uploaded_artifact(
+                "art_01TESTPENDINGCONTRACTINPUT0",
+                status=TemporalArtifactStatus.PENDING_UPLOAD,
+            )
+
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "type": "task",
+                    "priority": 4,
+                    "maxAttempts": 3,
+                    "payload": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "targetRuntime": "codex",
+                        "task": {
+                            "instructions": "Should fail fast on unreadable input artifact.",
+                            "runtime": {
+                                "mode": "codex",
+                                "model": "gpt-5.3-codex",
+                                "effort": "high",
+                            },
+                            "inputArtifactRef": artifact_id,
+                            "publish": {"mode": "branch"},
+                        },
+                    },
+                },
+            )
+            assert create_response.status_code == 422
+            body = create_response.json()
+            assert body["detail"]["code"] == "invalid_execution_request"
+            assert "readable artifact" in body["detail"]["message"]
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
@@ -666,11 +767,14 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
             transport=transport,
             base_url="http://testserver",
         ) as client:
+            manifest_artifact_ref = await _create_uploaded_artifact(
+                "art_manifest_123",
+            )
             create_response = await client.post(
                 "/api/executions",
                 json={
                     "workflowType": "MoonMind.ManifestIngest",
-                    "manifestArtifactRef": "art_manifest_123",
+                    "manifestArtifactRef": manifest_artifact_ref,
                     "failurePolicy": "best_effort",
                     "initialParameters": {
                         "requestedBy": {"type": "user", "id": str(shared_user_id)},
@@ -688,7 +792,7 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
             created = create_response.json()
             workflow_id = created["workflowId"]
             assert created["workflowType"] == "MoonMind.ManifestIngest"
-            assert created["manifestArtifactRef"] == "art_manifest_123"
+            assert manifest_artifact_ref in created["artifactRefs"]
             assert created["executionPolicy"]["maxConcurrency"] == 6
             assert created["counts"]["ready"] == 1
             assert created["counts"]["running"] == 1

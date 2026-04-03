@@ -603,14 +603,38 @@ async def test_start_manifest_child_runs_preserves_lineage_and_request_cancel_po
 ) -> None:
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            manifest_artifact, _ = await artifact_service.create(
+                principal="user-1",
+                content_type="application/yaml",
+            )
+            completed_manifest = await artifact_service.write_complete(
+                artifact_id=manifest_artifact.artifact_id,
+                principal="user-1",
+                payload=(MANIFEST_YAML + "\n").encode("utf-8"),
+                content_type="application/yaml",
+            )
+            plan_artifact, _ = await artifact_service.create(
+                principal="user-1",
+                content_type="application/json",
+            )
+            completed_plan = await artifact_service.write_complete(
+                artifact_id=plan_artifact.artifact_id,
+                principal="user-1",
+                payload=b'{"nodes":[]}',
+                content_type="application/json",
+            )
             execution_service = TemporalExecutionService(session)
             parent = await execution_service.create_execution(
                 workflow_type="MoonMind.ManifestIngest",
                 owner_id=uuid4(),
                 title="Manifest ingest",
                 input_artifact_ref=None,
-                plan_artifact_ref="art_plan_1",
-                manifest_artifact_ref="art_manifest_1",
+                plan_artifact_ref=completed_plan.artifact_id,
+                manifest_artifact_ref=completed_manifest.artifact_id,
                 failure_policy="fail_fast",
                 initial_parameters={
                     "requestedBy": {"type": "user", "id": "user-1"},
@@ -623,7 +647,7 @@ async def test_start_manifest_child_runs_preserves_lineage_and_request_cancel_po
             )
             nodes = plan_nodes_to_runtime_nodes(
                 compile_manifest_plan(
-                    manifest_ref="art_manifest_1",
+                    manifest_ref=completed_manifest.artifact_id,
                     manifest_payload=MANIFEST_YAML,
                     action="run",
                     options={},

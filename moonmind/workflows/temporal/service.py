@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     MoonMindWorkflowState,
+    TemporalArtifact,
+    TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionOwnerType,
@@ -286,6 +288,27 @@ class TemporalExecutionService:
                         if td_clean:
                             queue.append((td_clean, depth + 1))
 
+    async def _validate_readable_temporal_artifact_ref(
+        self,
+        artifact_ref: str | None,
+        *,
+        field_name: str,
+    ) -> None:
+        ref = str(artifact_ref or "").strip()
+        if not ref or not ref.startswith("art_"):
+            return
+
+        artifact = await self._session.get(TemporalArtifact, ref)
+        if artifact is None:
+            raise TemporalExecutionValidationError(
+                f"{field_name} was not found: {ref}"
+            )
+        if artifact.status is not TemporalArtifactStatus.COMPLETE:
+            raise TemporalExecutionValidationError(
+                f"{field_name} must reference a readable artifact; "
+                f"{ref} is {artifact.status.value}."
+            )
+
     async def create_execution(
         self,
         *,
@@ -325,6 +348,19 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
+
+        await self._validate_readable_temporal_artifact_ref(
+            input_artifact_ref,
+            field_name="inputArtifactRef",
+        )
+        await self._validate_readable_temporal_artifact_ref(
+            plan_artifact_ref,
+            field_name="planArtifactRef",
+        )
+        await self._validate_readable_temporal_artifact_ref(
+            manifest_artifact_ref,
+            field_name="manifestArtifactRef",
+        )
 
         now = _utc_now()
         workflow_id = f"mm:{uuid4()}"
