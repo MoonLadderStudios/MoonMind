@@ -10,6 +10,7 @@ const SKILL_OPTIONS_DATALIST_ID = 'queue-skill-options';
 const MODEL_OPTIONS_DATALIST_ID = 'queue-model-options';
 const EFFORT_OPTIONS_DATALIST_ID = 'queue-effort-options';
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const PR_RESOLVER_SKILLS = new Set(['pr-resolver', 'batch-pr-resolver']);
 
 type TemplateScope = 'global' | 'personal';
 type ScheduleMode = 'immediate' | 'once' | 'deferred_minutes' | 'recurring';
@@ -217,6 +218,10 @@ function createStepStateEntry(index: number, overrides: Partial<StepState> = {})
 function hasExplicitSkillSelection(skillId: string): boolean {
   const normalized = skillId.trim().toLowerCase();
   return normalized !== '' && normalized !== 'auto';
+}
+
+function isResolverSkill(skillId: string): boolean {
+  return PR_RESOLVER_SKILLS.has(skillId.trim().toLowerCase());
 }
 
 function shouldShowSkillArgs(step: StepState | null | undefined): boolean {
@@ -648,6 +653,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
+  const previousPrimarySkillRef = useRef('');
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
 
@@ -710,6 +716,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     providerProfile,
     runtime,
   ]);
+
+  useEffect(() => {
+    const primarySkill = String(steps[0]?.skillId || '').trim().toLowerCase();
+    const previousPrimarySkill = previousPrimarySkillRef.current;
+    previousPrimarySkillRef.current = primarySkill;
+    if (primarySkill === previousPrimarySkill) {
+      return;
+    }
+    if (isResolverSkill(primarySkill)) {
+      setPublishMode('none');
+    }
+  }, [steps]);
 
   const skillsQuery = useQuery({
     queryKey: ['task-create', 'skills'],

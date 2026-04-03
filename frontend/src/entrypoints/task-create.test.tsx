@@ -347,6 +347,50 @@ describe('Task Create Entrypoint', () => {
     });
   });
 
+  it('defaults publish mode to none when selecting pr-resolver skills', async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText('Step 1 (Primary)')).closest('section');
+    expect(primaryStep).not.toBeNull();
+
+    const publishSelect = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
+    expect(publishSelect).toHaveValue('pr');
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
+      target: { value: 'pr-resolver' },
+    });
+    expect(screen.getByLabelText('Publish Mode')).toHaveValue('none');
+
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
+      target: { value: 'batch-pr-resolver' },
+    });
+    expect(screen.getByLabelText('Publish Mode')).toHaveValue('none');
+  });
+
+  it('submits publish mode none when the selected primary skill is pr-resolver', async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText('Step 1 (Primary)')).closest('section');
+    expect(primaryStep).not.toBeNull();
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
+      target: { value: 'pr-resolver' },
+    });
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText('Instructions'), {
+      target: { value: 'Resolve the current branch PR.' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/api/executions', expect.objectContaining({ method: 'POST' }));
+    });
+
+    const executionCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions').at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.publish).toMatchObject({
+      mode: 'none',
+    });
+  });
+
   it('renders the restored legacy create-task controls', async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
