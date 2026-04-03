@@ -622,6 +622,7 @@ describe('LiveLogsPanel', () => {
   let originalEventSource: typeof EventSource;
   let originalClipboardDescriptor: PropertyDescriptor | undefined;
   let originalDocumentHiddenDescriptor: PropertyDescriptor | undefined;
+  let originalScrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
     window.history.pushState({}, 'Test', '/tasks/wf-1?source=temporal');
@@ -630,9 +631,19 @@ describe('LiveLogsPanel', () => {
     originalEventSource = window.EventSource;
     originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     originalDocumentHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
+    originalScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'scrollIntoView',
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).EventSource = MockEventSource;
-    Element.prototype.scrollIntoView = vi.fn();
+    if (typeof Element.prototype.scrollIntoView !== 'function') {
+      Object.defineProperty(Element.prototype, 'scrollIntoView', {
+        configurable: true,
+        writable: true,
+        value: vi.fn(),
+      });
+    }
   });
 
   afterEach(() => {
@@ -648,6 +659,12 @@ describe('LiveLogsPanel', () => {
     } else {
       Reflect.deleteProperty(document, 'hidden');
     }
+    if (originalScrollIntoViewDescriptor) {
+      Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoViewDescriptor);
+    } else {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
+    vi.restoreAllMocks();
   });
 
   /** Build a fetch mock that routes execution, artifacts, observability, and merged tail calls. */
@@ -724,23 +741,29 @@ describe('LiveLogsPanel', () => {
   });
 
   it('does not auto-scroll the page when live logs update', async () => {
-    const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
-    mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
-    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    const scrollIntoViewSpy = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+    try {
+      mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
+      renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
-    fireEvent.click(await screen.findByText('Live Logs'));
+      fireEvent.click(await screen.findByText('Live Logs'));
 
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-    const es = MockEventSource.instances[0]!;
-    scrollIntoViewSpy.mockClear();
+      await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+      const es = MockEventSource.instances[0]!;
+      scrollIntoViewSpy.mockClear();
 
-    act(() => es.triggerOpen());
-    act(() => es.triggerLogChunk({ sequence: 1, stream: 'stdout', text: 'live line\n' }));
+      act(() => es.triggerOpen());
+      act(() => es.triggerLogChunk({ sequence: 1, stream: 'stdout', text: 'live line\n' }));
 
-    await waitFor(() => {
-      expect(screen.getByText(/live line/)).toBeTruthy();
-    });
-    expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(screen.getByText(/live line/)).toBeTruthy();
+      });
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    } finally {
+      scrollIntoViewSpy.mockRestore();
+    }
   });
 
   it('does not create EventSource for ended runs', async () => {
