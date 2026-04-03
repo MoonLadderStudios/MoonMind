@@ -157,36 +157,84 @@ cmd_check() {
 }
 
 # ---------------------------------------------------------------------------
-# --register: register the volume in the MoonMind auth profile API
+# --register: register the volume in the MoonMind provider profile API
 # ---------------------------------------------------------------------------
 cmd_register() {
   local API_URL="${MOONMIND_API_URL:-http://localhost:5000}"
   local PROFILE_ID="${CLAUDE_PROFILE_ID:-claude_anthropic}"
+  local CREATE_URL="${API_URL}/api/v1/provider-profiles"
+  local UPDATE_URL="${API_URL}/api/v1/provider-profiles/${PROFILE_ID}"
 
-  echo "Registering auth profile '${PROFILE_ID}' via ${API_URL}..."
+  echo "Registering provider profile '${PROFILE_ID}' via ${API_URL}..."
+
+  local create_payload
+  create_payload=$(cat <<EOF
+{
+  "profile_id": "${PROFILE_ID}",
+  "runtime_id": "claude_code",
+  "provider_id": "anthropic",
+  "provider_label": "Anthropic",
+  "credential_source": "oauth_volume",
+  "runtime_materialization_mode": "oauth_home",
+  "volume_ref": "${VOLUME_NAME}",
+  "volume_mount_path": "${CLAUDE_VOLUME_PATH}",
+  "account_label": "Claude OAuth Profile (${PROFILE_ID})",
+  "clear_env_keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+  "max_parallel_runs": 1,
+  "cooldown_after_429_seconds": 900,
+  "rate_limit_policy": "backoff",
+  "enabled": true
+}
+EOF
+)
+
+  local update_payload
+  update_payload=$(cat <<EOF
+{
+  "provider_id": "anthropic",
+  "provider_label": "Anthropic",
+  "credential_source": "oauth_volume",
+  "runtime_materialization_mode": "oauth_home",
+  "volume_ref": "${VOLUME_NAME}",
+  "volume_mount_path": "${CLAUDE_VOLUME_PATH}",
+  "account_label": "Claude OAuth Profile (${PROFILE_ID})",
+  "clear_env_keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+  "max_parallel_runs": 1,
+  "cooldown_after_429_seconds": 900,
+  "rate_limit_policy": "backoff",
+  "enabled": true
+}
+EOF
+)
 
   local response
-  response=$(curl -sS -w "\n%{http_code}" -X POST "${API_URL}/api/v1/auth-profiles" \
+  response=$(curl -sS -w "\n%{http_code}" -X POST "${CREATE_URL}" \
     -H "Content-Type: application/json" \
-    -d '{
-      "profile_id": "'"${PROFILE_ID}"'",
-      "runtime_id": "claude_code",
-      "auth_mode": "oauth",
-      "volume_ref": "'"${VOLUME_NAME}"'",
-      "volume_mount_path": "'"${CLAUDE_VOLUME_PATH}"'",
-      "account_label": "Claude OAuth Profile ('"${PROFILE_ID}"')",
-      "max_parallel_runs": 1
-    }')
+    -d "${create_payload}")
 
   local status_code=$(echo "$response" | tail -n1)
   local body=$(echo "$response" | sed '$d')
 
   if [ "$status_code" -eq 201 ]; then
-    echo "Successfully registered profile '${PROFILE_ID}'."
+    echo "Successfully created provider profile '${PROFILE_ID}'."
   elif [ "$status_code" -eq 409 ]; then
-    echo "Profile '${PROFILE_ID}' already exists."
+    echo "Provider profile '${PROFILE_ID}' already exists; updating it..."
+
+    response=$(curl -sS -w "\n%{http_code}" -X PATCH "${UPDATE_URL}" \
+      -H "Content-Type: application/json" \
+      -d "${update_payload}")
+
+    status_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | sed '$d')
+
+    if [ "$status_code" -eq 200 ]; then
+      echo "Successfully updated provider profile '${PROFILE_ID}'."
+    else
+      echo "Error updating provider profile (HTTP $status_code): $body" >&2
+      exit 1
+    fi
   else
-    echo "Error registering profile (HTTP $status_code): $body" >&2
+    echo "Error registering provider profile (HTTP $status_code): $body" >&2
     exit 1
   fi
 }
