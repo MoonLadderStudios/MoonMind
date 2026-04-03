@@ -9,11 +9,11 @@
 # PostgreSQL: uses docker compose exec + local psql (password not required for peer/trust
 # inside the container) to ALTER USER to match POSTGRES_PASSWORD.
 #
-# MinIO: uses a one-shot minio/mc container. If MinIO already accepts the credentials in
-# .env, nothing is changed. Otherwise set MINIO_ROOT_PASSWORD_PREVIOUS to the secret MinIO
-# currently accepts, then re-run. As a dev convenience, if the root user is still the
-# default minioadmin and authentication with .env fails, the script tries the default
-# secret minioadmin once before giving up.
+# MinIO: uses a one-shot minio/mc container with --entrypoint /bin/sh (the mc image defaults
+# to entrypoint "mc", so a bare /bin/sh would be treated as an mc subcommand).
+# If MinIO already accepts the credentials in .env, nothing is changed. Otherwise the script
+# tries MINIO_ROOT_PASSWORD_PREVIOUS (env), then default minioadmin/minioadmin when applicable,
+# then prompts interactively for the secret MinIO currently accepts (TTY only).
 #
 # After Postgres password changes, restart app services that cache connections if needed
 # (for example: docker compose restart api init-db).
@@ -27,8 +27,8 @@ Reads repo-root .env and updates:
   - Postgres role POSTGRES_USER (default postgres) password -> POSTGRES_PASSWORD
   - MinIO root user MINIO_ROOT_USER (default minioadmin) secret -> MINIO_ROOT_PASSWORD
 
-MinIO rotation needs either credentials already in sync with .env, or
-MINIO_ROOT_PASSWORD_PREVIOUS exported in the environment (current secret before .env change).
+MinIO rotation: if .env is ahead of the server, use MINIO_ROOT_PASSWORD_PREVIOUS or answer
+the interactive prompt with the secret MinIO still accepts.
 
 Options:
   --help, -h   Show this help.
@@ -103,11 +103,12 @@ minio_try_admin_info() {
   local user="$2"
   local secret="$3"
   docker run --rm \
+    --entrypoint /bin/sh \
     --network "container:${cid}" \
     -e MC_AUTH_USER="$user" \
     -e MC_AUTH_SECRET="$secret" \
     "$MINIO_MC_IMAGE" \
-    /bin/sh -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin info mm' >/dev/null
+    -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin info mm' >/dev/null
 }
 
 minio_rotate_secret() {
@@ -116,12 +117,13 @@ minio_rotate_secret() {
   local auth_secret="$3"
   local new_secret="$4"
   docker run --rm \
+    --entrypoint /bin/sh \
     --network "container:${cid}" \
     -e MC_AUTH_USER="$auth_user" \
     -e MC_AUTH_SECRET="$auth_secret" \
     -e MC_NEW_SECRET="$new_secret" \
     "$MINIO_MC_IMAGE" \
-    /bin/sh -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin accesskey edit mm "$MC_AUTH_USER" --secret-key "$MC_NEW_SECRET"'
+    -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin accesskey edit mm "$MC_AUTH_USER" --secret-key "$MC_NEW_SECRET"'
 }
 
 update_minio_password() {
@@ -158,8 +160,22 @@ update_minio_password() {
     fi
   fi
 
+  local prompted=""
+  if [[ -t 0 ]]; then
+    echo "[update-docker-passwords] MinIO: credentials in .env did not authenticate." >&2
+    printf '%s' "Enter the root secret MinIO currently uses (input hidden): " >&2
+    read -rs prompted || true
+    echo >&2
+    if [[ -n "$prompted" ]] && minio_try_admin_info "$cid" "$MINIO_ROOT_USER" "$prompted"; then
+      echo "[update-docker-passwords] MinIO: rotating to MINIO_ROOT_PASSWORD from .env..."
+      minio_rotate_secret "$cid" "$MINIO_ROOT_USER" "$prompted" "$MINIO_ROOT_PASSWORD"
+      echo "[update-docker-passwords] MinIO: done."
+      return 0
+    fi
+  fi
+
   echo "Error: could not authenticate to MinIO with MINIO_ROOT_PASSWORD from .env." >&2
-  echo "Export MINIO_ROOT_PASSWORD_PREVIOUS to the secret MinIO currently uses, then run again." >&2
+  echo "Set MINIO_ROOT_PASSWORD_PREVIOUS, re-run on a TTY to be prompted, or fix .env." >&2
   exit 1
 }
 
