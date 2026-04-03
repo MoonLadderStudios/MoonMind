@@ -19,6 +19,7 @@ from api_service.api.routers.executions import (
     router,
 )
 from api_service.auth_providers import get_current_user
+from api_service.db.base import get_async_session
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal import (
@@ -444,6 +445,49 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "startingBranch": "feature/resolve-pr",
         "targetBranch": "codex/pr-resolver",
     }
+
+
+def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                default_model="gpt-5-codex",
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "task": {
+                        "instructions": "Fix failing Temporal run.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs["initial_parameters"]
+    assert initial_parameters["profileId"] == "codex-provider-profile"
+    assert initial_parameters["model"] == "gpt-5-codex"
+    assert initial_parameters["modelSource"] == "provider_profile_default"
+    app.dependency_overrides.clear()
 
 
 def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(

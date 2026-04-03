@@ -84,6 +84,7 @@ describe('Task Detail Entrypoint', () => {
       source: 'temporal',
       workflowType: 'MoonMind.Run',
       entry: 'run',
+      targetRuntime: 'gemini_cli',
       title: 'Example task',
       summary: 'Did work',
       status: 'completed',
@@ -117,6 +118,7 @@ describe('Task Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
+      expect(screen.getByText('Gemini CLI')).toBeTruthy();
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');

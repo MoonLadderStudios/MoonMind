@@ -5,6 +5,7 @@ import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
+import { formatRuntimeLabel } from '../utils/formatters';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -1198,7 +1199,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             <Card label="Source">Temporal</Card>
             <Card label="Workflow Type">{execution.workflowType || '—'}</Card>
             <Card label="Entry">{execution.entry || '—'}</Card>
-            {execution.targetRuntime ? <Card label="Runtime">{execution.targetRuntime}</Card> : null}
+            {execution.targetRuntime ? (
+              <Card label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Card>
+            ) : null}
             {execution.model ? (
               <Card label="Model">
                 <code className="text-xs">{execution.model}</code>

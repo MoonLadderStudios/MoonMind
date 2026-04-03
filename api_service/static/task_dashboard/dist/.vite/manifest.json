@@ -6,15 +6,15 @@
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_PageSizeSelector-OOSXp2SI.js": {
-    "file": "assets/PageSizeSelector-OOSXp2SI.js",
+  "_PageSizeSelector-CL2UEVG7.js": {
+    "file": "assets/PageSizeSelector-CL2UEVG7.js",
     "name": "PageSizeSelector",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_executionStatusPillClasses-C4O1mjPd.js": {
-    "file": "assets/executionStatusPillClasses-C4O1mjPd.js",
+  "_executionStatusPillClasses-BrOBSTcF.js": {
+    "file": "assets/executionStatusPillClasses-BrOBSTcF.js",
     "name": "executionStatusPillClasses",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
@@ -65,14 +65,14 @@
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-CN5pl5Lj.js",
+    "file": "assets/proposals-BREleDfj.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_PageSizeSelector-OOSXp2SI.js",
-      "_executionStatusPillClasses-C4O1mjPd.js"
+      "_PageSizeSelector-CL2UEVG7.js",
+      "_executionStatusPillClasses-BrOBSTcF.js"
     ]
   },
   "entrypoints/schedules.tsx": {
@@ -104,7 +104,7 @@
     ]
   },
   "entrypoints/task-create.tsx": {
-    "file": "assets/task-create-ZFPCaxY8.js",
+    "file": "assets/task-create-C9Mw0pNs.js",
     "name": "task-create",
     "src": "entrypoints/task-create.tsx",
     "isEntry": true,
@@ -120,7 +120,7 @@
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_executionStatusPillClasses-C4O1mjPd.js"
+      "_executionStatusPillClasses-BrOBSTcF.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
@@ -133,14 +133,14 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-DX8Ms9BW.js",
+    "file": "assets/tasks-list-Zv-cobTU.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_PageSizeSelector-OOSXp2SI.js",
-      "_executionStatusPillClasses-C4O1mjPd.js"
+      "_PageSizeSelector-CL2UEVG7.js",
+      "_executionStatusPillClasses-BrOBSTcF.js"
     ]
   }
 }

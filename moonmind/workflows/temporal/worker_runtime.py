@@ -257,6 +257,16 @@ def _build_runtime_planner():
         if isinstance(effort, str) and effort.strip():
             runtime_node["effort"] = effort.strip()
 
+        profile_id = (
+            runtime_payload.get("profileId")
+            or runtime_payload.get("providerProfile")
+            or parameter_payload.get("profileId")
+        )
+        if isinstance(profile_id, str) and profile_id.strip():
+            normalized_profile_id = profile_id.strip()
+            runtime_node["profileId"] = normalized_profile_id
+            runtime_node["providerProfile"] = normalized_profile_id
+
         exec_profile_ref = (
             runtime_payload.get("executionProfileRef")
             or runtime_payload.get("execution_profile_ref")
@@ -512,7 +522,7 @@ def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, 
     artifact_storage = LocalRuntimeArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
-    launcher = ManagedRuntimeLauncher(store)
+    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
     return store, supervisor, launcher
 
 
