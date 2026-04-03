@@ -1,0 +1,222 @@
+openapi: 3.1.0
+info:
+  title: Jira Tools for Managed Agents
+  version: 0.1.0
+  description: >
+    Contract summary for the Jira actions exposed through MoonMind's existing MCP
+    discovery and tool-call surface.
+paths:
+  /mcp/tools:
+    get:
+      summary: List available MCP tools
+      responses:
+        "200":
+          description: Tool discovery response including Jira actions when enabled
+  /mcp/tools/call:
+    post:
+      summary: Invoke one MCP tool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolCallRequest"
+      responses:
+        "200":
+          description: Successful Jira tool call
+        "403":
+          description: Policy violation or permission-denied Jira action
+        "404":
+          description: Unknown Jira tool
+        "422":
+          description: Invalid Jira tool arguments
+        "429":
+          description: Jira rate limited after bounded retries
+        "502":
+          description: Upstream Jira request failure
+components:
+  schemas:
+    ToolCallRequest:
+      type: object
+      required:
+        - tool
+        - arguments
+      properties:
+        tool:
+          type: string
+          enum:
+            - jira.create_issue
+            - jira.create_subtask
+            - jira.edit_issue
+            - jira.get_issue
+            - jira.search_issues
+            - jira.get_transitions
+            - jira.transition_issue
+            - jira.add_comment
+            - jira.list_create_issue_types
+            - jira.get_create_fields
+            - jira.get_edit_metadata
+            - jira.verify_connection
+        arguments:
+          oneOf:
+            - $ref: "#/components/schemas/CreateIssueArguments"
+            - $ref: "#/components/schemas/CreateSubtaskArguments"
+            - $ref: "#/components/schemas/EditIssueArguments"
+            - $ref: "#/components/schemas/GetIssueArguments"
+            - $ref: "#/components/schemas/SearchIssuesArguments"
+            - $ref: "#/components/schemas/GetTransitionsArguments"
+            - $ref: "#/components/schemas/TransitionIssueArguments"
+            - $ref: "#/components/schemas/AddCommentArguments"
+            - $ref: "#/components/schemas/ListCreateIssueTypesArguments"
+            - $ref: "#/components/schemas/GetCreateFieldsArguments"
+            - $ref: "#/components/schemas/GetEditMetadataArguments"
+            - $ref: "#/components/schemas/VerifyConnectionArguments"
+    CreateIssueArguments:
+      type: object
+      additionalProperties: false
+      required: [projectKey, issueTypeId, summary]
+      properties:
+        projectKey:
+          type: string
+        issueTypeId:
+          type: string
+        summary:
+          type: string
+        description:
+          oneOf:
+            - type: string
+            - type: object
+        fields:
+          type: object
+          additionalProperties: true
+    CreateSubtaskArguments:
+      type: object
+      additionalProperties: false
+      required: [projectKey, parentIssueKey, issueTypeId, summary]
+      properties:
+        projectKey:
+          type: string
+        parentIssueKey:
+          type: string
+        issueTypeId:
+          type: string
+        summary:
+          type: string
+        description:
+          oneOf:
+            - type: string
+            - type: object
+        fields:
+          type: object
+          additionalProperties: true
+    EditIssueArguments:
+      type: object
+      additionalProperties: false
+      required: [issueKey]
+      properties:
+        issueKey:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+        update:
+          type: object
+          additionalProperties: true
+    GetIssueArguments:
+      type: object
+      additionalProperties: false
+      required: [issueKey]
+      properties:
+        issueKey:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+        expand:
+          type: array
+          items:
+            type: string
+    SearchIssuesArguments:
+      type: object
+      additionalProperties: false
+      required: [jql]
+      properties:
+        jql:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+        startAt:
+          type: integer
+          minimum: 0
+        maxResults:
+          type: integer
+          minimum: 1
+    GetTransitionsArguments:
+      type: object
+      additionalProperties: false
+      required: [issueKey]
+      properties:
+        issueKey:
+          type: string
+        expandFields:
+          type: boolean
+    TransitionIssueArguments:
+      type: object
+      additionalProperties: false
+      required: [issueKey, transitionId]
+      properties:
+        issueKey:
+          type: string
+        transitionId:
+          oneOf:
+            - type: string
+            - type: integer
+        fields:
+          type: object
+          additionalProperties: true
+        update:
+          type: object
+          additionalProperties: true
+    AddCommentArguments:
+      type: object
+      additionalProperties: false
+      required: [issueKey, body]
+      properties:
+        issueKey:
+          type: string
+        body:
+          oneOf:
+            - type: string
+            - type: object
+    ListCreateIssueTypesArguments:
+      type: object
+      additionalProperties: false
+      required: [projectKey]
+      properties:
+        projectKey:
+          type: string
+    GetCreateFieldsArguments:
+      type: object
+      additionalProperties: false
+      required: [projectKey, issueTypeId]
+      properties:
+        projectKey:
+          type: string
+        issueTypeId:
+          type: string
+    GetEditMetadataArguments:
+      type: object
+      additionalProperties: false
+      required: [issueKey]
+      properties:
+        issueKey:
+          type: string
+    VerifyConnectionArguments:
+      type: object
+      additionalProperties: false
+      properties:
+        projectKey:
+          type: string

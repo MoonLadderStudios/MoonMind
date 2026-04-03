@@ -10,6 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.config.settings import settings
+from moonmind.integrations.jira.errors import JiraToolError
+from moonmind.integrations.jira.tool import JiraToolService
+from moonmind.mcp.jira_tool_registry import (
+    JiraToolExecutionContext,
+    JiraToolRegistry,
+)
 from moonmind.mcp.jules_tool_registry import (
     JulesToolExecutionContext,
     JulesToolRegistry,
@@ -30,8 +36,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mcp", tags=["mcp-tools"])
 
 _queue_registry = QueueToolRegistry()
+_jira_registry: JiraToolRegistry | None = None
+_jira_service: JiraToolService | None = None
 _jules_registry: JulesToolRegistry | None = None
 _jules_client: JulesClient | None = None
+
+if settings.atlassian.jira.jira_tool_enabled:
+    _jira_service = JiraToolService(atlassian_settings=settings.atlassian)
+    _jira_registry = JiraToolRegistry(
+        enabled_actions=_jira_service.discoverable_actions()
+    )
 
 if settings.jules.jules_enabled:
     _jules_api_url = settings.jules.jules_api_url
@@ -64,6 +78,11 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "invalid_tool_arguments", "message": str(exc)},
         )
+    if isinstance(exc, JiraToolError):
+        return HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        )
     if isinstance(exc, JulesClientError):
         if exc.status_code == 429:
             http_status = status.HTTP_429_TOO_MANY_REQUESTS
@@ -93,6 +112,8 @@ async def list_tools(
 ) -> ToolListResponse:
     """Return all registered MCP tool definitions."""
     tools = _queue_registry.list_tools()
+    if _jira_registry is not None:
+        tools = tools + _jira_registry.list_tools()
     if _jules_registry is not None:
         tools = tools + _jules_registry.list_tools()
     return ToolListResponse(tools=tools)
@@ -106,7 +127,16 @@ async def call_tool(
     """Dispatch one MCP tool invocation."""
 
     try:
-        if payload.tool.startswith("jules.") and _jules_registry is not None:
+        if payload.tool.startswith("jira.") and _jira_registry is not None:
+            if _jira_service is None:  # pragma: no cover
+                raise ToolNotFoundError(payload.tool)
+            jira_context = JiraToolExecutionContext(service=_jira_service)
+            result: Any = await _jira_registry.call_tool(
+                tool=payload.tool,
+                arguments=payload.arguments,
+                context=jira_context,
+            )
+        elif payload.tool.startswith("jules.") and _jules_registry is not None:
             if _jules_client is None:  # pragma: no cover
                 raise ToolNotFoundError(payload.tool)
             jules_context = JulesToolExecutionContext(client=_jules_client)
@@ -125,6 +155,8 @@ async def call_tool(
                 arguments=payload.arguments,
                 context=queue_context,
             )
+    except JiraToolError as exc:
+        raise _to_http_exception(exc) from None
     except Exception as exc:  # pragma: no cover - mapping layer
         raise _to_http_exception(exc) from exc
     return ToolCallResponse(result=result)
