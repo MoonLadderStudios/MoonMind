@@ -55,6 +55,7 @@ interface DashboardConfig {
 interface ProviderProfile {
   profile_id: string;
   account_label?: string | null;
+  default_model?: string | null;
 }
 
 interface SkillsResponse {
@@ -620,6 +621,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [model, setModel] = useState(
     String(defaultTaskModelByRuntime[defaultRuntime] || dashboardConfig.system?.defaultTaskModel || ''),
   );
+  const [modelManualOverride, setModelManualOverride] = useState(false);
   const [effort, setEffort] = useState(
     String(defaultTaskEffortByRuntime[defaultRuntime] || dashboardConfig.system?.defaultTaskEffort || ''),
   );
@@ -646,16 +648,32 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
+  const prevRuntimeRef = useRef(runtime);
 
   useEffect(() => {
-    setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
+    if (modelManualOverride) {
+      return;
+    }
+    const profiles = providerProfilesQuery.data || [];
+    const selectedProfile = profiles.find((p) => p.profile_id === providerProfile);
+    if (selectedProfile?.default_model) {
+      setModel(selectedProfile.default_model);
+    } else {
+      setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
+    }
     setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
-    setProviderProfile('');
+    if (prevRuntimeRef.current !== runtime) {
+      setProviderProfile('');
+      prevRuntimeRef.current = runtime;
+    }
   }, [
     dashboardConfig.system?.defaultTaskEffort,
     dashboardConfig.system?.defaultTaskModel,
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
+    modelManualOverride,
+    providerProfilesQuery.data,
+    providerProfile,
     runtime,
   ]);
 
@@ -1704,7 +1722,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               list={MODEL_OPTIONS_DATALIST_ID}
               value={model}
               placeholder="runtime default"
-              onChange={(event) => setModel(event.target.value)}
+              onChange={(event) => {
+                setModel(event.target.value);
+                setModelManualOverride(true);
+              }}
             />
           </label>
           <label>
