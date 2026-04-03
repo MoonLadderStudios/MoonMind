@@ -974,9 +974,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleApplyPreset() {
-    if (isApplyingPreset) {
-      return;
-    }
+    if (isApplyingPreset) return;
     if (!selectedPreset) {
       setTemplateMessage('Choose a preset first.');
       return;
@@ -1682,7 +1680,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               />
             </label>
             <div className="actions">
-              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} aria-busy={isApplyingPreset}>
+              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} aria-disabled={isApplyingPreset} aria-busy={isApplyingPreset}>
                 Apply
               </button>
               {taskTemplateSaveEnabled ? (
@@ -1957,7 +1955,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
 
         <div className="actions">
-          <button type="submit" className="queue-submit-primary" aria-busy={isSubmitting}>
+          <button type="submit" className="queue-submit-primary" aria-disabled={isSubmitting} aria-busy={isSubmitting}>
             Create
           </button>
         </div>
@@ -1970,6 +1968,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </p>
       </form>
     </div>
+  );
+}
+
+mountPage(TaskCreatePage);
+
+
+mountPage(TaskCreatePage);
+ </div>
+  );
+}
+
+mountPage(TaskCreatePage);
+ </div>
   );
 }
 
