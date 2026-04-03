@@ -494,6 +494,91 @@ async def test_start_passes_profile_default_model_to_launcher() -> None:
     assert profile_payload.get("modelOverrides") == {"small_fast": "MiniMax-M2.7"}
 
 
+async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
+    profiles = [
+        {
+            "profile_id": "codex-openrouter",
+            "provider_id": "openrouter",
+            "provider_label": "OpenRouter",
+            "credential_source": "secret_ref",
+            "runtime_materialization_mode": "composite",
+            "default_model": "qwen/qwen3.6-plus:free",
+            "command_behavior": {"suppress_default_model_flag": True},
+            "env_template": {
+                "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"},
+            },
+            "file_templates": [
+                {
+                    "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                    "format": "toml",
+                    "merge_strategy": "replace",
+                    "content_template": {
+                        "model_provider": "openrouter",
+                    },
+                }
+            ],
+            "home_path_overrides": {
+                "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+            },
+            "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
+            "clear_env_keys": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+            "command_template": ["codex", "exec"],
+        }
+    ]
+    captured_payload: dict[str, Any] = {}
+
+    async def _run_launcher(**kwargs: Any):
+        payload = kwargs.get("payload")
+        if isinstance(payload, dict):
+            captured_payload.update(payload)
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-openrouter",
+        runtime_id="codex_cli",
+        run_launcher=_run_launcher,
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        executionProfileRef="codex-openrouter",
+        correlationId="corr-openrouter",
+        idempotencyKey="idem-openrouter",
+    )
+    await adapter.start(request)
+
+    profile_payload = captured_payload.get("profile") or {}
+    assert profile_payload.get("providerId") == "openrouter"
+    assert profile_payload.get("providerLabel") == "OpenRouter"
+    assert profile_payload.get("credentialSource") == "secret_ref"
+    assert profile_payload.get("runtimeMaterializationMode") == "composite"
+    assert profile_payload.get("commandBehavior") == {
+        "suppress_default_model_flag": True
+    }
+    assert profile_payload.get("envTemplate") == {
+        "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+    }
+    assert profile_payload.get("fileTemplates") == [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "mergeStrategy": "replace",
+            "contentTemplate": {"model_provider": "openrouter"},
+            "permissions": None,
+        }
+    ]
+    assert profile_payload.get("homePathOverrides") == {
+        "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+    }
+
+
 async def test_start_falls_back_to_runtime_default_model_when_profile_blank() -> None:
     profiles = [
         {
@@ -926,9 +1011,90 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
         ]
-        assert profiles[0]["runtime_env_overrides"] == {
+        assert profiles[0]["env_template"] == {
             "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             "ANTHROPIC_MODEL": "MiniMax-M2.7",
+        }
+
+
+async def test_provider_profile_list_preserves_path_aware_codex_materialization_fields(
+    tmp_path: Path,
+):
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex-openrouter",
+                    runtime_id="codex_cli",
+                    provider_id="openrouter",
+                    provider_label="OpenRouter",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                    secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+                    clear_env_keys=["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+                    env_template={
+                        "OPENROUTER_API_KEY": {
+                            "from_secret_ref": "provider_api_key"
+                        }
+                    },
+                    file_templates=[
+                        {
+                            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                            "format": "toml",
+                            "merge_strategy": "replace",
+                            "content_template": {
+                                "model_provider": "openrouter"
+                            },
+                        }
+                    ],
+                    home_path_overrides={
+                        "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+                    },
+                    command_behavior={"suppress_default_model_flag": True},
+                    max_parallel_runs=4,
+                    cooldown_after_429_seconds=300,
+                    rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+            session_factory
+        )
+        try:
+            result = await activities.provider_profile_list(runtime_id="codex_cli")
+        finally:
+            _db_base_mod.get_async_session_context = orig
+
+        profiles = result["profiles"]
+        assert len(profiles) == 1
+        assert profiles[0]["provider_label"] == "OpenRouter"
+        assert profiles[0]["env_template"] == {
+            "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+        }
+        assert profiles[0]["file_templates"] == [
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "merge_strategy": "replace",
+                "content_template": {"model_provider": "openrouter"},
+            }
+        ]
+        assert profiles[0]["home_path_overrides"] == {
+            "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+        }
+        assert profiles[0]["command_behavior"] == {
+            "suppress_default_model_flag": True
         }
 
 

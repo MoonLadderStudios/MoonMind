@@ -62,8 +62,8 @@ class ProviderProfileCreate(BaseModel):
     
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
-    env_template: Optional[dict[str, str]] = None
-    file_templates: Optional[list[dict[str, str]]] = None
+    env_template: Optional[dict[str, Any]] = None
+    file_templates: Optional[list[dict[str, Any]]] = None
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
 
@@ -77,21 +77,12 @@ class ProviderProfileCreate(BaseModel):
     @classmethod
     def _stringify_runtime_env(
         cls, value: object
-    ) -> dict[str, str] | None:
+    ) -> dict[str, Any] | None:
         if value is None:
             return None
         if not isinstance(value, dict):
             raise ValueError("env_template must be a JSON object")
-        out: dict[str, str] = {}
-        for raw_key, raw_val in value.items():
-            key = str(raw_key).strip()
-            if not key:
-                continue
-            if raw_val is None:
-                out[key] = ""
-            else:
-                out[key] = str(raw_val)
-        return out
+        return value
 
     @field_validator("secret_refs", mode="after")
     @classmethod
@@ -117,8 +108,8 @@ class ProviderProfileUpdate(BaseModel):
     priority: Optional[int] = None
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
-    env_template: Optional[dict[str, str]] = None
-    file_templates: Optional[list[dict[str, str]]] = None
+    env_template: Optional[dict[str, Any]] = None
+    file_templates: Optional[list[dict[str, Any]]] = None
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
 
@@ -128,21 +119,12 @@ class ProviderProfileUpdate(BaseModel):
     @classmethod
     def _stringify_runtime_env_update(
         cls, value: object
-    ) -> dict[str, str] | None:
+    ) -> dict[str, Any] | None:
         if value is None:
             return None
         if not isinstance(value, dict):
             raise ValueError("env_template must be a JSON object")
-        out: dict[str, str] = {}
-        for raw_key, raw_val in value.items():
-            key = str(raw_key).strip()
-            if not key:
-                continue
-            if raw_val is None:
-                out[key] = ""
-            else:
-                out[key] = str(raw_val)
-        return out
+        return value
         
     cooldown_after_429_seconds: Optional[int] = Field(default=None, ge=0)
     rate_limit_policy: Optional[str] = Field(
@@ -176,8 +158,8 @@ class ProviderProfileResponse(BaseModel):
     priority: int = 100
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
-    env_template: Optional[dict[str, str]] = None
-    file_templates: Optional[list[dict[str, str]]] = None
+    env_template: Optional[dict[str, Any]] = None
+    file_templates: Optional[list[dict[str, Any]]] = None
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
     max_parallel_runs: int

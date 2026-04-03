@@ -56,7 +56,21 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         """
         cmd = self._sanitize_command_template(profile.command_template)
 
-        model = self.get_model(profile, request)
+        requested_model = (
+            str(request.parameters.get("model") or "").strip()
+            if request.parameters
+            else ""
+        )
+        command_behavior = getattr(profile, "command_behavior", {}) or {}
+        suppress_default_model_flag = bool(
+            command_behavior.get("suppress_default_model_flag")
+        )
+
+        model = None
+        if requested_model:
+            model = self.get_model(profile, request)
+        elif not suppress_default_model_flag:
+            model = self.get_model(profile, request)
         if model:
             cmd.extend(["-m", model])
 

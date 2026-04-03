@@ -310,6 +310,31 @@ class TestCodexCliBuildCommand:
         # No instruction_ref but runtime default model still applies.
         assert cmd == ["codex", "exec", "-m", "gpt-5.4"]
 
+    def test_suppress_default_model_flag_omits_default_m_flag(self) -> None:
+        s = CodexCliStrategy()
+        profile = _make_profile(
+            command_template=["codex", "exec"],
+            default_model="qwen/qwen3.6-plus:free",
+        )
+        profile.command_behavior = {"suppress_default_model_flag": True}
+        request = _make_request(instruction_ref="Go")
+        cmd = s.build_command(profile, request)
+        assert cmd == ["codex", "exec", "Go"]
+
+    def test_suppress_default_model_flag_keeps_explicit_request_model(self) -> None:
+        s = CodexCliStrategy()
+        profile = _make_profile(
+            command_template=["codex", "exec"],
+            default_model="qwen/qwen3.6-plus:free",
+        )
+        profile.command_behavior = {"suppress_default_model_flag": True}
+        request = _make_request(
+            instruction_ref="Go",
+            parameters={"model": "qwen/qwen3.6-plus:free"},
+        )
+        cmd = s.build_command(profile, request)
+        assert cmd == ["codex", "exec", "-m", "qwen/qwen3.6-plus:free", "Go"]
+
 
 class TestCodexCliShapeEnvironment:
     def test_passes_through_codex_keys(self) -> None:

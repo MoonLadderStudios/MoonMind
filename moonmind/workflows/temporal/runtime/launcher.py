@@ -687,7 +687,17 @@ class ManagedRuntimeLauncher:
             secret_resolver=AsyncDictSecretResolver()
         )
 
-        env_overrides, mat_cmd = await materializer.materialize(profile)
+        runtime_support_dir = None
+        if resolved_workspace_path is not None:
+            runtime_support_dir = str(
+                (Path(resolved_workspace_path).resolve().parent / ".moonmind").resolve()
+            )
+
+        env_overrides, mat_cmd = await materializer.materialize(
+            profile,
+            workspace_path=resolved_workspace_path,
+            runtime_support_dir=runtime_support_dir,
+        )
         # Update profile with the materialized command template so build_command uses it
         profile.command_template = mat_cmd
 

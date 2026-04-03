@@ -598,6 +598,71 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "account_label": "Claude Code via MiniMax (auto-seeded)",
         })
 
+    if os.environ.get("OPENROUTER_API_KEY"):
+        _DEFAULT_PROFILES.append({
+            "profile_id": "codex_openrouter_qwen36_plus",
+            "runtime_id": "codex_cli",
+            "provider_id": "openrouter",
+            "provider_label": "OpenRouter",
+            "default_model": "qwen/qwen3.6-plus:free",
+            "credential_source": ProviderCredentialSource.SECRET_REF,
+            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+            "secret_refs": {
+                "provider_api_key": "env://OPENROUTER_API_KEY",
+            },
+            "clear_env_keys": [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "OPENROUTER_API_KEY",
+            ],
+            "env_template": {
+                "OPENROUTER_API_KEY": {
+                    "from_secret_ref": "provider_api_key",
+                },
+            },
+            "file_templates": [
+                {
+                    "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                    "format": "toml",
+                    "merge_strategy": "replace",
+                    "content_template": {
+                        "model_provider": "openrouter",
+                        "profile": "openrouter_qwen36_plus",
+                        "model_providers": {
+                            "openrouter": {
+                                "name": "OpenRouter",
+                                "base_url": "https://openrouter.ai/api/v1",
+                                "env_key": "OPENROUTER_API_KEY",
+                                "wire_api": "responses",
+                            },
+                        },
+                        "profiles": {
+                            "openrouter_qwen36_plus": {
+                                "model_provider": "openrouter",
+                                "model": "qwen/qwen3.6-plus:free",
+                            },
+                        },
+                    },
+                    "permissions": "0600",
+                },
+            ],
+            "home_path_overrides": {
+                "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+            },
+            "command_behavior": {
+                "suppress_default_model_flag": True,
+            },
+            "max_parallel_runs": 4,
+            "cooldown_after_429_seconds": 300,
+            "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
+            "max_lease_duration_seconds": 7200,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Codex CLI via OpenRouter (auto-seeded)",
+        })
+
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
@@ -656,10 +721,21 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     secret_refs=profile_def.get("secret_refs"),
                     clear_env_keys=profile_def.get("clear_env_keys"),
                     env_template=profile_def.get("env_template"),
-                    max_parallel_runs=1,
-                    cooldown_after_429_seconds=900,
-                    rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                    file_templates=profile_def.get("file_templates"),
+                    home_path_overrides=profile_def.get("home_path_overrides"),
+                    command_behavior=profile_def.get("command_behavior"),
+                    max_parallel_runs=profile_def.get("max_parallel_runs", 1),
+                    cooldown_after_429_seconds=profile_def.get(
+                        "cooldown_after_429_seconds", 900
+                    ),
+                    rate_limit_policy=profile_def.get(
+                        "rate_limit_policy",
+                        ManagedAgentRateLimitPolicy.BACKOFF,
+                    ),
                     enabled=True,
+                    max_lease_duration_seconds=profile_def.get(
+                        "max_lease_duration_seconds", 7200
+                    ),
                 )
                 session.add(profile)
                 seeded.append(profile_def["runtime_id"])
