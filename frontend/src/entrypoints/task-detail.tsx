@@ -944,7 +944,7 @@ function renderMissingTaskRunCopy(state: MissingTaskRunState): string {
 export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
-  const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
+  const detailPoll = useMemo(() => cfg?.pollIntervalsMs?.detail ?? 2000, [cfg?.pollIntervalsMs?.detail]);
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
