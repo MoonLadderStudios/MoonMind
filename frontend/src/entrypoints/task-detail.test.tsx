@@ -723,6 +723,26 @@ describe('LiveLogsPanel', () => {
     expect(document.querySelectorAll('[data-stream]').length).toBe(2);
   });
 
+  it('does not auto-scroll the page when live logs update', async () => {
+    const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+    mockFetchSequence(activeExecution, activeSummary, 'first from artifact\n');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    const es = MockEventSource.instances[0]!;
+    scrollIntoViewSpy.mockClear();
+
+    act(() => es.triggerOpen());
+    act(() => es.triggerLogChunk({ sequence: 1, stream: 'stdout', text: 'live line\n' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/live line/)).toBeTruthy();
+    });
+    expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+  });
+
   it('does not create EventSource for ended runs', async () => {
     mockFetchSequence(terminalExecution, endedSummary, 'final output\n');
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
