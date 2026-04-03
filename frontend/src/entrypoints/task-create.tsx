@@ -1961,11 +1961,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
 
         <div className="actions">
-<<<<<<< HEAD
-          <button type="submit" className="queue-submit-primary" aria-busy={isSubmitting}>
-=======
           <button type="submit" className="queue-submit-primary" aria-disabled={isSubmitting} aria-busy={isSubmitting}>
->>>>>>> ce567672 (Address PR feedback for #1176: Use aria-disabled and aria-busy on submit buttons)
             Create
           </button>
         </div>
@@ -1983,6 +1979,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
 mountPage(TaskCreatePage);
 
+
+mountPage(TaskCreatePage);
+ </div>
+  );
+}
 
 mountPage(TaskCreatePage);
  </div>
