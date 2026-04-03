@@ -44,6 +44,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip uv
         uv pip install --system -e .[tests]
+    - name: Set up Node.js for UI build
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install Node dependencies
+      run: npm ci
+    - name: Build frontend assets for backend tests
+      run: npm run ui:build
     - name: Run pytest unit tests
       env:
         GITHUB_TOKEN: ${{ github.token }}
