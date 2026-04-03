@@ -546,7 +546,7 @@ class TemporalExecutionService:
             integration=integration,
         )
         stmt = stmt.order_by(
-            TemporalExecutionCanonicalRecord.started_at.desc(),
+            TemporalExecutionCanonicalRecord.updated_at.desc(),
             TemporalExecutionCanonicalRecord.workflow_id.desc(),
         )
         stmt = stmt.offset(offset).limit(page_size + 1)

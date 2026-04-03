@@ -257,6 +257,84 @@ def test_describe_execution_source_temporal_syncs_projection(client) -> None:
         )
 
 
+def test_describe_execution_source_temporal_keeps_updated_at_stable_while_refreshing_freshness(
+    client,
+) -> None:
+    test_client, service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.client.fetch_workflow_execution"
+        ) as mock_fetch,
+        patch("api_service.core.sync.sync_execution_projection") as mock_sync,
+        patch(
+            "api_service.api.routers.executions.TemporalClientAdapter"
+        ) as mock_adapter_cls,
+    ):
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+        mock_fetch.return_value = AsyncMock()
+
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from api_service.db.models import MoonMindWorkflowState
+
+        semantic_updated_at = datetime(2026, 3, 28, 0, 0, 2, tzinfo=UTC)
+        refreshed_at_1 = datetime(2026, 3, 28, 0, 0, 4, tzinfo=UTC)
+        refreshed_at_2 = datetime(2026, 3, 28, 0, 0, 6, tzinfo=UTC)
+
+        def _record(last_synced_at: datetime) -> SimpleNamespace:
+            record = SimpleNamespace()
+            record.workflow_id = "mm:wf-123"
+            record.run_id = "run-1"
+            record.namespace = "moonmind"
+            record.workflow_type = SimpleNamespace(value="MoonMind.Run")
+            record.state = MoonMindWorkflowState.EXECUTING
+            record.close_status = None
+            record.owner_id = "user-123"
+            record.owner_type = SimpleNamespace(value="user")
+            record.search_attributes = {"mm_state": "executing", "mm_entry": "run"}
+            record.memo = {"title": "Task", "summary": "Running"}
+            record.artifact_refs = []
+            record.entry = "run"
+            record.created_at = semantic_updated_at
+            record.started_at = semantic_updated_at
+            record.updated_at = semantic_updated_at
+            record.last_synced_at = last_synced_at
+            record.closed_at = None
+            record.integration_state = None
+            record.parameters = {}
+            return record
+
+        service.describe_execution.side_effect = [
+            _record(refreshed_at_1),
+            _record(refreshed_at_2),
+        ]
+
+        first = test_client.get("/api/executions/mm:wf-123?source=temporal")
+        second = test_client.get("/api/executions/mm:wf-123?source=temporal")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["updatedAt"] == semantic_updated_at.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert second.json()["updatedAt"] == semantic_updated_at.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert first.json()["refreshedAt"] == refreshed_at_1.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert second.json()["refreshedAt"] == refreshed_at_2.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert mock_sync.await_count == 2
+
+
 def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     test_client, service, user, _mock_session = client
 
