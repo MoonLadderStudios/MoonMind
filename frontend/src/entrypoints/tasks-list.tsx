@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatTaskSkills } from '../utils/formatters';
+import { formatRuntime, formatTaskSkills } from '../utils/formatters';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
@@ -473,7 +473,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                             <code>{row.taskId}</code>
                           </a>
                         </td>
-                        <td>{row.targetRuntime || '—'}</td>
+                        <td>{formatRuntime(row.targetRuntime)}</td>
                         <td>{formatTaskSkills(row.taskSkills, row.targetSkill)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
@@ -504,7 +504,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         <p className="queue-card-meta">
                           <code>{row.taskId}</code>
                           {` · ${
-                            [row.targetRuntime, row.targetSkill, row.workflowType].filter(Boolean).join(' · ') || 'Temporal task'
+                            [formatRuntime(row.targetRuntime), row.targetSkill, row.workflowType].filter(Boolean).join(' · ') || 'Temporal task'
                           }`}
                         </p>
                       </div>
@@ -523,7 +523,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Runtime</dt>
-                        <dd>{row.targetRuntime || '—'}</dd>
+                        <dd>{formatRuntime(row.targetRuntime)}</dd>
                       </div>
                       <div>
                         <dt>Skill</dt>

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
+import { formatRuntime } from '../utils/formatters';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 
@@ -1205,7 +1206,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             <Card label="Source">Temporal</Card>
             <Card label="Workflow Type">{execution.workflowType || '—'}</Card>
             <Card label="Entry">{execution.entry || '—'}</Card>
-            {execution.targetRuntime ? <Card label="Runtime">{execution.targetRuntime}</Card> : null}
+            {execution.targetRuntime ? <Card label="Runtime">{formatRuntime(execution.targetRuntime)}</Card> : null}
             {execution.model ? (
               <Card label="Model">
                 <code className="text-xs">{execution.model}</code>

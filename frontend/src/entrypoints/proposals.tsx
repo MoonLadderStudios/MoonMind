@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { formatTaskSkills } from '../utils/formatters';
+import { formatRuntime, formatTaskSkills } from '../utils/formatters';
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
@@ -291,7 +291,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                             <code>{row.id.split('-').pop()}</code>
                           </a>
                         </td>
-                        <td>{row.taskPreview?.runtimeMode || '—'}</td>
+                        <td>{formatRuntime(row.taskPreview?.runtimeMode)}</td>
                         <td>{formatTaskSkills(row.taskPreview?.taskSkills, row.taskPreview?.skillId)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
@@ -343,7 +343,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                         <p className="queue-card-meta">
                           <code>{row.id}</code>
                           {` · ${
-                            [row.taskPreview?.runtimeMode, row.taskPreview?.skillId].filter(Boolean).join(' · ') || 'Proposal'
+                            [formatRuntime(row.taskPreview?.runtimeMode), row.taskPreview?.skillId].filter(Boolean).join(' · ') || 'Proposal'
                           }`}
                         </p>
                       </div>
@@ -362,7 +362,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Runtime</dt>
-                        <dd>{row.taskPreview?.runtimeMode || '—'}</dd>
+                        <dd>{formatRuntime(row.taskPreview?.runtimeMode)}</dd>
                       </div>
                       <div>
                         <dt>Skill</dt>
