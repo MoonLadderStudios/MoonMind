@@ -1955,7 +1955,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
         <div className="actions">
           <button type="submit" className="queue-submit-primary" disabled={isSubmitting}>
-            {isSubmitting ? 'Submitting...' : 'Create'}
+            Create
           </button>
         </div>
 
