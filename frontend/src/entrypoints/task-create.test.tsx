@@ -348,14 +348,22 @@ describe('Task Create Entrypoint', () => {
   });
 
   it('defaults publish mode to none when selecting pr-resolver skills', async () => {
+    type MockInitialData = {
+      dashboardConfig: {
+        system: {
+          defaultPublishMode: string;
+        };
+      };
+    };
+
     const payload: BootPayload = {
       ...mockPayload,
       initialData: {
-        ...(mockPayload.initialData as any),
+        ...(mockPayload.initialData as MockInitialData),
         dashboardConfig: {
-          ...(mockPayload.initialData as any).dashboardConfig,
+          ...(mockPayload.initialData as MockInitialData).dashboardConfig,
           system: {
-            ...(mockPayload.initialData as any).dashboardConfig.system,
+            ...(mockPayload.initialData as MockInitialData).dashboardConfig.system,
             defaultPublishMode: 'pr',
           },
         },
@@ -368,7 +376,7 @@ describe('Task Create Entrypoint', () => {
     expect(primaryStep).not.toBeNull();
 
     const publishSelect = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
-    expect(publishSelect.value).toBe((payload.initialData as any).dashboardConfig.system.defaultPublishMode);
+    expect(publishSelect.value).toBe((payload.initialData as MockInitialData).dashboardConfig.system.defaultPublishMode);
     fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
       target: { value: 'pr-resolver' },
     });
