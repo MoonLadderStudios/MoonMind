@@ -1519,12 +1519,41 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     const normalizedTaskTool = primaryStepTool;
 
+    // Derive title from feature request when a preset is applied
+    const explicitTitle = ((): string | undefined => {
+      if (!templateFeatureRequest.trim()) {
+        return undefined;
+      }
+      const firstLine = templateFeatureRequest.split('\n')[0].trim();
+      if (!firstLine) {
+        return undefined;
+      }
+      // Strip markdown heading prefix (e.g., "# Title" -> "Title")
+      return firstLine.replace(/^#+\s*/, '').trim() || undefined;
+    })();
+
+    // Determine skill: use template slug when a preset is applied without explicit skill selection
+    const effectiveSkillId = ((): string => {
+      if (hasExplicitSkillSelection(primarySkillId)) {
+        return primarySkillId;
+      }
+      if (appliedTemplates.length > 0) {
+        const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
+        return lastTemplate.slug;
+      }
+      return primarySkillId;
+    })();
+
+    // Only include skills array when we have an explicit skill or a template slug
+    const shouldIncludeSkills = hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0;
+
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructions,
       tool: normalizedTaskTool,
       skill: primaryStepSkill,
-      ...(hasExplicitSkillSelection(primarySkillId) ? { skills: [primarySkillId] } : {}),
+      ...(shouldIncludeSkills ? { skills: [effectiveSkillId] } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
+      ...(explicitTitle ? { title: explicitTitle } : {}),
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
