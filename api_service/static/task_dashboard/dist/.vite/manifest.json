@@ -65,7 +65,7 @@
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-ClGz-DgU.js",
+    "file": "assets/proposals-DyjYx6Zl.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
@@ -133,7 +133,7 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-C2T2Y8Db.js",
+    "file": "assets/tasks-list-BEi98dqr.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
