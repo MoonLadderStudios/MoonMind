@@ -590,10 +590,9 @@ describe("Task Create Entrypoint", () => {
     const uploadCall = fetchSpy.mock.calls
       .filter(([url]) => String(url) === "/api/artifacts/art-001/content")
       .at(-1);
-    expect(uploadCall?.[1]?.headers).toEqual(
-      expect.objectContaining({
-        "Content-Type": "application/json; charset=utf-8",
-      }),
+    const uploadHeaders = new Headers(uploadCall?.[1]?.headers);
+    expect(uploadHeaders.get("content-type")).toBe(
+      "application/json; charset=utf-8",
     );
     expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
       repository: "MoonLadderStudios/MoonMind",
@@ -647,7 +646,10 @@ describe("Task Create Entrypoint", () => {
                   "http://localhost:9000/moonmind-temporal-artifacts/demo-presigned-upload",
                 expires_at: "2026-04-02T00:00:00Z",
                 max_size_bytes: 100000,
-                required_headers: {},
+                required_headers: {
+                  "content-type": "text/plain",
+                  "x-amz-server-side-encryption": "AES256",
+                },
               },
             }),
           } as Response);
@@ -656,6 +658,9 @@ describe("Task Create Entrypoint", () => {
           url ===
           "http://localhost:9000/moonmind-temporal-artifacts/demo-presigned-upload"
         ) {
+          const headers = new Headers(init?.headers);
+          expect(headers.get("content-type")).toBe("text/plain");
+          expect(headers.get("x-amz-server-side-encryption")).toBe("AES256");
           return Promise.resolve({
             ok: true,
             text: async () => "",

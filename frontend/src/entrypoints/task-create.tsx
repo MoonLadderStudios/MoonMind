@@ -663,12 +663,13 @@ async function createInputArtifact(
 
   let uploadResponse: Response;
   try {
+    const uploadHeaders = new Headers(requiredHeaders);
+    if (!uploadHeaders.has("content-type")) {
+      uploadHeaders.set("content-type", "application/json; charset=utf-8");
+    }
     uploadResponse = await fetch(uploadUrl, {
       method: "PUT",
-      headers: {
-        ...requiredHeaders,
-        "Content-Type": "application/json; charset=utf-8",
-      },
+      headers: uploadHeaders,
       body,
     });
   } catch (error) {
