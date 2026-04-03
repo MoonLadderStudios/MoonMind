@@ -60,7 +60,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 | Component | Role |
 | --- | --- |
-| **API Service** | FastAPI OpenAI-compatible endpoints, MCP server, and job queue API. |
+| **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, and external integrations. |
 | **Mission Control** | Operational dashboard for managing tasks and reviewing artifacts. |

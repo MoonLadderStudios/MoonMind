@@ -1,8 +1,10 @@
 # MoonMind Memory Architecture (Desired State)
 
 Status: Proposed
-Last Updated: 2026-02-16
-Scope: Chat, RAG, Mission Control (agent queue), Spec workflow, system
+Last Updated: 2026-04-02
+Scope: Chat, RAG, Mission Control (task and execution surfaces), Spec workflow, system
+
+This desired-state document now assumes MoonMind's current Temporal-first bridge architecture. Older queue/Celery terminology should be treated as historical only, not as the current execution substrate.
 
 ## 1) Goals
 
@@ -25,10 +27,10 @@ Non-goals:
 
 MoonMind already has the core primitives we will extend:
 
-- **Document retrieval (RAG)**: LlamaIndex + Qdrant powering chat and `/context`.
-- **Durable execution state**: Postgres tables for spec workflows, system runs, and agent queue jobs.
-- **Durable artifacts**: filesystem artifact roots for workflow runs and agent jobs.
-- **Background jobs**: Celery + RabbitMQ for orchestration and asynchronous processing.
+- **Document retrieval (RAG)**: LlamaIndex + Qdrant powering chat, `/context`, and related retrieval flows.
+- **Durable execution state**: Temporal-backed workflow executions plus Postgres-backed execution/projection records used by Mission Control and execution APIs.
+- **Durable artifacts and run evidence**: S3-compatible workflow artifacts plus managed-run observability artifacts and workspace-backed log spools.
+- **Background orchestration**: Temporal workflows and activities running across specialized worker fleets.
 
 This architecture does not replace these primitives. It adds a thin “memory layer” that:
 1) reads from them, and
@@ -54,8 +56,8 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 **Question:** “What happened last time we tried something like this?”
 
 **Source of truth:**
-- Postgres run/job rows + lifecycle/event streams + timestamps.
-- Artifact store for logs/patches/test results.
+- Temporal-backed execution state plus Postgres execution/projection rows, timestamps, and related metadata.
+- Artifact storage and managed-run observability artifacts for logs, patches, diagnostics, and test results.
 
 **Derived retrieval indexes (not sources of truth):**
 - **Run Digests**: short structured summaries of intent/result/changes/decisions/gotchas/next steps.
@@ -63,7 +65,7 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 
 **Storage:**
 - Digests and fix patterns are embedded and indexed in Qdrant (never raw logs).
-- Every digest links back to evidence: run/job IDs, commits/PRs, artifact paths.
+- Every digest links back to evidence: `workflowId`, `taskRunId` when applicable, commits/PRs, and artifact refs.
 
 ### Plane C — Long-Term Memory (Mem0)
 
@@ -109,21 +111,21 @@ Fail-open behavior:
 
 ## 5) Write Path: Turning Runs Into Memory
 
-Writeback is automatic, async-first, and idempotent by run/job ID.
+Writeback is automatic, async-first, and idempotent by execution identity (`workflowId`, and `taskRunId` for managed-run observability when applicable).
 
 ### 5.1 On run start
 - If linked to Beads: claim the work item with `run_ref`.
-- Record minimal start metadata in the existing run/job tables (baseline behavior).
+- Record minimal start metadata in the Temporal-backed execution row/projection and related run metadata.
 
 ### 5.2 During execution
-- Append events to existing run/job event streams (status transitions, key tool calls).
+- Persist lifecycle state through Temporal history, execution projections, and managed-run observability records as appropriate.
 - Store large outputs to artifacts (logs, patches, test output).
 
 ### 5.3 On run finish
 1) **Generate a Run Digest (Plane B index)**
 - Structured summary:
   - intent, outcome, key changes, key decisions, gotchas, next steps
-- Link to evidence (run/job id, commit/PR, artifact refs).
+- Link to evidence (`workflowId`, `taskRunId` when present, commit/PR, artifact refs).
 - Embed + upsert into Qdrant.
 
 2) **Update Fix Patterns (Plane B procedural memory)**
@@ -141,10 +143,10 @@ Writeback is automatic, async-first, and idempotent by run/job ID.
 ## 6) Storage Contracts
 
 ### 6.1 Sources of truth
-- **Postgres**: workflow runs, task states, system runs, agent queue jobs, event logs.
+- **Postgres**: Temporal-backed execution records/projections, workflow support tables, system runs, and related event metadata.
 - **Artifact store**:
-  - workflow artifacts under `var/artifacts/workflow_runs/<run_id>/`
-  - agent job artifacts under `var/artifacts/agent_jobs/<job_id>/`
+  - workflow artifacts under `var/artifacts/<scope>/<run_id>/`
+  - managed-run workspace and observability artifacts under `/work/agent_jobs/<job_id>/...` in worker containers
 - **Git**: code + Beads planning state.
 
 ### 6.2 Qdrant: retrieval indexes (not truth)
@@ -161,7 +163,7 @@ Payload keys (minimum):
 Required metadata on every Mem0 entry:
 - `namespace_id`, `repo`, `scope` (`project | team | user`)
 - `review_state` (`draft | approved | deprecated`)
-- `provenance` pointers (run/job IDs, commits, doc refs)
+- `provenance` pointers (`workflowId`, `taskRunId` when applicable, commits, doc refs)
 
 ## 7) Integration Surfaces
 

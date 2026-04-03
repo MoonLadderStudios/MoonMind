@@ -2,55 +2,53 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-01
+Last Updated: 2026-04-02
 
 ## 1. Purpose
 
-Define the REST API surface for creating, monitoring, and observing MoonMind task runs. The API acts as a translation layer between the Mission Control UI and the Temporal Workflow engine: incoming HTTP requests are normalized into the canonical task payload and dispatched as `MoonMind.Run` Temporal Workflow Executions.
+Define the REST API surfaces used to create, monitor, and observe MoonMind task runs in the Temporal-first architecture.
+
+MoonMind now splits this responsibility across:
+
+- **`/api/executions`** for Temporal-backed execution lifecycle operations
+- **`/api/task-runs`** for managed-run observability (logs, diagnostics, live follow)
+
+Mission Control still presents these executions as **tasks** in the product UI, but the active lifecycle API is execution-oriented.
 
 ## 2. API Surface
 
-Task runs are served by two routers:
+Task runs are served by two active router families:
 
-- **`/api/queue/jobs`** — Job lifecycle (create, list, detail, update, cancel, resubmit, events, artifacts, attachments).
-- **`/api/task-runs`** — Artifact-backed observability endpoints for Temporal-backed task runs.
+- **`/api/executions`** — Execution lifecycle for Temporal-backed work.
+- **`/api/task-runs`** — Artifact-backed managed-run observability.
 
-### 2.1 Job Lifecycle (`/api/queue/jobs`)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/queue/jobs` | Create a new task run from canonical payload |
-| `POST` | `/api/queue/jobs/with-attachments` | Create with file attachments (multipart) |
-| `GET`  | `/api/queue/jobs` | List task runs (filterable by `type`, `limit`) |
-| `GET`  | `/api/queue/jobs/{jobId}` | Get task run detail |
-| `PUT`  | `/api/queue/jobs/{jobId}` | Update a queued task run before execution |
-| `POST` | `/api/queue/jobs/{jobId}/resubmit` | Clone a terminal task run into a new queued run |
-| `POST` | `/api/queue/jobs/{jobId}/cancel` | Cancel a running or queued task run |
-| `GET`  | `/api/queue/jobs/{jobId}/events` | List run events |
-| `GET`  | `/api/queue/jobs/{jobId}/events/stream` | SSE stream of run events |
-| `GET`  | `/api/queue/jobs/{jobId}/artifacts` | List run artifacts |
-| `GET`  | `/api/queue/jobs/{jobId}/artifacts/{artifactId}/download` | Download an artifact |
-| `GET`  | `/api/queue/jobs/{jobId}/attachments` | List run attachments |
-| `GET`  | `/api/queue/jobs/{jobId}/attachments/{attachmentId}/download` | Download an attachment |
-| `GET`  | `/api/queue/jobs/{jobId}/finish-summary` | Get completion summary |
-
-### 2.2 Worker Callbacks (`/api/queue`)
-
-These endpoints are authenticated with worker tokens and used by agent workers during execution.
+### 2.1 Execution Lifecycle (`/api/executions`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/queue/jobs/claim` | Worker claims a queued job |
-| `POST` | `/api/queue/jobs/{jobId}/heartbeat` | Worker heartbeat while executing |
-| `POST` | `/api/queue/jobs/{jobId}/runtime-state` | Worker reports runtime state |
-| `POST` | `/api/queue/jobs/{jobId}/complete` | Worker marks job succeeded |
-| `POST` | `/api/queue/jobs/{jobId}/fail` | Worker marks job failed |
-| `POST` | `/api/queue/jobs/{jobId}/cancel/ack` | Worker acknowledges cancellation |
-| `POST` | `/api/queue/jobs/{jobId}/recover` | Worker requests recovery |
+| `POST` | `/api/executions` | Create/start a Temporal-backed execution |
+| `GET`  | `/api/executions` | List executions visible to the caller |
+| `GET`  | `/api/executions/{workflowId}` | Get execution detail |
+| `POST` | `/api/executions/{workflowId}/update` | Apply a workflow update such as input edits or rerun requests |
+| `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve |
+| `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution |
 
-### 2.3 Observability (`/api/task-runs`)
+### 2.2 Auxiliary Execution Routes (`/api/executions`)
 
-These endpoints expose read-only observability for Temporal-backed runs. The legacy `/live-session*` family used by terminal-session experiments is not part of the active Phase 6 API surface.
+These routes extend the main lifecycle surface for specific execution types:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/executions/{workflowId}/manifest-status` | Fetch manifest-run status summary |
+| `GET` | `/api/executions/{workflowId}/manifest-nodes` | Page manifest node state |
+| `POST` | `/api/executions/{workflowId}/integration` | Register/update integration monitoring state |
+| `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results |
+| `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
+| `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters |
+
+### 2.3 Managed-Run Observability (`/api/task-runs`)
+
+These endpoints expose artifact-backed observability for managed runs. The legacy `/live-session*` family is not part of the active API.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -61,7 +59,22 @@ These endpoints expose read-only observability for Temporal-backed runs. The leg
 | `GET` | `/api/task-runs/{taskRunId}/logs/merged` | Read the merged log view or synthesized fallback |
 | `GET` | `/api/task-runs/{taskRunId}/diagnostics` | Read the diagnostics artifact |
 
-### 2.4 Observability Behavior
+## 3. Identity Model
+
+MoonMind currently uses three related identifiers around task runs:
+
+- **`workflowId`** — the canonical durable execution identifier for `/api/executions`
+- **`taskId`** — the task-oriented product identifier; for Temporal-backed work, `taskId == workflowId`
+- **`taskRunId`** — the managed-run observability record identifier used by `/api/task-runs`
+
+The normal control-plane flow is:
+
+1. Create or list work through `/api/executions`
+2. Use `workflowId` for lifecycle actions and detail fetches
+3. Read `taskRunId` from execution detail when managed-run observability is available
+4. Use `/api/task-runs/{taskRunId}` for logs, diagnostics, and live follow
+
+## 4. Observability Behavior
 
 These routes are artifact-first:
 
@@ -70,73 +83,13 @@ These routes are artifact-first:
 - `logs/stdout`, `logs/stderr`, and `logs/merged` remain available for historical and terminal runs.
 - `diagnostics` exposes the persisted supervision payload for postmortem inspection.
 
-Legacy live-session and terminal-handoff routes should be treated as deprecated migration references only. See [Live Logs](../ManagedAgents/LiveLogs.md) and [Live Task Management](../Temporal/LiveTaskManagement.md).
+Full log bodies and diagnostics come from managed-run artifact storage and spool files, not from workflow history or raw Temporal event history.
 
-## 3. Canonical Task Payload
+## 5. Request Model Posture
 
-Tasks submitted via `POST /api/queue/jobs` are normalized into the canonical payload shape defined in `moonmind.workflows.agent_queue.task_contract`. The contract supports three ingest formats (`task`, `codex_exec`, `codex_skill`), all of which are normalized into the same canonical structure.
+`POST /api/executions` is the active create surface. It accepts the execution-oriented request model and, during migration, may also normalize task-shaped compatibility payloads into the same Temporal-backed execution contract.
 
-```json
-{
-  "repository": "owner/repo",
-  "requiredCapabilities": ["git", "codex"],
-  "targetRuntime": "codex",
-  "auth": {
-    "repoAuthRef": null,
-    "publishAuthRef": null
-  },
-  "task": {
-    "instructions": "Implement feature and run tests",
-    "skill": {
-      "id": "auto",
-      "args": {}
-    },
-    "runtime": {
-      "mode": "codex",
-      "model": null,
-      "effort": null
-    },
-    "git": {
-      "startingBranch": null,
-      "targetBranch": null
-    },
-    "publish": {
-      "mode": "pr",
-      "prBaseBranch": null,
-      "commitMessage": null,
-      "prTitle": null,
-      "prBody": null
-    },
-    "proposeTasks": true,
-    "steps": [],
-    "container": null,
-    "proposalPolicy": null
-  }
-}
-```
-
-### 3.1 Key Payload Sections
-
-- **`task.runtime`** — Selects the agent runtime (`codex`, `gemini`, `claude`, `jules`) and optional model/effort overrides.
-- **`task.skill`** — Selects a skill from the skill catalog. `"auto"` lets the system pick based on instructions.
-- **`task.publish`** — Controls how results are published (`pr`, `branch`, `none`). Certain skills force specific publish modes.
-- **`task.steps`** — Optional ordered list of execution steps, each with its own instructions and optional skill override. Steps receive sequential IDs (`step-1`, `step-2`, …).
-- **`task.container`** — Optional custom container execution with `image`, `command`, `env`, and `timeout_seconds`. Mutually exclusive with `task.steps`.
-- **`task.proposalPolicy`** — Controls task proposal emission targets (`project`, `moonmind`) and per-target limits.
-- **`task.proposeTasks`** — Whether the worker should generate follow-up task proposals.
-- **`requiredCapabilities`** — Auto-populated from runtime, publish mode, skill requirements, and container settings.
-
-### 3.2 Legacy Format Support
-
-The contract includes backward-compatible normalization for:
-
-- **`codex_exec`** jobs — Flat payloads with top-level `instruction`, `publish`, and `codex` blocks.
-- **`codex_skill`** jobs — Payloads with `skillId` and `inputs` blocks from the older skill execution API.
-- **Top-level `targetRuntime`** — Lifted into `task.runtime.mode` during normalization.
-
-## 4. Temporal Dispatch
-
-Once the payload is normalized, the system creates a `MoonMind.Run` Temporal Workflow Execution. Activity execution is dispatched across specialized Temporal Task Queues grouped by worker fleet:
+Execution requests ultimately dispatch into `MoonMind.Run` or another allowed workflow type, then fan out across Temporal worker fleets grouped by capability and security boundary:
 
 | Fleet | Task Queue | Capabilities | Purpose |
 |-------|-----------|--------------|---------|
@@ -149,10 +102,16 @@ Once the payload is normalized, the system creates a `MoonMind.Run` Temporal Wor
 
 The `activity_catalog.py` module defines the full routing contract including per-activity timeout and retry policies.
 
-## 5. Related Documentation
+## 6. Legacy Queue Posture
 
+The legacy `/api/queue/jobs` lifecycle routes and `/api/queue` worker callback routes are historical migration references only. They are not the active task-run lifecycle API, and the execution router explicitly rejects falling back to the old queue substrate when Temporal submission is disabled.
+
+## 7. Related Documentation
+
+- [../Api/ExecutionsApiContract.md](../Api/ExecutionsApiContract.md) — Direct execution lifecycle contract
 - [TaskArchitecture.md](TaskArchitecture.md) — Overall task system design
-- [TasksStepSystem.md](TasksStepSystem.md) — Multi-step task execution
+- [../UI/MissionControlArchitecture.md](../UI/MissionControlArchitecture.md) — Task-oriented UI over execution APIs
 - [TaskProposalSystem.md](TaskProposalSystem.md) — Task proposal generation
 - [TaskCancellation.md](TaskCancellation.md) — Cancellation flow
-- [TemporalArchitecture.md](../Temporal/TemporalArchitecture.md) — Temporal infrastructure
+- [../ManagedAgents/LiveLogs.md](../ManagedAgents/LiveLogs.md) — Managed-run log and observability design
+- [../Temporal/TemporalArchitecture.md](../Temporal/TemporalArchitecture.md) — Temporal infrastructure

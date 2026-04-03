@@ -4,6 +4,8 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 
 This document is the top-level architectural overview. It covers the major subsystems, how they connect, and where to find deeper documentation. It reflects the **current and intended near-term** state of the project.
 
+> **Migration posture:** MoonMind is currently in a bridge state. Core execution is Temporal-native and live for major paths, while task-oriented product routes, compatibility APIs, and a few projection/read-model layers still remain around that execution core.
+
 ---
 
 ## Architecture at a Glance
@@ -36,7 +38,7 @@ flowchart LR
 
 Key layers:
 
-* **Control Plane** — API + Mission Control. Authenticates callers, starts workflows, exposes task-oriented surfaces, and serves the operator dashboard.
+* **Control Plane** — API + Mission Control. Authenticates callers, resolves task templates and agent-skill intent, starts workflows, exposes execution and task-oriented surfaces, and serves the operator dashboard.
 * **Execution Plane** — Temporal workers grouped by capability, not by agent brand. Workflows orchestrate; Activities execute side effects.
 * **Data Layer** — A single consolidated Postgres instance, Qdrant for vector retrieval, and MinIO for S3-compatible artifact storage.
 
@@ -48,10 +50,13 @@ Key layers:
 
 The FastAPI-based [API service](../api_service/) is MoonMind's central control plane:
 
-* **Workflow management** — starts Temporal workflows, sends signals/updates/cancellations, queries execution state.
-* **Task compatibility APIs** — exposes `/tasks/*` endpoints that map the user-facing "task" concept onto Temporal workflow executions.
+* **Execution lifecycle APIs** — exposes `/api/executions` for create/list/detail/update/signal/cancel and related Temporal-backed execution operations.
+* **Task-oriented product routes** — serves `/tasks/*` Mission Control routes and compatibility views that present workflow executions as tasks.
+* **Observability APIs** — exposes `/api/task-runs/*` for managed-run log, diagnostics, and live-follow surfaces.
 * **Artifact APIs** — manages artifact metadata, presigned upload/download grants, and artifact-to-execution linkage.
-* **RAG retrieval** — indexes and retrieves vectors via Qdrant for chat and the `/context` MCP endpoint.
+* **Task templates and presets** — serves the task step template catalog used by Mission Control submission flows.
+* **Agent skill resolution** — accepts task/step skill-selection intent and resolves it into immutable `ResolvedSkillSet` snapshot refs for execution.
+* **RAG retrieval** — indexes and retrieves vectors via Qdrant for chat, `/context`, and related retrieval surfaces.
 * **Task Proposals** — stores and surfaces agent-generated task proposals for human review before promotion to executing workflows.
 * **Auth** — optional OIDC via Keycloak, or disabled-auth mode for local development.
 
@@ -61,7 +66,7 @@ Mission Control is MoonMind's purpose-built operator dashboard — a thin, serve
 
 * **Task list** — unified view of workflow executions, with filtering, sorting, and pagination via Temporal Visibility.
 * **Task detail** — execution state, artifact browsing, timeline, and operator actions (pause, resume, cancel, approve, rerun).
-* **Task submission** — form wizard for creating new tasks with runtime/model selection, scheduling, and artifact upload.
+* **Task submission** — form wizard for creating new tasks with runtime/model selection, template expansion, skill selection, scheduling, and artifact upload.
 * **Proposals** — triage queue for reviewing, promoting, or dismissing agent-generated task proposals.
 
 > **Vocabulary rule:** The UI uses **task** as the primary term. "Workflow execution" is reserved for implementation docs and debug views. Temporal Task Queues are never presented as a user-facing queue product.
@@ -82,7 +87,7 @@ See: [Mission Control Architecture](UI/MissionControlArchitecture.md) · [Missio
 * **Schedules** for recurring and deferred task starts.
 * **Timers, retries, signals, updates** for resilient fire-and-forget execution.
 
-The Temporal server runs self-hosted in Docker Compose with PostgreSQL persistence and visibility. It is private-network only — no ports are exposed to the host by default.
+The Temporal server runs self-hosted in Docker Compose with PostgreSQL persistence and visibility. The baseline local compose file publishes `7233:7233` for host tooling and debugging, while workers and the API normally use the internal `temporal-internal` network alias.
 
 See: [Temporal Architecture](Temporal/TemporalArchitecture.md) · [Temporal Platform Foundation](Temporal/TemporalPlatformFoundation.md)
 
@@ -95,7 +100,8 @@ MoonMind keeps a small workflow type catalog:
 | `MoonMind.Run` | Root workflow for all task execution — direct commands, plan-driven execution, and external integrations. |
 | `MoonMind.AgentRun` | Child workflow for true agent-runtime execution (managed and external agents). Started per-step by `MoonMind.Run`. |
 | `MoonMind.ManifestIngest` | Manifest-driven ingestion with graph compilation, fan-out/fan-in, and aggregation. |
-| `MoonMindProviderProfileManagerWorkflow` | Manages provider-profile slot acquisition and release for managed runtimes. |
+| `MoonMind.ProviderProfileManager` | Manages provider-profile slot acquisition, release, and cooldown coordination for managed runtimes. |
+| `MoonMind.OAuthSession` | Manages browser and terminal OAuth session lifecycle for managed runtimes. |
 
 See: [Workflow Type Catalog](Temporal/WorkflowTypeCatalogAndLifecycle.md)
 
@@ -108,6 +114,7 @@ MoonMind's execution model is built on three domain concepts that Temporal does 
   * `agent_runtime` — dispatched as a child `MoonMind.AgentRun` workflow.
 * **Plan** — a DAG of tool invocations (Steps) with explicit dependencies, concurrency policy, and failure mode (`FAIL_FAST` or `CONTINUE`).
 * **Artifact** — large inputs/outputs stored outside workflow history, referenced by `ArtifactRef`.
+* **Agent skill context** — task/step skill-selection intent is resolved by the control plane into immutable `ResolvedSkillSet` refs before runtime launch.
 
 Plans are data, not code. They are validated, stored as artifacts, and interpreted deterministically by the plan executor inside `MoonMind.Run`. Planning itself is "just a tool" — an LLM activity that produces a plan artifact.
 
@@ -207,9 +214,29 @@ See: [Memory Architecture](Memory/MemoryArchitecture.md) · [Memory Research](Me
 
 ## Model Context Protocol
 
-MoonMind implements an MCP server endpoint at `POST /context`. This gives agent runtimes (OpenHands or others) a standardized interface to MoonMind's model routing, RAG, and policy layers — decoupling agent UX from specific model vendors.
+MoonMind exposes two agent-facing HTTP surfaces related to the MCP ecosystem:
 
-See: [Model Context Protocol](ModelContextProtocol.md)
+* **Context-style completion** — `POST /context` provides MoonMind-routed completion with optional RAG enrichment. This is a MoonMind REST JSON contract, not the full MCP streamable transport.
+* **HTTP MCP tools** — `GET /mcp/tools` and `POST /mcp/tools/call` expose tool discovery and invocation over JSON/HTTP for clients that can target an HTTP MCP tool server.
+
+Together these surfaces let agent runtimes consume MoonMind context, retrieval, and tool capabilities without binding directly to one model vendor.
+
+See: [Model Context Protocol](ExternalAgents/ModelContextProtocol.md)
+
+---
+
+## Observability
+
+MoonMind currently uses complementary product-facing and operational observability layers:
+
+* **Execution list/query/count** — Temporal Visibility is the source of truth for Temporal-backed execution list and filter behavior.
+* **Managed-run observability APIs** — `/api/task-runs/*` exposes artifact-backed logs, diagnostics, and SSE live follow for active managed runs.
+* **Mission Control detail views** — task detail pages combine execution state, artifacts, and observability refs into the operator-facing "what happened?" surface.
+* **Operational telemetry** — MoonMind now includes dedicated observability transport code and an OpenTelemetry design, but the OpenTelemetry subsystem is still an active draft rather than a fully locked architecture surface.
+
+Operational telemetry should complement, not replace, Temporal Visibility, Mission Control, or artifact-backed run evidence.
+
+See: [OpenTelemetry System](Observability/OpenTelemetrySystem.md) · [Managed and External Agent Execution Model](Temporal/ManagedAndExternalAgentExecutionModel.md) · [Task Runs API](Tasks/TaskRunsApi.md)
 
 ---
 
