@@ -315,11 +315,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             Live updates
           </label>
           <span className="small">
-            {isFetching && liveUpdates && listEnabled
-              ? 'Refreshing...'
-              : liveUpdates && listEnabled
-                ? `Polling every ${Math.round(listPollMs / 1000)}s`
-                : 'Updates paused to keep selections stable.'}
+            {liveUpdates && listEnabled
+              ? `Polling every ${Math.round(listPollMs / 1000)}s`
+              : 'Updates paused to keep selections stable.'}
           </span>
         </div>
       </div>
