@@ -311,8 +311,8 @@ Do not use `system` annotations to:
 * `no_output_interval` — `Supervisor: no stdout/stderr observed for 30s; process still running.`
 * `warning_deduplicated` — `Supervisor: repeated config warning observed 12 times; suppressing duplicates in live view.`
 * `live_stream_unavailable` — `Supervisor: live streaming unavailable; durable artifact capture continues.`
-* `artifact_fallback` — `Supervisor: merged log view is using artifact-backed fallback.`
-* `chronological_merge_unavailable` — `Supervisor: chronological merged ordering unavailable; showing labeled concatenation fallback.`
+* `artifact_fallback` — `Supervisor: merged log view is using artifact-backed fallback.` (Aspirational)
+* `chronological_merge_unavailable` — `Supervisor: chronological merged ordering unavailable; showing labeled concatenation fallback.` (Aspirational)
 * `termination_requested_timeout` — `Supervisor: process termination requested after timeout.`
 * `termination_requested_cancel` — `Supervisor: process termination requested due to operator cancel.`
 * `termination_requested_rate_limit` — `Supervisor: process termination requested due to live rate-limit detection.`

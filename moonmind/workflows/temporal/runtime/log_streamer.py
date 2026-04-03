@@ -79,9 +79,13 @@ class RuntimeLogStreamer:
             chunks.append(chunk)
             text_content = chunk.decode("utf-8", errors="replace")
             if chunk_callback is not None:
-                callback_result = chunk_callback(stream_name, text_content)
-                if inspect.isawaitable(callback_result):
-                    await callback_result
+                try:
+                    callback_result = chunk_callback(stream_name, text_content)
+                    if inspect.isawaitable(callback_result):
+                        _ = await callback_result
+                except Exception:
+                    # Ignore chunk callback errors so they don't abort log capture
+                    pass
             
             if live_publisher is not None:
                 try:
@@ -103,8 +107,7 @@ class RuntimeLogStreamer:
                 # Accumulate decoded text and split by newlines so that the
                 # parser always receives whole lines, not raw read() chunks
                 # that may straddle a newline boundary.
-                decoded_chunk = chunk.decode("utf-8", errors="replace")
-                _line_buf += decoded_chunk
+                _line_buf += text_content
                 *complete_lines, _line_buf = _line_buf.split("\n")
                 for line in complete_lines:
                     line_with_nl = line + "\n"

@@ -693,7 +693,7 @@ class ManagedRuntimeLauncher:
                             run_id=run_id,
                             workspace_path=resolved_workspace_path,
                             annotation_type="workspace_preparation_skipped",
-                            text="Supervisor: skipped writing CLAUDE.md because the file already exists or is a symlink.",
+                            text="Launcher: skipped writing CLAUDE.md because the file already exists or is a symlink.",
                             metadata={
                                 "source": "launcher",
                                 "target": "CLAUDE.md",
@@ -705,7 +705,7 @@ class ManagedRuntimeLauncher:
                             run_id=run_id,
                             workspace_path=resolved_workspace_path,
                             annotation_type="workspace_preparation_applied",
-                            text="Supervisor: workspace instructions written to CLAUDE.md.",
+                            text="Launcher: workspace instructions written to CLAUDE.md.",
                             metadata={
                                 "source": "launcher",
                                 "target": "CLAUDE.md",
@@ -852,6 +852,7 @@ class ManagedRuntimeLauncher:
                     cwd=resolved_workspace_path,
                 )
         except Exception:
+            self._log_streamer.consume_annotations(run_id)
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:

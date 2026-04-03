@@ -92,6 +92,7 @@ class ManagedRunSupervisor:
             last_no_output_annotation_at = start_time
             first_stdout_seen = False
             first_stderr_seen = False
+            stderr_buffer = ""
             warning_counts: dict[str, int] = {}
             warning_dedup_announced: set[str] = set()
 
@@ -121,7 +122,7 @@ class ManagedRunSupervisor:
                 return any(keyword in lowered for keyword in _WARNING_SUBSTRINGS)
 
             def _handle_stream_chunk(stream_name: str, text: str) -> None:
-                nonlocal first_stdout_seen, first_stderr_seen, last_output_seen_at
+                nonlocal first_stdout_seen, first_stderr_seen, last_output_seen_at, stderr_buffer
                 if not text:
                     return
                 if not text.isspace():
@@ -142,7 +143,17 @@ class ManagedRunSupervisor:
                     )
                 if stream_name != "stderr":
                     return
-                for raw_line in text.splitlines():
+                
+                stderr_buffer += text
+                if "\n" not in stderr_buffer:
+                    return
+                
+                lines = stderr_buffer.split("\n")
+                # The last element is either an empty string (if text ended with \n)
+                # or a partial line that we need to buffer.
+                stderr_buffer = lines.pop()
+                
+                for raw_line in lines:
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -338,8 +349,8 @@ class ManagedRunSupervisor:
                 )
             duration = (datetime.now(tz=UTC) - start_time).total_seconds()
             _record_annotation(
-                annotation_type="diagnostics_written",
-                text="Supervisor: diagnostics bundle persisted.",
+                annotation_type="diagnostics_collection_started",
+                text="Supervisor: persisting diagnostics bundle.",
                 reason="diagnostics",
             )
             annotations = self._log_streamer.consume_annotations(run_id)
@@ -382,6 +393,7 @@ class ManagedRunSupervisor:
 
             return record
         finally:
+            self._log_streamer.consume_annotations(run_id)
             self._active_processes.pop(run_id, None)
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
 
@@ -472,6 +484,7 @@ class ManagedRunSupervisor:
                 finished_at=datetime.now(tz=UTC),
                 error_message="Cancelled (process not found in supervisor)",
             )
+            self._log_streamer.consume_annotations(run_id)
             return
 
         _record_cancel_annotation()
