@@ -630,6 +630,11 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def _format_failure_message(exc: BaseException) -> str:
+    detail = str(exc).strip() or exc.__class__.__name__
+    return f"error: batch-pr-resolver failed: {detail}"
+
+
 async def main() -> int:
     args = _parse_args()
     repo = _resolve_repo(args.repo, args.task_context_path)
@@ -679,6 +684,6 @@ async def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
-    except Exception:
-        print("error: batch-pr-resolver failed. See logs for details.", flush=True)
+    except Exception as exc:
+        print(_format_failure_message(exc), flush=True)
         raise SystemExit(1)

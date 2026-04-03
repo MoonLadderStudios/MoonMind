@@ -520,3 +520,13 @@ def test_build_queue_request_skill_version_passthrough() -> None:
     req = _build_request(module, skill_version="2.3")
     skill = req["payload"]["task"]["skill"]
     assert skill.get("version") == "2.3"
+
+
+def test_format_failure_message_includes_exception_detail() -> None:
+    module = _load_module()
+    format_failure_message = module["_format_failure_message"]
+
+    assert (
+        format_failure_message(RuntimeError("gh auth login required"))
+        == "error: batch-pr-resolver failed: gh auth login required"
+    )
