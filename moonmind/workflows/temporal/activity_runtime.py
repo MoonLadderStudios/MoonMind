@@ -1710,7 +1710,7 @@ class TemporalProposalActivities:
     @staticmethod
     def _resolve_task_instructions(parameters: Mapping[str, Any]) -> str:
         task_node = parameters.get("task")
-        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        task = task_node if isinstance(task_node, Mapping) else {}
 
         instructions = str(
             task.get("instructions") or parameters.get("instructions") or ""

@@ -1234,11 +1234,13 @@ class MoonMindRunWorkflow:
         return {}
 
     def _proposal_generation_requested(self, parameters: Mapping[str, Any]) -> bool:
-        task_payload = self._mapping_value(parameters, "task")
-        task_flag = task_payload.get("proposeTasks")
-        if task_flag is not None:
+        if workflow.patched("run-workflow-nested-propose-tasks"):
+            task_node = parameters.get("task")
+            task_payload = task_node if isinstance(task_node, Mapping) else {}
+            task_flag = task_payload.get("proposeTasks", parameters.get("proposeTasks"))
             return _coerce_bool(task_flag, default=False)
-        return _coerce_bool(parameters.get("proposeTasks"), default=False)
+        else:
+            return _coerce_bool(parameters.get("proposeTasks"), default=False)
 
     def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
         instructions = self._coerce_text(task_payload.get("instructions"))
