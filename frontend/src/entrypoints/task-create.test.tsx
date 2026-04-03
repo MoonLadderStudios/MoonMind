@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
 import { renderWithClient } from '../utils/test-utils';
-import { TaskCreatePage } from './task-create';
+import { resolveObjectiveInstructions, TaskCreatePage } from './task-create';
 
 vi.mock('../lib/navigation', () => ({
   navigateTo: vi.fn(),
@@ -44,9 +44,11 @@ const mockPayload: BootPayload = {
         },
         taskTemplateCatalog: {
           enabled: true,
+          templateSaveEnabled: true,
           list: '/api/task-step-templates',
           detail: '/api/task-step-templates/{slug}',
           expand: '/api/task-step-templates/{slug}:expand',
+          saveFromTask: '/api/task-step-templates/save-from-task',
         },
       },
     },
@@ -55,10 +57,12 @@ const mockPayload: BootPayload = {
 
 describe('Task Create Entrypoint', () => {
   let fetchSpy: MockInstance;
+  let executionResponseOverride: Response | null;
 
   beforeEach(() => {
     window.history.pushState({}, 'Task Create', '/tasks/new');
     vi.mocked(navigateTo).mockReset();
+    executionResponseOverride = null;
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('/api/tasks/skills')) {
@@ -90,6 +94,14 @@ describe('Task Create Entrypoint', () => {
                 latestVersion: '1.2.3',
                 version: '1.2.3',
               },
+              {
+                slug: 'objective-demo',
+                scope: 'global',
+                title: 'Objective Request Demo',
+                description: 'Use template inputs to derive the task objective.',
+                latestVersion: '2.0.0',
+                version: '2.0.0',
+              },
             ],
           }),
         } as Response);
@@ -108,6 +120,27 @@ describe('Task Create Entrypoint', () => {
               {
                 name: 'feature_name',
                 label: 'Feature Name',
+                type: 'text',
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/task-step-templates/objective-demo?scope=global')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: 'objective-demo',
+            scope: 'global',
+            title: 'Objective Request Demo',
+            description: 'Use template inputs to derive the task objective.',
+            latestVersion: '2.0.0',
+            version: '2.0.0',
+            inputs: [
+              {
+                name: 'request',
+                label: 'Request',
                 type: 'text',
                 required: true,
               },
@@ -143,6 +176,34 @@ describe('Task Create Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.startsWith('/api/task-step-templates/objective-demo:expand?scope=global')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: 'tpl:objective-demo:2.0.0:01',
+                title: 'Clarify request',
+                instructions: '',
+                skill: {
+                  id: 'speckit-clarify',
+                  args: { mode: 'objective' },
+                },
+              },
+              {
+                id: 'tpl:objective-demo:2.0.0:02',
+                title: 'Review objective',
+                instructions: 'Review the resulting task objective.',
+              },
+            ],
+            appliedTemplate: {
+              slug: 'objective-demo',
+              version: '2.0.0',
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
       if (url.startsWith('/api/v1/provider-profiles')) {
         const runtimeId = new URL(`http://localhost${url}`).searchParams.get('runtime_id');
         const items =
@@ -160,6 +221,9 @@ describe('Task Create Entrypoint', () => {
         } as Response);
       }
       if (url === '/api/executions') {
+        if (executionResponseOverride) {
+          return Promise.resolve(executionResponseOverride);
+        }
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -167,6 +231,17 @@ describe('Task Create Entrypoint', () => {
             runId: 'run-123',
             namespace: 'moonmind',
             redirectPath: '/tasks/mm:workflow-123?source=temporal',
+          }),
+        } as Response);
+      }
+      if (url === '/api/task-step-templates/save-from-task') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: 'saved-preset',
+            scope: 'personal',
+            title: 'Saved preset',
+            latestVersion: '1.0.0',
           }),
         } as Response);
       }
@@ -215,18 +290,17 @@ describe('Task Create Entrypoint', () => {
   it('submits the queue-shaped Temporal task payload and redirects on success', async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
+    const primaryStep = (await screen.findByText('Step 1 (Primary)')).closest('section');
+    expect(primaryStep).not.toBeNull();
     fireEvent.change(await screen.findByLabelText('Instructions'), {
       target: { value: 'Run end-to-end regression flow.' },
     });
-    fireEvent.change(document.querySelector('input[name="repository"]') as HTMLInputElement, {
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
       target: { value: 'MoonLadderStudios/MoonMind' },
     });
-    fireEvent.change(
-      document.querySelector('input[data-step-field="skillId"][data-step-index="0"]') as HTMLInputElement,
-      {
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
       target: { value: 'speckit-orchestrate' },
-      },
-    );
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -377,6 +451,16 @@ describe('Task Create Entrypoint', () => {
         id: 'tpl:speckit-demo:1.2.3:01',
         title: 'Clarify spec',
         instructions: 'Clarify the {{ inputs.feature_name }} scope.',
+        tool: {
+          type: 'skill',
+          name: 'speckit-clarify',
+          version: '1.0',
+          inputs: { feature: 'Task Create' },
+        },
+        skill: {
+          id: 'speckit-clarify',
+          args: { feature: 'Task Create' },
+        },
       },
       {
         id: 'tpl:speckit-demo:1.2.3:02',
@@ -390,5 +474,77 @@ describe('Task Create Entrypoint', () => {
         version: '1.2.3',
       }),
     ]);
+  });
+
+  it('derives the task objective from feature-request template input aliases', () => {
+    expect(
+      resolveObjectiveInstructions('', '', [
+        {
+          slug: 'objective-demo',
+          version: '2.0.0',
+          appliedAt: '2026-04-03T00:00:00Z',
+          inputs: {
+            request: 'Restore the legacy Create Task objective handling.',
+          },
+          stepIds: [],
+          capabilities: [],
+        },
+      ]),
+    ).toBe('Restore the legacy Create Task objective handling.');
+  });
+
+  it('surfaces plain-text execution errors without reading the response body twice', async () => {
+    executionResponseOverride = new Response('Plaintext execution failure.', {
+      status: 400,
+      statusText: 'Bad Request',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Instructions'), {
+      target: { value: 'Run end-to-end regression flow.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Plaintext execution failure.')).not.toBeNull();
+    });
+  });
+
+  it('blocks preset saves when step skill args are invalid JSON', async () => {
+    const promptSpy = vi
+      .spyOn(window, 'prompt')
+      .mockImplementationOnce(() => 'Saved preset title')
+      .mockImplementationOnce(() => 'Saved preset description');
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText('Step 1 (Primary)')).closest('section');
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText('Instructions'), {
+      target: { value: 'Capture the current draft as a preset.' },
+    });
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
+      target: { value: 'pr-resolver' },
+    });
+    await waitFor(() => {
+      expect(within(primaryStep as HTMLElement).getByLabelText(/Skill Args \(optional JSON object\)/)).not.toBeNull();
+    });
+    fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill Args \(optional JSON object\)/), {
+      target: { value: '{"broken":' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Save Current Steps as Preset/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Step 1 Skill Args must be valid JSON object text.')).not.toBeNull();
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/task-step-templates/save-from-task')).toBe(false);
+
+    promptSpy.mockRestore();
   });
 });

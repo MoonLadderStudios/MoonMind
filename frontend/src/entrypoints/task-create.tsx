@@ -410,7 +410,16 @@ function mapExpandedStepToState(index: number, step: ExpandedStepPayload): StepS
   });
 }
 
-function resolveObjectiveInstructions(
+function normalizeTemplateInputKey(rawKey: string): string {
+  return rawKey.trim().toLowerCase().replaceAll(/[^a-z0-9]/g, '');
+}
+
+function isFeatureRequestInputKey(rawKey: string): boolean {
+  const normalizedKey = normalizeTemplateInputKey(rawKey);
+  return normalizedKey === 'featurerequest' || normalizedKey === 'feature' || normalizedKey === 'request';
+}
+
+export function resolveObjectiveInstructions(
   featureRequest: string,
   primaryInstructions: string,
   appliedTemplates: AppliedTemplateState[],
@@ -428,8 +437,7 @@ function resolveObjectiveInstructions(
       continue;
     }
     const value = Object.entries(candidate.inputs || {}).find(([rawKey, rawValue]) => {
-      const normalizedKey = rawKey.trim().toLowerCase().replaceAll(/[^a-z0-9]/g, '');
-      return normalizedKey === 'featurerequest' && String(rawValue || '').trim();
+      return isFeatureRequestInputKey(rawKey) && String(rawValue || '').trim();
     });
     if (value) {
       return String(value[1] || '').trim();
@@ -440,25 +448,26 @@ function resolveObjectiveInstructions(
 
 async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
-    const payload = (await response.json()) as { detail?: string | { message?: string } };
-    if (typeof payload.detail === 'string' && payload.detail.trim()) {
-      return payload.detail.trim();
-    }
-    if (payload.detail && typeof payload.detail === 'object') {
-      const detailMessage = String(payload.detail.message || '').trim();
-      if (detailMessage) {
-        return detailMessage;
-      }
-    }
-  } catch {
-    try {
-      const text = (await response.text()).trim();
-      if (text) {
-        return text;
-      }
-    } catch {
+    const rawText = (await response.text()).trim();
+    if (!rawText) {
       return fallback;
     }
+    try {
+      const payload = JSON.parse(rawText) as { detail?: string | { message?: string } };
+      if (typeof payload.detail === 'string' && payload.detail.trim()) {
+        return payload.detail.trim();
+      }
+      if (payload.detail && typeof payload.detail === 'object') {
+        const detailMessage = String(payload.detail.message || '').trim();
+        if (detailMessage) {
+          return detailMessage;
+        }
+      }
+    } catch {
+      return rawText;
+    }
+  } catch {
+    return fallback;
   }
   return fallback;
 }
@@ -861,8 +870,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         ? definition.options.map((option) => String(option).trim()).filter(Boolean)
         : [];
       const key = name.toLowerCase();
-      const isFeatureRequestKey =
-        key.includes('feature_request') || key === 'feature' || key === 'request';
+      const isFeatureRequestKey = isFeatureRequestInputKey(name);
 
       let value: unknown = null;
       let valueSource = '';
@@ -910,7 +918,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
 
-      let normalized: unknown = value;
+      let normalized: unknown;
       if (inputType === 'boolean') {
         normalized = Boolean(value);
       } else {
@@ -1037,45 +1045,50 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const description =
       window.prompt('Preset description', `Saved from queue draft: ${title}`) || '';
 
-    const presetSteps = steps
-      .map((step) => {
-        const instructions = step.instructions.trim();
-        if (!instructions) {
-          return null;
-        }
-        const blueprint: Record<string, unknown> = { instructions };
-        const skillId = step.skillId.trim();
-        const caps = parseCapabilitiesCsv(step.skillRequiredCapabilities);
-        const skillArgsRaw = shouldShowSkillArgs(step) ? step.skillArgs.trim() : '';
-        if (skillId || skillArgsRaw || caps.length > 0) {
-          let skillArgs: Record<string, unknown> = {};
-          if (skillArgsRaw) {
-            try {
-              const parsed = JSON.parse(skillArgsRaw) as unknown;
-              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                skillArgs = parsed as Record<string, unknown>;
-              }
-            } catch {
-              skillArgs = {};
+    const presetSteps: Record<string, unknown>[] = [];
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (!step) {
+        continue;
+      }
+      const instructions = step.instructions.trim();
+      if (!instructions) {
+        continue;
+      }
+      const blueprint: Record<string, unknown> = { instructions };
+      const skillId = step.skillId.trim();
+      const caps = parseCapabilitiesCsv(step.skillRequiredCapabilities);
+      const skillArgsRaw = shouldShowSkillArgs(step) ? step.skillArgs.trim() : '';
+      if (skillId || skillArgsRaw || caps.length > 0) {
+        let skillArgs: Record<string, unknown> = {};
+        if (skillArgsRaw) {
+          try {
+            const parsed = JSON.parse(skillArgsRaw) as unknown;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('Skill args must be an object.');
             }
+            skillArgs = parsed as Record<string, unknown>;
+          } catch {
+            setTemplateMessage(`Step ${index + 1} Skill Args must be valid JSON object text.`);
+            return;
           }
-          const normalizedTool = {
-            type: 'skill',
-            name: skillId || 'auto',
-            version: '1.0',
-            inputs: skillArgs,
-            ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
-          };
-          blueprint.tool = normalizedTool;
-          blueprint.skill = {
-            id: normalizedTool.name,
-            args: skillArgs,
-            ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
-          };
         }
-        return blueprint;
-      })
-      .filter(Boolean);
+        const normalizedTool = {
+          type: 'skill',
+          name: skillId || 'auto',
+          version: '1.0',
+          inputs: skillArgs,
+          ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
+        };
+        blueprint.tool = normalizedTool;
+        blueprint.skill = {
+          id: normalizedTool.name,
+          args: skillArgs,
+          ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
+        };
+      }
+      presetSteps.push(blueprint);
+    }
 
     if (presetSteps.length === 0) {
       setTemplateMessage('Add at least one step with instructions before saving.');
@@ -1183,6 +1196,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
     }
 
+    const primaryStepTool = {
+      type: 'skill',
+      name: primarySkillId,
+      version: '1.0',
+      ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
+      ...(taskSkillRequiredCapabilities.length > 0 ? { requiredCapabilities: taskSkillRequiredCapabilities } : {}),
+    };
+    const primaryStepSkill = {
+      id: primarySkillId,
+      args: primarySkillArgs,
+      ...(taskSkillRequiredCapabilities.length > 0 ? { requiredCapabilities: taskSkillRequiredCapabilities } : {}),
+    };
+    const primaryStepHasSkillOverride =
+      hasExplicitSkillSelection(primarySkillId) ||
+      Object.keys(primarySkillArgs).length > 0 ||
+      taskSkillRequiredCapabilities.length > 0;
+
     const additionalSteps: Array<{ sourceIndex: number; payload: Record<string, unknown> }> = [];
     const stepSkillRequiredCapabilities: string[] = [];
     for (let index = 1; index < steps.length; index += 1) {
@@ -1257,7 +1287,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       additionalSteps.length > 0 || includePrimaryStepForObjectiveOverride || hasTemplateBoundStep;
 
     const normalizedSteps = includeExplicitSteps
-      ? [{ sourceIndex: 0, payload: primaryInstructions ? { instructions: primaryInstructions } : {} }, ...additionalSteps]
+      ? [
+          {
+            sourceIndex: 0,
+            payload: {
+              ...(primaryInstructions ? { instructions: primaryInstructions } : {}),
+              ...(primaryStepHasSkillOverride ? { tool: primaryStepTool, skill: primaryStepSkill } : {}),
+            },
+          },
+          ...additionalSteps,
+        ]
           .map((entry) => {
             const sourceStep = steps[entry.sourceIndex];
             if (!sourceStep) {
@@ -1280,26 +1319,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       templateCapabilities,
     });
 
-    const normalizedTaskTool = {
-      type: 'skill',
-      name: primarySkillId,
-      version: '1.0',
-      ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
-      ...(taskSkillRequiredCapabilities.length > 0
-        ? { requiredCapabilities: taskSkillRequiredCapabilities }
-        : {}),
-    };
+    const normalizedTaskTool = primaryStepTool;
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructions,
       tool: normalizedTaskTool,
-      skill: {
-        id: primarySkillId,
-        args: primarySkillArgs,
-        ...(taskSkillRequiredCapabilities.length > 0
-          ? { requiredCapabilities: taskSkillRequiredCapabilities }
-          : {}),
-      },
+      skill: primaryStepSkill,
       ...(hasExplicitSkillSelection(primarySkillId) ? { skills: [primarySkillId] } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
       proposeTasks,
