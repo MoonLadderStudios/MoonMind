@@ -58,10 +58,13 @@ def _coerce_temporal_scalar(value: Any) -> str | None:
 
 
 def _parse_temporal_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, (list, tuple)) and value and isinstance(value[0], datetime):
+        val = value[0]
+        return val if val.tzinfo is not None else val.replace(tzinfo=UTC)
     scalar = _coerce_temporal_scalar(value)
     if not scalar:
-        if isinstance(value, datetime):
-            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return None
     try:
         parsed = datetime.fromisoformat(scalar.replace("Z", "+00:00"))
@@ -261,6 +264,7 @@ async def map_temporal_state_to_projection(
 async def sync_execution_projection(
     session: AsyncSession,
     desc: WorkflowExecutionDescription,
+    synced_at: datetime | None = None,
 ) -> TemporalExecutionRecord:
     """Upsert the Temporal workflow state to the local projection database."""
     payload = await map_temporal_state_to_projection(desc)
@@ -268,7 +272,7 @@ async def sync_execution_projection(
     projection = await session.get(TemporalExecutionRecord, desc.id)
     canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
     previous_version = int(projection.projection_version or 0) if projection else 0
-    synced_at = _utc_now()
+    synced_at = synced_at or _utc_now()
     semantic_updated_at = payload.get("updated_at")
     if semantic_updated_at is None:
         if projection is not None:
@@ -306,6 +310,9 @@ async def sync_execution_projection(
                 continue
             setattr(projection, field, value)
         projection.updated_at = semantic_updated_at
+        # Force SQLAlchemy to include updated_at in the UPDATE even when the
+        # semantic timestamp is unchanged, so the column's onupdate handler
+        # does not overwrite it with "now()" during sync-only refreshes.
         flag_modified(projection, "updated_at")
         projection.projection_version = max(previous_version + 1, 1)
         projection.last_synced_at = synced_at

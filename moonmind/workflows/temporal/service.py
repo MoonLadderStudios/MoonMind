@@ -533,7 +533,10 @@ class TemporalExecutionService:
         )
         offset = self._decode_page_token(next_page_token, expected_scope=query_scope)
 
-        stmt = select(TemporalExecutionCanonicalRecord)
+        stmt = select(TemporalExecutionCanonicalRecord).outerjoin(
+            TemporalExecutionRecord,
+            TemporalExecutionCanonicalRecord.workflow_id == TemporalExecutionRecord.workflow_id,
+        )
         stmt = self._apply_filters(
             stmt,
             model=TemporalExecutionCanonicalRecord,
@@ -546,7 +549,10 @@ class TemporalExecutionService:
             integration=integration,
         )
         stmt = stmt.order_by(
-            TemporalExecutionCanonicalRecord.updated_at.desc(),
+            func.coalesce(
+                TemporalExecutionRecord.updated_at,
+                TemporalExecutionCanonicalRecord.updated_at,
+            ).desc(),
             TemporalExecutionCanonicalRecord.workflow_id.desc(),
         )
         stmt = stmt.offset(offset).limit(page_size + 1)

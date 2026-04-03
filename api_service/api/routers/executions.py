@@ -132,13 +132,13 @@ def _mark_execution_alias_usage(
     response.headers["X-MoonMind-Deprecated-Identifier"] = raw_identifier
 
 
-def _compatibility_refreshed_at(record) -> datetime:
+def _compatibility_refreshed_at(record, now: datetime | None = None) -> datetime:
     refreshed_at = (
         getattr(record, "last_synced_at", None)
         or getattr(record, "updated_at", None)
         or getattr(record, "started_at", None)
         or getattr(record, "created_at", None)
-        or datetime.now(UTC)
+        or (now if now is not None else datetime.now(UTC))
     )
     if isinstance(refreshed_at, str):
         refreshed_at = datetime.fromisoformat(refreshed_at.replace("Z", "+00:00"))
@@ -1729,6 +1729,7 @@ async def list_executions(
             },
         ) from exc
 
+    now = datetime.now(UTC)
     return ExecutionListResponse(
         items=[
             _serialize_execution(item, include_artifact_refs=False, user=user)
@@ -1739,7 +1740,7 @@ async def list_executions(
         count_mode="exact",
         degraded_count=False,
         refreshed_at=max(
-            (_compatibility_refreshed_at(item) for item in result.items),
+            (_compatibility_refreshed_at(item, now=now) for item in result.items),
             default=None,
         ),
     )
