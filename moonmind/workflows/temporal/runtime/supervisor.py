@@ -349,8 +349,8 @@ class ManagedRunSupervisor:
                 )
             duration = (datetime.now(tz=UTC) - start_time).total_seconds()
             _record_annotation(
-                annotation_type="diagnostics_collection_started",
-                text="Supervisor: persisting diagnostics bundle.",
+                annotation_type="diagnostics_writing",
+                text="Supervisor: persisting diagnostics bundle...",
                 reason="diagnostics",
             )
             annotations = self._log_streamer.consume_annotations(run_id)

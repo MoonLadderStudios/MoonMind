@@ -83,10 +83,9 @@ class RuntimeLogStreamer:
                     callback_result = chunk_callback(stream_name, text_content)
                     if inspect.isawaitable(callback_result):
                         _ = await callback_result
-                except Exception:
-                    # Ignore chunk callback errors so they don't abort log capture
-                    pass
-            
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).debug("chunk_callback failed: %s", e)
             if live_publisher is not None:
                 try:
                     obj = LiveLogChunk(
@@ -100,7 +99,7 @@ class RuntimeLogStreamer:
                 except Exception:
                     # Failsafe: publishers must not crash the workflow
                     pass
-            
+
             current_offset += chunk_length
 
             if parser is not None:
