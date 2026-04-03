@@ -174,6 +174,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                 "policy": {
                     "targets": ["project", "moonmind"],
                     "maxItems": {"project": 1, "moonmind": 2},
+                    "minSeverityForMoonMind": "medium",
                 },
                 "origin": {},
             }

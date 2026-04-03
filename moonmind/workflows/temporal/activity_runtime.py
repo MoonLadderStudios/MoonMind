@@ -1925,13 +1925,27 @@ class TemporalProposalActivities:
                 target_repo = ""
                 if isinstance(payload_node, Mapping):
                     target_repo = str(payload_node.get("repository") or "").strip()
-                is_moonmind_target = bool(moonmind_repo) and target_repo == moonmind_repo
+                
+                is_moonmind_target = bool(moonmind_repo) and target_repo.lower() == moonmind_repo.lower()
+                should_submit = False
+
                 if is_moonmind_target:
-                    if not effective_policy.consume_moonmind_slot():
-                        continue
+                    severity = str(candidate.get("severity") or "medium")
+                    if effective_policy.severity_meets_floor(severity) and effective_policy.consume_moonmind_slot():
+                        should_submit = True
                 else:
-                    if not effective_policy.consume_project_slot():
-                        continue
+                    if effective_policy.consume_project_slot():
+                        should_submit = True
+                    else:
+                        severity = str(candidate.get("severity") or "medium")
+                        if bool(moonmind_repo) and effective_policy.severity_meets_floor(severity) and effective_policy.consume_moonmind_slot():
+                            is_moonmind_target = True
+                            should_submit = True
+                            if isinstance(payload_node, dict):
+                                payload_node["repository"] = moonmind_repo
+
+                if not should_submit:
+                    continue
 
                 try:
                     if service is not None:

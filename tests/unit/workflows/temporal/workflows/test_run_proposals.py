@@ -39,6 +39,14 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     return workflow
 
 
+def _to_serializable(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return str(obj)
+
+
 @pytest.mark.asyncio
 async def test_run_proposals_stage_propagates_policy(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -51,13 +59,6 @@ async def test_run_proposals_stage_propagates_policy(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
-        def _to_serializable(obj: Any) -> Any:
-            if hasattr(obj, "model_dump"):
-                return obj.model_dump()
-            if hasattr(obj, "dict"):
-                return obj.dict()
-            return str(obj)
-
         dumped = json.loads(json.dumps(payload, default=_to_serializable))
         captured.append((activity_type, dumped))
         if activity_type == "proposal.generate":
@@ -108,13 +109,6 @@ async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
-        def _to_serializable(obj: Any) -> Any:
-            if hasattr(obj, "model_dump"):
-                return obj.model_dump()
-            if hasattr(obj, "dict"):
-                return obj.dict()
-            return str(obj)
-
         dumped = json.loads(json.dumps(payload, default=_to_serializable))
         captured.append((activity_type, dumped))
         if activity_type == "proposal.generate":
