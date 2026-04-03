@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 from uuid import uuid4
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     from moonmind.schemas.temporal_activity_models import (
@@ -399,6 +400,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         secret_access_key: str,
         region_name: str,
         use_ssl: bool,
+        public_endpoint_url: str | None = None,
     ) -> None:
         if not endpoint_url.strip() or not bucket.strip():
             raise TemporalArtifactValidationError(
@@ -418,6 +420,9 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             "region_name": region_name.strip() or "us-east-1",
             "use_ssl": bool(use_ssl),
         }
+        self._public_endpoint = (
+            self._normalize_public_endpoint(public_endpoint_url)
+        )
         self._client_local = threading.local()
         self._ensure_bucket_exists()
 
@@ -446,6 +451,47 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             if code not in {"404", "NoSuchBucket", "NotFound"}:
                 raise
         self._client.create_bucket(Bucket=self._bucket)
+
+    @staticmethod
+    def _normalize_public_endpoint(
+        public_endpoint_url: str | None,
+    ) -> Any | None:
+        if not public_endpoint_url:
+            return None
+        candidate = public_endpoint_url.strip()
+        if not candidate:
+            return None
+        parsed = urlsplit(candidate)
+        if not parsed.scheme or not parsed.netloc:
+            raise TemporalArtifactValidationError(
+                "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT must be a full URL with scheme and host."
+            )
+        return parsed
+
+    def _rewrite_presigned_url(self, url: str) -> str:
+        if self._public_endpoint is None:
+            return url
+        try:
+            parsed = urlsplit(url)
+            public_path = self._public_endpoint.path.rstrip("/")
+            artifact_path = parsed.path
+            if public_path:
+                if not public_path.startswith("/"):
+                    public_path = f"/{public_path}"
+                if not artifact_path.startswith("/"):
+                    artifact_path = f"/{artifact_path}"
+                artifact_path = f"{public_path}{artifact_path}"
+            return urlunsplit(
+                (
+                    self._public_endpoint.scheme,
+                    self._public_endpoint.netloc,
+                    artifact_path,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
+        except Exception:
+            return url
 
     def build_storage_key(
         self, *, namespace: str, artifact_id: str, now: datetime
@@ -514,7 +560,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             ExpiresIn=expires_in_seconds,
             HttpMethod="PUT",
         )
-        return url, required_headers
+        return self._rewrite_presigned_url(url), required_headers
 
     def create_multipart_upload(
         self,
@@ -553,7 +599,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             ExpiresIn=expires_in_seconds,
             HttpMethod="PUT",
         )
-        return url, {}
+        return self._rewrite_presigned_url(url), {}
 
     def complete_multipart_upload(
         self,
@@ -607,12 +653,15 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
                 f'attachment; filename="{download_filename}"'
             )
 
-        return self._client.generate_presigned_url(
-            "get_object",
-            Params=params,
-            ExpiresIn=expires_in_seconds,
-            HttpMethod="GET",
+        return self._rewrite_presigned_url(
+            self._client.generate_presigned_url(
+                "get_object",
+                Params=params,
+                ExpiresIn=expires_in_seconds,
+                HttpMethod="GET",
+            )
         )
+
 
 
 class TemporalArtifactRepository:
@@ -909,6 +958,7 @@ class TemporalArtifactService:
                 secret_access_key=settings.workflow.temporal_artifact_s3_secret_access_key,
                 region_name=settings.workflow.temporal_artifact_s3_region,
                 use_ssl=settings.workflow.temporal_artifact_s3_use_ssl,
+                public_endpoint_url=settings.workflow.temporal_artifact_s3_public_endpoint,
             )
         raise TemporalArtifactValidationError(
             f"Unsupported temporal artifact backend '{backend}'"

@@ -7,6 +7,23 @@
   <title>MoonMind Mission Control</title>
   <script>
     (() => {
+      if (
+        window.customElements &&
+        !window.__moonmind_customElementsDefineGuard
+      ) {
+        const originalDefine = window.customElements.define.bind(window.customElements);
+        window.customElements.define = function(name, constructor, options) {
+          if (
+            name === "mce-autosize-textarea" &&
+            window.customElements.get(name)
+          ) {
+            return;
+          }
+          return originalDefine(name, constructor, options);
+        };
+        window.__moonmind_customElementsDefineGuard = true;
+      }
+
       const key = "moonmind.theme";
       const root = document.documentElement;
       let stored = null;

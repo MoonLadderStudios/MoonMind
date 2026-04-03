@@ -311,6 +311,14 @@ class WorkflowSettings(BaseSettings):
             "http://moonmind-temporal-artifacts-s3:9000 to avoid ambiguous `minio` DNS."
         ),
     )
+    temporal_artifact_s3_public_endpoint: str = Field(
+        "",
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT"),
+        description=(
+            "Optional public S3 endpoint exposed to browsers for presigned URLs. "
+            "When empty, generated presigned URLs keep the internal endpoint."
+        ),
+    )
     temporal_artifact_s3_bucket: str = Field(
         "moonmind-temporal-artifacts",
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_BUCKET", "MINIO_BUCKET"),
