@@ -1371,7 +1371,7 @@ async def test_run_proposals_stage_global_disable_halts_execution(
     assert workflow._state == "initializing"  # State shouldn't change to PROPOSALS
 
 @pytest.mark.asyncio
-async def test_run_proposals_stage_uses_legacy_fallback_policy(
+async def test_run_proposals_stage_ignores_legacy_fallback_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings
@@ -1407,9 +1407,7 @@ async def test_run_proposals_stage_uses_legacy_fallback_policy(
     )
     
     assert captured_policy is not None
-    assert captured_policy["max_items"] == 8
-    assert captured_policy["targets"] == "file"
-    assert captured_policy["default_runtime"] == "gemini"
+    assert captured_policy == {}
 
 
 @pytest.mark.asyncio
@@ -1459,9 +1457,9 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     )
     
     assert captured_policy is not None
-    assert captured_policy["max_items"] == 12
+    assert captured_policy["maxItems"] == {"project": 12}
     assert captured_policy["targets"] == ["project"]
-    assert captured_policy["default_runtime"] == "gemini_cli"
+    assert captured_policy["defaultRuntime"] == "gemini_cli"
     
     # Also verify origin format DOC-REQ-005
     assert captured_origin["source"] == "workflow"
