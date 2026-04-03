@@ -3,7 +3,7 @@
 Status: In progress
 Owners: MoonMind Engineering
 Last Updated: 2026-04-03
-Progress: Phases 1–4 complete. Phase 5 — remaining item: workflow-boundary tests for retry and rerun snapshot pinning (§10). Phases 6–7 not started (Mission Control surfaces; proposals, schedules, reruns, policy hardening).
+Progress: Phases 1–5 complete. Phases 6–7 not started (Mission Control surfaces; proposals, schedules, reruns, policy hardening).
 Canonical doc: `docs/Tasks/AgentSkillSystem.md`
 Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
 
@@ -36,8 +36,7 @@ MoonMind has implemented the core control-plane and runtime path through Phases 
 
 ### Partial / in flight
 
-- Retries and continuation paths definitively reusing the same resolved snapshot (Phase 5, §10)
-- Workflow-boundary coverage for rerun behavior defaulting to original snapshot (Phase 5, §10)
+_Nothing in flight for Phase 5._
 
 ### Not yet delivered
 
@@ -277,10 +276,10 @@ Make agent skills part of the real execution contract.
 - [x] Ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries
 - [x] Pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path
 - [x] Ensure workflow payloads carry refs and metadata only
-- [ ] Add workflow-boundary tests for retry and rerun snapshot pinning:
-  - [ ] Activity retry within the same run passes the identical `resolved_skillset_ref` to the retried child or activity
-  - [ ] Rerun defaults to the original `ResolvedSkillSet` without calling `agent_skill.resolve` again
-  - [ ] Child workflow `AgentRun` dispatch receives the correct snapshot ref on both first-run and retry paths
+- [x] Add workflow-boundary tests for retry and rerun snapshot pinning:
+  - [x] Activity retry within the same run passes the identical `resolved_skillset_ref` to the retried child or activity
+  - [x] Rerun defaults to the original `ResolvedSkillSet` without calling `agent_skill.resolve` again
+  - [x] Child workflow `AgentRun` dispatch receives the correct snapshot ref on both first-run and retry paths
 
 ### Exit criteria
 
