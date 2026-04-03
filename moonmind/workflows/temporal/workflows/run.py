@@ -101,6 +101,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
+DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -180,6 +181,7 @@ class MoonMindRunWorkflow:
         self._awaiting_external: bool = False
         self._waiting_reason: Optional[str] = None
         self._attention_required: bool = False
+        self._dependency_workflow_ids: list[str] = []
 
         # Action flags
         self._cancel_requested = False
@@ -385,6 +387,85 @@ class MoonMindRunWorkflow:
             )
         return [payload_by_id[node_id] for node_id in ordered_node_ids]
 
+    def _dependency_ids_from_parameters(self, parameters: Mapping[str, Any]) -> list[str]:
+        task_payload = parameters.get("task")
+        if task_payload is None:
+            return []
+        if not isinstance(task_payload, Mapping):
+            raise ValueError("initialParameters.task must be an object when provided")
+
+        depends_on = task_payload.get("dependsOn")
+        if depends_on is None:
+            return []
+        if not isinstance(depends_on, list):
+            raise ValueError(
+                "initialParameters.task.dependsOn must be a list when provided"
+            )
+
+        normalized: list[str] = []
+        for dep_id in depends_on:
+            if not isinstance(dep_id, str):
+                raise ValueError(
+                    "initialParameters.task.dependsOn entries must be strings"
+                )
+            candidate = dep_id.strip()
+            if candidate and candidate not in normalized:
+                normalized.append(candidate)
+        return normalized
+
+    async def _await_dependency_result(self, dependency_id: str) -> None:
+        handle = workflow.get_external_workflow_handle(dependency_id)
+        try:
+            await handle.result()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                f"Dependency '{dependency_id}' did not complete successfully: {exc}"
+            ) from exc
+
+    async def _await_dependency_results(self, dependency_ids: list[str]) -> None:
+        await asyncio.gather(
+            *(self._await_dependency_result(dep_id) for dep_id in dependency_ids)
+        )
+
+    async def _wait_for_dependencies(self, dependency_ids: list[str]) -> None:
+        if not dependency_ids:
+            return
+
+        self._dependency_workflow_ids = list(dependency_ids)
+        self._waiting_reason = "dependency_wait"
+        self._set_state(
+            STATE_WAITING_ON_DEPENDENCIES,
+            summary=f"Waiting on {len(dependency_ids)} prerequisite execution(s).",
+        )
+
+        dependency_task = asyncio.create_task(
+            self._await_dependency_results(dependency_ids)
+        )
+        cancel_task = asyncio.create_task(
+            workflow.wait_condition(lambda: self._cancel_requested)
+        )
+
+        try:
+            done, pending = await asyncio.wait(
+                {dependency_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if cancel_task in done:
+                dependency_task.cancel()
+                await asyncio.gather(dependency_task, return_exceptions=True)
+                return
+
+            cancel_task.cancel()
+            await asyncio.gather(cancel_task, return_exceptions=True)
+            await dependency_task
+        finally:
+            self._waiting_reason = None
+            self._update_search_attributes()
+            self._update_memo()
+
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         try:
@@ -453,6 +534,25 @@ class MoonMindRunWorkflow:
             return {"status": "canceled"}
 
         self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
+        try:
+            dependency_ids = self._dependency_ids_from_parameters(parameters)
+            if dependency_ids and workflow.patched(DEPENDENCY_GATE_PATCH):
+                await self._wait_for_dependencies(dependency_ids)
+                if self._cancel_requested:
+                    await self._run_finalizing_stage(
+                        parameters=parameters, status="canceled", error=None
+                    )
+                    return {"status": "canceled"}
+        except ValueError as exc:
+            await self._run_finalizing_stage(
+                parameters=parameters, status="failed", error=str(exc)
+            )
+            self._close_status = CLOSE_STATUS_FAILED
+            self._set_state(STATE_FAILED, summary=str(exc))
+            raise exceptions.ApplicationError(
+                str(exc),
+                non_retryable=True,
+            ) from exc
         self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
 
         # Pause until unpaused
@@ -2024,6 +2124,8 @@ class MoonMindRunWorkflow:
             memo_dict["logs_artifact_ref"] = self._logs_ref
         if self._summary_ref:
             memo_dict["summary_artifact_ref"] = self._summary_ref
+        if self._dependency_workflow_ids:
+            memo_dict["dependency_workflow_ids"] = list(self._dependency_workflow_ids)
 
         try:
             workflow.upsert_memo(memo_dict)

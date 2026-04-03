@@ -97,7 +97,7 @@ class ManagedRuntimeStrategy(ABC):
     @property
     @abstractmethod
     def default_command_template(self) -> list[str]:
-        """e.g. ['gemini'] or ['codex', 'exec', '--full-auto']"""
+        """e.g. ['gemini'] or ['codex', 'exec']"""
 
     @property
     def default_auth_mode(self) -> str:
@@ -309,7 +309,7 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 - [x] Implement `CodexCliStrategy`
   - [x] `build_command`: former `codex_cli` branch
   - [x] `shape_environment`: Codex home/config keys — **wired via launcher**
-  - [x] `default_command_template`: `["codex", "exec", "--full-auto"]`
+  - [x] `default_command_template`: `["codex", "exec"]`
   - [x] `prepare_workspace`: RAG context injection via `ContextInjectionService`
 - [x] Remove all per-runtime `if/elif` branching from `launcher.py:build_command()`
 - [x] Remove `_runtime_env_keys` hardcoded list from `launcher.py`

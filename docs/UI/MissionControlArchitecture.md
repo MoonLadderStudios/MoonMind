@@ -63,26 +63,24 @@ Important distinctions:
 
 ## 4. Implementation snapshot
 
-Mission Control is a **server-hosted hybrid UI**:
+Mission Control is a **server-hosted React/Vite UI**:
 
-- FastAPI serves the HTML shell
-- a shared generated stylesheet is served to all routes
-- the client is split between legacy bundle code and Vite-built React entrypoints
+- FastAPI serves the HTML shell and owns canonical routes
+- a frontend-owned shared stylesheet is emitted through the Vite build
+- page behavior is implemented through Vite-built React entrypoints
 - runtime config is generated server-side
 - REST APIs remain the only supported browser/backend boundary
 
 Representative pieces:
 
-- HTML shell: `api_service/templates/task_dashboard.html`
+- HTML shell: `api_service/templates/react_dashboard.html`
 - navigation partials: `api_service/templates/_navigation.html`
-- legacy client: `api_service/static/task_dashboard/dashboard.js`
-- shared stylesheet source: `api_service/static/task_dashboard/dashboard.tailwind.css`
-- generated stylesheet: `api_service/static/task_dashboard/dashboard.css`
+- page entrypoints: `frontend/src/entrypoints/`
+- shared stylesheet source: `frontend/src/styles/mission-control.css`
+- generated JS/CSS bundles: `api_service/static/task_dashboard/dist/`
 - React/Vite build output: `api_service/static/task_dashboard/dist/`
 - runtime config builder: `api_service/api/routers/task_dashboard_view_model.py`
 - route shell: `api_service/api/routers/task_dashboard.py`
-
-Mission Control should continue to behave as one product surface even while route implementations remain mixed between legacy and React entrypoints.
 
 ---
 
@@ -92,29 +90,28 @@ Mission Control should continue to behave as one product surface even while rout
 
 Tailwind must scan all sources that can contain utility classes, including:
 
-- `api_service/templates/`
-- `api_service/static/task_dashboard/**/*.js`
+- `api_service/templates/react_dashboard.html`
+- `api_service/templates/_navigation.html`
 - `frontend/src/**/*.{js,jsx,ts,tsx}`
 
 `frontend/src` must be included because production-aligned builds generate CSS before Vite output exists. Scanning only the built `dist` files is not sufficient for Docker correctness.
 
 ## 5.2 Build posture
 
-Mission Control relies on two distinct generated outputs:
+Mission Control relies on two generated outputs:
 
-- `dashboard.css`
-- Vite `dist/` bundles
+- Vite `dist/` bundles (JS plus extracted CSS)
+- `frontend/src/generated/openapi.ts`
 
-The CSS build and the Vite build are separate responsibilities and must both remain reproducible in CI. Frontend-consumed API types are a third checked-in generated artifact and are refreshed alongside `dashboard.css`.
+The shared Mission Control stylesheet is emitted as part of the Vite build from `frontend/src/styles/mission-control.css`. Frontend-consumed API types remain a second checked-in generated artifact.
 
 The canonical local generation path is:
 
 1. `npm run generate`
-2. `npm run ui:build`
 
 `npm run generate` is responsible for:
 
-- rebuilding `api_service/static/task_dashboard/dashboard.css`
+- rebuilding `api_service/static/task_dashboard/dist/`
 - regenerating `frontend/src/generated/openapi.ts`
 
 The canonical CI drift gate is `npm run generate:check`, which reruns that generation path and fails on diffs in the checked-in generated files. OpenAPI generation now writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
@@ -128,7 +125,7 @@ Representative workflow:
 
 ## 5.3 Common failure symptom
 
-If a React route renders structurally correct HTML but spacing, grids, or layout styling are missing, the likely cause is stale or incomplete `dashboard.css`, usually because the Tailwind content configuration did not scan React source files.
+If a React route renders structurally correct HTML but spacing, grids, or layout styling are missing, the likely cause is stale or incomplete Vite-emitted CSS, usually because the Tailwind content configuration did not scan React source files.
 
 ---
 

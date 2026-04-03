@@ -81,7 +81,7 @@ def test_build_command_codex_cli():
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(
         runtime_id="codex_cli",
-        command_template=["codex", "exec", "--full-auto"],
+        command_template=["codex", "exec"],
         default_model="gpt-5.3-codex",
         default_effort="high",
     )
@@ -91,7 +91,7 @@ def test_build_command_codex_cli():
     )
 
     cmd = launcher.build_command(profile, request)
-    assert cmd[:3] == ["codex", "exec", "--full-auto"]
+    assert cmd[:2] == ["codex", "exec"]
     assert "-m" in cmd
     assert "o3" in cmd
     # Codex does not support --effort or --model (long form)
@@ -190,9 +190,19 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
     profile = _make_profile(
         command_template=["echo", "hello"],
         env_overrides={"MM_SAFE": "1"},
@@ -232,6 +242,58 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["MM_SAFE"] == "1"
     assert captured_env["GH_TOKEN"] == "ghp-runtime"
     assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
+
+
+@pytest.mark.asyncio
+async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spool_path = workspace / "live_streams.spool"
+    spool_path.write_text("stale prior run output\n", encoding="utf-8")
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 888) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request()
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-reset-spool",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    assert not spool_path.exists()
 
 
 def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_path):

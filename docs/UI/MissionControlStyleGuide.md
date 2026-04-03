@@ -19,17 +19,17 @@ For architecture, routes, runtime config, and Temporal integration, see `docs/UI
 
 ## 2. Background / Current State
 
-The dashboard currently ships as:
+Mission Control currently ships as:
 
-- Template: `api_service/templates/task_dashboard.html`
-- Renderer: `api_service/static/task_dashboard/dashboard.js`
-- Source CSS: `api_service/static/task_dashboard/dashboard.tailwind.css`
-- Served CSS: `api_service/static/task_dashboard/dashboard.css`
+- Template: `api_service/templates/react_dashboard.html`
+- Entry points: `frontend/src/entrypoints/*.tsx`
+- Source CSS: `frontend/src/styles/mission-control.css`
+- Served CSS: Vite-emitted assets under `api_service/static/task_dashboard/dist/`
 
 Current implementation status:
 
 - [x] Tailwind + PostCSS toolchain exists.
-- [x] `dashboard.css` is generated from `dashboard.tailwind.css`.
+- [x] Mission Control CSS is emitted from `frontend/src/styles/mission-control.css` through the Vite/PostCSS pipeline.
 - [x] Tokenized light palette is live (`--mm-*` tokens).
 - [x] Purple/cyan/pink visual refresh is live for light mode.
 - [x] Existing semantic class names remain stable (`masthead`, `panel`, `route-nav`, `status-*`, etc).
@@ -43,11 +43,10 @@ Accuracy note: `tailwind.config.cjs` still uses `darkMode: "class"`, and Phase 3
 
 ### 3.1 Goals
 
-1. Keep public asset path stable:
-   - Continue serving `/static/task_dashboard/dashboard.css`.
-2. Keep migration low-risk:
-   - No framework rewrite.
-   - No class-name churn in `dashboard.js` output.
+1. Keep FastAPI-owned route delivery and stable `/static/task_dashboard/dist/` asset serving.
+2. Keep the frontend modular and page-scoped:
+   - No SPA takeover.
+   - No return to a monolithic JS renderer.
 3. Deliver a modern 2026 visual style:
    - Dark mode first-class.
    - Purple-forward brand direction.
@@ -58,9 +57,8 @@ Accuracy note: `tailwind.config.cjs` still uses `darkMode: "class"`, and Phase 3
 
 ### 3.2 Non-Goals
 
-- Introducing React/Vue/Svelte or a JS bundler.
 - Rewriting routing, auth, or API contracts.
-- Replacing semantic classes with Tailwind utility strings in JS-rendered HTML.
+- Moving route ownership away from FastAPI.
 
 ## 4. Visual Direction: MoonMind 2026 (Dark, Futuristic, Glass)
 
@@ -127,11 +125,11 @@ This keeps JS stable and avoids dynamic utility-generation problems.
 
 Build flow:
 
-- Input: `api_service/static/task_dashboard/dashboard.tailwind.css`
-- Output: `api_service/static/task_dashboard/dashboard.css`
+- Input: `frontend/src/styles/mission-control.css`
+- Output: Vite-emitted CSS assets under `api_service/static/task_dashboard/dist/`
 
-Do not hand-edit `dashboard.css` during normal development.
-When frontend-consumed API contracts or Tailwind-backed dashboard markup change, use `npm run generate` as the canonical refresh path so `dashboard.css` and generated frontend API types stay in sync together.
+Do not hand-edit emitted CSS assets during normal development.
+When frontend-consumed API contracts or Tailwind-backed Mission Control markup change, use `npm run generate` as the canonical refresh path so the emitted UI bundles and generated frontend API types stay in sync together.
 
 ### 5.3 Token-First Theming
 
@@ -145,7 +143,7 @@ When frontend-consumed API contracts or Tailwind-backed dashboard markup change,
 
 Current config expectations:
 
-- `content` includes HTML templates, legacy dashboard JS under `api_service/static/task_dashboard/`, and **React source** under `frontend/src/` (see [`MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2). Without the `frontend/src` glob, Vite/React routes that use utility classes ship without matching rules in `dashboard.css`—especially in Docker, where Tailwind runs **after** `dist/` is wiped and **before** `ui:build`.
+- `content` includes the shared React shell templates and **React source** under `frontend/src/` (see [`MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2). Without the `frontend/src` glob, Vite/React routes that use utility classes ship without matching rules in the emitted Mission Control CSS.
 - `darkMode: "class"` is enabled.
 - `corePlugins.preflight` remains `false` to avoid reset regressions.
 - Token colors map to `rgb(var(--mm-*) / <alpha-value>)`.
@@ -155,9 +153,8 @@ Reference snippet:
 ```js
 module.exports = {
   content: [
-    "./api_service/templates/task_dashboard.html",
+    "./api_service/templates/react_dashboard.html",
     "./api_service/templates/_navigation.html",
-    "./api_service/static/task_dashboard/**/*.js",
     "./frontend/src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: "class",
@@ -286,7 +283,7 @@ body {
 
 ## 8. Dark Mode Implementation
 
-### 8.1 Template Updates (`task_dashboard.html`)
+### 8.1 Template Updates (`react_dashboard.html`)
 
 1. Update viewport:
 
@@ -294,17 +291,16 @@ body {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 ```
 
-2. Add a toggle in the masthead controls:
+2. Keep the no-flash theme bootstrap in `<head>` and let React entrypoints mount inside the shared shell:
 
 ```html
-<button class="theme-toggle secondary" type="button" aria-label="Toggle dark mode">
-  Theme
-</button>
+<div id="dashboard-alerts-root"></div>
+<div id="mission-control-root"></div>
 ```
 
-### 8.2 Theme Preference Logic (`dashboard.js`)
+### 8.2 Theme Preference Logic (Shared Shell Bootstrap)
 
-Use local preference first, system preference second.
+Use local preference first, system preference second in the inline theme bootstrap that runs before Vite assets load.
 
 ```js
 function initTheme() {
@@ -339,7 +335,7 @@ function initTheme() {
 }
 ```
 
-Call `initTheme()` near the top of the dashboard IIFE.
+The shared shell should set the theme before React mounts.
 
 ### 8.3 Prevent Theme Flash on Load
 
@@ -454,9 +450,9 @@ A 1px outline plus edge-light inset highlight keeps buttons legible on:
 
 Without the outline, buttons visually blend into the panel surface.
 
-#### 9.4.5 CSS Recipe (`dashboard.tailwind.css`)
+#### 9.4.5 CSS Recipe (`frontend/src/styles/mission-control.css`)
 
-Use this as the source-of-truth interaction recipe when editing `api_service/static/task_dashboard/dashboard.tailwind.css`:
+Use this as the source-of-truth interaction recipe when editing `frontend/src/styles/mission-control.css`:
 
 ```css
 /* Button interaction system: Glow + Grow (no translateY) */
@@ -671,7 +667,7 @@ The current semantic class names still use `queue-*`, but the desired product be
 - Advanced filters such as repository, integration, and owner scoping belong in a secondary drawer/popover, not in the default filter cluster.
 - Page size belongs with pagination controls or a compact display menu, not in the primary filter row.
 - Column-local filtering, when added, should use header popovers/funnel affordances for selected columns while preserving click-to-sort behavior on the header.
-- Styling source of truth: selectors live in `dashboard.tailwind.css` and compiled into `dashboard.css`. Use MoonMind tokens (`--mm-border`, `--mm-panel`, `--mm-muted`) for color/alpha tweaks to stay dark-mode compatible.
+- Styling source of truth: selectors live in `frontend/src/styles/mission-control.css` and are emitted through the Vite build. Use MoonMind tokens (`--mm-border`, `--mm-panel`, `--mm-muted`) for color/alpha tweaks to stay dark-mode compatible.
 
 #### 10.5.1 Shared Row Definition
 
@@ -685,15 +681,15 @@ The table and mobile cards should share one normalized row definition, but the d
 
 ## 11. Production baseline vs upcoming polish
 
-The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, **light visual direction**, and **dark mode** (`.dark` scope, theme toggle, no-flash boot) are the current production baseline. Outstanding design work now includes the **wide console layout for `/tasks/list`**, clearer filter hierarchy, stronger table column economics, and the remaining **mobile refinement / glass-motion polish** called out in the tracker linked above.
+The **toolchain** (frontend-owned Tailwind/PostCSS through Vite), **`--mm-*` tokens**, **light visual direction**, and **dark mode** (`.dark` scope and no-flash boot) are the current production baseline. Outstanding design work now includes the **wide console layout for `/tasks/list`**, clearer filter hierarchy, stronger table column economics, and the remaining **mobile refinement / glass-motion polish** called out in the tracker linked above.
 
 ## 12. Troubleshooting
 
 ### Tailwind classes do not appear
 
-1. Confirm `tailwind.config.cjs` `content` includes templates, `api_service/static/task_dashboard/**/*.js`, and `./frontend/src/**/*.{js,jsx,ts,tsx}`.
+1. Confirm `tailwind.config.cjs` `content` includes the shared shell templates and `./frontend/src/**/*.{js,jsx,ts,tsx}`.
 2. Avoid dynamic utility class construction in JS; use semantic classes.
-3. Confirm generated assets were refreshed (`npm run generate`), or at minimum rebuild the shared stylesheet with `npm run dashboard:css:min`.
+3. Confirm generated assets were refreshed (`npm run generate`) so the Vite-emitted CSS bundle is current.
 
 ### `tailwindcss: command not found`
 
@@ -703,7 +699,7 @@ The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, *
 
 ### Dark mode controls look wrong
 
-1. Verify `.dark` token scope exists in `dashboard.tailwind.css`.
+1. Verify `.dark` token scope exists in `frontend/src/styles/mission-control.css`.
 2. Verify toggle script runs before dashboard render logic.
 3. Check `color-scheme` values for both light and dark scopes.
 
@@ -717,7 +713,7 @@ The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, *
 
 - `docs/UI/MissionControlArchitecture.md`
 - `specs/025-tailwind-dashboard/`
-- `api_service/templates/task_dashboard.html`
-- `api_service/static/task_dashboard/dashboard.js`
-- `api_service/static/task_dashboard/dashboard.tailwind.css`
-- `api_service/static/task_dashboard/dashboard.css`
+- `api_service/templates/react_dashboard.html`
+- `frontend/src/entrypoints/`
+- `frontend/src/styles/mission-control.css`
+- `api_service/static/task_dashboard/dist/`

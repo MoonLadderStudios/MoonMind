@@ -87,7 +87,7 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
     assert response.headers["location"] == "/tasks/list"
 
 
-def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
+def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
         "/tasks/new",
         "/tasks/create",
@@ -96,7 +96,12 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     ):
         response = client.get(path)
         assert response.status_code == 200
-        assert "task-dashboard-config" in response.text
+        assert "moonmind-ui-boot" in response.text
+        assert 'type="module"' in response.text
+        assert "/static/task_dashboard/dist/assets/" in response.text
+        assert "task-dashboard-config" not in response.text
+        assert "/static/task_dashboard/dashboard.js" not in response.text
+        assert 'id="dashboard-alerts-root"' in response.text
 
     for path in (
         "/tasks/list",
@@ -111,6 +116,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
+        assert 'id="dashboard-alerts-root"' in response.text
 
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:

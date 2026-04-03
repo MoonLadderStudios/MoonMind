@@ -444,7 +444,7 @@ async def test_send_message_retries_on_503():
 # --- T010: Pydantic model tests ---
 
 
-def test_jules_agent_message_model():
+async def test_jules_agent_message_model():
     """T010: JulesAgentMessage parses from alias and field name."""
     from moonmind.schemas.jules_models import JulesAgentMessage
 
@@ -455,7 +455,7 @@ def test_jules_agent_message_model():
     assert msg2.agent_message == "test"
 
 
-def test_jules_activity_model():
+async def test_jules_activity_model():
     """T010: JulesActivity parses with all fields."""
     from moonmind.schemas.jules_models import JulesActivity
 
@@ -475,7 +475,7 @@ def test_jules_activity_model():
     assert activity.create_time == "2026-03-21T10:00:00Z"
 
 
-def test_jules_activity_model_no_message():
+async def test_jules_activity_model_no_message():
     """T010: JulesActivity with no agentMessaged field."""
     from moonmind.schemas.jules_models import JulesActivity
 
@@ -484,7 +484,7 @@ def test_jules_activity_model_no_message():
     assert activity.originator == "user"
 
 
-def test_jules_list_activities_result_model():
+async def test_jules_list_activities_result_model():
     """T010: JulesListActivitiesResult parses aliases."""
     from moonmind.schemas.jules_models import JulesListActivitiesResult
 
@@ -498,7 +498,7 @@ def test_jules_list_activities_result_model():
     assert result.activity_id == "abc123"
 
 
-def test_jules_list_activities_result_model_no_question():
+async def test_jules_list_activities_result_model_no_question():
     """T010: JulesListActivitiesResult with no question."""
     from moonmind.schemas.jules_models import JulesListActivitiesResult
 

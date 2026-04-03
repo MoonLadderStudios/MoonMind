@@ -22,13 +22,24 @@ _CODEX_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
 class CodexCliStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``codex`` CLI runs."""
 
+    _MANAGED_POLICY_FLAGS = frozenset({
+        "--full-auto",
+        "--dangerously-bypass-approvals-and-sandbox",
+    })
+    _MANAGED_POLICY_FLAGS_WITH_VALUE = frozenset({
+        "-a",
+        "--ask-for-approval",
+        "-s",
+        "--sandbox",
+    })
+
     @property
     def runtime_id(self) -> str:
         return "codex_cli"
 
     @property
     def default_command_template(self) -> list[str]:
-        return ["codex", "exec", "--full-auto"]
+        return ["codex", "exec"]
 
     def build_command(
         self,
@@ -43,7 +54,7 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         Codex CLI uses ``-m`` for model and does NOT support
         ``--effort``.  Prompt is a positional argument.
         """
-        cmd = list(profile.command_template)
+        cmd = self._sanitize_command_template(profile.command_template)
 
         model = self.get_model(profile, request)
         if model:
@@ -53,6 +64,29 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             cmd.append(request.instruction_ref)
 
         return cmd
+
+    @classmethod
+    def _sanitize_command_template(cls, command_template: list[str]) -> list[str]:
+        """Drop sandbox/approval flags so managed policy comes only from config."""
+
+        sanitized: list[str] = []
+        skip_next = False
+        managed_policy_flags = (
+            cls._MANAGED_POLICY_FLAGS | cls._MANAGED_POLICY_FLAGS_WITH_VALUE
+        )
+        for part in command_template:
+            if skip_next:
+                skip_next = False
+                continue
+            if part in cls._MANAGED_POLICY_FLAGS:
+                continue
+            if part in cls._MANAGED_POLICY_FLAGS_WITH_VALUE:
+                skip_next = True
+                continue
+            if any(part.startswith(flag + "=") for flag in managed_policy_flags):
+                continue
+            sanitized.append(part)
+        return sanitized
 
     def shape_environment(
         self,

@@ -120,7 +120,15 @@ def _mock_queue_create_job(page, job_id=None, should_fail=False):
                 body=json.dumps({"detail": "queue error"}),
             )
             return
-        payload = json.dumps({"id": job_id or TEST_JOB_ID})
+        workflow_id = f"mm:{job_id or TEST_JOB_ID}"
+        payload = json.dumps(
+            {
+                "workflowId": workflow_id,
+                "runId": "run-123",
+                "namespace": "moonmind",
+                "redirectPath": f"/tasks/{workflow_id}?source=temporal",
+            }
+        )
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -148,9 +156,9 @@ def test_submit_create_task_flow_successful_navigation(server):
                 expect(submit_button).to_have_text("Submitting...")
             response = response_info.value
             assert response.ok
-            page.wait_for_url(f"**/tasks/queue/{TEST_JOB_ID}")
+            page.wait_for_url(f"**/tasks/mm:{TEST_JOB_ID}?source=temporal")
 
-            assert page.url.endswith(f"/tasks/queue/{TEST_JOB_ID}")
+            assert page.url.endswith(f"/tasks/mm:{TEST_JOB_ID}?source=temporal")
 
 
 def test_submit_create_task_flow_error_restores_label(server):

@@ -94,7 +94,7 @@ async def _async_noop(**_kwargs):
 # ---------------------------------------------------------------------------
 
 
-def test_shape_environment_for_oauth_clears_sensitive_vars():
+async def test_shape_environment_for_oauth_clears_sensitive_vars():
     base = {
         "HOME": "/home/user",
         "GOOGLE_API_KEY": "secret-key",
@@ -110,14 +110,14 @@ def test_shape_environment_for_oauth_clears_sensitive_vars():
     assert shaped["MANAGED_AUTH_VOLUME_PATH"] == "/mnt/auth"
 
 
-def test_shape_environment_for_oauth_without_mount_path():
+async def test_shape_environment_for_oauth_without_mount_path():
     base = {"HOME": "/home/user", "GEMINI_API_KEY": "secret"}
     shaped = shape_environment_for_oauth(base, volume_mount_path=None)
     assert "MANAGED_AUTH_VOLUME_PATH" not in shaped
     assert "GEMINI_API_KEY" not in shaped
 
 
-def test_shape_environment_for_oauth_clears_github_cli_tokens():
+async def test_shape_environment_for_oauth_clears_github_cli_tokens():
     base = {
         "HOME": "/home/user",
         "GH_TOKEN": "ghp-token",
@@ -130,7 +130,7 @@ def test_shape_environment_for_oauth_clears_github_cli_tokens():
     assert "OPENAI_API_KEY" not in shaped
 
 
-def test_shape_environment_for_api_key_sets_ref():
+async def test_shape_environment_for_api_key_sets_ref():
     base = {"HOME": "/home/user"}
     shaped = shape_environment_for_api_key(
         base, api_key_ref="secrets/my-api-key", account_label="ci-bot"
@@ -140,7 +140,7 @@ def test_shape_environment_for_api_key_sets_ref():
     assert shaped["HOME"] == "/home/user"
 
 
-def test_shape_environment_for_api_key_without_ref():
+async def test_shape_environment_for_api_key_without_ref():
     base = {"HOME": "/home/user"}
     shaped = shape_environment_for_api_key(base, api_key_ref=None, account_label=None)
     assert "MANAGED_API_KEY_REF" not in shaped

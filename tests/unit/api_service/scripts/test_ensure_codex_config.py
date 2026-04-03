@@ -27,7 +27,7 @@ def test_ensure_codex_config_enforces_network_defaults_and_preserves_custom_keys
         template_path,
         """
 approval_policy = "never"
-sandbox_mode = "workspace-write"
+sandbox_mode = "danger-full-access"
 
 [sandbox_workspace_write]
 network_access = true
@@ -57,7 +57,7 @@ network_access = false
     assert result.path == target_path
     rendered = toml.load(target_path)
     assert rendered["approval_policy"] == "never"
-    assert rendered["sandbox_mode"] == "workspace-write"
+    assert rendered["sandbox_mode"] == "danger-full-access"
     assert rendered["sandbox_workspace_write"]["network_access"] is True
 
     # Ensure non-enforced user values survive.
@@ -74,7 +74,7 @@ def test_ensure_codex_config_replaces_invalid_nested_shape(tmp_path, monkeypatch
         template_path,
         """
 approval_policy = "never"
-sandbox_mode = "workspace-write"
+sandbox_mode = "danger-full-access"
 
 [sandbox_workspace_write]
 network_access = true
@@ -107,7 +107,7 @@ def test_ensure_codex_config_requires_workspace_network_key(
         template_path,
         """
 approval_policy = "never"
-sandbox_mode = "workspace-write"
+sandbox_mode = "danger-full-access"
 """.strip()
         + "\n",
     )
