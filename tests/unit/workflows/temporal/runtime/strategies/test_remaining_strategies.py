@@ -292,6 +292,8 @@ class TestCodexCliBuildCommand:
                 "workspace-write",
                 "--ask-for-approval",
                 "on-request",
+                "--sandbox=danger-full-access",
+                "--ask-for-approval=never",
             ],
         )
         request = _make_request(instruction_ref="Go")

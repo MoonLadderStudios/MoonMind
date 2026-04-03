@@ -71,6 +71,9 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
 
         sanitized: list[str] = []
         skip_next = False
+        managed_policy_flags = (
+            cls._MANAGED_POLICY_FLAGS | cls._MANAGED_POLICY_FLAGS_WITH_VALUE
+        )
         for part in command_template:
             if skip_next:
                 skip_next = False
@@ -79,6 +82,8 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
                 continue
             if part in cls._MANAGED_POLICY_FLAGS_WITH_VALUE:
                 skip_next = True
+                continue
+            if any(part.startswith(flag + "=") for flag in managed_policy_flags):
                 continue
             sanitized.append(part)
         return sanitized
