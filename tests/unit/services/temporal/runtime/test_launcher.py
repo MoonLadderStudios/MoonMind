@@ -660,6 +660,127 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_launch_emits_workspace_preparation_applied_annotation(
+    tmp_path, monkeypatch
+):
+    class _RecorderLogStreamer:
+        def __init__(self) -> None:
+            self.emissions: list[dict[str, object]] = []
+
+        def emit_system_annotation(self, **kwargs: object) -> None:
+            self.emissions.append(kwargs)
+
+    log_streamer = _RecorderLogStreamer()
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+    )
+    request = _make_request(instruction_ref="Run task")
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1001, returncode: int = 0) -> None:
+            self.pid = pid
+            self.returncode = returncode
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-applied",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace_path),
+    )
+
+    await process.wait()
+    assert process is not None
+    assert record.workspace_path == str(workspace_path)
+    assert (workspace_path / "CLAUDE.md").read_text(encoding="utf-8") == "Run task"
+    assert any(
+        emission.get("annotation_type") == "workspace_preparation_applied"
+        for emission in log_streamer.emissions
+    )
+
+
+@pytest.mark.asyncio
+async def test_launch_emits_workspace_preparation_skipped_annotation_for_existing_file(
+    tmp_path, monkeypatch
+):
+    class _RecorderLogStreamer:
+        def __init__(self) -> None:
+            self.emissions: list[dict[str, object]] = []
+
+        def emit_system_annotation(self, **kwargs: object) -> None:
+            self.emissions.append(kwargs)
+
+    log_streamer = _RecorderLogStreamer()
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+    )
+    request = _make_request(instruction_ref="Run task")
+    workspace_path = tmp_path / "workspace-skipped"
+    workspace_path.mkdir()
+    (workspace_path / "CLAUDE.md").write_text("already there", encoding="utf-8")
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1002, returncode: int = 0) -> None:
+            self.pid = pid
+            self.returncode = returncode
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-skipped",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace_path),
+    )
+
+    await process.wait()
+    assert process is not None
+    assert record.workspace_path == str(workspace_path)
+    assert (workspace_path / "CLAUDE.md").read_text(encoding="utf-8") == "already there"
+    assert any(
+        emission.get("annotation_type") == "workspace_preparation_skipped"
+        for emission in log_streamer.emissions
+    )
+
+
+@pytest.mark.asyncio
 async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypatch):
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)

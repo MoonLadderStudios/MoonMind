@@ -512,7 +512,7 @@ def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, 
     artifact_storage = LocalRuntimeArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
-    launcher = ManagedRuntimeLauncher(store)
+    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
     return store, supervisor, launcher
 
 
