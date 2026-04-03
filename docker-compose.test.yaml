@@ -40,9 +40,9 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    # Run through test_unit.sh so xdist, flags, and env setup are identical to CI.
-    # Pass --python-only to skip Node/dashboard tests (node may not be in this image).
-    command: ["bash", "-lc", "/app/tools/test_unit.sh --python-only"]
+    # Run all tests (Python + frontend) inside the container. The runtime image
+    # includes npm, so frontend tests are fully supported without --python-only.
+    command: ["bash", "-lc", "/app/tools/test_unit.sh"]
     depends_on:
       - minio
     networks:

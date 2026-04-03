@@ -233,6 +233,8 @@ WORKDIR /app
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=tooling-builder /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=tooling-builder /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
@@ -281,16 +283,19 @@ RUN apt-get update && \
 # Ensure the non-root ``app`` user exists for Temporal workers and the bundled
 # CLIs remain executable from its PATH.
 # Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
+# Pre-create ~/.npm as a managed cache so repeated managed-agent runs do not
+# pay the full install cost every time.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/gemini /usr/local/bin/claude && \
-    mkdir -p /home/app/.gemini && chown app:app /home/app/.gemini
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/gemini /usr/local/bin/claude /usr/local/bin/npm /usr/local/bin/npx && \
+    mkdir -p /home/app/.gemini && chown app:app /home/app/.gemini && \
+    mkdir -p /home/app/.npm && chown app:app /home/app/.npm
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
 # repository search tooling expected by Codex runtime defaults.
 RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
     HOME=/home/app \
     PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
-    sh -c 'codex --version && gemini --version && claude --version && rg --version'
+    sh -c 'codex --version && gemini --version && claude --version && npm --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals and managed sandbox defaults. The template is merged into the
