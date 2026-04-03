@@ -649,22 +649,56 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
+  const prevProviderProfileRef = useRef(providerProfile);
+
+  const providerProfilesQuery = useQuery({
+    queryKey: ['task-create', 'provider-profiles', runtime],
+    queryFn: async (): Promise<ProviderProfile[]> => {
+      const separator = providerProfilesEndpoint.includes('?') ? '&' : '?';
+      const response = await fetch(
+        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(runtime)}`,
+        {
+          headers: { Accept: 'application/json' },
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Failed to load provider profiles.'));
+      }
+      return (await response.json()) as ProviderProfile[];
+    },
+    enabled: Boolean(runtime),
+  });
 
   useEffect(() => {
-    if (modelManualOverride) {
+    const runtimeChanged = prevRuntimeRef.current !== runtime;
+    const profileChanged = prevProviderProfileRef.current !== providerProfile;
+
+    if (runtimeChanged || profileChanged) {
+      setModelManualOverride(false);
+    }
+
+    if (runtimeChanged) {
+      setProviderProfile('');
+      prevRuntimeRef.current = runtime;
+    }
+
+    if (profileChanged) {
+      prevProviderProfileRef.current = providerProfile;
+    }
+
+    setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
+
+    if (modelManualOverride && !runtimeChanged && !profileChanged) {
       return;
     }
+
+    const profileIdForModel = runtimeChanged ? '' : providerProfile;
     const profiles = providerProfilesQuery.data || [];
-    const selectedProfile = profiles.find((p) => p.profile_id === providerProfile);
+    const selectedProfile = profiles.find((p) => p.profile_id === profileIdForModel);
     if (selectedProfile?.default_model) {
       setModel(selectedProfile.default_model);
     } else {
       setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
-    }
-    setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
-    if (prevRuntimeRef.current !== runtime) {
-      setProviderProfile('');
-      prevRuntimeRef.current = runtime;
     }
   }, [
     dashboardConfig.system?.defaultTaskEffort,
@@ -689,24 +723,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const data = (await response.json()) as SkillsResponse;
       return data.items?.worker || [];
     },
-  });
-
-  const providerProfilesQuery = useQuery({
-    queryKey: ['task-create', 'provider-profiles', runtime],
-    queryFn: async (): Promise<ProviderProfile[]> => {
-      const separator = providerProfilesEndpoint.includes('?') ? '&' : '?';
-      const response = await fetch(
-        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(runtime)}`,
-        {
-          headers: { Accept: 'application/json' },
-        },
-      );
-      if (!response.ok) {
-        throw new Error(await responseErrorMessage(response, 'Failed to load provider profiles.'));
-      }
-      return (await response.json()) as ProviderProfile[];
-    },
-    enabled: Boolean(runtime),
   });
 
   const templateOptionsQuery = useQuery({
@@ -1723,8 +1739,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               value={model}
               placeholder="runtime default"
               onChange={(event) => {
-                setModel(event.target.value);
-                setModelManualOverride(true);
+                const next = event.target.value;
+                setModel(next);
+                setModelManualOverride(next !== '');
               }}
             />
           </label>
