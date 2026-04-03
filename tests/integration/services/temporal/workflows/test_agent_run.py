@@ -35,7 +35,7 @@ async def mock_cancel(request: dict) -> AgentRunStatus:
 
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict) -> dict:
-    """Return a single default managed profile."""
+    """Return managed profiles for exact-profile and selector routing tests."""
     return {
         "profiles": [
             {
@@ -53,19 +53,36 @@ async def mock_provider_profile_list(request: dict) -> dict:
                 "rate_limit_policy": "pause_and_retry",
                 "max_lease_duration_seconds": 7200,
                 "enabled": True,
-            }
+            },
+            {
+                "profile_id": "explicit-openai-profile",
+                "runtime_id": request.get("runtime_id", "test-agent"),
+                "provider_id": "openai",
+                "auth_mode": "volume",
+                "volume_ref": "test-volume",
+                "volume_mount_path": "/tmp/auth",
+                "account_label": "openai",
+                "api_key_ref": None,
+                "runtime_env_overrides": {},
+                "api_key_env_var": None,
+                "max_parallel_runs": 1,
+                "cooldown_after_429_seconds": 900,
+                "rate_limit_policy": "pause_and_retry",
+                "max_lease_duration_seconds": 7200,
+                "enabled": True,
+            },
         ]
     }
 
 
 @_activity.defn(name="provider_profile.ensure_manager")
 async def mock_provider_profile_ensure_manager(request: dict) -> dict:
-    return {"started": True, "workflow_id": f"auth-profile-manager:{request.get('runtime_id', 'test')}"}
+    return {"started": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
 
 
 @_activity.defn(name="provider_profile.reset_manager")
 async def mock_provider_profile_reset_manager(request: dict) -> dict:
-    return {"reset": True, "workflow_id": f"auth-profile-manager:{request.get('runtime_id', 'test')}"}
+    return {"reset": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
 
 
 # Collect all activities that need to be registered on the main task queue.
@@ -174,7 +191,11 @@ class MockProviderProfileManager:
             while self.pending_requests:
                 req = self.pending_requests.pop(0)
                 if assign_slots:
-                    profile_id = "default-managed"
+                    profile_id = (
+                        req.get("execution_profile_ref")
+                        or req.get("profile_id")
+                        or "default-managed"
+                    )
                     cooldown_until = self.cooldowns.get(profile_id)
                     if cooldown_until is not None:
                         cooldown_dt = datetime.fromisoformat(cooldown_until)
@@ -242,6 +263,7 @@ async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
 
 @pytest.mark.asyncio
 async def test_agent_run_workflow():
+    _managed_launch_requests.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         # Main agent-run worker.
         async with Worker(
@@ -262,7 +284,7 @@ async def test_agent_run_workflow():
                 # Start dummy manager
                 runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"auth-profile-manager:{runtime_id}"
+                manager_id = f"provider-profile-manager:{runtime_id}"
                 await env.client.start_workflow(
                     MockProviderProfileManager.run,
                     {"runtime_id": request.agent_id},
@@ -288,8 +310,8 @@ async def test_agent_run_workflow():
                 assert result.summary == "Success"
 
 
-@pytest.mark.asyncio
 async def test_agent_run_workflow_cancellation():
+    _managed_launch_requests.clear()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
@@ -309,7 +331,7 @@ async def test_agent_run_workflow_cancellation():
                 # Start dummy manager
                 runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"auth-profile-manager:{runtime_id}"
+                manager_id = f"provider-profile-manager:{runtime_id}"
                 await env.client.start_workflow(
                     MockProviderProfileManager.run,
                     {"runtime_id": request.agent_id, "assign_slots": False},
@@ -357,7 +379,7 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                     idempotency_key="idem-429",
                 )
 
-                manager_id = "auth-profile-manager:gemini_cli"
+                manager_id = "provider-profile-manager:gemini_cli"
                 await env.client.start_workflow(
                     MockProviderProfileManager.run,
                     {"runtime_id": "gemini_cli"},
@@ -436,7 +458,7 @@ async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histori
                     idempotency_key="idem-parent-bind",
                 )
 
-                manager_id = "auth-profile-manager:test-agent"
+                manager_id = "provider-profile-manager:test-agent"
                 await env.client.start_workflow(
                     MockProviderProfileManager.run,
                     {"runtime_id": "test-agent"},
@@ -693,7 +715,7 @@ async def test_cancellation_releases_provider_profile_slot():
                 # Start dummy manager that assigns slots
                 runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
-                manager_id = f"auth-profile-manager:{runtime_id}"
+                manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(
                     MockProviderProfileManager.run,
                     {"runtime_id": request.agent_id, "assign_slots": True},
