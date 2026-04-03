@@ -97,7 +97,7 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
     )
     temporal_authoritative_read_enabled: bool = Field(
-        False,
+        True,
         alias="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
     )
     workflow_worker_concurrency: int | None = Field(
