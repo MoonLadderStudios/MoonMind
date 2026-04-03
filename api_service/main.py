@@ -175,6 +175,94 @@ def _initialize_contexts(app_state, app_settings):
     logger.info("Storage and service contexts initialized successfully.")
 
 
+async def _sync_env_managed_secrets() -> int:
+    """Seed or refresh managed secrets from environment values."""
+
+    def _read_value_from_dotenv(name: str) -> str | None:
+        from moonmind.config.paths import ENV_FILE
+        env_file = ENV_FILE
+
+        try:
+            if not env_file.exists():
+                return None
+            for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line.removeprefix("export ").strip()
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.strip() != name:
+                    continue
+                value = value.strip()
+                if (value.startswith("\"") and value.endswith("\"")) or (
+                    value.startswith("'") and value.endswith("'")
+                ):
+                    return value[1:-1]
+                return value
+        except Exception:
+            logger.debug(
+                "Failed to read candidate managed secret from .env file",
+                slug=name,
+                env_file=str(env_file),
+                exc_info=True,
+            )
+            return None
+        return None
+
+    def _env_value(name: str) -> str | None:
+        return (
+            os.environ.get(name)
+            or _read_value_from_dotenv(name)
+        )
+
+    from api_service.services.secrets import SecretsService
+
+    github_token = (
+        _env_value("GITHUB_TOKEN")
+        or _env_value("GH_TOKEN")
+        or _env_value("GITHUB_PAT")
+    )
+    candidate_env_secrets = {
+        k: v
+        for k, v in {
+            "GITHUB_TOKEN": github_token,
+            "ATLASSIAN_API_KEY": _env_value("ATLASSIAN_API_KEY"),
+        }.items()
+        if v
+    }
+
+    if not candidate_env_secrets:
+        logger.debug("No managed secret values found in environment; skipping sync.")
+        return 0
+
+    try:
+        async with get_async_session_context() as session:
+            imported = await SecretsService.import_from_env(
+                session,
+                candidate_env_secrets,
+                overwrite_active=True,
+            )
+            if imported:
+                logger.info(
+                    "Synced managed secrets from environment on startup",
+                    slugs=sorted(candidate_env_secrets.keys()),
+                    imported_count=imported,
+                )
+            return imported
+    except Exception as exc:
+        # Keep startup resilient: this is convenience migration behavior, not a hard
+        # startup dependency.
+        logger.warning(
+            "Failed to sync managed secrets from environment during startup: %s",
+            exc,
+            exc_info=True,
+        )
+        return 0
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
     provider = settings.oidc.AUTH_PROVIDER
@@ -668,6 +756,7 @@ async def startup_event():
             exc,
         )
     await _sync_task_template_seed_catalog()
+    await _sync_env_managed_secrets()
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":

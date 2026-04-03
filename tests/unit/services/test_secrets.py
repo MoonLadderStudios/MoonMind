@@ -129,7 +129,60 @@ async def test_import_from_env(mock_db_session):
     mock_db_session.execute.side_effect = mock_execute
     
     count = await SecretsService.import_from_env(mock_db_session, env_dict)
-    
+
     assert count == 2
     assert mock_db_session.add.call_count == 2
     mock_db_session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_import_from_env_does_not_overwrite_active_by_default(mock_db_session):
+    active_secret = ManagedSecret(
+        slug="KEY_1",
+        ciphertext="old-value",
+        status=SecretStatus.ACTIVE,
+        details={"imported_from": ".env"},
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = active_secret
+
+    async def mock_execute(*args, **kwargs):
+        return mock_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    count = await SecretsService.import_from_env(
+        mock_db_session,
+        {"KEY_1": "new-value"},
+    )
+
+    assert count == 0
+    assert active_secret.ciphertext == "old-value"
+
+
+@pytest.mark.asyncio
+async def test_import_from_env_can_overwrite_active(mock_db_session):
+    active_secret = ManagedSecret(
+        slug="KEY_1",
+        ciphertext="old-value",
+        status=SecretStatus.ACTIVE,
+        details={"imported_from": ".env", "migrated_at": "earlier"},
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = active_secret
+
+    async def mock_execute(*args, **kwargs):
+        return mock_result
+
+    mock_db_session.execute.side_effect = mock_execute
+
+    count = await SecretsService.import_from_env(
+        mock_db_session,
+        {"KEY_1": "new-value"},
+        overwrite_active=True,
+    )
+
+    assert count == 1
+    assert active_secret.ciphertext == "new-value"
