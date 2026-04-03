@@ -1,4 +1,6 @@
 import contextlib
+import re
+import uuid
 
 def _build_proposal_service_factory():
     from api_service.db.base import get_async_session_context
@@ -94,6 +96,47 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {}
+
+
+def _coerce_non_empty_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _slugify_branch_prefix(value: Any, *, max_length: int = 40) -> str:
+    candidate = _coerce_non_empty_text(value)
+    if not candidate:
+        return ""
+    cleaned = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
+    return cleaned[:max_length].strip("-")
+
+
+def _derive_pr_branch_prefix(
+    task_payload: Mapping[str, Any],
+    publish_payload: Mapping[str, Any],
+    selected_skill_name: str,
+) -> str:
+    for raw in (
+        task_payload.get("title"),
+        publish_payload.get("prTitle"),
+        task_payload.get("instructions"),
+    ):
+        prefix = _slugify_branch_prefix(raw)
+        if prefix:
+            return prefix
+
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            step_title = _coerce_non_empty_text(step.get("title"))
+            step_prefix = _slugify_branch_prefix(step_title)
+            if step_prefix:
+                return step_prefix
+
+    if selected_skill_name.strip().lower() not in {"", "auto"}:
+        return _slugify_branch_prefix(selected_skill_name)
+    return ""
 
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
@@ -275,24 +318,22 @@ def _build_runtime_planner():
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
             if not node_inputs.get("targetBranch") and not node_inputs.get("branch"):
-                import re
-                import uuid
+                prefix = _derive_pr_branch_prefix(
+                    task_payload=task_payload,
+                    publish_payload=publish_payload,
+                    selected_skill_name=selected_skill_name,
+                )
+                if not prefix:
+                    prefix = _derive_pr_branch_prefix(
+                        task_payload=parameter_payload,
+                        publish_payload=publish_payload,
+                        selected_skill_name=selected_skill_name,
+                    )
 
-                desc_source = str(
-                    task_payload.get("title")
-                    or parameter_payload.get("title")
-                    or selected_skill_name
-                    or ""
-                ).strip()
-
-                if desc_source:
-                    clean_desc = re.sub(r"[^a-z0-9]+", "-", desc_source.lower()).strip("-")
-                    clean_desc = clean_desc[:40].strip("-")
-                    prefix = f"{clean_desc}-" if clean_desc else ""
-                else:
-                    prefix = ""
-
-                node_inputs["targetBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
+                branch_prefix = f"{prefix}-" if prefix else ""
+                node_inputs["targetBranch"] = (
+                    f"{branch_prefix}{str(uuid.uuid4())[:8]}"
+                )
 
         # --- Assemble plan ---
         title = str(

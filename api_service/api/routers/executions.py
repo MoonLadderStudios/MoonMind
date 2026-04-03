@@ -392,9 +392,7 @@ def _serialize_execution(
     if not isinstance(git_payload, dict):
         git_payload = {}
 
-    publish_payload = task_payload.get("publish")
-    if not isinstance(publish_payload, dict):
-        publish_payload = {}
+    publish_payload = _normalize_publish_payload(task_payload.get("publish"))
 
     # Precedence: task.git.startingBranch > task.startingBranch > params.startingBranch
     starting_branch = str(
@@ -741,6 +739,10 @@ def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
     return normalized
 
 
+def _coerce_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def _coerce_step_count(value: Any) -> int:
     if value is None:
         return 0
@@ -837,6 +839,38 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         normalized_steps.append(normalized_step)
 
     return normalized_steps
+
+
+def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
+    publish_payload = _coerce_mapping(raw_publish)
+    if not publish_payload:
+        return {}
+
+    normalized: dict[str, Any] = {}
+    for key in (
+        "mode",
+        "prBaseBranch",
+        "baseBranch",
+        "commitMessage",
+        "prTitle",
+        "prBody",
+        "verificationSkipReason",
+        "verification",
+    ):
+        if key not in publish_payload:
+            continue
+        value = publish_payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        normalized[key] = value
+
+    if "baseBranch" in normalized and "prBaseBranch" not in normalized:
+        normalized["prBaseBranch"] = normalized["baseBranch"]
+    return normalized
 
 
 def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1052,6 +1086,7 @@ async def _create_execution_from_task_request(
         if isinstance(task_payload.get("runtime"), dict)
         else {}
     )
+    publish_payload = _normalize_publish_payload(task_payload.get("publish"))
     normalized_tool = _normalize_task_tool(task_payload)
     normalized_task_for_planner: dict[str, Any] = {}
     instructions = str(task_payload.get("instructions") or "").strip()
@@ -1074,6 +1109,11 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["runtime"] = dict(runtime_payload)
     if normalized_steps:
         normalized_task_for_planner["steps"] = normalized_steps
+    task_title = str(task_payload.get("title") or "").strip()
+    if task_title:
+        normalized_task_for_planner["title"] = task_title
+    if publish_payload:
+        normalized_task_for_planner["publish"] = dict(publish_payload)
     git_payload = (
         task_payload.get("git") if isinstance(task_payload.get("git"), dict) else {}
     )

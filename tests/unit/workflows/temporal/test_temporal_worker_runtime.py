@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
@@ -413,6 +414,52 @@ def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
     text = plan["nodes"][-1]["inputs"]["instructions"]
     assert text == "Do work"
     assert "gh pr create" not in text
+
+
+def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Refine redirect handling.",
+                "title": "Fix login redirect",
+                "runtime": {"mode": "gemini_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    target = plan["nodes"][-1]["inputs"]["targetBranch"]
+    assert target.startswith("fix-login-redirect-")
+    assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", target)
+
+
+def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "runtime": {"mode": "gemini_cli"},
+                "tool": {"name": "auto", "type": "agent_runtime"},
+                "steps": [
+                    {"title": "Create PR-friendly branch", "instructions": "Plan step"},
+                ],
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    target = plan["nodes"][0]["inputs"]["targetBranch"]
+    assert target.startswith("create-pr-friendly-branch-")
+    assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", target)
 
 
 def test_enforce_codex_config_skips_non_managed_fleet() -> None:

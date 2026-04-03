@@ -446,6 +446,39 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     }
 
 
+def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "title": "Fix login redirect",
+                    "instructions": "Update OAuth callback behavior.",
+                    "publish": {
+                        "mode": "pr",
+                        "prTitle": "PR: Ensure OAuth redirect is correct",
+                        "prBody": "Adds integration tests and updates callback routing.",
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = called_kwargs["initial_parameters"]
+
+    assert initial_parameters["task"]["title"] == "Fix login redirect"
+    assert initial_parameters["task"]["publish"]["prTitle"] == "PR: Ensure OAuth redirect is correct"
+    assert initial_parameters["task"]["publish"]["prBody"] == "Adds integration tests and updates callback routing."
+
+
 def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
