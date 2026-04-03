@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 
@@ -16,8 +15,6 @@ from moonmind.auth.resolvers import (
     AdapterVaultSecretResolver,
     RootSecretResolver,
 )
-
-logger = logging.getLogger(__name__)
 
 # Slugs tried when no profile secret_refs / env token / WORKFLOW_GITHUB_TOKEN_SECRET_REF
 # produced a token (matches api_service startup seeding and dashboard hints).
