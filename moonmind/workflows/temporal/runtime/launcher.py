@@ -24,6 +24,7 @@ from moonmind.utils.logging import SecretRedactor
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .store import ManagedRunStore
+from .log_streamer import RuntimeLogStreamer
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -35,10 +36,15 @@ _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
 
-    def __init__(self, store: ManagedRunStore) -> None:
+    def __init__(
+        self,
+        store: ManagedRunStore,
+        log_streamer: RuntimeLogStreamer | None = None,
+    ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
+        self._log_streamer = log_streamer
 
     @staticmethod
     def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
@@ -64,6 +70,26 @@ class ManagedRuntimeLauncher:
         if repo_path.exists():
             return str(repo_path.resolve())
         return None
+
+    def _emit_system_annotation(
+        self,
+        *,
+        run_id: str,
+        workspace_path: str | None,
+        annotation_type: str,
+        text: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Emit a MoonMind-owned system annotation from the launcher lifecycle."""
+        if not self._log_streamer:
+            return
+        self._log_streamer.emit_system_annotation(
+            run_id=run_id,
+            workspace_path=workspace_path,
+            text=text,
+            annotation_type=annotation_type,
+            metadata={"source": "launcher", **(metadata or {})},
+        )
 
     @staticmethod
     def _workspace_root() -> Path:
@@ -648,10 +674,44 @@ class ManagedRuntimeLauncher:
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex).
         if resolved_workspace_path is not None and strategy is not None:
+            claude_md_path = None
+            claude_md_pre_existing = False
+            if strategy.runtime_id == "claude_code" and request.instruction_ref:
+                claude_md_path = Path(resolved_workspace_path) / "CLAUDE.md"
+                claude_md_pre_existing = (
+                    claude_md_path.exists() or claude_md_path.is_symlink()
+                )
+
             try:
                 await strategy.prepare_workspace(
                     Path(resolved_workspace_path), request
                 )
+
+                if claude_md_path is not None:
+                    if claude_md_pre_existing:
+                        self._emit_system_annotation(
+                            run_id=run_id,
+                            workspace_path=resolved_workspace_path,
+                            annotation_type="workspace_preparation_skipped",
+                            text="Supervisor: skipped writing CLAUDE.md because the file already exists or is a symlink.",
+                            metadata={
+                                "source": "launcher",
+                                "target": "CLAUDE.md",
+                                "reason": "preexisting_or_symlink",
+                            },
+                        )
+                    elif claude_md_path.exists():
+                        self._emit_system_annotation(
+                            run_id=run_id,
+                            workspace_path=resolved_workspace_path,
+                            annotation_type="workspace_preparation_applied",
+                            text="Supervisor: workspace instructions written to CLAUDE.md.",
+                            metadata={
+                                "source": "launcher",
+                                "target": "CLAUDE.md",
+                                "reason": "workspace_preparation",
+                            },
+                        )
             except Exception:
                 logger.warning(
                     "strategy.prepare_workspace failed for run_id=%s runtime=%s",

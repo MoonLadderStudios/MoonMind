@@ -31,6 +31,7 @@ class RuntimeLogStreamer:
         self._storage = artifact_storage
         self.publisher = publisher
         self._sequence_counter = 0
+        self._annotations_by_run: dict[str, list[dict[str, Any]]] = {}
 
     def _next_sequence(self) -> int:
         self._sequence_counter += 1
@@ -44,6 +45,7 @@ class RuntimeLogStreamer:
         stream_name: str,
         workspace_path: str | None = None,
         parser: RuntimeOutputParser | None = None,
+        chunk_callback: Any | None = None,
         event_callback: Any | None = None,
     ) -> tuple[str, str, list[dict]]:
         """Read an asyncio.StreamReader in fixed-size chunks and write to an artifact file.
@@ -75,10 +77,14 @@ class RuntimeLogStreamer:
             
             chunk_length = len(chunk)
             chunks.append(chunk)
+            text_content = chunk.decode("utf-8", errors="replace")
+            if chunk_callback is not None:
+                callback_result = chunk_callback(stream_name, text_content)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
             
             if live_publisher is not None:
                 try:
-                    text_content = chunk.decode("utf-8", errors="replace")
                     obj = LiveLogChunk(
                         sequence=self._next_sequence(),
                         stream=stream_name,  # type: ignore
@@ -127,6 +133,57 @@ class RuntimeLogStreamer:
         )
         return storage_ref, data.decode("utf-8", errors="replace"), events
 
+    def emit_system_annotation(
+        self,
+        *,
+        run_id: str,
+        workspace_path: str | None,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+        annotation_type: str | None = None,
+    ) -> None:
+        """Emit a MoonMind-owned system event into the shared sequence space."""
+        if metadata is None:
+            metadata = {}
+        text = str(text or "").strip()
+        if not text:
+            return
+
+        sequence = self._next_sequence()
+        annotation_record = {
+            "annotation_type": annotation_type or metadata.get("annotation_type", "system"),
+            "text": text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "sequence": sequence,
+            "metadata": metadata,
+        }
+        self._annotations_by_run.setdefault(run_id, []).append(annotation_record)
+
+        live_publisher = self.publisher
+        if live_publisher is None and workspace_path:
+            live_publisher = SpoolLogPublisher(workspace_path=workspace_path)
+
+        if live_publisher is None:
+            return
+
+        try:
+            obj = LiveLogChunk(
+                sequence=sequence,
+                stream="system",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                text=text,
+                offset=None,
+            )
+            live_publisher.publish(obj)
+        except Exception:
+            # Failures in observability publishing are non-fatal for runtime control.
+            return
+
+    def consume_annotations(self, run_id: str) -> list[dict[str, Any]]:
+        """Return and clear persisted in-memory supervisor annotations for a run."""
+        annotations = self._annotations_by_run.pop(run_id, None)
+        return list(annotations or [])
+
     async def stream_and_parse(
         self,
         stdout_reader: asyncio.StreamReader | None,
@@ -135,6 +192,7 @@ class RuntimeLogStreamer:
         run_id: str,
         workspace_path: str | None = None,
         parser: RuntimeOutputParser | None = None,
+        chunk_callback: Any | None = None,
         event_callback: Any | None = None,
     ) -> tuple[dict[str, str], str, str, ParsedOutput, list[dict]]:
         """Stream both stdout/stderr to artifacts and parse the output.
@@ -158,6 +216,7 @@ class RuntimeLogStreamer:
                     stream_name="stdout",
                     workspace_path=workspace_path,
                     parser=parser,
+                    chunk_callback=chunk_callback,
                     event_callback=event_callback,
                 )
             )
@@ -172,6 +231,7 @@ class RuntimeLogStreamer:
                     stream_name="stderr",
                     workspace_path=workspace_path,
                     parser=parser,
+                    chunk_callback=chunk_callback,
                     event_callback=event_callback,
                 )
             )
@@ -202,6 +262,7 @@ class RuntimeLogStreamer:
         exit_code: int | None,
         duration_seconds: float,
         log_refs: dict[str, str],
+        annotations: list[dict] | None = None,
         parsed_output: ParsedOutput | None = None,
         events: list[dict] | None = None,
     ) -> str:
@@ -211,6 +272,8 @@ class RuntimeLogStreamer:
             "duration_seconds": duration_seconds,
             "log_refs": log_refs,
         }
+        if annotations is not None:
+            diagnostics["annotations"] = annotations
         if events is not None:
             diagnostics["events"] = events
         if parsed_output is not None:
