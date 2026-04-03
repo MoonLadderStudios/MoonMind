@@ -218,12 +218,15 @@ describe('Task Create Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Instructions'), {
       target: { value: 'Run end-to-end regression flow.' },
     });
-    fireEvent.change(screen.getByLabelText('Repository'), {
+    fireEvent.change(document.querySelector('input[name="repository"]') as HTMLInputElement, {
       target: { value: 'MoonLadderStudios/MoonMind' },
     });
-    fireEvent.change(screen.getByLabelText('Skill'), {
+    fireEvent.change(
+      document.querySelector('input[data-step-field="skillId"][data-step-index="0"]') as HTMLInputElement,
+      {
       target: { value: 'speckit-orchestrate' },
-    });
+      },
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -240,8 +243,11 @@ describe('Task Create Entrypoint', () => {
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request).toMatchObject({
       type: 'task',
+      priority: 0,
+      maxAttempts: 3,
       payload: {
         repository: 'MoonLadderStudios/MoonMind',
+        targetRuntime: 'codex_cli',
         task: {
           instructions: 'Run end-to-end regression flow.',
           tool: {
@@ -261,15 +267,28 @@ describe('Task Create Entrypoint', () => {
         },
       },
     });
+    expect(request.payload.requiredCapabilities).toEqual(['codex_cli', 'git', 'gh']);
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith('/tasks/mm:workflow-123?source=temporal');
     });
   });
 
+  it('renders the restored legacy create-task controls', async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByPlaceholderText('owner/repo')).not.toBeNull();
+    expect(await screen.findByLabelText('Provider profile')).not.toBeNull();
+    expect(await screen.findByLabelText('Feature Request / Initial Instructions')).not.toBeNull();
+    expect(await screen.findByPlaceholderText('auto-generated unless starting branch is non-default')).not.toBeNull();
+    expect(await screen.findByDisplayValue('3')).not.toBeNull();
+    expect(screen.getByText('Task Presets (optional)')).not.toBeNull();
+    expect(screen.getByText('Schedule (optional)')).not.toBeNull();
+  });
+
   it('updates provider-profile options when the selected runtime changes', async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const providerSelect = await screen.findByLabelText('Provider Profile');
+    const providerSelect = await screen.findByLabelText('Provider profile');
     await waitFor(() => {
       const labels = Array.from((providerSelect as HTMLSelectElement).options).map((option) => option.text);
       expect(labels).toEqual(['Default (system chooses)', 'Codex Default', 'Codex Secondary']);
@@ -321,24 +340,23 @@ describe('Task Create Entrypoint', () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.value === 'global:speckit-demo',
+          (option) => option.text === 'Spec Kit Demo (Global)',
         ),
       ).toBe(true);
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: 'global:speckit-demo' },
+      target: { value: 'global::::speckit-demo' },
     });
 
-    const featureInput = await screen.findByLabelText('Feature Name');
-    fireEvent.change(featureInput, {
+    fireEvent.change(screen.getByLabelText('Feature Request / Initial Instructions'), {
       target: { value: 'Task Create' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Preset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
-    await screen.findByDisplayValue('Clarify spec');
-    await screen.findByDisplayValue('Plan implementation');
+    await screen.findByDisplayValue('Clarify the {{ inputs.feature_name }} scope.');
+    await screen.findByDisplayValue('Write a plan for the task builder recovery.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -353,21 +371,24 @@ describe('Task Create Entrypoint', () => {
 
     const executionCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions').at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.instructions).toBe('Task Create');
     expect(request.payload.task.steps).toEqual([
       {
         id: 'tpl:speckit-demo:1.2.3:01',
         title: 'Clarify spec',
         instructions: 'Clarify the {{ inputs.feature_name }} scope.',
-        skill: {
-          id: 'speckit-clarify',
-          args: { feature: 'Task Create' },
-        },
       },
       {
         id: 'tpl:speckit-demo:1.2.3:02',
         title: 'Plan implementation',
         instructions: 'Write a plan for the task builder recovery.',
       },
+    ]);
+    expect(request.payload.task.appliedStepTemplates).toEqual([
+      expect.objectContaining({
+        slug: 'speckit-demo',
+        version: '1.2.3',
+      }),
     ]);
   });
 });
