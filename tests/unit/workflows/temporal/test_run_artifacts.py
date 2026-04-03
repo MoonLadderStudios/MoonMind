@@ -43,6 +43,42 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
     assert workflow._plan_ref == "art_plan_1"
 
 
+def test_initialize_from_payload_tracks_declared_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "owner-1"),
+    )
+
+    workflow._initialize_from_payload(
+        {
+            "workflowType": "MoonMind.Run",
+            "initialParameters": {
+                "repo": "MoonLadderStudios/MoonMind",
+                "task": {"dependsOn": ["mm:dep-1", "mm:dep-2"]},
+            },
+        }
+    )
+
+    captured_memo: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda memo: captured_memo.append(dict(memo)),
+    )
+
+    workflow._update_memo()
+
+    assert workflow._declared_dependencies == ["mm:dep-1", "mm:dep-2"]
+    assert captured_memo[-1]["depends_on"] == ["mm:dep-1", "mm:dep-2"]
+    assert captured_memo[-1]["has_dependencies"] is True
+    assert captured_memo[-1]["dependency_wait_occurred"] is False
+
+
 @pytest.mark.asyncio
 async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -195,6 +231,82 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     assert captured[1][1]["artifact_ref"] == "artifact://registry/1"
     assert captured[2][0] == "mm.skill.execute"
     assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"
+
+
+@pytest.mark.asyncio
+async def test_run_finalizing_stage_writes_dependency_summary_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._state = "waiting_on_dependencies"
+    workflow._declared_dependencies = ["mm:dep-1", "mm:dep-2"]
+    workflow._dependency_wait_occurred = True
+    workflow._dependency_wait_duration_ms = 4200
+    workflow._dependency_resolution = "dependency_failure"
+    workflow._failed_dependency_id = "mm:dep-2"
+
+    written_payloads: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, bool]:
+        assert activity_type == "artifact.write_complete"
+        written_payloads.append(json.loads(payload.payload.decode("utf-8")))
+        return {"ok": True}
+
+    start_time = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+    finish_time = datetime(2026, 3, 29, 12, 0, 5, tzinfo=timezone.utc)
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "mm:wf-1",
+            "run_id": "run-1",
+            "start_time": start_time,
+        },
+    )
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
+
+    await workflow._run_finalizing_stage(
+        parameters={"runtime": {"mode": "codex"}, "publishMode": "none"},
+        status="failed",
+        error="dependency failed",
+    )
+
+    assert written_payloads
+    dependencies = written_payloads[-1]["dependencies"]
+    assert dependencies == {
+        "declared": ["mm:dep-1", "mm:dep-2"],
+        "waited": True,
+        "waitDurationMs": 4200,
+        "resolution": "dependency_failure",
+        "failedDependencyId": "mm:dep-2",
+    }
 
 
 @pytest.mark.asyncio

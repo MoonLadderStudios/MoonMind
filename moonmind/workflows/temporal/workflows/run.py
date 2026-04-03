@@ -30,6 +30,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
+    from moonmind.schemas.temporal_models import normalize_dependency_ids
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
@@ -169,6 +170,11 @@ class MoonMindRunWorkflow:
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
         self._pull_request_url: Optional[str] = None
+        self._declared_dependencies: list[str] = []
+        self._dependency_wait_occurred: bool = False
+        self._dependency_wait_duration_ms: int | None = None
+        self._dependency_resolution: str | None = None
+        self._failed_dependency_id: str | None = None
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -660,6 +666,10 @@ class MoonMindRunWorkflow:
             input_payload,
             "initialParameters",
             "initial_parameters",
+        )
+        task_parameters = self._mapping_value(parameters, "task")
+        self._declared_dependencies = normalize_dependency_ids(
+            task_parameters.get("dependsOn")
         )
         ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
         self._repo = (
@@ -1936,6 +1946,13 @@ class MoonMindRunWorkflow:
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,
                 },
+                "dependencies": {
+                    "declared": list(self._declared_dependencies),
+                    "waited": self._dependency_wait_occurred,
+                    "waitDurationMs": self._dependency_wait_duration_ms,
+                    "resolution": self._dependency_resolution,
+                    "failedDependencyId": self._failed_dependency_id,
+                },
             }
 
             artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
@@ -2076,6 +2093,18 @@ class MoonMindRunWorkflow:
         normalized = value.strip()
         return normalized or None
 
+    def _dependency_metadata(self) -> dict[str, Any]:
+        has_dependencies = bool(self._declared_dependencies)
+        metadata: dict[str, Any] = {
+            "dependency_wait_occurred": self._dependency_wait_occurred,
+            "depends_on": list(self._declared_dependencies) if has_dependencies else [],
+            "has_dependencies": has_dependencies,
+            "dependency_wait_duration_ms": self._dependency_wait_duration_ms,
+            "dependency_resolution": self._dependency_resolution,
+            "failed_dependency_id": self._failed_dependency_id,
+        }
+        return metadata
+
     def _update_search_attributes(self) -> None:
         attributes: dict[str, Any] = {
             "mm_state": self._state,
@@ -2142,6 +2171,7 @@ class MoonMindRunWorkflow:
             memo_dict["logs_artifact_ref"] = self._logs_ref
         if self._summary_ref:
             memo_dict["summary_artifact_ref"] = self._summary_ref
+        memo_dict.update(self._dependency_metadata())
         if self._dependency_workflow_ids:
             memo_dict["dependency_workflow_ids"] = list(self._dependency_workflow_ids)
 
