@@ -27,6 +27,7 @@ const mockPayload: BootPayload = {
         defaultTaskModel: 'gpt-5.4',
         defaultTaskEffort: 'medium',
         defaultPublishMode: 'pr',
+        defaultProposeTasks: false,
         defaultTaskModelByRuntime: {
           codex_cli: 'gpt-5.4',
           gemini_cli: 'gemini-2.5-pro',
@@ -40,6 +41,12 @@ const mockPayload: BootPayload = {
         supportedTaskRuntimes: ['codex_cli', 'gemini_cli', 'claude_code'],
         providerProfiles: {
           list: '/api/v1/provider-profiles',
+        },
+        taskTemplateCatalog: {
+          enabled: true,
+          list: '/api/task-step-templates',
+          detail: '/api/task-step-templates/{slug}',
+          expand: '/api/task-step-templates/{slug}:expand',
         },
       },
     },
@@ -59,10 +66,80 @@ describe('Task Create Entrypoint', () => {
           ok: true,
           json: async () => ({
             items: { worker: ['speckit-orchestrate', 'pr-resolver'] },
-            legacyItems: [
-              { id: 'speckit-orchestrate', markdown: '# Speckit Orchestrate' },
-              { id: 'pr-resolver', markdown: '# PR Resolver' },
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/task-step-templates?scope=personal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/task-step-templates?scope=global')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: 'speckit-demo',
+                scope: 'global',
+                title: 'Spec Kit Demo',
+                description: 'Seed a two-step planning flow.',
+                latestVersion: '1.2.3',
+                version: '1.2.3',
+              },
             ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/task-step-templates/speckit-demo?scope=global')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: 'speckit-demo',
+            scope: 'global',
+            title: 'Spec Kit Demo',
+            description: 'Seed a two-step planning flow.',
+            latestVersion: '1.2.3',
+            version: '1.2.3',
+            inputs: [
+              {
+                name: 'feature_name',
+                label: 'Feature Name',
+                type: 'text',
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/task-step-templates/speckit-demo:expand?scope=global')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: 'tpl:speckit-demo:1.2.3:01',
+                title: 'Clarify spec',
+                instructions: 'Clarify the {{ inputs.feature_name }} scope.',
+                skill: {
+                  id: 'speckit-clarify',
+                  args: { feature: 'Task Create' },
+                },
+              },
+              {
+                id: 'tpl:speckit-demo:1.2.3:02',
+                title: 'Plan implementation',
+                instructions: 'Write a plan for the task builder recovery.',
+              },
+            ],
+            appliedTemplate: {
+              slug: 'speckit-demo',
+              version: '1.2.3',
+            },
+            warnings: [],
           }),
         } as Response);
       }
@@ -180,6 +257,7 @@ describe('Task Create Entrypoint', () => {
           publish: {
             mode: 'pr',
           },
+          proposeTasks: false,
         },
       },
     });
@@ -233,6 +311,63 @@ describe('Task Create Entrypoint', () => {
     const executionCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions').at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request.payload.inputArtifactRef).toBe('art-001');
-    expect(request.payload.task.instructions).toBe('');
+    expect(request.payload.task.instructions).toBeUndefined();
+  });
+
+  it('applies a preset into task steps and submits them', async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText('Preset');
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.value === 'global:speckit-demo',
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: 'global:speckit-demo' },
+    });
+
+    const featureInput = await screen.findByLabelText('Feature Name');
+    fireEvent.change(featureInput, {
+      target: { value: 'Task Create' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Preset' }));
+
+    await screen.findByDisplayValue('Clarify spec');
+    await screen.findByDisplayValue('Plan implementation');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions',
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions').at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.steps).toEqual([
+      {
+        id: 'tpl:speckit-demo:1.2.3:01',
+        title: 'Clarify spec',
+        instructions: 'Clarify the {{ inputs.feature_name }} scope.',
+        skill: {
+          id: 'speckit-clarify',
+          args: { feature: 'Task Create' },
+        },
+      },
+      {
+        id: 'tpl:speckit-demo:1.2.3:02',
+        title: 'Plan implementation',
+        instructions: 'Write a plan for the task builder recovery.',
+      },
+    ]);
   });
 });
