@@ -55,6 +55,7 @@ interface DashboardConfig {
 interface ProviderProfile {
   profile_id: string;
   account_label?: string | null;
+  default_model?: string | null;
 }
 
 interface SkillsResponse {
@@ -620,6 +621,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [model, setModel] = useState(
     String(defaultTaskModelByRuntime[defaultRuntime] || dashboardConfig.system?.defaultTaskModel || ''),
   );
+  const [modelManualOverride, setModelManualOverride] = useState(false);
   const [effort, setEffort] = useState(
     String(defaultTaskEffortByRuntime[defaultRuntime] || dashboardConfig.system?.defaultTaskEffort || ''),
   );
@@ -646,32 +648,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
-
-  useEffect(() => {
-    setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
-    setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
-    setProviderProfile('');
-  }, [
-    dashboardConfig.system?.defaultTaskEffort,
-    dashboardConfig.system?.defaultTaskModel,
-    defaultTaskEffortByRuntime,
-    defaultTaskModelByRuntime,
-    runtime,
-  ]);
-
-  const skillsQuery = useQuery({
-    queryKey: ['task-create', 'skills'],
-    queryFn: async (): Promise<string[]> => {
-      const response = await fetch('/api/tasks/skills', {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) {
-        throw new Error(await responseErrorMessage(response, 'Failed to load skills.'));
-      }
-      const data = (await response.json()) as SkillsResponse;
-      return data.items?.worker || [];
-    },
-  });
+  const prevRuntimeRef = useRef(runtime);
+  const prevProviderProfileRef = useRef(providerProfile);
 
   const providerProfilesQuery = useQuery({
     queryKey: ['task-create', 'provider-profiles', runtime],
@@ -689,6 +667,62 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return (await response.json()) as ProviderProfile[];
     },
     enabled: Boolean(runtime),
+  });
+
+  useEffect(() => {
+    const runtimeChanged = prevRuntimeRef.current !== runtime;
+    const profileChanged = prevProviderProfileRef.current !== providerProfile;
+
+    if (runtimeChanged || profileChanged) {
+      setModelManualOverride(false);
+    }
+
+    if (runtimeChanged) {
+      setProviderProfile('');
+      prevRuntimeRef.current = runtime;
+    }
+
+    if (profileChanged) {
+      prevProviderProfileRef.current = providerProfile;
+    }
+
+    setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
+
+    if (modelManualOverride && !runtimeChanged && !profileChanged) {
+      return;
+    }
+
+    const profileIdForModel = runtimeChanged ? '' : providerProfile;
+    const profiles = providerProfilesQuery.data || [];
+    const selectedProfile = profiles.find((p) => p.profile_id === profileIdForModel);
+    if (selectedProfile?.default_model) {
+      setModel(selectedProfile.default_model);
+    } else {
+      setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
+    }
+  }, [
+    dashboardConfig.system?.defaultTaskEffort,
+    dashboardConfig.system?.defaultTaskModel,
+    defaultTaskEffortByRuntime,
+    defaultTaskModelByRuntime,
+    modelManualOverride,
+    providerProfilesQuery.data,
+    providerProfile,
+    runtime,
+  ]);
+
+  const skillsQuery = useQuery({
+    queryKey: ['task-create', 'skills'],
+    queryFn: async (): Promise<string[]> => {
+      const response = await fetch('/api/tasks/skills', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Failed to load skills.'));
+      }
+      const data = (await response.json()) as SkillsResponse;
+      return data.items?.worker || [];
+    },
   });
 
   const templateOptionsQuery = useQuery({
@@ -1704,7 +1738,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               list={MODEL_OPTIONS_DATALIST_ID}
               value={model}
               placeholder="runtime default"
-              onChange={(event) => setModel(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setModel(next);
+                setModelManualOverride(next !== '');
+              }}
             />
           </label>
           <label>
