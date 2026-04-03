@@ -1,6 +1,8 @@
 # Managed by MoonMind automation
 approval_policy = "never"
-sandbox_mode = "workspace-write"
+# Managed Codex runs are already container-sandboxed by MoonMind, so avoid
+# nested bubblewrap requirements inside the worker container.
+sandbox_mode = "danger-full-access"
 
 [sandbox_workspace_write]
 network_access = true

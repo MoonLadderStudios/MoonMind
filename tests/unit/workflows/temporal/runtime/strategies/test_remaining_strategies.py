@@ -236,7 +236,7 @@ class TestCodexCliProperties:
 
     def test_default_command_template(self) -> None:
         assert CodexCliStrategy().default_command_template == [
-            "codex", "exec", "--full-auto",
+            "codex", "exec",
         ]
 
     def test_default_auth_mode(self) -> None:
@@ -247,30 +247,30 @@ class TestCodexCliBuildCommand:
     def test_basic_prompt(self) -> None:
         s = CodexCliStrategy()
         profile = _make_profile(
-            command_template=["codex", "exec", "--full-auto"],
+            command_template=["codex", "exec"],
         )
         request = _make_request(instruction_ref="Fix the bug")
         cmd = s.build_command(profile, request)
         # When no profile default_model set, codex_cli runtime default applies.
-        assert cmd == ["codex", "exec", "--full-auto", "-m", "gpt-5.4", "Fix the bug"]
+        assert cmd == ["codex", "exec", "-m", "gpt-5.4", "Fix the bug"]
 
     def test_with_model(self) -> None:
         s = CodexCliStrategy()
         profile = _make_profile(
-            command_template=["codex", "exec", "--full-auto"],
+            command_template=["codex", "exec"],
             default_model="o3-mini",
         )
         request = _make_request(instruction_ref="Hello")
         cmd = s.build_command(profile, request)
         assert cmd == [
-            "codex", "exec", "--full-auto",
+            "codex", "exec",
             "-m", "o3-mini", "Hello",
         ]
 
     def test_model_from_params(self) -> None:
         s = CodexCliStrategy()
         profile = _make_profile(
-            command_template=["codex", "exec", "--full-auto"],
+            command_template=["codex", "exec"],
             default_model="o3-mini",
         )
         request = _make_request(
@@ -281,15 +281,32 @@ class TestCodexCliBuildCommand:
         assert "-m" in cmd
         assert "gpt-4.1" in cmd
 
+    def test_strips_managed_policy_flags_from_legacy_template(self) -> None:
+        s = CodexCliStrategy()
+        profile = _make_profile(
+            command_template=[
+                "codex",
+                "exec",
+                "--full-auto",
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request",
+            ],
+        )
+        request = _make_request(instruction_ref="Go")
+        cmd = s.build_command(profile, request)
+        assert cmd == ["codex", "exec", "-m", "gpt-5.4", "Go"]
+
     def test_no_prompt(self) -> None:
         s = CodexCliStrategy()
         profile = _make_profile(
-            command_template=["codex", "exec", "--full-auto"],
+            command_template=["codex", "exec"],
         )
         request = _make_request()
         cmd = s.build_command(profile, request)
         # No instruction_ref but runtime default model still applies.
-        assert cmd == ["codex", "exec", "--full-auto", "-m", "gpt-5.4"]
+        assert cmd == ["codex", "exec", "-m", "gpt-5.4"]
 
 
 class TestCodexCliShapeEnvironment:
