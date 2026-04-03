@@ -289,7 +289,8 @@ FastAPI should use a small asset helper that:
 1. reads the Vite manifest in production
 2. resolves the correct JS and CSS files for an entrypoint
 3. injects those assets into the rendered template
-4. **fails loudly** (HTTP 503 with a clear HTML page) when the manifest is missing, the entrypoint key is absent, or referenced files are missing — never a silent blank region under the shell
+4. switches to Vite dev-server module URLs when `MOONMIND_UI_DEV_SERVER_URL` is configured for FastAPI-backed local development
+5. **fails loudly** (HTTP 503 with a clear HTML page) when the manifest is missing, the entrypoint key is absent, or referenced files are missing — never a silent blank region under the shell
 
 For local experiments without a built `dist/`, set **`MOONMIND_LENIENT_UI_ASSETS=1`** so the helper emits HTML comments instead of errors.
 
@@ -305,18 +306,18 @@ api_service/ui_assets.py
 
 In development, the backend should support two modes:
 
-### A. Transitional Mode
+### A. Production-Like Build Mode
 
 - existing static assets continue to work
-- new TS pages can be developed with production-like builds
+- new TS pages can be developed with production-like builds via `npm run ui:build`
 
-### B. Full UI Dev Mode
+### B. FastAPI-Backed UI Dev Mode
 
-- Vite dev server runs with HMR
-- FastAPI templates detect a configured dev-server URL
-- templates load the Vite client and the page entrypoint from that dev server
+- Vite dev server runs with HMR via `npm run ui:dev`
+- FastAPI detects `MOONMIND_UI_DEV_SERVER_URL`
+- `ui_assets()` loads `@vite/client` plus `/entrypoints/<page>.tsx` from that dev server instead of the built manifest
 
-This preserves server-rendered pages while still giving fast frontend iteration.
+This preserves server-rendered pages while still giving fast frontend iteration against the real backend routes.
 
 ## 8.4 Package Scripts
 

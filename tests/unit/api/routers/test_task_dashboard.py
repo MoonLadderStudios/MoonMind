@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
-from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -25,6 +28,50 @@ def _build_mock_temporal_service() -> AsyncMock:
     return AsyncMock()
 
 
+def _write_dashboard_test_manifest(root: Path) -> Path:
+    dist_root = root / "dist"
+    manifest_dir = dist_root / ".vite"
+    assets_dir = dist_root / "assets"
+    manifest_dir.mkdir(parents=True)
+    assets_dir.mkdir()
+
+    shared_key = "_mountPage-shared.js"
+    manifest: dict[str, dict[str, object]] = {
+        shared_key: {
+            "file": "assets/mountPage.js",
+            "css": ["assets/mountPage.css"],
+        }
+    }
+    for entrypoint in (
+        "dashboard-alerts",
+        "manifest-submit",
+        "manifests",
+        "proposals",
+        "schedules",
+        "settings",
+        "skills",
+        "task-create",
+        "task-detail",
+        "tasks-home",
+        "tasks-list",
+    ):
+        manifest[f"entrypoints/{entrypoint}.tsx"] = {
+            "file": f"assets/{entrypoint}.js",
+            "imports": [shared_key],
+        }
+        (assets_dir / f"{entrypoint}.js").write_text(
+            f"console.log('{entrypoint}');",
+            encoding="utf-8",
+        )
+
+    (assets_dir / "mountPage.js").write_text("console.log('shared');", encoding="utf-8")
+    (assets_dir / "mountPage.css").write_text("body { color: red; }", encoding="utf-8")
+
+    manifest_path = manifest_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest_path
+
+
 @contextmanager
 def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
@@ -41,8 +88,27 @@ def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     app.dependency_overrides[_get_temporal_service] = _build_mock_temporal_service
 
-    with TestClient(app) as test_client:
-        yield test_client, mock_service
+    original_manifest = os.environ.get("VITE_MANIFEST_PATH")
+    tmpdir: tempfile.TemporaryDirectory[str] | None = None
+    if (
+        "MOONMIND_UI_DEV_SERVER_URL" not in os.environ
+        and "VITE_MANIFEST_PATH" not in os.environ
+    ):
+        tmpdir = tempfile.TemporaryDirectory()
+        os.environ["VITE_MANIFEST_PATH"] = str(
+            _write_dashboard_test_manifest(Path(tmpdir.name))
+        )
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client, mock_service
+    finally:
+        if original_manifest is None:
+            os.environ.pop("VITE_MANIFEST_PATH", None)
+        else:
+            os.environ["VITE_MANIFEST_PATH"] = original_manifest
+        if tmpdir is not None:
+            tmpdir.cleanup()
 
     app.dependency_overrides.clear()
 
@@ -117,6 +183,24 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
         assert 'id="dashboard-alerts-root"' in response.text
+
+
+def test_react_shell_uses_vite_dev_server_assets_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_UI_DEV_SERVER_URL", "http://127.0.0.1:5173")
+
+    with _client_with_mock_service() as (client, _mock_service):
+        response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert response.text.count('src="http://127.0.0.1:5173/@vite/client"') == 1
+    assert 'src="http://127.0.0.1:5173/entrypoints/tasks-list.tsx"' in response.text
+    assert (
+        'src="http://127.0.0.1:5173/entrypoints/dashboard-alerts.tsx"'
+        in response.text
+    )
+    assert "/static/task_dashboard/dist/assets/" not in response.text
 
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:

@@ -66,6 +66,7 @@ Important distinctions:
 Mission Control is a **server-hosted React/Vite UI**:
 
 - FastAPI serves the HTML shell and owns canonical routes
+- FastAPI can optionally load page modules from a configured Vite dev server during local development
 - a frontend-owned shared stylesheet is emitted through the Vite build
 - page behavior is implemented through Vite-built React entrypoints
 - runtime config is generated server-side
