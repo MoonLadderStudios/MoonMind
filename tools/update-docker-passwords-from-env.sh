@@ -109,7 +109,7 @@ minio_try_admin_info() {
     -e MC_AUTH_USER="$user" \
     -e MC_AUTH_SECRET="$secret" \
     "$MINIO_MC_IMAGE" \
-    -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin info mm' >/dev/null
+    -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin info mm' >/dev/null 2>&1
 }
 
 update_minio_password() {
@@ -137,9 +137,10 @@ update_minio_password() {
   fi
 
   local attempt
+  echo "[update-docker-passwords] MinIO: waiting for MinIO to accept updated credentials..."
   for attempt in $(seq 1 30); do
     if minio_try_admin_info "$cid" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; then
-      echo "[update-docker-passwords] MinIO: done."
+      echo "[update-docker-passwords] MinIO: done (ready after ${attempt} check(s))."
       if [[ "$TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID" == "$MINIO_ROOT_USER" ]] && [[ "$TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY" != "$MINIO_ROOT_PASSWORD" ]]; then
         echo "[update-docker-passwords] Warning: TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY in .env does not match MINIO_ROOT_PASSWORD." >&2
         echo "[update-docker-passwords] Warning: artifact clients using ${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID} may fail until their secret is updated too." >&2
