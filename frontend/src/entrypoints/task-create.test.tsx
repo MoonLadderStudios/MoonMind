@@ -440,7 +440,7 @@ describe('Task Create Entrypoint', () => {
     });
   });
 
-  it('uploads oversized instructions as an artifact before submitting the execution', async () => {
+  it('uploads oversized task input as a JSON artifact before submitting the execution', async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText('Instructions'), {
@@ -467,6 +467,74 @@ describe('Task Create Entrypoint', () => {
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request.payload.inputArtifactRef).toBe('art-001');
     expect(request.payload.task.instructions).toBeUndefined();
+
+    const uploadCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/artifacts/art-001/content').at(-1);
+    expect(uploadCall?.[1]?.headers).toEqual(
+      expect.objectContaining({
+        'Content-Type': 'application/json; charset=utf-8',
+      }),
+    );
+    expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
+      repository: 'MoonLadderStudios/MoonMind',
+      task: {
+        instructions: expect.stringContaining('Large instructions Large instructions'),
+      },
+    });
+  });
+
+  it('uploads oversized step instructions as a JSON artifact and strips inline step text', async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Instructions'), {
+      target: { value: 'Primary objective' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Step' }));
+
+    const stepTextarea = await screen.findByPlaceholderText(
+      'Step-specific instructions (leave blank to continue from the task objective).',
+    );
+    fireEvent.change(stepTextarea, {
+      target: { value: 'Long step instructions '.repeat(1000) },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/artifacts',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions').at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.inputArtifactRef).toBe('art-001');
+    expect(request.payload.task.instructions).toBe('Primary objective');
+    expect(request.payload.task.steps).toEqual([
+      {
+        instructions: 'Primary objective',
+      },
+      {},
+    ]);
+
+    const uploadCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/artifacts/art-001/content').at(-1);
+    expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
+      repository: 'MoonLadderStudios/MoonMind',
+      task: {
+        instructions: 'Primary objective',
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            instructions: 'Primary objective',
+          }),
+          expect.objectContaining({
+            instructions: expect.stringContaining('Long step instructions Long step instructions'),
+          }),
+        ]),
+      },
+    });
   });
 
   it('applies a preset into task steps and submits them', async () => {

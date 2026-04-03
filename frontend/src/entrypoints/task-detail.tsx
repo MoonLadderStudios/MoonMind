@@ -376,7 +376,6 @@ function LiveLogsPanel({
   const isVisible = usePageVisibility();
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const isTerminalRef = useRef(isTerminal);
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
@@ -517,11 +516,6 @@ function LiveLogsPanel({
     }
   }, [isTerminal]);
 
-  // Auto-scroll to the bottom when new content arrives.
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
-  }, [logContent]);
-
   const statusLabel =
     viewerState === 'live'
       ? 'Connected'
@@ -618,7 +612,6 @@ function LiveLogsPanel({
               ))
             )}
           </div>
-          <div ref={bottomRef} />
         </div>
       </div>
     </details>
