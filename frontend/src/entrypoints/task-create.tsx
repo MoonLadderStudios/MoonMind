@@ -5,7 +5,8 @@ import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
 
-const INLINE_TASK_INPUT_LIMIT = 8_000;
+// This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
+const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
 const SKILL_OPTIONS_DATALIST_ID = 'queue-skill-options';
 const MODEL_OPTIONS_DATALIST_ID = 'queue-model-options';
 const EFFORT_OPTIONS_DATALIST_ID = 'queue-effort-options';
@@ -475,10 +476,9 @@ async function responseErrorMessage(response: Response, fallback: string): Promi
 
 async function createInputArtifact(
   createEndpoint: string,
-  payload: Record<string, unknown>,
+  body: string,
   repository: string,
 ): Promise<{ artifactId: string }> {
-  const body = JSON.stringify(payload);
   const createResponse = await fetch(createEndpoint, {
     method: 'POST',
     headers: {
@@ -520,6 +520,60 @@ async function createInputArtifact(
   }
 
   return { artifactId };
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function stripOversizedInlineInstructions(requestBody: Record<string, unknown>): void {
+  const payload = requestBody.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return;
+  }
+
+  const payloadRecord = payload as Record<string, unknown>;
+  const task = payloadRecord.task;
+  if (!task || typeof task !== 'object' || Array.isArray(task)) {
+    return;
+  }
+
+  const taskRecord = task as Record<string, unknown>;
+  const steps = Array.isArray(taskRecord.steps) ? taskRecord.steps : [];
+
+  const fitsInlineLimit = () => utf8ByteLength(JSON.stringify(requestBody)) <= INLINE_TASK_INPUT_LIMIT_BYTES;
+  if (fitsInlineLimit()) {
+    return;
+  }
+
+  for (let index = steps.length - 1; index >= 1; index -= 1) {
+    const step = steps[index];
+    if (!step || typeof step !== 'object' || Array.isArray(step) || !('instructions' in step)) {
+      continue;
+    }
+    delete (step as Record<string, unknown>).instructions;
+    if (fitsInlineLimit()) {
+      return;
+    }
+  }
+
+  if ('instructions' in taskRecord) {
+    delete taskRecord.instructions;
+    if (fitsInlineLimit()) {
+      return;
+    }
+  }
+
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    if (!step || typeof step !== 'object' || Array.isArray(step) || !('instructions' in step)) {
+      continue;
+    }
+    delete (step as Record<string, unknown>).instructions;
+    if (fitsInlineLimit()) {
+      return;
+    }
+  }
 }
 
 async function linkInputArtifact(artifactId: string, execution: ExecutionCreateResponse): Promise<void> {
@@ -1449,31 +1503,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setIsSubmitting(true);
     try {
       let inputArtifactRef: string | null = null;
-      const artifactTaskPayload = JSON.parse(JSON.stringify(taskPayload)) as Record<string, unknown>;
-      const taskInputArtifactPayload: Record<string, unknown> = {
+      const taskInputArtifactBody = JSON.stringify({
         repository: normalizedRepository,
-        task: artifactTaskPayload,
-      };
-      const taskInputArtifactBytes = new TextEncoder().encode(JSON.stringify(taskInputArtifactPayload)).length;
-      if (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT) {
+        task: taskPayload,
+      });
+      const taskInputArtifactBytes = utf8ByteLength(taskInputArtifactBody);
+      if (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES) {
         const artifact = await createInputArtifact(
           artifactCreateEndpoint,
-          taskInputArtifactPayload,
+          taskInputArtifactBody,
           normalizedRepository,
         );
         inputArtifactRef = artifact.artifactId;
         (requestBody.payload as Record<string, unknown>).inputArtifactRef = inputArtifactRef;
-        delete (taskPayload as Record<string, unknown>).instructions;
-        if (Array.isArray(taskPayload.steps)) {
-          taskPayload.steps = taskPayload.steps.map((step) => {
-            if (!step || typeof step !== 'object' || Array.isArray(step)) {
-              return step;
-            }
-            const normalizedStep = { ...step } as Record<string, unknown>;
-            delete normalizedStep.instructions;
-            return normalizedStep;
-          });
-        }
+        stripOversizedInlineInstructions(requestBody);
       }
 
       const response = await fetch(temporalCreateEndpoint, {
