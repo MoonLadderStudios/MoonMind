@@ -85,7 +85,7 @@ _run_auth_command() {
 
   docker compose run --rm -it \
     ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} \
-    "${COMPOSE_NETWORK_ARGS[@]}" \
+    ${COMPOSE_NETWORK_ARGS[@]+"${COMPOSE_NETWORK_ARGS[@]}"} \
     --user app \
     --entrypoint /bin/bash \
     -e TERM="${CODEX_TERM}" \
