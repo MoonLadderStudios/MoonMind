@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import logging
 from collections.abc import Callable
-from typing import Any
 
 import httpx
 import pytest
@@ -211,3 +210,29 @@ async def test_request_json_retries_transient_server_failure(
     assert payload == {"ok": True}
     assert attempts["count"] == 2
     assert sleep_calls == [1.0]
+
+
+async def test_request_json_maps_decode_errors_to_sanitized_error() -> None:
+    connection = _build_connection()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="{not valid json",
+            headers={"content-type": "application/json"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="GET",
+                path="/myself",
+                action="verify_connection",
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_request_failed"
+    assert "decoded" in str(excinfo.value)

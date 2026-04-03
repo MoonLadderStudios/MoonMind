@@ -34,7 +34,7 @@ def test_atlassian_nested_jira_flags_and_timeout_controls(monkeypatch: pytest.Mo
     monkeypatch.setenv("ATLASSIAN_JIRA_READ_TIMEOUT_SECONDS", "12")
     monkeypatch.setenv("ATLASSIAN_JIRA_RETRY_ATTEMPTS", "5")
 
-    settings = AtlassianSettings()
+    settings = AtlassianSettings(_env_file=None)
 
     assert settings.confluence.confluence_enabled is True
     assert settings.jira.jira_enabled is True
@@ -55,7 +55,7 @@ def test_atlassian_settings_normalize_allowed_projects_actions_and_site_url(
     monkeypatch.setenv("ATLASSIAN_JIRA_ALLOWED_PROJECTS", " eng , OPS, eng ")
     monkeypatch.setenv("ATLASSIAN_SITE_URL", "https://https://example.atlassian.net/")
 
-    settings = AtlassianSettings()
+    settings = AtlassianSettings(_env_file=None)
 
     assert settings.jira.jira_allowed_actions == "create_issue,add_comment"
     assert settings.jira.jira_allowed_projects == "ENG,OPS"
@@ -71,4 +71,4 @@ def test_atlassian_settings_reject_invalid_allowed_action(
     )
 
     with pytest.raises(ValidationError):
-        AtlassianSettings()
+        AtlassianSettings(_env_file=None)

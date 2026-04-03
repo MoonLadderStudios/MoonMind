@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import logging as stdlib_logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -11,9 +11,9 @@ import httpx
 
 from moonmind.integrations.jira.auth import ResolvedJiraConnection
 from moonmind.integrations.jira.errors import JiraToolError
-from moonmind.utils.logging import SecretRedactor
+import moonmind.utils.logging as moonmind_logging
 
-logger = logging.getLogger(__name__)
+logger = stdlib_logging.getLogger(__name__)
 
 _RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
@@ -28,7 +28,7 @@ class JiraClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._connection = connection
-        self._redactor = SecretRedactor(connection.redaction_values)
+        self._redactor = moonmind_logging.SecretRedactor(connection.redaction_values)
         if client is not None:
             self._client = client
             self._owns_client = False
@@ -148,7 +148,15 @@ class JiraClient:
                 request_id,
                 safe_context,
             )
-            return self._decode_response(response)
+            try:
+                return self._decode_response(response)
+            except Exception as exc:
+                raise JiraToolError(
+                    "Jira response could not be decoded.",
+                    code="jira_request_failed",
+                    status_code=502,
+                    action=action,
+                ) from exc
 
         raise JiraToolError(
             "Jira request failed unexpectedly before a response could be returned.",
@@ -189,7 +197,7 @@ class JiraClient:
             response.status_code,
             request_id,
             dict(context or {}),
-            self._redactor.scrub(response.text[:500]),
+            self._redactor.scrub(response.text),
         )
 
     def _response_error(

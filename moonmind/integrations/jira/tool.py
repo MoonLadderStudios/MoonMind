@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from moonmind.config.settings import AtlassianSettings, settings
@@ -25,6 +26,8 @@ from moonmind.integrations.jira.models import (
     VerifyConnectionRequest,
     normalize_action_name,
 )
+
+_JQL_ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
 
 
 class JiraToolService:
@@ -155,7 +158,7 @@ class JiraToolService:
 
         jql = request.jql
         if project_key:
-            jql = f"project = {project_key} AND ({jql})"
+            jql = self._scope_jql_to_project(jql, project_key)
         return await self._request_json(
             method="POST",
             path="/search",
@@ -174,16 +177,27 @@ class JiraToolService:
     ) -> dict[str, Any]:
         self._ensure_enabled()
         self._ensure_action_allowed("get_transitions")
-        self._ensure_project_allowed(self._project_from_issue_key(request.issue_key))
-        params = {"expand": "transitions.fields"} if request.expand_fields else None
+        return await self._fetch_transitions(
+            issue_key=request.issue_key,
+            expand_fields=request.expand_fields,
+        )
+
+    async def _fetch_transitions(
+        self,
+        *,
+        issue_key: str,
+        expand_fields: bool = False,
+    ) -> dict[str, Any]:
+        self._ensure_project_allowed(self._project_from_issue_key(issue_key))
+        params = {"expand": "transitions.fields"} if expand_fields else None
         payload = await self._request_json(
             method="GET",
-            path=f"/issue/{request.issue_key}/transitions",
+            path=f"/issue/{issue_key}/transitions",
             action="get_transitions",
             params=params,
-            context={"issueKey": request.issue_key},
+            context={"issueKey": issue_key},
         )
-        return {"issueKey": request.issue_key, **payload}
+        return {"issueKey": issue_key, **payload}
 
     async def transition_issue(
         self, request: TransitionIssueRequest
@@ -192,8 +206,8 @@ class JiraToolService:
         self._ensure_action_allowed("transition_issue")
         self._ensure_project_allowed(self._project_from_issue_key(request.issue_key))
         if self._settings.jira.jira_require_explicit_transition_lookup:
-            transitions = await self.get_transitions(
-                GetTransitionsRequest(issueKey=request.issue_key)
+            transitions = await self._fetch_transitions(
+                issue_key=request.issue_key,
             )
             available = {
                 str(item.get("id", "")).strip()
@@ -391,3 +405,12 @@ class JiraToolService:
     def _project_from_issue_key(self, issue_key: str) -> str:
         return issue_key.split("-", 1)[0]
 
+    def _scope_jql_to_project(self, jql: str, project_key: str) -> str:
+        match = _JQL_ORDER_BY_RE.search(jql)
+        if match is None:
+            return f"project = {project_key} AND ({jql})"
+        predicate = jql[: match.start()].strip()
+        order_by = jql[match.start() :].strip()
+        if not predicate:
+            return f"project = {project_key} {order_by}"
+        return f"project = {project_key} AND ({predicate}) {order_by}"

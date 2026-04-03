@@ -169,6 +169,36 @@ async def test_transition_issue_requires_explicit_lookup_and_rejects_stale_trans
     assert service.calls[0]["method"] == "GET"
 
 
+async def test_transition_issue_allows_preflight_without_get_transitions_allowlist() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(
+            jira=JiraSettings(
+                jira_tool_enabled=True,
+                jira_allowed_actions="transition_issue",
+                jira_require_explicit_transition_lookup=True,
+            )
+        ),
+        responses=[
+            {"transitions": [{"id": "31", "name": "Done"}]},
+            {},
+        ],
+    )
+
+    result = await service.transition_issue(
+        TransitionIssueRequest(
+            issueKey="ENG-123",
+            transitionId="31",
+        )
+    )
+
+    assert result == {
+        "transitioned": True,
+        "issueKey": "ENG-123",
+        "transitionId": "31",
+    }
+    assert [call["method"] for call in service.calls] == ["GET", "POST"]
+
+
 async def test_add_comment_converts_plain_text_to_adf() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
@@ -186,6 +216,25 @@ async def test_add_comment_converts_plain_text_to_adf() -> None:
     body = service.calls[0]["json_body"]["body"]
     assert body["type"] == "doc"
     assert body["content"][0]["content"][1] == {"type": "hardBreak"}
+
+
+async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"issues": []}],
+    )
+
+    await service.search_issues(
+        SearchIssuesRequest(
+            projectKey="ENG",
+            jql="status = 'Todo' ORDER BY created DESC",
+        )
+    )
+
+    assert (
+        service.calls[0]["json_body"]["jql"]
+        == "project = ENG AND (status = 'Todo') ORDER BY created DESC"
+    )
 
 
 async def test_verify_connection_returns_project_result() -> None:

@@ -46,12 +46,12 @@ async def _resolve_binding_value(
     if ref:
         try:
             return str(await resolve_managed_api_key_reference(ref)).strip() or None
-        except Exception as exc:
+        except Exception:
             raise JiraToolError(
                 f"Jira binding '{binding_name}' could not be resolved.",
                 code="jira_not_configured",
                 status_code=503,
-            ) from exc
+            ) from None
 
     raw = str(raw_value or "").strip()
     return raw or None

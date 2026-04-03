@@ -155,6 +155,8 @@ async def call_tool(
                 arguments=payload.arguments,
                 context=queue_context,
             )
+    except JiraToolError as exc:
+        raise _to_http_exception(exc) from None
     except Exception as exc:  # pragma: no cover - mapping layer
         raise _to_http_exception(exc) from exc
     return ToolCallResponse(result=result)
