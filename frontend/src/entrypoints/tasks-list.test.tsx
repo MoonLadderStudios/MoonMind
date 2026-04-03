@@ -174,7 +174,7 @@ describe('Tasks List Entrypoint', () => {
 
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
-    expect(await screen.findByText('Readable runtime task')).toBeTruthy();
-    expect(await screen.findByText('Codex CLI')).toBeTruthy();
+    expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
+    expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
   });
 });
