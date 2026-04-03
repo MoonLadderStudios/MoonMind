@@ -11,6 +11,7 @@ const SKILL_OPTIONS_DATALIST_ID = 'queue-skill-options';
 const MODEL_OPTIONS_DATALIST_ID = 'queue-model-options';
 const EFFORT_OPTIONS_DATALIST_ID = 'queue-effort-options';
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const PR_RESOLVER_SKILLS = new Set(['pr-resolver', 'batch-pr-resolver']);
 const PROPOSE_TASKS_PREFERENCE_KEY = 'moonmind.task-create.propose-tasks';
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
@@ -245,6 +246,10 @@ function createStepStateEntry(index: number, overrides: Partial<StepState> = {})
 function hasExplicitSkillSelection(skillId: string): boolean {
   const normalized = skillId.trim().toLowerCase();
   return normalized !== '' && normalized !== 'auto';
+}
+
+function isResolverSkill(skillId: string): boolean {
+  return PR_RESOLVER_SKILLS.has(skillId.trim().toLowerCase());
 }
 
 function shouldShowSkillArgs(step: StepState | null | undefined): boolean {
@@ -793,6 +798,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     providerProfile,
     runtime,
   ]);
+
+  useEffect(() => {
+    const primarySkill = String(steps[0]?.skillId || '').trim().toLowerCase();
+    if (isResolverSkill(primarySkill)) {
+      setPublishMode('none');
+    }
+  }, [steps[0]?.skillId]);
 
   useEffect(() => {
     if (isInitialMount.current) {
