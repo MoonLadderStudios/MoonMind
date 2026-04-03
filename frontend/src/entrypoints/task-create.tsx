@@ -1972,16 +1972,3 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 }
 
 mountPage(TaskCreatePage);
-
-
-mountPage(TaskCreatePage);
- </div>
-  );
-}
-
-mountPage(TaskCreatePage);
- </div>
-  );
-}
-
-mountPage(TaskCreatePage);
