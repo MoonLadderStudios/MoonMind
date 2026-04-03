@@ -351,11 +351,11 @@ describe('Task Create Entrypoint', () => {
     const payload: BootPayload = {
       ...mockPayload,
       initialData: {
-        ...mockPayload.initialData,
+        ...(mockPayload.initialData as any),
         dashboardConfig: {
-          ...mockPayload.initialData.dashboardConfig,
+          ...(mockPayload.initialData as any).dashboardConfig,
           system: {
-            ...mockPayload.initialData.dashboardConfig.system,
+            ...(mockPayload.initialData as any).dashboardConfig.system,
             defaultPublishMode: 'pr',
           },
         },
@@ -368,7 +368,7 @@ describe('Task Create Entrypoint', () => {
     expect(primaryStep).not.toBeNull();
 
     const publishSelect = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
-    expect(publishSelect.value).toBe(payload.initialData.dashboardConfig.system.defaultPublishMode);
+    expect(publishSelect.value).toBe((payload.initialData as any).dashboardConfig.system.defaultPublishMode);
     fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
       target: { value: 'pr-resolver' },
     });
