@@ -19,6 +19,10 @@ Create one queue task per open pull request so each PR branch can be resolved by
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
 - `maxIterations` (number, optional): `pr-resolver` loop cap. Default `3`.
+- `runtimeMode` (string, optional): Runtime to stamp onto each queued `pr-resolver` task. When omitted, the helper falls back to inherited task context or deployment defaults.
+- `runtimeModel` (string, optional): Explicit model override to stamp onto each queued `pr-resolver` task.
+- `runtimeEffort` (string, optional): Explicit effort override to stamp onto each queued `pr-resolver` task.
+- `runtimeProviderProfile` (string, optional): Explicit provider-profile override to stamp onto each queued `pr-resolver` task.
 
 ## Workflow
 
@@ -32,7 +36,11 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
   --max-attempts 3 \
   --priority 0 \
   --merge-method squash \
-  --max-iterations 3
+  --max-iterations 3 \
+  --runtime-mode <runtime_mode> \
+  --runtime-model <model> \
+  --runtime-effort <effort> \
+  --runtime-provider-profile <profile_id>
 ```
 
 2. Map inputs to flags:
@@ -44,6 +52,12 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - `priority` -> `--priority`
    - `mergeMethod` -> `--merge-method`
    - `maxIterations` -> `--max-iterations`
+   - `runtimeMode` -> `--runtime-mode`
+   - `runtimeModel` -> `--runtime-model`
+   - `runtimeEffort` -> `--runtime-effort`
+   - `runtimeProviderProfile` -> `--runtime-provider-profile`
+
+   Always forward the parent task's explicit runtime selection fields when they are present so the queued `pr-resolver` tasks reuse the same runtime, model, effort, and provider profile instead of falling back to the deployment default runtime.
 
 3. For each open PR in the target repo:
    - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.

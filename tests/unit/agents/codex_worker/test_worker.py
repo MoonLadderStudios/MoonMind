@@ -878,6 +878,62 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
     assert runtime_config["profileId"] == "codex-provider-profile"
 
 
+async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_skill(
+    tmp_path: Path,
+) -> None:
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Queue PR resolver jobs.",
+                "skill": {"id": "auto"},
+                "steps": [
+                    {
+                        "id": "queue-prs",
+                        "instructions": "Queue PR resolver jobs.",
+                        "skill": {"id": "batch-pr-resolver"},
+                    }
+                ],
+                "runtime": {
+                    "mode": " codex ",
+                    "model": " gpt-5-codex ",
+                    "effort": " high ",
+                    "providerProfile": " codex-provider-profile ",
+                },
+                "git": {"startingBranch": "main", "targetBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="queued", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    processed = await worker.run_once()
+
+    assert processed is True
+    assert handler.calls == ["codex_skill:batch-pr-resolver:True"]
+    payload = handler.skill_payloads[0]
+    inputs = payload["inputs"]
+    assert inputs["runtimeMode"] == "codex"
+    assert inputs["runtimeModel"] == "gpt-5-codex"
+    assert inputs["runtimeEffort"] == "high"
+    assert inputs["runtimeProviderProfile"] == "codex-provider-profile"
+
+
 async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
     """Zero-byte artifacts should be skipped to avoid upload validation failures."""
 
