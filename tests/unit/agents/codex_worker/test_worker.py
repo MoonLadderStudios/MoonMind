@@ -889,15 +889,19 @@ async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_ski
             "targetRuntime": "codex",
             "task": {
                 "instructions": "Queue PR resolver jobs.",
-                "skill": {
-                    "id": "batch-pr-resolver",
-                    "args": {"repo": "MoonLadderStudios/MoonMind"},
-                },
+                "skill": {"id": "auto"},
+                "steps": [
+                    {
+                        "id": "queue-prs",
+                        "instructions": "Queue PR resolver jobs.",
+                        "skill": {"id": "batch-pr-resolver"},
+                    }
+                ],
                 "runtime": {
-                    "mode": "codex",
-                    "model": "gpt-5-codex",
-                    "effort": "high",
-                    "providerProfile": "codex-provider-profile",
+                    "mode": " codex ",
+                    "model": " gpt-5-codex ",
+                    "effort": " high ",
+                    "providerProfile": " codex-provider-profile ",
                 },
                 "git": {"startingBranch": "main", "targetBranch": None},
                 "publish": {"mode": "none"},

@@ -3843,24 +3843,37 @@ class CodexWorker:
             runtime_mode = str(
                 runtime.get("mode") or canonical_payload.get("targetRuntime") or ""
             ).strip()
-            runtime_model = runtime.get("model")
-            runtime_effort = runtime.get("effort")
+            runtime_model = (
+                str(runtime.get("model")).strip()
+                if runtime.get("model") is not None
+                else ""
+            )
+            runtime_effort = (
+                str(runtime.get("effort")).strip()
+                if runtime.get("effort") is not None
+                else ""
+            )
             runtime_provider_profile = (
                 runtime.get("providerProfile")
                 or runtime.get("profileId")
                 or canonical_payload.get("profileId")
             )
+            runtime_provider_profile = (
+                str(runtime_provider_profile).strip()
+                if runtime_provider_profile is not None
+                else ""
+            )
 
             if runtime_mode:
                 effective_args.setdefault("runtimeMode", runtime_mode)
-            if runtime_model is not None and str(runtime_model).strip():
-                effective_args.setdefault("runtimeModel", str(runtime_model))
-            if runtime_effort is not None and str(runtime_effort).strip():
-                effective_args.setdefault("runtimeEffort", str(runtime_effort))
-            if runtime_provider_profile is not None and str(runtime_provider_profile).strip():
+            if runtime_model:
+                effective_args.setdefault("runtimeModel", runtime_model)
+            if runtime_effort:
+                effective_args.setdefault("runtimeEffort", runtime_effort)
+            if runtime_provider_profile:
                 effective_args.setdefault(
                     "runtimeProviderProfile",
-                    str(runtime_provider_profile),
+                    runtime_provider_profile,
                 )
             return effective_args
 
@@ -3898,13 +3911,11 @@ class CodexWorker:
                 if explicit_step_skill:
                     effective_skill_id = explicit_step_skill
                     step_skill_args_node = step_skill.get("args")
-                    effective_skill_args = (
-                        _augment_skill_args(
-                            effective_skill_id,
-                            step_skill_args_node,
-                        )
+                    effective_skill_args = _augment_skill_args(
+                        effective_skill_id,
+                        step_skill_args_node
                         if isinstance(step_skill_args_node, Mapping)
-                        else {}
+                        else {},
                     )
                 else:
                     effective_skill_id = task_skill_id
