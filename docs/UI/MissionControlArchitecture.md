@@ -98,30 +98,28 @@ Tailwind must scan all sources that can contain utility classes, including:
 
 ## 5.2 Build posture
 
-Mission Control relies on two generated outputs:
+Mission Control relies on two generated outputs with different ownership:
 
-- Vite `dist/` bundles (JS plus extracted CSS)
+- Vite `dist/` bundles (JS plus extracted CSS) under `api_service/static/task_dashboard/dist/`
 - `frontend/src/generated/openapi.ts`
 
-The shared Mission Control stylesheet is emitted as part of the Vite build from `frontend/src/styles/mission-control.css`. Frontend-consumed API types remain a second checked-in generated artifact.
+The shared Mission Control stylesheet is emitted as part of the Vite build from `frontend/src/styles/mission-control.css`. The Vite `dist/` tree is runtime build output only and is built from source in local verification, CI, and Docker; it is not committed to git. Frontend-consumed API types remain the checked-in generated artifact.
 
-The canonical local generation path is:
+The canonical local commands are:
 
-1. `npm run generate`
+1. `npm run ui:build:check`
+2. `npm run generate`
 
-`npm run generate` is responsible for:
+`npm run ui:build:check` rebuilds `api_service/static/task_dashboard/dist/` from source and verifies the manifest. `npm run generate` regenerates `frontend/src/generated/openapi.ts`.
 
-- rebuilding `api_service/static/task_dashboard/dist/`
-- regenerating `frontend/src/generated/openapi.ts`
-
-The canonical CI drift gate is `npm run generate:check`, which reruns that generation path and fails on diffs in the checked-in generated files. OpenAPI generation now writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
+The canonical CI drift gate for tracked generated files is `npm run generate:check`, which verifies `frontend/src/generated/openapi.ts` is synchronized with backend schema sources. OpenAPI generation writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
 
 Representative workflow:
 
 1. install packages
 2. run `npm run generate`
-3. run Vite build
-4. verify manifest/static output as needed
+3. run `npm run ui:build:check`
+4. upload or copy the generated `dist/` tree as needed
 
 ## 5.3 Common failure symptom
 

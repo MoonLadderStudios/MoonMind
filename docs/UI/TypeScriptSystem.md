@@ -2,7 +2,7 @@
 
 Status: **Active**
 Owners: MoonMind Engineering
-Last Updated: 2026-03-28
+Last Updated: 2026-04-03
 Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/TaskArchitecture.md`
 
 **Implementation tracking:** [`docs/tmp/063-UI-TypeScriptSystem.md`](../tmp/063-UI-TypeScriptSystem.md)
@@ -337,7 +337,7 @@ Recommended scripts:
 }
 ```
 
-## 8.5 Source of truth, CI, Docker, and committed `dist/`
+## 8.5 Source of truth, CI, Docker, and runtime `dist/`
 
 **Canonical inputs:** TypeScript/React source under `frontend/`, `frontend/vite.config.ts`, and the root npm lockfile are the source of truth for Mission Control UI bundles.
 
@@ -345,20 +345,14 @@ Recommended scripts:
 
 ### Authoritative builds (correctness)
 
-- **CI** first runs **`npm run generate:check`** to verify checked-in generated assets are synchronized, then runs typecheck, lint, frontend tests, **`npm run ui:clean-dist`**, **`npm run ui:build`**, and **`npm run ui:verify-manifest`**. The workflow may upload **`mission-control-dist`** as an artifact.
+- **CI** verifies checked-in generated API types with **`npm run generate:check`**, then runs typecheck, lint, frontend tests, and **`npm run ui:build:check`**. The workflow may upload **`mission-control-dist`** as an artifact.
 - **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
 - **Shared Mission Control CSS:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** plus the shared React shell templates so the frontend-owned stylesheet imported from `frontend/src/styles/mission-control.css` emits the utilities used by React routes even when **`dist/` does not exist yet**. Do not rely on scanning Vite output alone. See [`docs/UI/MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2.
 - **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the task dashboard router instead of an empty content area.
 
-### Committed `dist/` (convenience only)
+### Runtime `dist/`
 
-Tracking `dist/` in git helps **fresh clones** and local bootstrap when Node has not been run yet.
-
-The **Sync Vite dist** GitHub Action may commit refreshed `dist/` for **same-repo** branches when relevant paths change. That workflow is a **developer convenience**, not the correctness gate. It does **not** run **`npm run generate`**; if you add Tailwind utilities in TSX or change frontend-consumed API contracts, regenerate and commit the checked-in generated assets separately. It does **not** run for fork PRs; do **not** “fix” that with **`pull_request_target`** and write access to untrusted code.
-
-### Fork pull requests
-
-Contributors should run **`npm run ui:build`** and commit updated `dist/`, or maintainers apply a follow-up commit after merge.
+`api_service/static/task_dashboard/dist/` is runtime build output only. It should be rebuilt locally with **`npm run ui:build`** or **`npm run ui:build:check`**, produced in CI as an artifact, and produced in Docker images from source. It is not a checked-in source of truth and contributors should not commit it.
 
 ---
 
@@ -458,14 +452,14 @@ Generated types should be created from MoonMind’s OpenAPI schema.
 
 Canonical flow:
 
-1. run `npm run generate` to refresh checked-in generated frontend assets
+1. run `npm run generate` to refresh checked-in generated frontend API types
 2. let `tools/generate_openapi_types.py` export the FastAPI OpenAPI schema to a temporary file
 3. generate TypeScript types into `frontend/src/generated/openapi.ts`
 4. use those generated types as the baseline shape for API requests and responses
 
 This reduces backend/frontend drift for core payloads.
 
-`npm run generate:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` and the checked-in Mission Control `dist/` output stay synchronized with their sources.
+`npm run generate:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` stays synchronized with its backend schema source. Mission Control `dist/` output is verified by `npm run ui:build:check` and produced from source in CI and Docker.
 
 ## 10.4 Domain Types vs Generated Types
 

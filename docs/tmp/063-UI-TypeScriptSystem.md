@@ -1,7 +1,7 @@
 # Remaining work: `docs/UI/TypeScriptSystem.md`
 
 **Source:** [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md)  
-**Last synced:** 2026-04-02
+**Last synced:** 2026-04-03
 
 This file is the **implementation tracker** for §15 (incremental adoption), §17 (operational rules), and §18 (risks). Canonical behavior and architecture stay in the main doc; this file holds **sequencing, checklists, and page-level status**.
 
@@ -171,7 +171,7 @@ Track these as **non-goals** until explicitly revisited:
 
 - **Two systems in flight:** Completed. Mission Control now has one primary React/Vite frontend path under FastAPI-owned routes.
 - **No SPA takeover:** Server owns routes.
-- **No hand-edited dist:** All changes go through `frontend/src` and Vite.
+- **No hand-edited dist:** All changes go through `frontend/src` and Vite; `dist/` is untracked runtime build output.
 - **API drift:** Prefer OpenAPI-generated types + Zod at unstable boundaries.
 - **Workflow friction:** Keep dependency set aligned with canonical §6.
 

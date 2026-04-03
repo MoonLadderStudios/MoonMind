@@ -87,7 +87,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip uv
         uv pip install --system -e .[tests]
-    - name: Verify generated frontend assets are in sync
+    - name: Verify generated frontend API types are in sync
       run: npm run generate:check
     - name: Run frontend tests and build
       run: npm run ci:test
@@ -97,7 +97,7 @@ jobs:
         name: mission-control-dist
         path: api_service/static/task_dashboard/dist/
         if-no-files-found: error
-    - name: Run dashboard legacy browser tests
+    - name: Run frontend unit tests via canonical shell wrapper
       run: |
         set -euo pipefail
         ./tools/test_unit.sh --dashboard-only

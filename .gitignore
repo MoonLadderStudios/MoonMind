@@ -30,9 +30,8 @@ jobs/
 # Build artifacts
 build/
 dist/
-# Mission Control Vite output is committed so FastAPI can resolve manifest entrypoints without a local `npm run ui:build`.
-!api_service/static/task_dashboard/dist/
-!api_service/static/task_dashboard/dist/**
+# Mission Control Vite output is local/CI build output only.
+api_service/static/task_dashboard/dist/
 *.egg-info/
 uv.lock
 

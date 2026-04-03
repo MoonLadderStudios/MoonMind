@@ -10,7 +10,7 @@ The current hook set is defined in `.pre-commit-config.yaml` and runs:
 - `isort --profile=black`
 - `ruff --fix`
 
-Generated frontend assets are validated separately. `pre-commit` does not run the asset pipeline because the repository wrappers invoke `pre-commit run --all-files`, and forcing full Tailwind/OpenAPI generation on every wrapper-driven test pass would add unnecessary latency. Use `npm run generate` to refresh checked-in generated assets and `npm run generate:check` to verify they are in sync.
+Frontend build output and generated API types are validated separately. `pre-commit` does not run the asset pipeline because the repository wrappers invoke `pre-commit run --all-files`, and forcing full Vite/OpenAPI regeneration on every wrapper-driven test pass would add unnecessary latency. Use `npm run ui:build:check` to validate a clean Mission Control bundle build, use `npm run generate` to refresh checked-in generated frontend API types, and use `npm run generate:check` to verify those tracked generated files are in sync.
 
 ## Current Project Behavior
 
@@ -66,7 +66,7 @@ pre-commit install
 
 1. Run `pre-commit run --all-files`
 2. Review and stage any files rewritten by the hooks
-3. If your change touches dashboard styling inputs or frontend-consumed API schemas, run `npm run generate:check`
+3. If your change touches dashboard styling inputs, run `npm run ui:build:check`; if it touches frontend-consumed API schemas, run `npm run generate:check`
 4. Run `./tools/test_unit.sh` for the canonical unit-test pass
 5. Run targeted integration or end-to-end scripts only when your change needs them
 

@@ -129,7 +129,7 @@ Build flow:
 - Output: Vite-emitted CSS assets under `api_service/static/task_dashboard/dist/`
 
 Do not hand-edit emitted CSS assets during normal development.
-When frontend-consumed API contracts or Tailwind-backed Mission Control markup change, use `npm run generate` as the canonical refresh path so the emitted UI bundles and generated frontend API types stay in sync together.
+When Tailwind-backed Mission Control markup changes, use `npm run ui:build:check` as the canonical refresh path for emitted UI bundles. When frontend-consumed API contracts change, use `npm run generate` to refresh the checked-in frontend API types.
 
 ### 5.3 Token-First Theming
 
@@ -689,7 +689,7 @@ The **toolchain** (frontend-owned Tailwind/PostCSS through Vite), **`--mm-*` tok
 
 1. Confirm `tailwind.config.cjs` `content` includes the shared shell templates and `./frontend/src/**/*.{js,jsx,ts,tsx}`.
 2. Avoid dynamic utility class construction in JS; use semantic classes.
-3. Confirm generated assets were refreshed (`npm run generate`) so the Vite-emitted CSS bundle is current.
+3. Confirm the Vite build was refreshed with `npm run ui:build:check` so the emitted CSS bundle is current.
 
 ### `tailwindcss: command not found`
 
