@@ -233,13 +233,24 @@ WORKDIR /app
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
-COPY --from=tooling-builder /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=tooling-builder /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
+
+# Docker COPY dereferences the npm/npx symlinks from the Node image. Install
+# stable wrappers that keep npm's relative module resolution anchored in the
+# copied /usr/local/lib/node_modules tree.
+RUN cat <<'EOF' >/usr/local/bin/npm
+#!/bin/sh
+exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"
+EOF
+RUN cat <<'EOF' >/usr/local/bin/npx
+#!/bin/sh
+exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npx-cli.js "$@"
+EOF
+RUN chmod 0755 /usr/local/bin/npm /usr/local/bin/npx
 
 RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/gemini-cli /usr/share/licenses/claude-cli
 
