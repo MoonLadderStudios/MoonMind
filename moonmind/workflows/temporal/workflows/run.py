@@ -1237,16 +1237,27 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _is_transient_summary(value: str) -> bool:
         normalized = " ".join(value.strip().lower().split())
-        return normalized in {
-            "launching agent...",
-            "launching agent",
-            "agent is running.",
-            "agent is running",
-            "executing run steps.",
-            "executing run steps",
-            "execution initialized.",
-            "execution initialized",
-        }
+        return (
+            normalized
+            in {
+                "launching agent...",
+                "launching agent",
+                "agent is running.",
+                "agent is running",
+                "executing run steps.",
+                "executing run steps",
+                "execution initialized.",
+                "execution initialized",
+                "planning execution strategy.",
+                "planning execution strategy",
+                "generating task proposals.",
+                "generating task proposals",
+                "finalizing execution.",
+                "finalizing execution",
+            }
+            or normalized.startswith("executing plan step")
+            or (normalized.startswith("executed") and "plan step" in normalized)
+        )
 
     def _resolve_publish_payload(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         task_payload = self._mapping_value(parameters, "task")
