@@ -537,7 +537,8 @@ async function createInputArtifact(
       });
       throw new Error(
         `Failed to reach the artifact creation API (endpoint: ${createEndpoint}). ` +
-        'The API service may be unreachable or a CORS policy is blocking the request.',
+          'The API service may be unreachable or a CORS policy is blocking the request.',
+        { cause: error },
       );
     }
     throw error;
@@ -572,7 +573,8 @@ async function createInputArtifact(
       });
       throw new Error(
         `Failed to upload artifact content (upload URL: ${uploadUrl}). ` +
-        'The storage service may be unreachable. Verify that Minio/S3 is running and accessible.',
+          'The storage service may be unreachable. Verify that Minio/S3 is running and accessible.',
+        { cause: error },
       );
     }
     throw error;
@@ -671,7 +673,8 @@ async function linkInputArtifact(artifactId: string, execution: ExecutionCreateR
       });
       throw new Error(
         `Failed to reach the artifact linking API (endpoint: ${linkEndpoint}). ` +
-        'The API service may be unreachable or a CORS policy is blocking the request.',
+          'The API service may be unreachable or a CORS policy is blocking the request.',
+        { cause: error },
       );
     }
     throw error;
