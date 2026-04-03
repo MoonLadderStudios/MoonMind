@@ -5,7 +5,7 @@ import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
 
-const INLINE_INSTRUCTIONS_LIMIT = 8_000;
+const INLINE_TASK_INPUT_LIMIT = 8_000;
 const SKILL_OPTIONS_DATALIST_ID = 'queue-skill-options';
 const MODEL_OPTIONS_DATALIST_ID = 'queue-model-options';
 const EFFORT_OPTIONS_DATALIST_ID = 'queue-effort-options';
@@ -475,9 +475,10 @@ async function responseErrorMessage(response: Response, fallback: string): Promi
 
 async function createInputArtifact(
   createEndpoint: string,
-  instructions: string,
+  payload: Record<string, unknown>,
   repository: string,
 ): Promise<{ artifactId: string }> {
+  const body = JSON.stringify(payload);
   const createResponse = await fetch(createEndpoint, {
     method: 'POST',
     headers: {
@@ -485,10 +486,10 @@ async function createInputArtifact(
       Accept: 'application/json',
     },
     body: JSON.stringify({
-      content_type: 'text/plain; charset=utf-8',
-      size_bytes: new TextEncoder().encode(instructions).length,
+      content_type: 'application/json; charset=utf-8',
+      size_bytes: new TextEncoder().encode(body).length,
       metadata: {
-        label: 'Submitted Instructions',
+        label: 'Submitted Task Input',
         repository: repository || null,
         source: 'task-dashboard-submit',
       },
@@ -510,12 +511,12 @@ async function createInputArtifact(
   const uploadResponse = await fetch(uploadUrl, {
     method: 'PUT',
     headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Type': 'application/json; charset=utf-8',
     },
-    body: instructions,
+    body,
   });
   if (!uploadResponse.ok) {
-    throw new Error(await responseErrorMessage(uploadResponse, 'Failed to upload input artifact content.'));
+    throw new Error(await responseErrorMessage(uploadResponse, 'Failed to upload task input artifact content.'));
   }
 
   return { artifactId };
@@ -539,7 +540,7 @@ async function linkInputArtifact(artifactId: string, execution: ExecutionCreateR
       workflow_id: workflowId,
       run_id: runId,
       link_type: 'input.instructions',
-      label: 'Submitted Instructions',
+      label: 'Submitted Task Input',
     }),
   });
   if (!response.ok) {
@@ -1448,15 +1449,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setIsSubmitting(true);
     try {
       let inputArtifactRef: string | null = null;
-      if (objectiveInstructions.length > INLINE_INSTRUCTIONS_LIMIT) {
+      const artifactTaskPayload = JSON.parse(JSON.stringify(taskPayload)) as Record<string, unknown>;
+      const taskInputArtifactPayload: Record<string, unknown> = {
+        repository: normalizedRepository,
+        task: artifactTaskPayload,
+      };
+      const taskInputArtifactBytes = new TextEncoder().encode(JSON.stringify(taskInputArtifactPayload)).length;
+      if (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT) {
         const artifact = await createInputArtifact(
           artifactCreateEndpoint,
-          objectiveInstructions,
+          taskInputArtifactPayload,
           normalizedRepository,
         );
         inputArtifactRef = artifact.artifactId;
         (requestBody.payload as Record<string, unknown>).inputArtifactRef = inputArtifactRef;
         delete (taskPayload as Record<string, unknown>).instructions;
+        if (Array.isArray(taskPayload.steps)) {
+          taskPayload.steps = taskPayload.steps.map((step) => {
+            if (!step || typeof step !== 'object' || Array.isArray(step)) {
+              return step;
+            }
+            const normalizedStep = { ...step } as Record<string, unknown>;
+            delete normalizedStep.instructions;
+            return normalizedStep;
+          });
+        }
       }
 
       const response = await fetch(temporalCreateEndpoint, {
