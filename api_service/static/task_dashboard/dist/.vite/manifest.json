@@ -6,15 +6,15 @@
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_PageSizeSelector-OOSXp2SI.js": {
-    "file": "assets/PageSizeSelector-OOSXp2SI.js",
+  "_PageSizeSelector-CL2UEVG7.js": {
+    "file": "assets/PageSizeSelector-CL2UEVG7.js",
     "name": "PageSizeSelector",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_executionStatusPillClasses-C4O1mjPd.js": {
-    "file": "assets/executionStatusPillClasses-C4O1mjPd.js",
+  "_executionStatusPillClasses-B9JcpGtv.js": {
+    "file": "assets/executionStatusPillClasses-B9JcpGtv.js",
     "name": "executionStatusPillClasses",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
@@ -65,14 +65,14 @@
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-CN5pl5Lj.js",
+    "file": "assets/proposals-4ldcGcDh.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_PageSizeSelector-OOSXp2SI.js",
-      "_executionStatusPillClasses-C4O1mjPd.js"
+      "_PageSizeSelector-CL2UEVG7.js",
+      "_executionStatusPillClasses-B9JcpGtv.js"
     ]
   },
   "entrypoints/schedules.tsx": {
@@ -114,13 +114,13 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-BIA3WX-9.js",
+    "file": "assets/task-detail-BCdmICx0.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_executionStatusPillClasses-C4O1mjPd.js"
+      "_executionStatusPillClasses-B9JcpGtv.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
@@ -133,14 +133,14 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-DX8Ms9BW.js",
+    "file": "assets/tasks-list-DwaiY7G6.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_PageSizeSelector-OOSXp2SI.js",
-      "_executionStatusPillClasses-C4O1mjPd.js"
+      "_PageSizeSelector-CL2UEVG7.js",
+      "_executionStatusPillClasses-B9JcpGtv.js"
     ]
   }
 }
