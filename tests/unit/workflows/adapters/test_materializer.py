@@ -153,3 +153,58 @@ async def test_materializer_cleanup_removes_generated_support_dir_tree():
 
     assert not Path(support_dir).exists()
     assert materializer.generated_dirs == []
+
+
+@pytest.mark.asyncio
+async def test_materializer_rejects_unknown_template_variables(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="test_unknown_template_variable",
+        runtime_id="codex_cli",
+        file_templates=[
+            {
+                "path": "{{missing_var}}/config.toml",
+                "format": "toml",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        command_template=["codex", "exec"],
+    )
+
+    with pytest.raises(ValueError, match="Unknown template variable: 'missing_var'"):
+        await materializer.materialize(
+            profile,
+            runtime_support_dir=str(tmp_path / ".moonmind"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_materializer_rejects_paths_outside_runtime_support_dir(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="test_path_escape",
+        runtime_id="codex_cli",
+        file_templates=[
+            {
+                "path": "../../escape.toml",
+                "format": "toml",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        command_template=["codex", "exec"],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="fileTemplates\\[\\]\\.path must stay within runtime_support_dir",
+    ):
+        await materializer.materialize(
+            profile,
+            runtime_support_dir=str(tmp_path / ".moonmind"),
+        )

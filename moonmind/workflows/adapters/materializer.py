@@ -126,7 +126,9 @@ class ProviderProfileMaterializer:
     def _render_string(self, value: str, context: dict[str, Any]) -> str:
         def _replace(match: re.Match[str]) -> str:
             key = match.group(1)
-            return str(context.get(key, ""))
+            if key not in context:
+                raise ValueError(f"Unknown template variable: {key!r}")
+            return str(context[key])
 
         return _TEMPLATE_PATTERN.sub(_replace, value)
 
@@ -164,7 +166,20 @@ class ProviderProfileMaterializer:
         if not rendered_path.strip():
             raise ValueError("fileTemplates[].path resolved to blank")
 
-        file_path = Path(rendered_path).expanduser().resolve()
+        runtime_support_dir = str(context.get("runtime_support_dir") or "").strip()
+        if not runtime_support_dir:
+            raise ValueError("runtime_support_dir is required for file materialization")
+
+        support_dir = Path(runtime_support_dir).expanduser().resolve()
+        requested_path = Path(rendered_path).expanduser()
+        if requested_path.is_absolute():
+            file_path = requested_path.resolve()
+        else:
+            file_path = (support_dir / requested_path).resolve()
+
+        if not file_path.is_relative_to(support_dir):
+            raise ValueError("fileTemplates[].path must stay within runtime_support_dir")
+
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         rendered_content = self._render_value(file_template.content_template, context)
