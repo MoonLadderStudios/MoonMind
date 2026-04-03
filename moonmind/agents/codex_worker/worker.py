@@ -3830,6 +3830,40 @@ class CodexWorker:
             else {}
         )
 
+        def _augment_skill_args(
+            skill_id: str, skill_args: Mapping[str, Any]
+        ) -> dict[str, Any]:
+            effective_args = dict(skill_args)
+            if skill_id != "batch-pr-resolver":
+                return effective_args
+
+            runtime_node = task.get("runtime")
+            runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
+
+            runtime_mode = str(
+                runtime.get("mode") or canonical_payload.get("targetRuntime") or ""
+            ).strip()
+            runtime_model = runtime.get("model")
+            runtime_effort = runtime.get("effort")
+            runtime_provider_profile = (
+                runtime.get("providerProfile")
+                or runtime.get("profileId")
+                or canonical_payload.get("profileId")
+            )
+
+            if runtime_mode:
+                effective_args.setdefault("runtimeMode", runtime_mode)
+            if runtime_model is not None and str(runtime_model).strip():
+                effective_args.setdefault("runtimeModel", str(runtime_model))
+            if runtime_effort is not None and str(runtime_effort).strip():
+                effective_args.setdefault("runtimeEffort", str(runtime_effort))
+            if runtime_provider_profile is not None and str(runtime_provider_profile).strip():
+                effective_args.setdefault(
+                    "runtimeProviderProfile",
+                    str(runtime_provider_profile),
+                )
+            return effective_args
+
         raw_steps = task.get("steps")
         if not isinstance(raw_steps, list) or not raw_steps:
             return [
@@ -3840,7 +3874,9 @@ class CodexWorker:
                     instructions=None,
                     effective_skill_id=task_skill_id,
                     effective_skill_args=(
-                        dict(task_skill_args) if task_skill_id != "auto" else {}
+                        _augment_skill_args(task_skill_id, task_skill_args)
+                        if task_skill_id != "auto"
+                        else {}
                     ),
                     has_step_instructions=False,
                 )
@@ -3863,16 +3899,25 @@ class CodexWorker:
                     effective_skill_id = explicit_step_skill
                     step_skill_args_node = step_skill.get("args")
                     effective_skill_args = (
-                        dict(step_skill_args_node)
+                        _augment_skill_args(
+                            effective_skill_id,
+                            step_skill_args_node,
+                        )
                         if isinstance(step_skill_args_node, Mapping)
                         else {}
                     )
                 else:
                     effective_skill_id = task_skill_id
-                    effective_skill_args = dict(task_skill_args)
+                    effective_skill_args = _augment_skill_args(
+                        effective_skill_id,
+                        task_skill_args,
+                    )
             else:
                 effective_skill_id = task_skill_id
-                effective_skill_args = dict(task_skill_args)
+                effective_skill_args = _augment_skill_args(
+                    effective_skill_id,
+                    task_skill_args,
+                )
 
             if not effective_skill_id:
                 effective_skill_id = "auto"
