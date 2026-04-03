@@ -262,6 +262,7 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 # Node.js runtime libraries that the bundled CLIs rely on.
 RUN apt-get update && \
     apt-get install -y \
+        bubblewrap \
         build-essential \
         pkg-config \
         libcairo2-dev \
