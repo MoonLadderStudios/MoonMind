@@ -291,7 +291,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                           </a>
                         </td>
                         <td>{row.taskPreview?.runtimeMode || '—'}</td>
-                        <td>{row.taskPreview?.taskSkills && row.taskPreview.taskSkills.length > 0 ? row.taskPreview.taskSkills.join(', ') : row.taskPreview?.skillId ? `${row.taskPreview.skillId} (inherited)` : '—'}</td>
+                        <td>{row.taskPreview?.taskSkills && row.taskPreview.taskSkills.length > 0 ? row.taskPreview.taskSkills.join(', ') : row.taskPreview?.skillId || '—'}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.status)}>
@@ -365,7 +365,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Skill</dt>
-                        <dd>{row.taskPreview?.taskSkills && row.taskPreview.taskSkills.length > 0 ? row.taskPreview.taskSkills.join(', ') : row.taskPreview?.skillId ? `${row.taskPreview.skillId} (inherited)` : '—'}</dd>
+                        <dd>{row.taskPreview?.taskSkills && row.taskPreview.taskSkills.length > 0 ? row.taskPreview.taskSkills.join(', ') : row.taskPreview?.skillId || '—'}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>

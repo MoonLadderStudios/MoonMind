@@ -473,7 +473,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           </a>
                         </td>
                         <td>{row.targetRuntime || '—'}</td>
-                        <td>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill ? `${row.targetSkill} (inherited)` : '—'}</td>
+                        <td>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill || '—'}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
@@ -526,7 +526,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Skill</dt>
-                        <dd>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill ? `${row.targetSkill} (inherited)` : '—'}</dd>
+                        <dd>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill || '—'}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>
