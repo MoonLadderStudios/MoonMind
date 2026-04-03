@@ -206,7 +206,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     listCursor,
   ] as const;
 
-  const { data, isLoading, isError, error, isFetching } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey,
     enabled: listEnabled,
     queryFn: async () => {
