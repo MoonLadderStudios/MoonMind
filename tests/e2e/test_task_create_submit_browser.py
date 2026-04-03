@@ -257,7 +257,10 @@ def test_submit_create_flows_to_task_detail(server):
             "Run end-to-end regression flow.",
         )
         page.fill('input[name="repository"]', "MoonLadderStudios/MoonMind")
-        page.fill('input[name="skill"]', "speckit-orchestrate")
+        page.fill(
+            'input[data-step-field="skillId"][data-step-index="0"]',
+            "speckit-orchestrate",
+        )
 
         submit_button = page.locator("#queue-submit-form button[type='submit']")
         original_label = _read_submit_label(page)
