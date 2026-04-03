@@ -491,12 +491,17 @@ describe('Task Create Entrypoint', () => {
   });
 
   it('uploads task input through the same-origin artifact content endpoint when the API returns a presigned storage URL', async () => {
+    const providerProfileItems = [
+      { profile_id: 'profile:codex-default', account_label: 'Codex Default' },
+      { profile_id: 'profile:codex-secondary', account_label: 'Codex Secondary' },
+    ];
+
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/v1/provider-profiles')) {
         return Promise.resolve({
           ok: true,
-          json: async () => providerProfiles,
+          json: async () => providerProfileItems,
         } as Response);
       }
       if (url === '/api/executions') {
