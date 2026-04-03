@@ -1,9 +1,10 @@
 # Agent Skill System Plan
 
-Status: In Progress  
-Owners: MoonMind Engineering  
-Last Updated: 2026-03-30  
-Canonical doc: `docs/Tasks/AgentSkillSystem.md`  
+Status: In progress
+Owners: MoonMind Engineering
+Last Updated: 2026-04-03
+Progress: Phases 1–4 complete. Phase 5 — remaining item: workflow-boundary tests for retry and rerun snapshot pinning (§10). Phases 6–7 not started (Mission Control surfaces; proposals, schedules, reruns, policy hardening).
+Canonical doc: `docs/Tasks/AgentSkillSystem.md`
 Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
 
 ---
@@ -23,31 +24,25 @@ The canonical design is defined in `docs/Tasks/AgentSkillSystem.md`. This plan e
 
 ## 2. Current state snapshot
 
-MoonMind is already partially aligned with the target direction, but the system is not yet end-to-end coherent.
+MoonMind has implemented the core control-plane and runtime path through Phases 1–4 and most of Phase 5 (see checklists in §§6–10). The system is coherent for resolution, artifact-backed snapshots, materialization, and primary workflow wiring; operator UX and lifecycle semantics (rerun, proposal, schedule) are still open.
 
-### Already present
+### Delivered (as of this update)
 
-- `.agents/skills` and `.agents/skills/local` already exist as workspace conventions
-- parts of the runtime side already assume a shared active skill view
-- MoonMind already prefers artifact-backed execution context over large workflow payloads
-- the docs already distinguish, at least partially, between executable tool contracts and agent instruction bundles
+- Canonical docs and terminology split (tools vs agent instruction bundles); stable `.agents/skills` / `.agents/skills/local` policy documented
+- Deployment-backed storage and models for definitions, versions, skill sets, provenance, and artifact-stored bodies
+- Resolution engine across built-in, deployment, repo, and local sources; `ResolvedSkillSet` artifacts; policy, precedence, and selector behavior per design
+- Runtime materialization into a run-scoped active view; adapters consume resolved snapshot refs; non-mutation of checked-in skill trees enforced at the materialization boundary
+- Canonical `task.skills` / `step.skills` in execution contracts; `agent_skill.*` activities; workflow propagation of compact refs through `MoonMind.AgentRun` (workflow payloads carry refs/metadata, not large bodies)
 
-### Partially present
+### Partial / in flight
 
-- shared-skill runtime behavior exists in some adapter and workspace conventions
-- local-only mirror behavior exists, but is not yet governed by a fully modeled control-plane contract
-- runtime-side skill exposure is ahead of the control-plane and storage model
+- Retries and continuation paths definitively reusing the same resolved snapshot (Phase 5, §10)
+- Workflow-boundary coverage for rerun behavior defaulting to original snapshot (Phase 5, §10)
 
-### Missing
+### Not yet delivered
 
-- a deployment-backed skill catalog
-- canonical `AgentSkillDefinition`, `SkillSet`, and `ResolvedSkillSet` contracts in code
-- end-to-end resolution of built-in, deployment, repo, and local skill sources
-- task/step skill selectors in the canonical execution payload
-- a formal materialization pipeline owned by activities
-- Mission Control submit/detail support for agent skills
-- clear rerun, proposal, and schedule semantics for skill snapshots
-- complete observability and policy enforcement
+- Mission Control submit/detail surfaces, APIs, redaction, and E2E tests for skills (Phase 6)
+- Proposal and schedule preservation of skill intent; explicit rerun vs re-resolution semantics; admin/operator source-policy controls; final doc/README polish (Phase 7)
 
 ---
 
@@ -282,18 +277,17 @@ Make agent skills part of the real execution contract.
 - [x] Ensure the workflow explicitly propagates `resolved_skillset_ref` across activity boundaries
 - [x] Pass `resolved_skillset_ref` or equivalent through the `MoonMind.AgentRun` path
 - [x] Ensure workflow payloads carry refs and metadata only
-- [ ] Ensure retries and continuation paths reuse the same resolved snapshot
-- [ ] Add workflow-boundary tests for:
-  - [x] task-level skill selection
-  - [x] step-level override behavior
-  - [x] child workflow agent-run dispatch with skill snapshot ref
-  - [ ] rerun behavior reusing the original snapshot by default
+- [ ] Add workflow-boundary tests for retry and rerun snapshot pinning:
+  - [ ] Activity retry within the same run passes the identical `resolved_skillset_ref` to the retried child or activity
+  - [ ] Rerun defaults to the original `ResolvedSkillSet` without calling `agent_skill.resolve` again
+  - [ ] Child workflow `AgentRun` dispatch receives the correct snapshot ref on both first-run and retry paths
 
 ### Exit criteria
 
 - agent skills are part of the real execution path
 - both `MoonMind.Run` and `MoonMind.AgentRun` can carry resolved skill snapshot refs safely
 - workflow and activity boundaries remain Temporal-idiomatic
+- workflow-boundary tests prove retry and rerun paths reuse the pinned snapshot
 
 ---
 
@@ -309,22 +303,42 @@ Expose the system clearly to operators.
 - detail-page visibility into resolved snapshots
 - operator-visible provenance and materialization data
 
-### Tasks
+### Tasks (test-first pairs)
 
-- [ ] Add submit-time layout/UX for agent skill selection (sets, includes, explicit excludes) without overloading default tabular data
-- [ ] Add task detail surface for resolved skill snapshot visibility (provenance, snapshot ID, selected versions, source precedence)
-- [ ] Implement compact provenance display for skill origins (e.g., distinguishing repo from built-in or default deployment scopes)
-- [ ] Add proposal-review visibility showing either explicit skill selectors or explicit "inherited defaults" status
-- [ ] Apply strict debug visibility rules for raw manifests, prompt indexes, and materialization refs
-- [ ] Add API fields needed for the above surfaces
-- [ ] Add redaction and access checks for debug metadata
-- [ ] Add end-to-end tests for submit/detail rendering of skill data
+Each pair below should be implemented with the test written first. Run the test to confirm it fails, implement the minimum code to make it pass, then refactor.
+
+- [ ] **Pair 1: Submit-time skill selection**
+  - [ ] E2E or integration test: submit a task with an explicit skill set → API persists the selectors → detail page shows them
+  - [ ] API: accept and persist `task.skills` selectors (sets, includes, excludes) on task submission
+  - [ ] UI: render skill selection controls on the submit form without overloading default tabular data
+
+- [ ] **Pair 2: Resolved snapshot provenance display**
+  - [ ] Integration test: provenance API returns correct source data (built-in, deployment, repo, local) for each resolved skill
+  - [ ] API: endpoint or response fields for resolved skill provenance (snapshot ID, source precedence, selected versions)
+  - [ ] UI: render provenance table on the task detail page
+
+- [ ] **Pair 3: Proposal-review skill visibility**
+  - [ ] Integration test: proposal review surface shows either explicit skill selectors or "inherited defaults" status
+  - [ ] API: include skill intent in proposal review payloads
+  - [ ] UI: render skill intent on the proposal review page
+
+- [ ] **Pair 4: Debug surfaces and redaction**
+  - [ ] Unit test: redaction rules strip secret-like or sensitive fields from raw manifest and prompt-index refs
+  - [ ] Unit test: debug metadata is only returned for authorized principals
+  - [ ] API: apply strict debug visibility rules for raw manifests, prompt indexes, and materialization refs
+  - [ ] API: add redaction and access checks for debug metadata
+  - [ ] UI: conditional rendering of debug surfaces based on authorization
+
+- [ ] **Pair 5: End-to-end submit/detail integration**
+  - [ ] E2E test: full lifecycle — submit with skills → resolution → materialization → detail page shows resolved versions and provenance
+  - [ ] API: wire any missing fields needed for the above surfaces
 
 ### Exit criteria
 
 - operators can see which skills were selected and which versions actually ran
 - Mission Control can explain where resolved skills came from
 - the UI reflects the canonical design rather than older ad hoc runtime behavior
+- all Mission Control skill surfaces are backed by passing tests
 
 ---
 
@@ -341,25 +355,48 @@ Close the remaining semantic gaps and remove older ambiguity.
 - policy hardening
 - cleanup of superseded ambiguous paths and contracts
 
-### Tasks
+### Tasks (regression-test-first)
 
-- [ ] Update proposal payload components to store and preserve `task.skills` and `step.skills` intent
-- [ ] Add promotion-time verification/validation ensuring promotion does not silently drop or drift incompatible skill selectors
-- [ ] Harden scheduled-run semantics matching tasks (i.e. strictly preserving selectors vs blindly resolving default states)
-- [ ] Define Task Execution Compatibility Model updates reflecting how skill-selector payloads traverse versions
-- [ ] Clean up all ambiguous "skill" terminology across older system interfaces, proposal schemas, and related legacy queues
-- [ ] Ensure reruns reuse the original `ResolvedSkillSet` by default, skipping explicit re-resolution
-- [ ] Add explicit re-resolution path only where intentionally supported
-- [ ] Harden policy enforcement around repo and local source usage
-- [ ] Add admin or operator controls for enabling or disabling repo/local skill sources
-- [ ] Remove or rewrite ambiguous older internal terminology and ad hoc runtime-side assumptions
-- [ ] Add compatibility or cutover handling for any in-flight workflow payload changes that affect already-running executions
-- [ ] Add regression tests for:
-  - [ ] proposal promotion semantics
-  - [ ] scheduled run behavior
-  - [ ] rerun default snapshot reuse
-  - [ ] source-policy enforcement
-  - [ ] in-flight safety for any changed Temporal-facing payloads
+Each semantic behavior below must have a failing test before implementation. The test encodes the expected contract; implementation makes it pass.
+
+- [ ] **Proposal promotion preserves skill intent**
+  - [ ] Regression test: promotion does not silently drop or drift `task.skills` or `step.skills` selectors
+  - [ ] Implementation: promotion-time verification/validation logic
+
+- [ ] **Scheduled run semantics**
+  - [ ] Integration test: scheduled run resolves skills at execution time using stored selectors, not blindly resolving latest defaults
+  - [ ] Implementation: schedule-time selector preservation + resolution-time snapshot creation
+
+- [ ] **Rerun defaults to original snapshot**
+  - [ ] Integration test: rerun with no explicit re-resolution flag reuses the original `ResolvedSkillSet`
+  - [ ] Integration test: rerun with explicit re-resolution flag triggers a new resolution
+  - [ ] Implementation: rerun path checks for original snapshot ref and skips resolution unless re-resolution is requested
+
+- [ ] **Task Execution Compatibility Model**
+  - [ ] Regression test: skill-selector payloads traverse skill version changes without breaking execution
+  - [ ] Implementation: compatibility model updates reflecting how skill-selector payloads traverse versions
+
+- [ ] **Policy hardening for repo and local sources**
+  - [ ] Unit test: policy enforcement blocks repo skills when `agent_skill_repo_sources_enabled = false`
+  - [ ] Unit test: policy enforcement blocks local skills when `agent_skill_local_sources_enabled = false`
+  - [ ] Unit test: local-only skills cannot bypass deployment policy silently
+  - [ ] Implementation: harden policy enforcement around repo and local source usage
+  - [ ] Implementation: admin/operator controls for enabling or disabling repo/local skill sources
+
+- [ ] **Terminology cleanup**
+  - [ ] Audit: identify all remaining ambiguous "skill" terminology across older system interfaces, proposal schemas, and related legacy queues
+  - [ ] Implementation: remove or rewrite ambiguous older internal terminology and ad hoc runtime-side assumptions
+
+- [ ] **In-flight payload safety**
+  - [ ] Replay or compatibility test: workflow history with pre-change skill payload shape replays correctly against updated code, OR explicit cutover plan documented
+  - [ ] Implementation: compatibility or cutover handling for any in-flight workflow payload changes that affect already-running executions
+
+- [ ] **Final regression suite**
+  - [ ] Regression test: proposal promotion semantics (end-to-end)
+  - [ ] Regression test: scheduled run behavior with stored selectors
+  - [ ] Regression test: rerun default snapshot reuse
+  - [ ] Regression test: source-policy enforcement for all source kinds
+  - [ ] Regression test: in-flight safety for any changed Temporal-facing payloads
 
 ### Final Polish
 
@@ -396,6 +433,37 @@ This order minimizes churn by establishing the canonical core before surfacing i
 
 The implementation should include tests at multiple layers.
 
+### Existing test inventory (already covered)
+
+The following areas already have meaningful unit-test coverage:
+
+- **`agent_skill.*` activities**: activity wrapper tests for `resolve`, `build_prompt_index`, `materialize` (mocked resolver)
+- **Service-level resolution**: source precedence, collisions, pinned version failures, policy blocks, step-level exclusions, deterministic snapshot sorting
+- **Service-level materialization**: workspace-mounted and prompt-bundled modes
+- **Workflow-level resolver**: policy resolution, permissive mode, legacy root fallback, `list_available_skill_names()`
+- **Workflow-level materializer**: cache/link creation, hash mismatch rejection, SSRF prevention, path traversal rejection, git clone safety
+- **Skill registry and runner**: stable percent, stage mappings, allowlist/permissive modes, canary rollout
+- **API service**: CRUD for skill definitions, version creation with artifact storage, skill set creation
+- **Activity runtime binding**: fleet routing for `agent_skill.*` activities to `AGENT_RUNTIME_FLEET`
+
+### Gaps (no coverage yet)
+
+- **Zero integration tests** for the `agent_skill.*` activity family or end-to-end resolution → materialization path
+- **Zero workflow boundary/replay tests** for skill payloads or in-flight compatibility
+- **Zero E2E tests** for Mission Control skill surfaces (submit/detail/provenance)
+- Activity tests mock the resolver entirely — no test exercises the real resolution path through all loaders
+- No tests exercise retry/rerun snapshot pinning
+
+### Test-first ordering
+
+For all remaining work, tests MUST be written before the code they validate:
+
+1. Write the failing test that encodes the expected behavior
+2. Run the test to confirm it fails
+3. Implement the minimum code to make it pass
+4. Refactor while keeping tests green
+5. Commit both test and implementation in the same PR
+
 ### Unit tests
 
 - source loading
@@ -404,6 +472,7 @@ The implementation should include tests at multiple layers.
 - policy gates
 - version immutability
 - materialization helpers
+- redaction and access control for debug metadata
 
 ### Workflow-boundary tests
 
@@ -419,6 +488,7 @@ The implementation should include tests at multiple layers.
 - non-mutation of checked-in skill folders
 - Mission Control submit/detail behavior
 - proposal and schedule semantics
+- rerun default snapshot reuse vs explicit re-resolution
 
 ---
 
