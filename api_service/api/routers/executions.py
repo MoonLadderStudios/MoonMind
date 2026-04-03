@@ -54,6 +54,7 @@ from moonmind.schemas.temporal_models import (
     TASK_RUN_ID_MEMO_KEYS,
     TASK_RUN_ID_PARAM_KEYS,
     TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    normalize_dependency_ids,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -364,7 +365,23 @@ def _serialize_execution(
     task_payload = params.get("task")
     if not isinstance(task_payload, dict):
         task_payload = {}
-        
+    depends_on = normalize_dependency_ids(task_payload.get("dependsOn"))
+    if not depends_on:
+        depends_on = normalize_dependency_ids(memo.get("depends_on"))
+    has_dependencies = bool(memo.get("has_dependencies") or depends_on)
+    dependency_wait_occurred = bool(memo.get("dependency_wait_occurred") or False)
+    raw_dependency_wait_duration = memo.get("dependency_wait_duration_ms")
+    dependency_wait_duration_ms = None
+    if raw_dependency_wait_duration is not None:
+        try:
+            dependency_wait_duration_ms = int(raw_dependency_wait_duration)
+        except (TypeError, ValueError):
+            dependency_wait_duration_ms = None
+    dependency_resolution = (
+        str(memo.get("dependency_resolution") or "").strip() or None
+    )
+    failed_dependency_id = str(memo.get("failed_dependency_id") or "").strip() or None
+
     resolved_skillset_ref = str(params.get("resolvedSkillsetRef") or params.get("resolved_skillset_ref") or "").strip() or None
     
     # task_skills can be passed explicitly via task payload
@@ -503,6 +520,12 @@ def _serialize_execution(
         ),
         latest_run_view=True,
         continue_as_new_cause=continue_as_new_cause,
+        depends_on=depends_on,
+        has_dependencies=has_dependencies,
+        dependency_wait_occurred=dependency_wait_occurred,
+        dependency_wait_duration_ms=dependency_wait_duration_ms,
+        dependency_resolution=dependency_resolution,
+        failed_dependency_id=failed_dependency_id,
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,

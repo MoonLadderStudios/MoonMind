@@ -930,6 +930,58 @@ async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
             assert payload == b'{"ok": true}'
 
 
+async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_signature(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            catalog = build_default_activity_catalog()
+            bindings = {
+                binding.activity_type: binding
+                for binding in build_activity_bindings(
+                    catalog,
+                    artifact_activities=TemporalArtifactActivities(service),
+                    proposal_activities=TemporalProposalActivities(artifact_service=service),
+                    agent_skills_activities=AgentSkillsActivities(),
+                    fleets=(ARTIFACTS_FLEET,),
+                )
+            }
+
+            from typing import get_type_hints
+            from moonmind.schemas.temporal_activity_models import (
+                ArtifactReadInput,
+                ArtifactWriteCompleteInput,
+            )
+
+            read_handler_hints = get_type_hints(bindings["artifact.read"].handler)
+            write_handler_hints = get_type_hints(
+                bindings["artifact.write_complete"].handler
+            )
+
+            annotation_globals = dict(TemporalArtifactActivities.artifact_read.__globals__)
+            annotation_globals.update({
+                "ArtifactReadInput": ArtifactReadInput,
+                "ArtifactWriteCompleteInput": ArtifactWriteCompleteInput,
+            })
+
+            read_method_hints = get_type_hints(
+                TemporalArtifactActivities.artifact_read, globalns=annotation_globals
+            )
+            write_method_hints = get_type_hints(
+                TemporalArtifactActivities.artifact_write_complete, globalns=annotation_globals
+            )
+
+            assert read_handler_hints["request"] == read_method_hints["request"]
+            assert read_handler_hints.get("return") == read_method_hints.get("return")
+
+            assert write_handler_hints["request"] == write_method_hints["request"]
+            assert write_handler_hints.get("return") == write_method_hints.get("return")
+
+
 async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapping(
     tmp_path: Path,
 ):
@@ -978,6 +1030,50 @@ async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapp
                 }
             )
 
+            assert payload == b'{"ok": true}'
+
+
+async def test_build_activity_bindings_artifact_write_complete_accepts_legacy_payload_mapping(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="application/octet-stream",
+            )
+            catalog = build_default_activity_catalog()
+            bindings = build_activity_bindings(
+                catalog,
+                artifact_activities=TemporalArtifactActivities(service),
+                proposal_activities=TemporalProposalActivities(artifact_service=service),
+                agent_skills_activities=AgentSkillsActivities(),
+                fleets=(ARTIFACTS_FLEET,),
+            )
+            artifact_write_handler = next(
+                binding.handler
+                for binding in bindings
+                if binding.activity_type == "artifact.write_complete"
+            )
+
+            stored_ref = await artifact_write_handler(
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "principal": "user-1",
+                    "payload": list(b'{"ok": true}'),
+                    "content_type": "application/json",
+                }
+            )
+            _stored_artifact, payload = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal="user-1",
+            )
+
+            assert stored_ref.artifact_id == artifact.artifact_id
             assert payload == b'{"ok": true}'
 
 

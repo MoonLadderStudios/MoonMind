@@ -3108,6 +3108,24 @@ export interface components {
             latestRunView: boolean;
             /** Continueasnewcause */
             continueAsNewCause?: string | null;
+            /** Dependson */
+            dependsOn?: string[];
+            /**
+             * Hasdependencies
+             * @default false
+             */
+            hasDependencies: boolean;
+            /**
+             * Dependencywaitoccurred
+             * @default false
+             */
+            dependencyWaitOccurred: boolean;
+            /** Dependencywaitdurationms */
+            dependencyWaitDurationMs?: number | null;
+            /** Dependencyresolution */
+            dependencyResolution?: string | null;
+            /** Faileddependencyid */
+            failedDependencyId?: string | null;
             /** Startedat */
             startedAt?: string | null;
             /**

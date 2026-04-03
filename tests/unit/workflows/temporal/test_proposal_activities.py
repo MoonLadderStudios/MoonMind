@@ -131,10 +131,98 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             for i in range(5)
         ]
         result = await activities.proposal_submit(
-            {"candidates": candidates, "policy": {"max_items": 2}, "origin": {}}
+            {
+                "candidates": candidates,
+                "policy": {"maxItems": {"project": 2}},
+                "origin": {},
+            }
         )
         self.assertEqual(result["generated_count"], 5)
         self.assertEqual(result["submitted_count"], 2)
+
+    async def test_raw_task_policy_uses_per_target_caps(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(
+            proposal_service_factory=factory,
+        )
+        candidates = [
+            {
+                "title": "Project 1",
+                "summary": "One",
+                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+            },
+            {
+                "title": "Project 2",
+                "summary": "Two",
+                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+            },
+            {
+                "title": "MoonMind 1",
+                "summary": "Three",
+                "taskCreateRequest": {
+                    "payload": {"repository": "MoonLadderStudios/MoonMind"}
+                },
+            },
+            {
+                "title": "MoonMind 2",
+                "summary": "Four",
+                "taskCreateRequest": {
+                    "payload": {"repository": "MoonLadderStudios/MoonMind"}
+                },
+            },
+        ]
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {
+                    "targets": ["project", "moonmind"],
+                    "maxItems": {"project": 1, "moonmind": 2},
+                    "minSeverityForMoonMind": "medium",
+                },
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["generated_count"], 4)
+        self.assertEqual(result["submitted_count"], 3)
+        self.assertEqual(mock_service.create_proposal.await_count, 3)
+
+    async def test_defaults_apply_when_policy_missing(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(
+            proposal_service_factory=factory,
+        )
+        candidates = [
+            {
+                "title": f"Proposal {i}",
+                "summary": f"Summary {i}",
+                "taskCreateRequest": {"payload": {"repository": "org/repo"}},
+            }
+            for i in range(5)
+        ]
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {},
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["generated_count"], 5)
+        self.assertEqual(result["submitted_count"], 3)
+        self.assertEqual(mock_service.create_proposal.await_count, 3)
 
     async def test_service_factory_called(self) -> None:
         mock_service = AsyncMock()

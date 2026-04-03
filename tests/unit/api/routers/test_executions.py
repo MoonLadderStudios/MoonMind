@@ -1007,6 +1007,49 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
     assert dumped["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
 
 
+def test_serialize_execution_surfaces_dependency_metadata() -> None:
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={
+            "title": "Dependent task",
+            "summary": "Waiting on dependencies.",
+            "depends_on": ["mm:dep-1", "mm:dep-2"],
+            "has_dependencies": True,
+            "dependency_wait_occurred": True,
+            "dependency_wait_duration_ms": 1500,
+            "dependency_resolution": "success",
+        },
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
+        workflow_id="mm:task-deps-1",
+        namespace="moonmind",
+        run_id="temporal-run-1",
+        artifact_refs=[],
+        created_at="2026-03-19T00:00:00Z",
+        started_at="2026-03-19T00:00:00Z",
+        updated_at="2026-03-19T00:00:00Z",
+        closed_at=None,
+        integration_state=None,
+        parameters={"task": {"dependsOn": ["mm:dep-1", "mm:dep-2"]}},
+        paused=False,
+        waiting_reason=None,
+        attention_required=False,
+    )
+
+    payload = _serialize_execution(record)
+
+    dumped = payload.model_dump(by_alias=True)
+    assert dumped["dependsOn"] == ["mm:dep-1", "mm:dep-2"]
+    assert dumped["hasDependencies"] is True
+    assert dumped["dependencyWaitOccurred"] is True
+    assert dumped["dependencyWaitDurationMs"] == 1500
+    assert dumped["dependencyResolution"] == "success"
+    assert dumped["failedDependencyId"] is None
+
+
 def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_scalar() -> None:
     record = SimpleNamespace(
         close_status=None,

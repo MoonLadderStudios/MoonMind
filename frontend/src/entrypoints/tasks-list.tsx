@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
+import { formatTaskSkills } from '../utils/formatters';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
@@ -473,7 +474,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           </a>
                         </td>
                         <td>{row.targetRuntime || '—'}</td>
-                        <td>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill ? `${row.targetSkill} (inherited)` : '—'}</td>
+                        <td>{formatTaskSkills(row.taskSkills, row.targetSkill)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
@@ -526,7 +527,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Skill</dt>
-                        <dd>{row.taskSkills && row.taskSkills.length > 0 ? row.taskSkills.join(', ') : row.targetSkill ? `${row.targetSkill} (inherited)` : '—'}</dd>
+                        <dd>{formatTaskSkills(row.taskSkills, row.targetSkill)}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>
