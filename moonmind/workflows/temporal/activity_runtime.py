@@ -1707,6 +1707,27 @@ class TemporalProposalActivities:
         self._artifact_service = artifact_service
         self._proposal_service_factory = proposal_service_factory
 
+    @staticmethod
+    def _resolve_task_instructions(parameters: Mapping[str, Any]) -> str:
+        task_node = parameters.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+
+        instructions = str(
+            task.get("instructions") or parameters.get("instructions") or ""
+        ).strip()
+        if instructions:
+            return instructions
+
+        steps = task.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, Mapping):
+                    continue
+                step_instructions = str(step.get("instructions") or "").strip()
+                if step_instructions:
+                    return step_instructions
+        return ""
+
     async def proposal_generate(
         self,
         request: Mapping[str, Any] | None = None,
@@ -1728,12 +1749,9 @@ class TemporalProposalActivities:
         repo = str(payload.get("repo") or parameters.get("repository") or "").strip()
         workflow_id = str(payload.get("workflow_id") or "").strip()
 
-        # Extract instructions from the task payload or top-level parameters.
         task_node = parameters.get("task")
         task = dict(task_node) if isinstance(task_node, Mapping) else {}
-        instructions = str(
-            task.get("instructions") or parameters.get("instructions") or ""
-        ).strip()
+        instructions = self._resolve_task_instructions(parameters)
 
         if not instructions:
             # Without instructions there is not enough context to derive a

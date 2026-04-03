@@ -1233,6 +1233,13 @@ class MoonMindRunWorkflow:
             return self._json_mapping(nested_publish, path="parameters.task.publish")
         return {}
 
+    def _proposal_generation_requested(self, parameters: Mapping[str, Any]) -> bool:
+        task_payload = self._mapping_value(parameters, "task")
+        task_flag = task_payload.get("proposeTasks")
+        if task_flag is not None:
+            return _coerce_bool(task_flag, default=False)
+        return _coerce_bool(parameters.get("proposeTasks"), default=False)
+
     def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
         instructions = self._coerce_text(task_payload.get("instructions"))
         if instructions:
@@ -1852,11 +1859,10 @@ class MoonMindRunWorkflow:
     async def _run_proposals_stage(self, *, parameters: dict[str, Any]) -> None:
         """Best-effort proposal generation phase.
 
-        Runs only when ``proposeTasks`` is set in ``initialParameters``.
+        Runs only when proposal generation is requested by the run payload.
         Failures are logged but do not fail the workflow.
         """
-        propose_tasks = parameters.get("proposeTasks")
-        if not _coerce_bool(propose_tasks, default=False):
+        if not self._proposal_generation_requested(parameters):
             return
 
         if workflow.patched("enable_task_proposals_gate"):
@@ -2017,9 +2023,7 @@ class MoonMindRunWorkflow:
                     ),
                 },
                 "proposals": {
-                    "requested": _coerce_bool(
-                        parameters.get("proposeTasks"), default=False
-                    ),
+                    "requested": self._proposal_generation_requested(parameters),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,
