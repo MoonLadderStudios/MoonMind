@@ -974,9 +974,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleApplyPreset() {
+<<<<<<< HEAD
     if (isApplyingPreset) {
       return;
     }
+=======
+    if (isApplyingPreset) return;
+>>>>>>> ce567672 (Address PR feedback for #1176: Use aria-disabled and aria-busy on submit buttons)
     if (!selectedPreset) {
       setTemplateMessage('Choose a preset first.');
       return;
@@ -1682,7 +1686,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               />
             </label>
             <div className="actions">
-              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} aria-busy={isApplyingPreset}>
+              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} aria-disabled={isApplyingPreset} aria-busy={isApplyingPreset}>
                 Apply
               </button>
               {taskTemplateSaveEnabled ? (
@@ -1957,7 +1961,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
 
         <div className="actions">
+<<<<<<< HEAD
           <button type="submit" className="queue-submit-primary" aria-busy={isSubmitting}>
+=======
+          <button type="submit" className="queue-submit-primary" aria-disabled={isSubmitting} aria-busy={isSubmitting}>
+>>>>>>> ce567672 (Address PR feedback for #1176: Use aria-disabled and aria-busy on submit buttons)
             Create
           </button>
         </div>
@@ -1970,6 +1978,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </p>
       </form>
     </div>
+  );
+}
+
+mountPage(TaskCreatePage);
+
+
+mountPage(TaskCreatePage);
+ </div>
   );
 }
 
