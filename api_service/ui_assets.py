@@ -1,7 +1,9 @@
 import json
 import os
+from html import escape
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 
 class MissionControlUIAssetsError(Exception):
@@ -24,6 +26,10 @@ class AssetFileMissingError(MissionControlUIAssetsError):
     pass
 
 
+class InvalidDevServerUrlError(MissionControlUIAssetsError):
+    pass
+
+
 def _default_manifest_path() -> str:
     return os.environ.get(
         "VITE_MANIFEST_PATH",
@@ -37,6 +43,26 @@ def _lenient_ui_assets() -> bool:
         "true",
         "yes",
     )
+
+
+def _vite_dev_server_url() -> str | None:
+    raw = os.environ.get("MOONMIND_UI_DEV_SERVER_URL", "").strip()
+    if not raw:
+        return None
+
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise InvalidDevServerUrlError(
+            "MOONMIND_UI_DEV_SERVER_URL must be an absolute http(s) URL such as "
+            "'http://127.0.0.1:5173'."
+        )
+    if parsed.query or parsed.fragment:
+        raise InvalidDevServerUrlError(
+            "MOONMIND_UI_DEV_SERVER_URL must not include a query string or fragment."
+        )
+
+    normalized_path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
 
 
 class ViteAssetResolver:
@@ -151,14 +177,34 @@ def _collect_css_files(
     return css_files
 
 
+def _vite_dev_server_assets(entrypoint: str, dev_server_url: str) -> str:
+    client_url = escape(f"{dev_server_url}/@vite/client", quote=True)
+    entrypoint_url = escape(
+        f"{dev_server_url}/entrypoints/{entrypoint}.tsx", quote=True
+    )
+    return "\n".join(
+        (
+            f'<script type="module" src="{client_url}"></script>',
+            f'<script type="module" src="{entrypoint_url}"></script>',
+        )
+    )
+
+
 def ui_assets(entrypoint: str) -> str:
     """Return HTML tags to load the Vite bundle for a Mission Control entrypoint.
+
+    Set MOONMIND_UI_DEV_SERVER_URL to an absolute Vite dev-server URL to inject
+    FastAPI-backed development assets with HMR instead of reading the built manifest.
 
     By default (strict), raises MissionControlUIAssetsError if the manifest or files
     are missing so operators never get a blank content region without explanation.
 
     Set MOONMIND_LENIENT_UI_ASSETS=1 for local experiments without a built dist.
     """
+    dev_server_url = _vite_dev_server_url()
+    if dev_server_url:
+        return _vite_dev_server_assets(entrypoint, dev_server_url)
+
     manifest_path = _default_manifest_path()
     manifest_key = f"entrypoints/{entrypoint}.tsx"
     lenient = _lenient_ui_assets()
