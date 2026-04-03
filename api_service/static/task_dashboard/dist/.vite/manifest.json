@@ -1,146 +1,146 @@
 {
-  "_DataTable-D9SKzqfc.js": {
-    "file": "assets/DataTable-D9SKzqfc.js",
+  "_DataTable-BJ66qh3g.js": {
+    "file": "assets/DataTable-BJ66qh3g.js",
     "name": "DataTable",
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_PageSizeSelector-BARVKruo.js": {
-    "file": "assets/PageSizeSelector-BARVKruo.js",
+  "_PageSizeSelector-CL2UEVG7.js": {
+    "file": "assets/PageSizeSelector-CL2UEVG7.js",
     "name": "PageSizeSelector",
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_executionStatusPillClasses-R6RgxNF5.js": {
-    "file": "assets/executionStatusPillClasses-R6RgxNF5.js",
+  "_executionStatusPillClasses-B9JE78AA.js": {
+    "file": "assets/executionStatusPillClasses-B9JE78AA.js",
     "name": "executionStatusPillClasses",
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_mountPage-B2nSeEmT.js": {
-    "file": "assets/mountPage-B2nSeEmT.js",
+  "_mountPage-BLUzMZxz.css": {
+    "file": "assets/mountPage-BLUzMZxz.css",
+    "src": "_mountPage-BLUzMZxz.css"
+  },
+  "_mountPage-BvSZ22Ix.js": {
+    "file": "assets/mountPage-BvSZ22Ix.js",
     "name": "mountPage",
     "css": [
-      "assets/mountPage-BgZFhWi1.css"
+      "assets/mountPage-BLUzMZxz.css"
     ]
-  },
-  "_mountPage-BgZFhWi1.css": {
-    "file": "assets/mountPage-BgZFhWi1.css",
-    "src": "_mountPage-BgZFhWi1.css"
   },
   "_navigation-CRIwDiyQ.js": {
     "file": "assets/navigation-CRIwDiyQ.js",
     "name": "navigation"
   },
   "entrypoints/dashboard-alerts.tsx": {
-    "file": "assets/dashboard-alerts-CywoTJWy.js",
+    "file": "assets/dashboard-alerts-6MU7gdmG.js",
     "name": "dashboard-alerts",
     "src": "entrypoints/dashboard-alerts.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
   "entrypoints/manifest-submit.tsx": {
-    "file": "assets/manifest-submit-D4ABX3v_.js",
+    "file": "assets/manifest-submit-B2UEe1s0.js",
     "name": "manifest-submit",
     "src": "entrypoints/manifest-submit.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
+      "_mountPage-BvSZ22Ix.js",
       "_navigation-CRIwDiyQ.js"
     ]
   },
   "entrypoints/manifests.tsx": {
-    "file": "assets/manifests-A61MKOEw.js",
+    "file": "assets/manifests-DsEm60NG.js",
     "name": "manifests",
     "src": "entrypoints/manifests.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
-      "_DataTable-D9SKzqfc.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_DataTable-BJ66qh3g.js"
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-DcnFJX-Z.js",
+    "file": "assets/proposals-ClGz-DgU.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
-      "_PageSizeSelector-BARVKruo.js",
-      "_executionStatusPillClasses-R6RgxNF5.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_PageSizeSelector-CL2UEVG7.js",
+      "_executionStatusPillClasses-B9JE78AA.js"
     ]
   },
   "entrypoints/schedules.tsx": {
-    "file": "assets/schedules-DUx-vwRw.js",
+    "file": "assets/schedules-B-cxQAvi.js",
     "name": "schedules",
     "src": "entrypoints/schedules.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
-      "_DataTable-D9SKzqfc.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_DataTable-BJ66qh3g.js"
     ]
   },
   "entrypoints/settings.tsx": {
-    "file": "assets/settings-eHQqfvnZ.js",
+    "file": "assets/settings-6zYm0dL8.js",
     "name": "settings",
     "src": "entrypoints/settings.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
   "entrypoints/skills.tsx": {
-    "file": "assets/skills-Cy1H3P-d.js",
+    "file": "assets/skills-CX8GBUd9.js",
     "name": "skills",
     "src": "entrypoints/skills.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
   "entrypoints/task-create.tsx": {
-    "file": "assets/task-create-FF-7WxI2.js",
+    "file": "assets/task-create-dKBhoD2V.js",
     "name": "task-create",
     "src": "entrypoints/task-create.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
+      "_mountPage-BvSZ22Ix.js",
       "_navigation-CRIwDiyQ.js"
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-CJO3clSh.js",
+    "file": "assets/task-detail-OX-ydney.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
-      "_executionStatusPillClasses-R6RgxNF5.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_executionStatusPillClasses-B9JE78AA.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
-    "file": "assets/tasks-home-B0nzPX1K.js",
+    "file": "assets/tasks-home-DyiNo86_.js",
     "name": "tasks-home",
     "src": "entrypoints/tasks-home.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js"
+      "_mountPage-BvSZ22Ix.js"
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-O_Igd7cn.js",
+    "file": "assets/tasks-list-C2T2Y8Db.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-B2nSeEmT.js",
-      "_PageSizeSelector-BARVKruo.js",
-      "_executionStatusPillClasses-R6RgxNF5.js"
+      "_mountPage-BvSZ22Ix.js",
+      "_PageSizeSelector-CL2UEVG7.js",
+      "_executionStatusPillClasses-B9JE78AA.js"
     ]
   }
 }
