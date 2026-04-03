@@ -151,10 +151,17 @@ class SecretsService:
         return secret.ciphertext
 
     @classmethod
-    async def import_from_env(cls, db: AsyncSession, env_dict: dict[str, str]) -> int:
+    async def import_from_env(
+        cls,
+        db: AsyncSession,
+        env_dict: dict[str, str],
+        *,
+        overwrite_active: bool = False,
+    ) -> int:
         """
         Migrate legacy .env values.
-        Upserts missing values to ManagedSecrets, skipping existing active ones.
+        Upserts values to ManagedSecrets.
+        By default, existing active secrets are skipped.
         """
         imported_count = 0
         for key, value in env_dict.items():
@@ -162,21 +169,29 @@ class SecretsService:
             existing = result.scalar_one_or_none()
 
             if existing:
-                if existing.status == SecretStatus.ACTIVE:
+                if existing.status == SecretStatus.ACTIVE and not overwrite_active:
                     continue  # Skip overriding already active managed secrets
-                else:
-                    existing.ciphertext = value
-                    existing.status = SecretStatus.ACTIVE
-                    existing.details.update({"imported_from": ".env", "migrated_at": datetime.now(timezone.utc).isoformat()})
-                    existing.updated_at = datetime.now(timezone.utc)
-                    imported_count += 1
+                now = datetime.now(timezone.utc)
+                existing.ciphertext = value
+                existing.status = SecretStatus.ACTIVE
+                details = dict(existing.details or {})
+                details.update(
+                    {"imported_from": ".env", "migrated_at": now.isoformat()}
+                )
+                existing.details = details
+                existing.updated_at = now
+                imported_count += 1
             else:
+                now = datetime.now(timezone.utc)
                 db.add(
                     ManagedSecret(
                         slug=key,
                         ciphertext=value,
                         status=SecretStatus.ACTIVE,
-                        details={"imported_from": ".env", "migrated_at": datetime.now(timezone.utc).isoformat()}
+                        details={
+                            "imported_from": ".env",
+                            "migrated_at": now.isoformat(),
+                        },
                     )
                 )
                 imported_count += 1
