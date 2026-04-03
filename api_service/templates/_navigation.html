@@ -1,6 +1,6 @@
 <nav class="route-nav" aria-label="Mission Control navigation">
   <a href="/tasks" data-nav {% if current_path == '/tasks' %}aria-current="page"{% endif %}>🛰️ Tasks</a>
-  <a href="/tasks/new" data-nav {% if current_path == '/tasks/new' %}aria-current="page"{% endif %}>🚀 Create</a>
+  <a href="/tasks/new" data-nav {% if current_path == '/tasks/new' or current_path == '/tasks/create' %}aria-current="page"{% endif %}>🚀 Create</a>
   <a href="/tasks/manifests" data-nav {% if current_path == '/tasks/manifests' %}aria-current="page"{% endif %}>💽 Manifests</a>
   <a href="/tasks/manifests/new" data-nav {% if current_path == '/tasks/manifests/new' %}aria-current="page"{% endif %}>📡 Manifest Submit</a>
   <a href="/tasks/schedules" data-nav {% if current_path == '/tasks/schedules' %}aria-current="page"{% endif %}>🌒 Schedules</a>

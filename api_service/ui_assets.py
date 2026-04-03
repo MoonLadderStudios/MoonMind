@@ -95,6 +95,62 @@ def _verify_asset_paths(dist_root: Path, asset_info: Dict[str, Any]) -> None:
             )
 
 
+def _walk_manifest_imports(
+    manifest: Dict[str, Any], manifest_key: str, seen: set[str] | None = None
+) -> list[tuple[str, Dict[str, Any]]]:
+    if seen is None:
+        seen = set()
+    if manifest_key in seen:
+        return []
+
+    asset_info = manifest.get(manifest_key)
+    if not isinstance(asset_info, dict):
+        raise AssetFileMissingError(
+            f"Manifest import {manifest_key!r} is missing or invalid."
+        )
+
+    seen.add(manifest_key)
+    ordered_assets: list[tuple[str, Dict[str, Any]]] = []
+    imports = asset_info.get("imports") or []
+    if not isinstance(imports, list):
+        raise AssetFileMissingError(
+            f"Manifest entry {manifest_key!r} has a non-list 'imports' field."
+        )
+
+    for import_key in imports:
+        if not isinstance(import_key, str):
+            raise AssetFileMissingError(
+                f"Manifest entry {manifest_key!r} contains a non-string import key."
+            )
+        ordered_assets.extend(_walk_manifest_imports(manifest, import_key, seen))
+
+    ordered_assets.append((manifest_key, asset_info))
+    return ordered_assets
+
+
+def _collect_css_files(
+    manifest: Dict[str, Any], manifest_key: str
+) -> list[str]:
+    css_files: list[str] = []
+    seen_css: set[str] = set()
+
+    for _, asset_info in _walk_manifest_imports(manifest, manifest_key):
+        css_entries = asset_info.get("css") or []
+        if not isinstance(css_entries, list):
+            raise AssetFileMissingError("Manifest entry 'css' must be a list when present.")
+        for css_file in css_entries:
+            if not isinstance(css_file, str):
+                raise AssetFileMissingError(
+                    "Manifest CSS entry must be a string path."
+                )
+            if css_file in seen_css:
+                continue
+            seen_css.add(css_file)
+            css_files.append(css_file)
+
+    return css_files
+
+
 def ui_assets(entrypoint: str) -> str:
     """Return HTML tags to load the Vite bundle for a Mission Control entrypoint.
 
@@ -136,14 +192,15 @@ def ui_assets(entrypoint: str) -> str:
 
     dist_root = _dist_root_for_manifest(manifest_path)
     try:
-        _verify_asset_paths(dist_root, asset_info)
+        for _, imported_asset_info in _walk_manifest_imports(manifest, manifest_key):
+            _verify_asset_paths(dist_root, imported_asset_info)
     except AssetFileMissingError:
         if lenient:
             return f"<!-- Vite manifest references missing files for {entrypoint} -->"
         raise
 
     js_file = asset_info["file"]
-    css_files = asset_info.get("css") or []
+    css_files = _collect_css_files(manifest, manifest_key)
 
     tags: list[str] = []
     tags.append(

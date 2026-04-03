@@ -501,7 +501,7 @@ Each review adds one activity result to the workflow history. With a default of 
 | File | Change |
 |---|---|
 | `api_service/api/routers/executions.py` | Accept `approvalPolicy` in create-run payload, merge into `initialParameters` |
-| `api_service/static/task_dashboard/dashboard.js` | Add approval policy toggle to task creation form |
+| `frontend/src/entrypoints/task-create.tsx` | Add approval policy toggle to task creation form |
 
 ### Layer 5: Observability
 

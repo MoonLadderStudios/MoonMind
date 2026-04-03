@@ -2,7 +2,7 @@
 
 Status: In Progress  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-29  
+Last Updated: 2026-04-01  
 Related: `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 
 ## Phase 0 - Spec Alignment ✅ COMPLETE
@@ -26,26 +26,28 @@ All Phase 0 requirements verified complete as of 2026-03-29 (spec `116-task-dep-
 
 All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-phase1`).
 
-## Phase 2 - `MoonMind.Run` Dependency Gate
+## Phase 2 - `MoonMind.Run` Dependency Gate ✅ COMPLETE
 
-- Parse `initialParameters.task.dependsOn` in `MoonMindRunWorkflow.run()` after `_initialize_from_payload()` and before entering `STATE_PLANNING`.
-  - The insertion point is `run.py` between the current `STATE_INITIALIZING` and `STATE_PLANNING` transitions (currently lines 413–414).
-- When `dependsOn` is present and non-empty:
-  - Set `mm_state` to `waiting_on_dependencies` and update memo/search attributes with dependency IDs.
-  - Wait on each prerequisite using Temporal external workflow handles:
-    ```python
-    handles = [
-        workflow.get_external_workflow_handle(dep_id)
-        for dep_id in depends_on
-    ]
-    await asyncio.gather(*(handle.result() for handle in handles))
-    ```
-  - Wrap the `gather` in a Temporal `CancellationScope` so cancellation of the dependent run interrupts the wait cleanly.
-  - Guard with `workflow.patched("dependency-gate-v1")` for replay safety.
-- When `dependsOn` is absent or empty, proceed directly to `planning` (current behavior — no change needed).
-- Fail the dependent run with a dependency-specific message when a prerequisite fails, is canceled, or is terminated (propagated via the `handle.result()` exception).
-- Preserve cancel semantics during the dependency wait: canceling the dependent run cancels only that run, not the prerequisites.
-- Pause/resume semantics: check `self._paused` after the dependency wait resolves, consistent with the existing pause gate pattern.
+- [x] Parse `initialParameters.task.dependsOn` in `MoonMindRunWorkflow.run()` after `_initialize_from_payload()` and before entering `STATE_PLANNING`.
+  - Insertion point: `run.py` between the current `STATE_INITIALIZING` and `STATE_PLANNING` transitions.
+- [x] Set `mm_state` to `waiting_on_dependencies` and update memo/search attributes with dependency IDs when `dependsOn` is present and non-empty.
+- [x] Wait on each prerequisite using Temporal external workflow handles.
+  ```python
+  handles = [
+      workflow.get_external_workflow_handle(dep_id)
+      for dep_id in depends_on
+  ]
+  await asyncio.gather(*(handle.result() for handle in handles))
+  ```
+- [x] Wrap the dependency wait in an interruptible cancellation boundary so cancellation of the dependent run interrupts the wait cleanly.
+  - Implementation note: the current `temporalio.workflow` SDK in this repo does not expose a `CancellationScope` API, so the workflow uses explicit task cancellation around the dependency wait to preserve the intended semantics.
+- [x] Guard the dependency gate with `workflow.patched("dependency-gate-v1")` for replay safety.
+- [x] Preserve current behavior by proceeding directly to `planning` when `dependsOn` is absent or empty.
+- [x] Fail the dependent run with a dependency-specific message when a prerequisite fails, is canceled, or is terminated.
+- [x] Preserve cancel semantics during the dependency wait so canceling the dependent run cancels only that run, not the prerequisites.
+- [x] Check `self._paused` after the dependency wait resolves, consistent with the existing pause gate pattern.
+
+All Phase 2 requirements verified complete as of 2026-04-01 (spec `123-task-dep-phase2`).
 
 ## Phase 3 - Finish Summary And Read Model Metadata ✅ COMPLETE
 
@@ -62,17 +64,20 @@ All Phase 3 requirements verified complete as of 2026-03-29.
 
 ## Phase 4 - Mission Control Create And Detail UX
 
-- Add a Dependencies section to `/tasks/new`.
-- Use execution search or list APIs to power a dependency picker for existing `MoonMind.Run` executions.
-- Enforce client-side validation for dependency count and duplicate entries.
-- Verify `waiting_on_dependencies` presentation in the task list.
-- Add a Dependencies panel to task detail with prerequisite links and current statuses.
-- Quick-view in task list shows titles of blocking tasks.
-- Add a lightweight downstream dependents view only if backend reverse lookup is feasible without blocking v1.
+- [ ] Add a Dependencies section to `/tasks/new`.
+- [ ] Use execution search or list APIs to power a dependency picker for existing `MoonMind.Run` executions.
+- [ ] Enforce client-side validation for dependency count and duplicate entries.
+- [ ] Verify `waiting_on_dependencies` presentation in the task list.
+- [ ] Add a Dependencies panel to task detail with prerequisite links and current statuses.
+- [ ] Show titles of blocking tasks in the task list quick view.
+- [ ] Add a lightweight downstream dependents view if backend reverse lookup is feasible without blocking v1.
 
 ## Phase 5 - Hardening And Rollout
 
-- Add integration coverage for chained execution, multi-dependency fan-in, failure propagation, and restart or replay safety.
-- Verify Continue-As-New behavior preserves dependency context.
-- Confirm list and detail pages remain performant with dependency metadata present.
-- Document operator guidance for dependency limits, failure semantics, and known v1 non-goals.
+- [ ] Add integration coverage for chained execution.
+- [ ] Add integration coverage for multi-dependency fan-in.
+- [ ] Add integration coverage for failure propagation.
+- [ ] Add integration coverage for restart or replay safety.
+- [ ] Verify Continue-As-New behavior preserves dependency context.
+- [ ] Confirm list and detail pages remain performant with dependency metadata present.
+- [ ] Document operator guidance for dependency limits, failure semantics, and known v1 non-goals.

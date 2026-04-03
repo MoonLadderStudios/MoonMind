@@ -313,6 +313,30 @@ def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_rejects_more_than_50_steps(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    steps = [{"title": f"Step {i}", "instructions": f"Do step {i}."} for i in range(51)]
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Too many steps.",
+                    "steps": steps,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -420,6 +444,73 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "startingBranch": "feature/resolve-pr",
         "targetBranch": "codex/pr-resolver",
     }
+
+
+def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "runtime": {
+                        "mode": "gemini_cli",
+                    },
+                    "steps": [
+                        {
+                            "id": "tpl:demo:1.0.0:01",
+                            "title": "Clarify the create-task recovery plan",
+                            "instructions": "Audit the regression and list the missing controls.",
+                            "skill": {
+                                "id": "speckit-clarify",
+                                "args": {"feature": "task-create"},
+                                "requiredCapabilities": ["git", "github"],
+                            },
+                        },
+                        {
+                            "id": "tpl:demo:1.0.0:02",
+                            "title": "Implement the restored builder",
+                            "instructions": "Restore presets and multi-step submission.",
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = called_kwargs["initial_parameters"]
+
+    assert called_kwargs["title"] == "Clarify the create-task recovery plan"
+    assert (
+        called_kwargs["summary"]
+        == "Audit the regression and list the missing controls."
+    )
+    assert initial_parameters["stepCount"] == 2
+    assert initial_parameters["task"]["steps"] == [
+        {
+            "id": "tpl:demo:1.0.0:01",
+            "title": "Clarify the create-task recovery plan",
+            "instructions": "Audit the regression and list the missing controls.",
+            "skill": {
+                "id": "speckit-clarify",
+                "args": {"feature": "task-create"},
+                "requiredCapabilities": ["git", "github"],
+            },
+        },
+        {
+            "id": "tpl:demo:1.0.0:02",
+            "title": "Implement the restored builder",
+            "instructions": "Restore presets and multi-step submission.",
+        },
+    ]
 
 
 def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(

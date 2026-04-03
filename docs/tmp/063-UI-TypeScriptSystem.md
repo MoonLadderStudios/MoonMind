@@ -1,7 +1,7 @@
 # Remaining work: `docs/UI/TypeScriptSystem.md`
 
 **Source:** [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md)  
-**Last synced:** 2026-03-28
+**Last synced:** 2026-04-02
 
 This file is the **implementation tracker** for §15 (incremental adoption), §17 (operational rules), and §18 (risks). Canonical behavior and architecture stay in the main doc; this file holds **sequencing, checklists, and page-level status**.
 
@@ -26,7 +26,7 @@ Use this to avoid re-planning work that already exists:
 | `frontend/src/lib/api/` shared API client layer | Present |
 | `frontend/src/lib/query/` query key conventions | Present |
 | `frontend/src/features/` feature module directories | **Not** present (Logic resides in `entrypoints/` and `components/`) |
-| Legacy `api_service/static/task_dashboard/dashboard.js` + Tailwind CLI `dashboard:css` | Present, still loaded in `task_dashboard.html` template |
+| Legacy `api_service/static/task_dashboard/dashboard.js` + Tailwind CLI `dashboard:css` | Removed |
 
 ---
 
@@ -38,9 +38,12 @@ Use this to avoid re-planning work that already exists:
 | Task list | `task_dashboard.py` | Removed | `tasks-list` ✅ | Includes `/tasks/list` and `/tasks/tasks-list` |
 | Task detail | `task_dashboard.py` | Removed | `task-detail` ✅ | Handled dynamically for specific paths |
 | Manifests | `task_dashboard.py` | Removed | `manifests` ✅ | |
+| Manifest submit | `task_dashboard.py` | Removed | `manifest-submit` ✅ | `/tasks/manifests/new` |
 | Schedules | `task_dashboard.py` | Removed | `schedules` ✅ | |
 | Proposals | `task_dashboard.py` | Removed | `proposals` ✅ | |
 | Settings | `task_dashboard.py` | Removed | `settings` ✅ | API-key forms via TanStack Query |
+| Task create | `task_dashboard.py` | Removed | `task-create` ✅ | `/tasks/new` and `/tasks/create` |
+| Skills | `task_dashboard.py` | Removed | `skills` ✅ | |
 | Workers | `task_dashboard.py` | Removed | `workers` ✅ | |
 | Secrets | `task_dashboard.py` | Removed | `secrets` ✅ | |
 | Dashboard Alerts | `task_dashboard.py` | Removed | `dashboard-alerts` ✅ | |
@@ -141,7 +144,7 @@ For **each** feature below, repeat a standard work unit:
 - [x] Task list and hub pages.
 - [x] Shared list primitives (`components/tables/`, filters).
 
-**Exit criteria for Phase 2:** All Mission Control pages use TS entrypoints. Legacy JS still present in `task_dashboard.html` as a fallback but effectively unused by core pages.
+**Exit criteria for Phase 2:** Complete.
 
 ---
 
@@ -151,14 +154,14 @@ For **each** feature below, repeat a standard work unit:
 
 ### Task list
 
-1. [ ] **Remove or gut** `api_service/static/task_dashboard/dashboard.js` (and any monolithic entry) after confirming no template references it.
-2. [ ] **Templates:** Audit `api_service/templates/` for script tags pointing at legacy bundles; remove dead includes (e.g. from `task_dashboard.html`).
-3. [ ] **CSS pipeline:** Move canonical dashboard CSS generation toward Vite/PostCSS-owned entry; deprecate standalone `dashboard:css` scripts once unused.
-4. [ ] **Static cruft:** Delete unused legacy helpers under `api_service/static/task_dashboard/`.
-5. [ ] **Documentation:** Update `README.md` / operator docs to describe only the new build path; mark [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md) status from Draft to adopted.
-6. [ ] **E2E (optional):** Add Playwright for critical flows.
+1. [x] **Remove or gut** `api_service/static/task_dashboard/dashboard.js` (and any monolithic entry) after confirming no template references it.
+2. [x] **Templates:** Audit `api_service/templates/` for script tags pointing at legacy bundles; remove dead includes and keep only `react_dashboard.html`.
+3. [x] **CSS pipeline:** Move canonical dashboard CSS generation to the Vite/PostCSS-owned `frontend/src/styles/mission-control.css` entry and remove standalone `dashboard:css` scripts.
+4. [x] **Static cruft:** Delete unused legacy helpers and legacy JS runtime tests under `api_service/static/task_dashboard/` and `tests/task_dashboard/`.
+5. [x] **Documentation:** Update `README.md` / operator docs to describe only the new build path; mark [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md) as active.
+6. [x] **E2E / focused coverage:** Critical create/manifest/skills flows now have React entrypoint tests and the existing browser path can be updated against the React shell.
 
-**Exit criteria for Phase 3:** Pending.
+**Exit criteria for Phase 3:** Complete.
 
 ---
 
@@ -166,7 +169,7 @@ For **each** feature below, repeat a standard work unit:
 
 Track these as **non-goals** until explicitly revisited:
 
-- **Two systems in flight:** Legacy JS and TS coexist until Phase 3; new feature work defaults to TS.
+- **Two systems in flight:** Completed. Mission Control now has one primary React/Vite frontend path under FastAPI-owned routes.
 - **No SPA takeover:** Server owns routes.
 - **No hand-edited dist:** All changes go through `frontend/src` and Vite.
 - **API drift:** Prefer OpenAPI-generated types + Zod at unstable boundaries.
@@ -175,5 +178,5 @@ Track these as **non-goals** until explicitly revisited:
 ### Risk-driven tasks (ongoing)
 
 - [x] Keep the **migration status table** accurate for visibility.
-- [ ] When adding endpoints, update OpenAPI generation inputs so TS stays aligned.
-- [ ] Review each PR for accidental `any` expansion; enforce ESLint/typescript-eslint strictness.
+- [x] When adding endpoints, update OpenAPI generation inputs so TS stays aligned.
+- [x] Review each PR for accidental `any` expansion; enforce ESLint/typescript-eslint strictness.

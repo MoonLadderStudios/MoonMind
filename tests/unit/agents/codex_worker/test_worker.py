@@ -3720,7 +3720,7 @@ async def test_run_once_task_step_and_exec_logs_dedupe_mixed_prefix_final_replay
     assert step_text.count(marker) == 1
 
 
-def test_load_step_log_offsets_checkpoint_ignores_large_payload(
+async def test_load_step_log_offsets_checkpoint_ignores_large_payload(
     tmp_path: Path,
 ) -> None:
     """Oversized checkpoint payloads should be ignored instead of loaded into memory."""
@@ -3751,7 +3751,7 @@ def test_load_step_log_offsets_checkpoint_ignores_large_payload(
     assert worker._load_step_log_offsets_checkpoint(artifacts_dir=artifacts_dir) == {}
 
 
-def test_persist_step_log_offsets_checkpoint_safely_skips_symlinked_parent(
+async def test_persist_step_log_offsets_checkpoint_safely_skips_symlinked_parent(
     tmp_path: Path,
 ) -> None:
     """Checkpoint writes must avoid symlinked checkpoint state directories."""
@@ -3787,7 +3787,7 @@ def test_persist_step_log_offsets_checkpoint_safely_skips_symlinked_parent(
     assert not (state_target / "step_log_offsets.json").exists()
 
 
-def test_persist_step_log_offsets_checkpoint_handles_temp_path_directory(
+async def test_persist_step_log_offsets_checkpoint_handles_temp_path_directory(
     tmp_path: Path,
 ) -> None:
     """Cleanup handling should tolerate a pre-existing temporary path directory."""
@@ -7097,7 +7097,7 @@ def codex_worker_components(
     return worker, queue, handler
 
 
-def test_resolve_skills_cache_root_uses_worker_workdir_for_relative_paths(
+async def test_resolve_skills_cache_root_uses_worker_workdir_for_relative_paths(
     codex_worker_components: tuple[CodexWorker, FakeQueueClient, FakeHandler],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7291,7 +7291,7 @@ async def test_resolve_publish_text_override_preserves_non_empty_verbatim() -> N
     assert CodexWorker._resolve_publish_text_override(None) is None
 
 
-def test_parse_git_status_paths_collects_renamed_source_paths() -> None:
+async def test_parse_git_status_paths_collects_renamed_source_paths() -> None:
     """Git status parser should include both sides of a rename or copy for safety."""
 
     status_output = """
@@ -7308,7 +7308,7 @@ R  \"src/legacy path.py\" -> \"legacy/src/archived.py\"
     )
 
 
-def test_is_source_code_change_path_preserves_dotfile_classes() -> None:
+async def test_is_source_code_change_path_preserves_dotfile_classes() -> None:
     """Source-path classifier should keep dot-prefixed allowlist entries working."""
 
     assert (
@@ -7329,7 +7329,7 @@ def test_is_source_code_change_path_preserves_dotfile_classes() -> None:
     )
 
 
-def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> None:
+async def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> None:
     """Only `verificationSkipReason.category`/`reason` should be accepted."""
 
     assert CodexWorker._resolve_publish_verification_skip_reason(
@@ -7369,7 +7369,7 @@ def test_resolve_publish_verification_skip_reason_rejects_legacy_fields() -> Non
         )
 
 
-def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
+async def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
     tmp_path: Path,
 ) -> None:
     """Evidence collection should ignore plain `$`-prefixed output text."""
@@ -7404,7 +7404,7 @@ def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
     assert evidence[1]["command"] == "npm run build"
 
 
-def test_collect_verification_evidence_records_log_read_errors(
+async def test_collect_verification_evidence_records_log_read_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Unreadable verification logs should surface errors while preserving other evidence."""
@@ -7455,7 +7455,7 @@ def test_collect_verification_evidence_records_log_read_errors(
     )
 
 
-def test_collect_verification_evidence_prefers_structured_report_records(
+async def test_collect_verification_evidence_prefers_structured_report_records(
     tmp_path: Path,
 ) -> None:
     """Structured verification records should count as evidence when commands passed."""

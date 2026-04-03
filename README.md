@@ -60,7 +60,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 | Component | Role |
 | --- | --- |
-| **API Service** | FastAPI OpenAI-compatible endpoints, MCP server, and job queue API. |
+| **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, and external integrations. |
 | **Mission Control** | Operational dashboard for managing tasks and reviewing artifacts. |
@@ -72,4 +72,4 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 MIT — free for personal and commercial use.
 
 ### UI Development
-To develop the frontend UI, run `npm install` first. Then run `npm run ui:dev` to start the Vite development server (note: you still need the FastAPI backend running for API calls and template rendering). If you change Tailwind-backed dashboard markup or API contracts consumed by the frontend, run `npm run generate` to refresh the checked-in generated assets before pushing. For production builds, run `npm run ui:build` which outputs assets to the `api_service/static/dist/` directory. **Do not edit files in `dist/` directly**, as they are generated build artifacts.
+To develop the frontend UI, run `npm install` first. Then run `npm run ui:dev` to start the Vite development server; FastAPI still owns routes, auth, and template delivery, so keep the backend running as well. Use `npm run ui:test`, `npm run ui:typecheck`, and `npm run ui:lint` for frontend verification. Use `npm run generate` when you need to refresh checked-in generated frontend artifacts such as `frontend/src/generated/openapi.ts` and the Vite-built Mission Control bundles. Production builds use `npm run ui:build`, which emits assets into `api_service/static/task_dashboard/dist/`. Do not edit files in `dist/` directly.
