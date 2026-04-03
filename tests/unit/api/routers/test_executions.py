@@ -313,6 +313,30 @@ def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_rejects_more_than_50_steps(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    steps = [{"title": f"Step {i}", "instructions": f"Do step {i}."} for i in range(51)]
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Too many steps.",
+                    "steps": steps,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

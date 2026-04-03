@@ -139,7 +139,7 @@ function templateKey(scope: TemplateScope, slug: string): string {
 
 function interpolatePath(template: string, replacements: Record<string, string>): string {
   return Object.entries(replacements).reduce(
-    (value, [key, replacement]) => value.replace(`{${key}}`, encodeURIComponent(replacement)),
+    (value, [key, replacement]) => value.replaceAll(`{${key}}`, encodeURIComponent(replacement)),
     template,
   );
 }
@@ -150,8 +150,8 @@ function withQueryParams(
 ): string {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
-    if (value) {
-      searchParams.set(key, value);
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, String(value));
     }
   });
   const serialized = searchParams.toString();
@@ -355,8 +355,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const defaultRepository = String(dashboardConfig.system?.defaultRepository || '');
   const defaultPublishMode = String(dashboardConfig.system?.defaultPublishMode || 'pr');
   const defaultProposeTasks = Boolean(dashboardConfig.system?.defaultProposeTasks);
-  const defaultTaskModelByRuntime = dashboardConfig.system?.defaultTaskModelByRuntime || {};
-  const defaultTaskEffortByRuntime = dashboardConfig.system?.defaultTaskEffortByRuntime || {};
+  const defaultTaskModelByRuntime = useMemo(
+    () => dashboardConfig.system?.defaultTaskModelByRuntime || {},
+    [dashboardConfig.system?.defaultTaskModelByRuntime],
+  );
+  const defaultTaskEffortByRuntime = useMemo(
+    () => dashboardConfig.system?.defaultTaskEffortByRuntime || {},
+    [dashboardConfig.system?.defaultTaskEffortByRuntime],
+  );
   const supportedTaskRuntimes = dashboardConfig.system?.supportedTaskRuntimes || [
     'codex_cli',
     'gemini_cli',

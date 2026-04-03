@@ -732,6 +732,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     if not isinstance(raw_steps, list):
         raise _invalid_task_request("payload.task.steps must be a JSON array.")
+    if len(raw_steps) > 50:
+        raise _invalid_task_request("payload.task.steps can have a maximum of 50 items.")
 
     normalized_steps: list[dict[str, Any]] = []
     forbidden = {
