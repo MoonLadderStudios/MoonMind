@@ -281,7 +281,10 @@ def _load_parent_runtime_selection(
             runtime_config.get("effort") or runtime_node.get("effort")
         )
         provider_profile = _runtime_text(
-            runtime_config.get("providerProfile") or runtime_node.get("providerProfile")
+            runtime_config.get("providerProfile")
+            or runtime_config.get("profileId")
+            or runtime_node.get("providerProfile")
+            or runtime_node.get("profileId")
         )
         return RuntimeSelection(
             mode=mode, model=model, effort=effort, provider_profile=provider_profile

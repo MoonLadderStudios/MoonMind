@@ -75,6 +75,32 @@ def test_runtime_planner_preserves_execution_profile_ref_snake_case():
     )
 
 
+def test_runtime_planner_promotes_profile_id_to_runtime_node():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Use the pinned Codex provider profile.",
+                "runtime": {
+                    "mode": "codex",
+                    "providerProfile": "codex-provider-profile",
+                },
+            }
+        },
+        parameters={"profileId": "codex-provider-profile"},
+        snapshot=snapshot,
+    )
+
+    runtime_node = plan["nodes"][0]["inputs"]["runtime"]
+    assert runtime_node["profileId"] == "codex-provider-profile"
+    assert runtime_node["providerProfile"] == "codex-provider-profile"
+
+
 def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

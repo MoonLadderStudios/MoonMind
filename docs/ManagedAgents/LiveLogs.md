@@ -260,6 +260,68 @@ Rules for merged tail:
 * the endpoint must handle partial artifacts and still return whatever durably captured content is available
 * when a historical run lacks both `merged_log_artifact_ref` and spool metadata, the endpoint may fall back to labeled stdout/stderr artifact concatenation with an explicit warning that chronological merge order is unavailable
 
+## 7.4 Supervisor Annotations
+
+Supervisor annotations are MoonMind-owned `system` events emitted from the runtime supervision / observability layer.
+
+They are explicitly separate from raw `stdout` and `stderr` artifacts:
+
+* they represent MoonMind-observed facts (lifecycle, supervision decisions, fallback behavior)
+* they must never rewrite or paraphrase subprocess output
+* they may appear in merged tails with `stream="system"` using the shared run-global sequence
+* they are not a substitute for provider-native structured output when that later becomes available
+
+### When supervisor annotations are recommended
+
+Emit `system` annotations when MoonMind can add high-value operator context, especially where raw output is:
+
+* sparse or delayed
+* repetitive
+* ambiguous
+* degraded by fallback behavior
+
+Good use cases:
+
+* run lifecycle transitions (`run_started`, `command_launched`)
+* workspace preparation outcomes (`workspace_preparation_applied`, `workspace_preparation_skipped`)
+* first-output visibility (`first_stdout_seen`, `first_stderr_seen`)
+* inactivity and fallback behavior (`no_output_interval`, `live_stream_unavailable`, `artifact_fallback`, `chronological_merge_unavailable`)
+* repeated warning deduplication (`warning_deduplicated`)
+* supervision decisions (`termination_requested_timeout`, `termination_requested_cancel`, `termination_requested_rate_limit`)
+* final classification and persistence (`exit_code_resolved`, `run_classified_completed`, `run_classified_failed`, `run_classified_timed_out`, `diagnostics_written`)
+
+### When supervisor annotations are not recommended
+
+Do not use `system` annotations to:
+
+* mirror parent-workflow status prints like “doing X / now doing Y”
+* simulate model reasoning
+* paraphrase normal `stdout`/`stderr` lines
+* spam progress updates without diagnostic value
+* provide low-signal heartbeat messages with no operational meaning
+
+### Example events that should receive supervisor annotations
+
+* `run_started` — `Supervisor: managed run started.`
+* `workspace_preparation_applied` — `Supervisor: workspace instructions written to CLAUDE.md.`
+* `workspace_preparation_skipped` — `Supervisor: skipped writing CLAUDE.md because the file already exists or is a symlink.`
+* `command_launched` — `Supervisor: runtime command launched in managed mode.`
+* `first_stdout_seen` — `Supervisor: first stdout output received.`
+* `first_stderr_seen` — `Supervisor: first stderr output received.`
+* `no_output_interval` — `Supervisor: no stdout/stderr observed for 30s; process still running.`
+* `warning_deduplicated` — `Supervisor: repeated config warning observed 12 times; suppressing duplicates in live view.`
+* `live_stream_unavailable` — `Supervisor: live streaming unavailable; durable artifact capture continues.`
+* `artifact_fallback` — `Supervisor: merged log view is using artifact-backed fallback.` (Aspirational)
+* `chronological_merge_unavailable` — `Supervisor: chronological merged ordering unavailable; showing labeled concatenation fallback.` (Aspirational)
+* `termination_requested_timeout` — `Supervisor: process termination requested after timeout.`
+* `termination_requested_cancel` — `Supervisor: process termination requested due to operator cancel.`
+* `termination_requested_rate_limit` — `Supervisor: process termination requested due to live rate-limit detection.`
+* `exit_code_resolved` — `Supervisor: authoritative exit code resolved to 1.`
+* `run_classified_completed` — `Supervisor: run classified as completed.`
+* `run_classified_failed` — `Supervisor: run classified as failed (execution_error).`
+* `run_classified_timed_out` — `Supervisor: run classified as timed_out.`
+* `diagnostics_written` — `Supervisor: diagnostics bundle persisted.`
+
 ---
 
 ## 8. Runtime execution model

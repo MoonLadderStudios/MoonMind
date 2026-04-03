@@ -24,6 +24,7 @@ from moonmind.utils.logging import SecretRedactor
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .store import ManagedRunStore
+from .log_streamer import RuntimeLogStreamer
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -35,10 +36,15 @@ _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
 
-    def __init__(self, store: ManagedRunStore) -> None:
+    def __init__(
+        self,
+        store: ManagedRunStore,
+        log_streamer: RuntimeLogStreamer | None = None,
+    ) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
+        self._log_streamer = log_streamer
 
     @staticmethod
     def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
@@ -64,6 +70,26 @@ class ManagedRuntimeLauncher:
         if repo_path.exists():
             return str(repo_path.resolve())
         return None
+
+    def _emit_system_annotation(
+        self,
+        *,
+        run_id: str,
+        workspace_path: str | None,
+        annotation_type: str,
+        text: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Emit a MoonMind-owned system annotation from the launcher lifecycle."""
+        if not self._log_streamer:
+            return
+        self._log_streamer.emit_system_annotation(
+            run_id=run_id,
+            workspace_path=workspace_path,
+            text=text,
+            annotation_type=annotation_type,
+            metadata={"source": "launcher", **(metadata or {})},
+        )
 
     @staticmethod
     def _workspace_root() -> Path:
@@ -357,22 +383,45 @@ class ManagedRuntimeLauncher:
         from moonmind.config.settings import settings as _mm_settings
         from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
             resolve_managed_api_key_reference,
+            resolve_managed_github_token_from_store,
         )
 
         secret_ref = str(
             getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
         ).strip()
-        if not secret_ref:
-            return None
+        if secret_ref:
+            try:
+                return await resolve_managed_api_key_reference(secret_ref)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Failed to resolve GitHub token secret ref for managed runtime launch",
+                    exc_info=True,
+                )
 
         try:
-            return await resolve_managed_api_key_reference(secret_ref)
+            store_token = await resolve_managed_github_token_from_store()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning(
-                "Failed to resolve GitHub token secret ref for managed runtime launch",
+                "Failed to resolve GitHub token from managed secrets store",
                 exc_info=True,
             )
             return None
+        return store_token
+
+    @staticmethod
+    def _runtime_requires_direct_github_env(runtime_id: str | None) -> bool:
+        """Return whether a managed runtime needs token env in addition to broker helpers.
+
+        Codex CLI shell-tool execution can bypass the workspace-local ``gh`` wrapper
+        during nested ``bash -lc`` command execution, so direct ``GH_TOKEN`` /
+        ``GITHUB_TOKEN`` env remains necessary for reliable GitHub CLI auth.
+        """
+
+        return str(runtime_id or "").strip() == "codex_cli"
 
     @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:
@@ -648,10 +697,44 @@ class ManagedRuntimeLauncher:
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex).
         if resolved_workspace_path is not None and strategy is not None:
+            claude_md_path = None
+            claude_md_pre_existing = False
+            if strategy.runtime_id == "claude_code" and request.instruction_ref:
+                claude_md_path = Path(resolved_workspace_path) / "CLAUDE.md"
+                claude_md_pre_existing = (
+                    claude_md_path.exists() or claude_md_path.is_symlink()
+                )
+
             try:
                 await strategy.prepare_workspace(
                     Path(resolved_workspace_path), request
                 )
+
+                if claude_md_path is not None:
+                    if claude_md_pre_existing:
+                        self._emit_system_annotation(
+                            run_id=run_id,
+                            workspace_path=resolved_workspace_path,
+                            annotation_type="workspace_preparation_skipped",
+                            text="Launcher: skipped writing CLAUDE.md because the file already exists or is a symlink.",
+                            metadata={
+                                "source": "launcher",
+                                "target": "CLAUDE.md",
+                                "reason": "preexisting_or_symlink",
+                            },
+                        )
+                    elif claude_md_path.exists():
+                        self._emit_system_annotation(
+                            run_id=run_id,
+                            workspace_path=resolved_workspace_path,
+                            annotation_type="workspace_preparation_applied",
+                            text="Launcher: workspace instructions written to CLAUDE.md.",
+                            metadata={
+                                "source": "launcher",
+                                "target": "CLAUDE.md",
+                                "reason": "workspace_preparation",
+                            },
+                        )
             except Exception:
                 logger.warning(
                     "strategy.prepare_workspace failed for run_id=%s runtime=%s",
@@ -733,8 +816,13 @@ class ManagedRuntimeLauncher:
                     socket_path=github_socket_path,
                 )
                 deferred_cleanup_paths.append(github_socket_path)
-                env_overrides.pop("GITHUB_TOKEN", None)
-                env_overrides.pop("GH_TOKEN", None)
+                if self._runtime_requires_direct_github_env(profile.runtime_id):
+                    env_overrides["GITHUB_TOKEN"] = github_token
+                    env_overrides["GH_TOKEN"] = github_token
+                    env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")
+                else:
+                    env_overrides.pop("GITHUB_TOKEN", None)
+                    env_overrides.pop("GH_TOKEN", None)
 
             if resolved_workspace_path is not None:
                 deferred_cleanup_paths.extend(
@@ -792,6 +880,7 @@ class ManagedRuntimeLauncher:
                     cwd=resolved_workspace_path,
                 )
         except Exception:
+            self._log_streamer.consume_annotations(run_id)
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:

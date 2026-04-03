@@ -660,6 +660,127 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_launch_emits_workspace_preparation_applied_annotation(
+    tmp_path, monkeypatch
+):
+    class _RecorderLogStreamer:
+        def __init__(self) -> None:
+            self.emissions: list[dict[str, object]] = []
+
+        def emit_system_annotation(self, **kwargs: object) -> None:
+            self.emissions.append(kwargs)
+
+    log_streamer = _RecorderLogStreamer()
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+    )
+    request = _make_request(instruction_ref="Run task")
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1001, returncode: int = 0) -> None:
+            self.pid = pid
+            self.returncode = returncode
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-applied",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace_path),
+    )
+
+    await process.wait()
+    assert process is not None
+    assert record.workspace_path == str(workspace_path)
+    assert (workspace_path / "CLAUDE.md").read_text(encoding="utf-8") == "Run task"
+    assert any(
+        emission.get("annotation_type") == "workspace_preparation_applied"
+        for emission in log_streamer.emissions
+    )
+
+
+@pytest.mark.asyncio
+async def test_launch_emits_workspace_preparation_skipped_annotation_for_existing_file(
+    tmp_path, monkeypatch
+):
+    class _RecorderLogStreamer:
+        def __init__(self) -> None:
+            self.emissions: list[dict[str, object]] = []
+
+        def emit_system_annotation(self, **kwargs: object) -> None:
+            self.emissions.append(kwargs)
+
+    log_streamer = _RecorderLogStreamer()
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+    )
+    request = _make_request(instruction_ref="Run task")
+    workspace_path = tmp_path / "workspace-skipped"
+    workspace_path.mkdir()
+    (workspace_path / "CLAUDE.md").write_text("already there", encoding="utf-8")
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1002, returncode: int = 0) -> None:
+            self.pid = pid
+            self.returncode = returncode
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-skipped",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace_path),
+    )
+
+    await process.wait()
+    assert process is not None
+    assert record.workspace_path == str(workspace_path)
+    assert (workspace_path / "CLAUDE.md").read_text(encoding="utf-8") == "already there"
+    assert any(
+        emission.get("annotation_type") == "workspace_preparation_skipped"
+        for emission in log_streamer.emissions
+    )
+
+
+@pytest.mark.asyncio
 async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypatch):
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)
@@ -1004,6 +1125,201 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
     assert "[credential]" in gitconfig.read_text(encoding="utf-8")
     assert "resolved-github-token" not in gitconfig.read_text(encoding="utf-8")
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
+
+
+@pytest.mark.asyncio
+async def test_launch_resolves_github_token_from_managed_secrets_store_without_profile_ref(
+    tmp_path, monkeypatch
+):
+    """Managed secret slug GITHUB_TOKEN (Settings) supplies gh without profile secret_refs."""
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+    request = _make_request(
+        workspace_spec={"repository": str(tmp_path / "source-repo")},
+    )
+
+    source_repo = tmp_path / "source-repo"
+    subprocess.run(["git", "init", str(source_repo)], check=True, capture_output=True)
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1003) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    async def _fake_store_token() -> str:
+        return "resolved-from-managed-secrets-table"
+
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-github-managed-store-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    run_root = store.store_root.parent / "workspaces" / "run-github-managed-store-1"
+    assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GITHUB_TOKEN" not in captured_env
+    assert "GH_TOKEN" not in captured_env
+    assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
+    assert (run_root / ".moonmind" / "bin" / "gh").exists()
+
+
+@pytest.mark.asyncio
+async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
+    tmp_path, monkeypatch
+):
+    """Codex CLI managed runs keep token env because nested shell tools may bypass wrappers."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+    request = _make_request(
+        workspace_spec={"repository": str(tmp_path / "source-repo")},
+    )
+
+    source_repo = tmp_path / "source-repo"
+    subprocess.run(["git", "init", str(source_repo)], check=True, capture_output=True)
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1004) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    async def _fake_store_token() -> str:
+        return "resolved-from-managed-secrets-table"
+
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-github-managed-store-codex-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    run_root = store.store_root.parent / "workspaces" / "run-github-managed-store-codex-1"
+    assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert captured_env["GITHUB_TOKEN"] == "resolved-from-managed-secrets-table"
+    assert captured_env["GH_TOKEN"] == "resolved-from-managed-secrets-table"
+    assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
+    assert (run_root / ".moonmind" / "bin" / "gh").exists()
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
+    monkeypatch,
+):
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_resolve(_secret_name: str) -> str:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await ManagedRuntimeLauncher._resolve_github_token_for_launch({})
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_token_for_launch_propagates_cancellation_from_store(
+    monkeypatch,
+):
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_store_token() -> str:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await ManagedRuntimeLauncher._resolve_github_token_for_launch({})
 
 
 @pytest.mark.asyncio
