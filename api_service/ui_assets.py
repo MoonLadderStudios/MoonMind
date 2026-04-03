@@ -30,11 +30,34 @@ class InvalidDevServerUrlError(MissionControlUIAssetsError):
     pass
 
 
-def _default_manifest_path() -> str:
-    return os.environ.get(
-        "VITE_MANIFEST_PATH",
-        "api_service/static/task_dashboard/dist/.vite/manifest.json",
+def local_ui_dist_root() -> Path:
+    return Path(__file__).resolve().parent / "static" / "task_dashboard" / "dist"
+
+
+def bundled_ui_dist_root() -> Path:
+    return Path(
+        os.environ.get(
+            "MOONMIND_BUNDLED_UI_DIST_ROOT",
+            "/opt/moonmind_static/task_dashboard/dist",
+        )
     )
+
+
+def _manifest_path_for_dist_root(dist_root: Path) -> Path:
+    return dist_root / ".vite" / "manifest.json"
+
+
+def _configured_manifest_path() -> str | None:
+    value = os.environ.get("VITE_MANIFEST_PATH")
+    return value if value else None
+
+
+def _default_manifest_path() -> str:
+    configured_path = _configured_manifest_path()
+    if configured_path:
+        return configured_path
+
+    return str(_manifest_path_for_dist_root(resolve_mission_control_dist_root()))
 
 
 def _lenient_ui_assets() -> bool:
@@ -94,6 +117,52 @@ class ViteAssetResolver:
 
 def _dist_root_for_manifest(manifest_path: str) -> Path:
     return Path(manifest_path).resolve().parent.parent
+
+
+def _manifest_tree_is_usable(dist_root: Path) -> bool:
+    manifest_path = _manifest_path_for_dist_root(dist_root)
+    if not manifest_path.is_file():
+        return False
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    if not isinstance(manifest, dict):
+        return False
+
+    for manifest_key, asset_info in manifest.items():
+        if not isinstance(manifest_key, str) or not isinstance(asset_info, dict):
+            return False
+        try:
+            _verify_asset_paths(dist_root, asset_info)
+        except AssetFileMissingError:
+            return False
+        imports = asset_info.get("imports") or []
+        if not isinstance(imports, list):
+            return False
+        for import_key in imports:
+            if not isinstance(import_key, str) or import_key not in manifest:
+                return False
+
+    return True
+
+
+def resolve_mission_control_dist_root() -> Path:
+    configured_manifest_path = _configured_manifest_path()
+    if configured_manifest_path:
+        return _dist_root_for_manifest(configured_manifest_path)
+
+    for candidate in (local_ui_dist_root(), bundled_ui_dist_root()):
+        if _manifest_tree_is_usable(candidate):
+            return candidate
+
+    local_root = local_ui_dist_root()
+    if _manifest_path_for_dist_root(local_root).exists():
+        return local_root
+
+    return bundled_ui_dist_root()
 
 
 def _verify_asset_paths(dist_root: Path, asset_info: Dict[str, Any]) -> None:

@@ -6,11 +6,16 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.testclient import TestClient
 
+import api_service.ui_assets as ui_assets_module
 from api_service.ui_assets import (
     AssetFileMissingError,
     EntrypointMissingError,
     ManifestNotFoundError,
+    resolve_mission_control_dist_root,
     ui_assets,
 )
 
@@ -94,6 +99,88 @@ def test_ui_assets_includes_css_from_imported_chunks(
 
     assert 'src="/static/task_dashboard/dist/assets/tasks-list.js"' in html
     assert 'href="/static/task_dashboard/dist/assets/mountPage.css"' in html
+
+
+def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist_root = tmp_path / "bundled-dist"
+    manifest_dir = dist_root / ".vite"
+    assets_dir = dist_root / "assets"
+    manifest_dir.mkdir(parents=True)
+    assets_dir.mkdir()
+
+    manifest = manifest_dir / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "entrypoints/tasks-list.tsx": {
+                    "file": "assets/tasks-list.js",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "tasks-list.js").write_text("console.log('entry');", encoding="utf-8")
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(dist_root))
+    monkeypatch.setattr(
+        ui_assets_module,
+        "local_ui_dist_root",
+        lambda: tmp_path / "missing-local-dist",
+    )
+
+    html = ui_assets("tasks-list")
+
+    assert 'src="/static/task_dashboard/dist/assets/tasks-list.js"' in html
+    assert resolve_mission_control_dist_root() == dist_root
+
+
+def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist_root = tmp_path / "bundled-dist"
+    assets_dir = dist_root / "assets"
+    manifest_dir = dist_root / ".vite"
+    assets_dir.mkdir(parents=True)
+    manifest_dir.mkdir()
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "entrypoints/tasks-list.tsx": {
+                    "file": "assets/tasks-list.js",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "tasks-list.js").write_text("console.log('bundled');", encoding="utf-8")
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(dist_root))
+    monkeypatch.setattr(
+        ui_assets_module,
+        "local_ui_dist_root",
+        lambda: tmp_path / "missing-local-dist",
+    )
+
+    app = FastAPI()
+    empty_static = tmp_path / "empty-static"
+    empty_static.mkdir()
+    app.mount(
+        "/static/task_dashboard/dist",
+        StaticFiles(directory=str(resolve_mission_control_dist_root())),
+        name="task-dashboard-dist",
+    )
+    app.mount("/static", StaticFiles(directory=str(empty_static)), name="static")
+
+    with TestClient(app) as client:
+        response = client.get("/static/task_dashboard/dist/assets/tasks-list.js")
+
+    assert response.status_code == 200
+    assert "bundled" in response.text
 
 
 def test_ui_assets_strict_raises_when_imported_chunk_file_missing(

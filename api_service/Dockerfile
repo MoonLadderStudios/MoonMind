@@ -343,6 +343,7 @@ COPY api_service /app/api_service/
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /app/api_service/static/task_dashboard/
+COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /opt/moonmind_static/task_dashboard/
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh

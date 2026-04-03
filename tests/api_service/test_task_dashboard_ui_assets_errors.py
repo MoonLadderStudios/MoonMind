@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import api_service.ui_assets as ui_assets_module
 from tests.unit.api.routers.test_task_dashboard import _client_with_mock_service
 
 
@@ -24,3 +25,45 @@ def test_tasks_list_returns_503_when_manifest_entry_missing(
     assert response.status_code == 503
     assert "Mission Control UI unavailable" in response.text
     assert "tasks-list" in response.text
+
+
+def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist_root = tmp_path / "bundled-dist"
+    manifest_dir = dist_root / ".vite"
+    assets_dir = dist_root / "assets"
+    manifest_dir.mkdir(parents=True)
+    assets_dir.mkdir()
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "entrypoints/tasks-list.tsx": {
+                    "file": "assets/tasks-list.js",
+                },
+                "entrypoints/dashboard-alerts.tsx": {
+                    "file": "assets/dashboard-alerts.js",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "tasks-list.js").write_text("console.log('tasks-list');", encoding="utf-8")
+    (assets_dir / "dashboard-alerts.js").write_text(
+        "console.log('dashboard-alerts');", encoding="utf-8"
+    )
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(dist_root))
+    monkeypatch.setattr(
+        ui_assets_module,
+        "local_ui_dist_root",
+        lambda: tmp_path / "missing-local-dist",
+    )
+
+    with _client_with_mock_service() as (client, _mock):
+        response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert "/static/task_dashboard/dist/assets/tasks-list.js" in response.text
