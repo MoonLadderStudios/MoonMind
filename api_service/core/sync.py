@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 from api_service.db.models import (
@@ -54,6 +55,23 @@ def _coerce_temporal_scalar(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _parse_temporal_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, (list, tuple)) and value and isinstance(value[0], datetime):
+        val = value[0]
+        return val if val.tzinfo is not None else val.replace(tzinfo=UTC)
+    scalar = _coerce_temporal_scalar(value)
+    if not scalar:
+        return None
+    try:
+        parsed = datetime.fromisoformat(scalar.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Invalid datetime search attribute value: %r", value)
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def merged_parameters_for_projection(
@@ -202,6 +220,9 @@ async def map_temporal_state_to_projection(
     if not waiting_reason and state_value == MoonMindWorkflowState.AWAITING_EXTERNAL:
         waiting_reason = "external_completion"
 
+    canonical_updated_at = _parse_temporal_datetime(
+        search_attributes.get("mm_updated_at")
+    )
     sanitized_memo = _sanitize_for_json(dict(memo))
     return {
         "workflow_id": desc.id,
@@ -235,7 +256,7 @@ async def map_temporal_state_to_projection(
         "last_update_idempotency_key": memo.get("last_update_idempotency_key"),
         "last_update_response": _sanitize_for_json(memo.get("last_update_response")),
         "started_at": desc.execution_time or desc.start_time,
-        "updated_at": _utc_now(),
+        "updated_at": canonical_updated_at,
         "closed_at": desc.close_time,
     }
 
@@ -243,13 +264,24 @@ async def map_temporal_state_to_projection(
 async def sync_execution_projection(
     session: AsyncSession,
     desc: WorkflowExecutionDescription,
+    synced_at: datetime | None = None,
 ) -> TemporalExecutionRecord:
     """Upsert the Temporal workflow state to the local projection database."""
     payload = await map_temporal_state_to_projection(desc)
 
     projection = await session.get(TemporalExecutionRecord, desc.id)
+    canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
     previous_version = int(projection.projection_version or 0) if projection else 0
-    synced_at = _utc_now()
+    synced_at = synced_at or _utc_now()
+    semantic_updated_at = payload.get("updated_at")
+    if semantic_updated_at is None:
+        if projection is not None:
+            semantic_updated_at = projection.updated_at
+        elif canonical is not None:
+            semantic_updated_at = canonical.updated_at
+        else:
+            semantic_updated_at = payload.get("started_at") or synced_at
+    payload["updated_at"] = semantic_updated_at
 
     if projection is None:
         projection = TemporalExecutionRecord(
@@ -277,6 +309,11 @@ async def sync_execution_projection(
             ):
                 continue
             setattr(projection, field, value)
+        projection.updated_at = semantic_updated_at
+        # Force SQLAlchemy to include updated_at in the UPDATE even when the
+        # semantic timestamp is unchanged, so the column's onupdate handler
+        # does not overwrite it with "now()" during sync-only refreshes.
+        flag_modified(projection, "updated_at")
         projection.projection_version = max(previous_version + 1, 1)
         projection.last_synced_at = synced_at
         projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
@@ -294,8 +331,6 @@ async def sync_execution_projection(
     close_status_value: TemporalExecutionCloseStatus | None = payload.get(
         "close_status"
     )
-    canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
-
     # Preserve canonical parameters (targetRuntime, model, effort, etc.) that were
     # set at execution creation time and are not present in the Temporal memo.
     # The memo-derived parameters from map_temporal_state_to_projection are typically
