@@ -387,6 +387,17 @@ class ManagedRuntimeLauncher:
         return store_token
 
     @staticmethod
+    def _runtime_requires_direct_github_env(runtime_id: str | None) -> bool:
+        """Return whether a managed runtime needs token env in addition to broker helpers.
+
+        Codex CLI shell-tool execution can bypass the workspace-local ``gh`` wrapper
+        during nested ``bash -lc`` command execution, so direct ``GH_TOKEN`` /
+        ``GITHUB_TOKEN`` env remains necessary for reliable GitHub CLI auth.
+        """
+
+        return str(runtime_id or "").strip() == "codex_cli"
+
+    @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -745,8 +756,13 @@ class ManagedRuntimeLauncher:
                     socket_path=github_socket_path,
                 )
                 deferred_cleanup_paths.append(github_socket_path)
-                env_overrides.pop("GITHUB_TOKEN", None)
-                env_overrides.pop("GH_TOKEN", None)
+                if self._runtime_requires_direct_github_env(profile.runtime_id):
+                    env_overrides["GITHUB_TOKEN"] = github_token
+                    env_overrides["GH_TOKEN"] = github_token
+                    env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")
+                else:
+                    env_overrides.pop("GITHUB_TOKEN", None)
+                    env_overrides.pop("GH_TOKEN", None)
 
             if resolved_workspace_path is not None:
                 deferred_cleanup_paths.extend(
