@@ -1083,6 +1083,48 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
 
 
 @pytest.mark.asyncio
+async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
+    monkeypatch,
+):
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_resolve(_secret_name: str) -> str:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await ManagedRuntimeLauncher._resolve_github_token_for_launch({})
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_token_for_launch_propagates_cancellation_from_store(
+    monkeypatch,
+):
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_store_token() -> str:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await ManagedRuntimeLauncher._resolve_github_token_for_launch({})
+
+
+@pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:
     1. chown the full run workspace root to app:app so the app user can write

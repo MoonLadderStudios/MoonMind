@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 
+from sqlalchemy import select
+
 from moonmind.auth.secret_refs import parse_secret_ref, SecretBackend, VaultSecretResolver, load_vault_token
 from moonmind.auth.resolvers import (
     EnvSecretResolver,
@@ -33,22 +35,22 @@ async def resolve_managed_github_token_from_store() -> str | None:
     org-wide token under a well-known slug without binding it to each profile.
     """
     from api_service.db.base import async_session_maker
-    from api_service.services.secrets import SecretsService
+    from api_service.db.models import ManagedSecret, SecretStatus
 
-    for slug in _MANAGED_GITHUB_TOKEN_SLUGS:
-        try:
-            async with async_session_maker() as session:
-                plaintext = await SecretsService.get_secret(session, slug)
-        except Exception:
-            logger.debug(
-                "Managed GitHub token lookup failed for slug %s",
-                slug,
-                exc_info=True,
+    async with async_session_maker() as session:
+        for slug in _MANAGED_GITHUB_TOKEN_SLUGS:
+            # Probe well-known slugs quietly so an expected "not configured"
+            # path does not emit one warning per candidate.
+            result = await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == slug,
+                    ManagedSecret.status == SecretStatus.ACTIVE,
+                )
             )
-            continue
-        candidate = str(plaintext or "").strip()
-        if candidate:
-            return candidate
+            secret = result.scalar_one_or_none()
+            candidate = str(secret.ciphertext if secret else "").strip()
+            if candidate:
+                return candidate
     return None
 
 

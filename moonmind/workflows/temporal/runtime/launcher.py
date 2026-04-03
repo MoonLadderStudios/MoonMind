@@ -366,6 +366,8 @@ class ManagedRuntimeLauncher:
         if secret_ref:
             try:
                 return await resolve_managed_api_key_reference(secret_ref)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.warning(
                     "Failed to resolve GitHub token secret ref for managed runtime launch",
@@ -374,6 +376,8 @@ class ManagedRuntimeLauncher:
 
         try:
             store_token = await resolve_managed_github_token_from_store()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning(
                 "Failed to resolve GitHub token from managed secrets store",
