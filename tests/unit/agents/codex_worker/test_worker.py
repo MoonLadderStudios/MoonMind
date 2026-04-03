@@ -844,6 +844,7 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
                     "mode": "codex",
                     "model": "gpt-5-codex",
                     "effort": "high",
+                    "providerProfile": "codex-provider-profile",
                 },
                 "git": {"startingBranch": "main", "targetBranch": None},
                 "publish": {"mode": "none"},
@@ -873,6 +874,8 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
     assert runtime_config["mode"] == "codex"
     assert runtime_config["model"] == "gpt-5-codex"
     assert runtime_config["effort"] == "high"
+    assert runtime_config["providerProfile"] == "codex-provider-profile"
+    assert runtime_config["profileId"] == "codex-provider-profile"
 
 
 async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:

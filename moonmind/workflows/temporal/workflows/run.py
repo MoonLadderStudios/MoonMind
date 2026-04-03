@@ -1358,6 +1358,10 @@ class MoonMindRunWorkflow:
         execution_profile_ref = str(
             node_inputs.get("executionProfileRef")
             or runtime_block.get("executionProfileRef")
+            or node_inputs.get("profileId")
+            or runtime_block.get("profileId")
+            or node_inputs.get("providerProfile")
+            or runtime_block.get("providerProfile")
             or f"default:{agent_id}"
         )
         wf_info = workflow.info()

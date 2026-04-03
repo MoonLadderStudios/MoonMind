@@ -1150,8 +1150,11 @@ async def _create_execution_from_task_request(
     )
     raw_profile_id = str(
         runtime_payload.get("profileId")
+        or runtime_payload.get("providerProfile")
         or task_payload.get("profileId")
+        or task_payload.get("providerProfile")
         or payload.get("profileId")
+        or payload.get("providerProfile")
         or ""
     ).strip() or None
     # Preserve the original requested model byte-for-byte (Compatibility Policy:
