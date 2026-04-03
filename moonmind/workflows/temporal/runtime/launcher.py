@@ -357,22 +357,30 @@ class ManagedRuntimeLauncher:
         from moonmind.config.settings import settings as _mm_settings
         from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
             resolve_managed_api_key_reference,
+            resolve_managed_github_token_from_store,
         )
 
         secret_ref = str(
             getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
         ).strip()
-        if not secret_ref:
-            return None
+        if secret_ref:
+            try:
+                return await resolve_managed_api_key_reference(secret_ref)
+            except Exception:
+                logger.warning(
+                    "Failed to resolve GitHub token secret ref for managed runtime launch",
+                    exc_info=True,
+                )
 
         try:
-            return await resolve_managed_api_key_reference(secret_ref)
+            store_token = await resolve_managed_github_token_from_store()
         except Exception:
             logger.warning(
-                "Failed to resolve GitHub token secret ref for managed runtime launch",
+                "Failed to resolve GitHub token from managed secrets store",
                 exc_info=True,
             )
             return None
+        return store_token
 
     @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:

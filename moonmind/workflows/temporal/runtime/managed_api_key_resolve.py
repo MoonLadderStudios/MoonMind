@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -13,6 +14,42 @@ from moonmind.auth.resolvers import (
     AdapterVaultSecretResolver,
     RootSecretResolver,
 )
+
+logger = logging.getLogger(__name__)
+
+# Slugs tried when no profile secret_refs / env token / WORKFLOW_GITHUB_TOKEN_SECRET_REF
+# produced a token (matches api_service startup seeding and dashboard hints).
+_MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_PAT",
+)
+
+
+async def resolve_managed_github_token_from_store() -> str | None:
+    """Return an active GitHub PAT from managed secrets (Settings), if any.
+
+    This is separate from provider profile ``secret_refs``: operators store one
+    org-wide token under a well-known slug without binding it to each profile.
+    """
+    from api_service.db.base import async_session_maker
+    from api_service.services.secrets import SecretsService
+
+    for slug in _MANAGED_GITHUB_TOKEN_SLUGS:
+        try:
+            async with async_session_maker() as session:
+                plaintext = await SecretsService.get_secret(session, slug)
+        except Exception:
+            logger.debug(
+                "Managed GitHub token lookup failed for slug %s",
+                slug,
+                exc_info=True,
+            )
+            continue
+        candidate = str(plaintext or "").strip()
+        if candidate:
+            return candidate
+    return None
 
 
 async def resolve_managed_api_key_reference(ref: str) -> str:
@@ -92,4 +129,7 @@ async def resolve_managed_api_key_reference(ref: str) -> str:
             await vault_resolver_instance.aclose()
 
 
-__all__ = ["resolve_managed_api_key_reference"]
+__all__ = [
+    "resolve_managed_api_key_reference",
+    "resolve_managed_github_token_from_store",
+]

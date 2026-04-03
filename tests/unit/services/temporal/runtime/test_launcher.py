@@ -1007,6 +1007,82 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
 
 
 @pytest.mark.asyncio
+async def test_launch_resolves_github_token_from_managed_secrets_store_without_profile_ref(
+    tmp_path, monkeypatch
+):
+    """Managed secret slug GITHUB_TOKEN (Settings) supplies gh without profile secret_refs."""
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+    request = _make_request(
+        workspace_spec={"repository": str(tmp_path / "source-repo")},
+    )
+
+    source_repo = tmp_path / "source-repo"
+    subprocess.run(["git", "init", str(source_repo)], check=True, capture_output=True)
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1003) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    async def _fake_store_token() -> str:
+        return "resolved-from-managed-secrets-table"
+
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-github-managed-store-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    run_root = store.store_root.parent / "workspaces" / "run-github-managed-store-1"
+    assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GITHUB_TOKEN" not in captured_env
+    assert "GH_TOKEN" not in captured_env
+    assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
+    assert (run_root / ".moonmind" / "bin" / "gh").exists()
+
+
+@pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:
     1. chown the full run workspace root to app:app so the app user can write
