@@ -31,6 +31,23 @@ TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
 TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
 
+def normalize_dependency_ids(raw_value: Any) -> list[str]:
+    """Normalize a list of dependency IDs, stripping whitespace and removing duplicates/non-strings."""
+    if not isinstance(raw_value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_value:
+        if not isinstance(item, str):
+            continue
+        candidate = item.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        normalized.append(candidate)
+    return normalized
+
+
 from moonmind.schemas.manifest_ingest_models import (
     ManifestExecutionPolicyModel,
     ManifestNodeCountsModel,

@@ -30,6 +30,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
+    from moonmind.schemas.temporal_models import normalize_dependency_ids
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
@@ -567,7 +568,7 @@ class MoonMindRunWorkflow:
             "initial_parameters",
         )
         task_parameters = self._mapping_value(parameters, "task")
-        self._declared_dependencies = self._normalize_dependency_ids(
+        self._declared_dependencies = normalize_dependency_ids(
             task_parameters.get("dependsOn")
         )
         ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
@@ -1992,35 +1993,16 @@ class MoonMindRunWorkflow:
         normalized = value.strip()
         return normalized or None
 
-    @staticmethod
-    def _normalize_dependency_ids(raw_value: Any) -> list[str]:
-        if not isinstance(raw_value, list):
-            return []
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for item in raw_value:
-            if not isinstance(item, str):
-                continue
-            candidate = item.strip()
-            if not candidate or candidate in seen:
-                continue
-            seen.add(candidate)
-            normalized.append(candidate)
-        return normalized
-
     def _dependency_metadata(self) -> dict[str, Any]:
+        has_dependencies = bool(self._declared_dependencies)
         metadata: dict[str, Any] = {
             "dependency_wait_occurred": self._dependency_wait_occurred,
+            "depends_on": list(self._declared_dependencies) if has_dependencies else [],
+            "has_dependencies": has_dependencies,
+            "dependency_wait_duration_ms": self._dependency_wait_duration_ms,
+            "dependency_resolution": self._dependency_resolution,
+            "failed_dependency_id": self._failed_dependency_id,
         }
-        if self._declared_dependencies:
-            metadata["depends_on"] = list(self._declared_dependencies)
-            metadata["has_dependencies"] = True
-        if self._dependency_wait_duration_ms is not None:
-            metadata["dependency_wait_duration_ms"] = self._dependency_wait_duration_ms
-        if self._dependency_resolution:
-            metadata["dependency_resolution"] = self._dependency_resolution
-        if self._failed_dependency_id:
-            metadata["failed_dependency_id"] = self._failed_dependency_id
         return metadata
 
     def _update_search_attributes(self) -> None:

@@ -54,6 +54,7 @@ from moonmind.schemas.temporal_models import (
     TASK_RUN_ID_MEMO_KEYS,
     TASK_RUN_ID_PARAM_KEYS,
     TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    normalize_dependency_ids,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -364,22 +365,9 @@ def _serialize_execution(
     task_payload = params.get("task")
     if not isinstance(task_payload, dict):
         task_payload = {}
-    raw_depends_on = task_payload.get("dependsOn")
-    depends_on = []
-    if isinstance(raw_depends_on, list):
-        depends_on = [
-            candidate
-            for candidate in (str(item).strip() for item in raw_depends_on)
-            if candidate
-        ]
+    depends_on = normalize_dependency_ids(task_payload.get("dependsOn"))
     if not depends_on:
-        raw_memo_depends_on = memo.get("depends_on")
-        if isinstance(raw_memo_depends_on, list):
-            depends_on = [
-                candidate
-                for candidate in (str(item).strip() for item in raw_memo_depends_on)
-                if candidate
-            ]
+        depends_on = normalize_dependency_ids(memo.get("depends_on"))
     has_dependencies = bool(memo.get("has_dependencies") or depends_on)
     dependency_wait_occurred = bool(memo.get("dependency_wait_occurred") or False)
     raw_dependency_wait_duration = memo.get("dependency_wait_duration_ms")
