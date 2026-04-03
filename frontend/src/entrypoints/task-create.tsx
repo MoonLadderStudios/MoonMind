@@ -620,6 +620,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setSubmitMessage('Add task instructions, select a skill, or define at least one step.');
       return;
     }
+
+    // When submitting steps-only (no objective instructions/skill), at minimum
+    // the first step must have its own instructions or a skill selected so the
+    // Temporal planner has something to act on.
+    const hasObjectiveContent = Boolean(trimmedInstructions || selectedSkill);
+    if (!hasObjectiveContent && normalizedSteps.length > 0) {
+      const firstStepSkillId =
+        normalizedSteps[0] &&
+        normalizedSteps[0].skill &&
+        typeof normalizedSteps[0].skill === 'object'
+          ? String((normalizedSteps[0].skill as Record<string, unknown>).id || '').trim()
+          : '';
+      const firstStepInstructions = normalizedSteps[0]
+        ? String(normalizedSteps[0].instructions || '').trim()
+        : '';
+      if (!firstStepInstructions && !firstStepSkillId) {
+        setSubmitMessage(
+          'Add task instructions, select a skill, or add instructions/a skill to the first step.',
+        );
+        return;
+      }
+    }
+
+
     if (!repository.trim()) {
       setSubmitMessage('Repository is required.');
       return;
