@@ -1,0 +1,22 @@
+[
+  {
+    "id": 3034176610,
+    "disposition": "addressed",
+    "rationale": "Fixed _client_with_mock_service to override _get_temporal_service with a lambda returning the actual mock_service instance instead of a fresh AsyncMock. Removed unused _build_mock_temporal_service function."
+  },
+  {
+    "id": 3034173336,
+    "disposition": "addressed",
+    "rationale": "Refactored _client_with_mock_service to accept optional monkeypatch parameter and use monkeypatch.setenv for environment variable management when available, making tests cleaner and more idiomatic to pytest."
+  },
+  {
+    "id": 4057082355,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary from Gemini, no specific action required beyond the addressed review comment."
+  },
+  {
+    "id": 4057086102,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary from Copilot, no specific action required beyond the addressed review comment."
+  }
+]

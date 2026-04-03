@@ -24,10 +24,6 @@ from api_service.api.routers.task_dashboard import (
 )
 
 
-def _build_mock_temporal_service() -> AsyncMock:
-    return AsyncMock()
-
-
 def _write_dashboard_test_manifest(root: Path) -> Path:
     dist_root = root / "dist"
     manifest_dir = dist_root / ".vite"
@@ -73,7 +69,9 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
 
 
 @contextmanager
-def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
+def _client_with_mock_service(
+    monkeypatch: pytest.MonkeyPatch | None = None,
+) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
 
@@ -86,7 +84,7 @@ def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     )
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
-    app.dependency_overrides[_get_temporal_service] = _build_mock_temporal_service
+    app.dependency_overrides[_get_temporal_service] = lambda: mock_service
 
     original_manifest = os.environ.get("VITE_MANIFEST_PATH")
     tmpdir: tempfile.TemporaryDirectory[str] | None = None
@@ -95,18 +93,24 @@ def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
         and "VITE_MANIFEST_PATH" not in os.environ
     ):
         tmpdir = tempfile.TemporaryDirectory()
-        os.environ["VITE_MANIFEST_PATH"] = str(
-            _write_dashboard_test_manifest(Path(tmpdir.name))
-        )
+        if monkeypatch is not None:
+            monkeypatch.setenv("VITE_MANIFEST_PATH", str(
+                _write_dashboard_test_manifest(Path(tmpdir.name))
+            ))
+        else:
+            os.environ["VITE_MANIFEST_PATH"] = str(
+                _write_dashboard_test_manifest(Path(tmpdir.name))
+            )
 
     try:
         with TestClient(app) as test_client:
             yield test_client, mock_service
     finally:
-        if original_manifest is None:
-            os.environ.pop("VITE_MANIFEST_PATH", None)
-        else:
-            os.environ["VITE_MANIFEST_PATH"] = original_manifest
+        if monkeypatch is None:
+            if original_manifest is None:
+                os.environ.pop("VITE_MANIFEST_PATH", None)
+            else:
+                os.environ["VITE_MANIFEST_PATH"] = original_manifest
         if tmpdir is not None:
             tmpdir.cleanup()
 
