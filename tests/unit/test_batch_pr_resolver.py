@@ -185,6 +185,29 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
     assert runtime.provider_profile == "inherited-profile"
 
 
+def test_load_parent_runtime_selection_accepts_profile_id_fallback(tmp_path: Path):
+    module = _load_module()
+    load_parent_runtime_selection = module["_load_parent_runtime_selection"]
+
+    task_context = tmp_path / "task_context.json"
+    task_context.write_text(
+        (
+            "{"
+            '"runtime":"codex",'
+            '"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"high","profileId":"profile-from-id"}'
+            "}"
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = load_parent_runtime_selection(str(task_context))
+    assert runtime is not None
+    assert runtime.mode == "codex"
+    assert runtime.model == "gpt-5-codex"
+    assert runtime.effort == "high"
+    assert runtime.provider_profile == "profile-from-id"
+
+
 def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]

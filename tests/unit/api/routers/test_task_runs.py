@@ -385,6 +385,60 @@ def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
     assert "[merged-order unavailable: spool metadata missing]" in response.text
 
 
+def test_stream_task_run_log_merged_fallback_includes_system_annotations(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run"
+    run_dir.mkdir(parents=True)
+
+    (run_dir / "stdout.log").write_text("hello from stdout\n", encoding="utf-8")
+    (run_dir / "stderr.log").write_text("warning from stderr\n", encoding="utf-8")
+    diagnostics = {
+        "annotations": [
+            {
+                "sequence": 20,
+                "text": "Supervisor: run classified as completed.",
+                "annotation_type": "run_classified_completed",
+            },
+            {
+                "sequence": 10,
+                "text": "Supervisor: managed run started.",
+                "annotation_type": "run_started",
+            },
+        ]
+    }
+    (run_dir / "diagnostics.json").write_text(
+        json.dumps(diagnostics),
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = "run/stdout.log"
+    mock_record.stderr_artifact_ref = "run/stderr.log"
+    mock_record.diagnostics_ref = "run/diagnostics.json"
+    mock_record.workspace_path = str(tmp_path / "workspace-without-spool")
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "artifact-fallback"
+    body = response.text
+    assert "[sequence=10] Supervisor: managed run started." in body
+    assert "[sequence=20] Supervisor: run classified as completed." in body
+    assert body.index("[sequence=10] Supervisor: managed run started.") > body.index(
+        "[merged-order unavailable: spool metadata missing]"
+    )
+
+
 def test_stream_task_run_log_merged_falls_back_to_legacy_log_artifact(
     client: tuple[TestClient, AsyncMock],
     tmp_path,

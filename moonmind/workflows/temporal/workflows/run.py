@@ -103,6 +103,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
+NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -1101,15 +1102,27 @@ class MoonMindRunWorkflow:
                     or last_node_inputs.get("startingBranch")
                     or "main"
                 )
-                task_payload = self._mapping_value(parameters, "task")
-                pr_title = self._resolve_native_pr_title(
-                    publish_payload=publish_payload,
-                    task_payload=task_payload,
-                )
-                pr_body = self._resolve_native_pr_body(
-                    publish_payload=publish_payload,
-                    task_payload=task_payload,
-                )
+                pr_title = self._title or "Automated changes by MoonMind"
+                pr_body = self._summary or "Automated changes by MoonMind."
+                if workflow.patched(NATIVE_PR_CREATE_PAYLOAD_PATCH):
+                    publish_payload = self._resolve_publish_payload(parameters)
+                    base_branch = (
+                        self._resolve_publish_base_branch(publish_payload)
+                        or (
+                            ws.get("startingBranch")
+                            or last_node_inputs.get("startingBranch")
+                            or "main"
+                        )
+                    )
+                    task_payload = self._mapping_value(parameters, "task")
+                    pr_title = self._resolve_native_pr_title(
+                        publish_payload=publish_payload,
+                        task_payload=task_payload,
+                    )
+                    pr_body = self._resolve_native_pr_body(
+                        publish_payload=publish_payload,
+                        task_payload=task_payload,
+                    )
 
                 push_status = agent_outputs.get("push_status", "")
                 if push_status == "no_commits":
@@ -1210,19 +1223,42 @@ class MoonMindRunWorkflow:
         normalized = value.strip().lower()
         return normalized if normalized in {"none", "branch", "pr"} else ""
 
-    def _coerce_text(self, value: Any, max_words: int | None = None) -> str | None:
+    def _coerce_text(
+        self, value: Any, max_chars: int | None = None, *, flatten: bool = True
+    ) -> str | None:
         if not isinstance(value, str):
             return None
-        normalized = " ".join(value.split())
+        normalized = " ".join(value.split()) if flatten else value.strip()
         if not normalized:
             return None
-        if max_words:
-            truncated = normalized[:max_words].rstrip()
-            if len(truncated) < len(normalized):
-                return truncated
-            return truncated
+        if max_chars:
+            return normalized[:max_chars].rstrip()
         return normalized
 
+    @staticmethod
+    def _is_transient_summary(value: str) -> bool:
+        normalized = " ".join(value.strip().lower().split())
+        return (
+            normalized
+            in {
+                "launching agent...",
+                "launching agent",
+                "agent is running.",
+                "agent is running",
+                "executing run steps.",
+                "executing run steps",
+                "execution initialized.",
+                "execution initialized",
+                "planning execution strategy.",
+                "planning execution strategy",
+                "generating task proposals.",
+                "generating task proposals",
+                "finalizing execution.",
+                "finalizing execution",
+            }
+            or normalized.startswith("executing plan step")
+            or (normalized.startswith("executed") and "plan step" in normalized)
+        )
     def _resolve_publish_payload(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         task_payload = self._mapping_value(parameters, "task")
         publish_payload = self._mapping_value(parameters, "publish")
@@ -1233,8 +1269,17 @@ class MoonMindRunWorkflow:
             return self._json_mapping(nested_publish, path="parameters.task.publish")
         return {}
 
+    def _proposal_generation_requested(self, parameters: Mapping[str, Any]) -> bool:
+        if workflow.patched("run-workflow-nested-propose-tasks"):
+            task_node = parameters.get("task")
+            task_payload = task_node if isinstance(task_node, Mapping) else {}
+            task_flag = task_payload.get("proposeTasks", parameters.get("proposeTasks"))
+            return _coerce_bool(task_flag, default=False)
+        else:
+            return _coerce_bool(parameters.get("proposeTasks"), default=False)
+
     def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
-        instructions = self._coerce_text(task_payload.get("instructions"))
+        instructions = self._coerce_text(task_payload.get("instructions"), flatten=False)
         if instructions:
             return instructions
         steps = task_payload.get("steps")
@@ -1242,7 +1287,7 @@ class MoonMindRunWorkflow:
             for step in steps:
                 if not isinstance(step, Mapping):
                     continue
-                step_instructions = self._coerce_text(step.get("instructions"))
+                step_instructions = self._coerce_text(step.get("instructions"), flatten=False)
                 if step_instructions:
                     return step_instructions
         return None
@@ -1253,10 +1298,12 @@ class MoonMindRunWorkflow:
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
-        publish_title = self._coerce_text(publish_payload.get("prTitle"))
+        publish_title = self._coerce_text(
+            publish_payload.get("prTitle"), max_chars=150
+        )
         if publish_title:
             return publish_title
-        explicit_title = self._coerce_text(task_payload.get("title"))
+        explicit_title = self._coerce_text(task_payload.get("title"), max_chars=150)
         if explicit_title:
             return explicit_title
         steps = task_payload.get("steps")
@@ -1264,10 +1311,12 @@ class MoonMindRunWorkflow:
             for step in steps:
                 if not isinstance(step, Mapping):
                     continue
-                step_title = self._coerce_text(step.get("title"))
+                step_title = self._coerce_text(step.get("title"), max_chars=150)
                 if step_title:
                     return step_title
-        task_instructions = self._coerce_text(task_payload.get("instructions"))
+        task_instructions = self._coerce_text(
+            task_payload.get("instructions"), max_chars=150
+        )
         if task_instructions:
             return task_instructions
         if self._title:
@@ -1280,13 +1329,15 @@ class MoonMindRunWorkflow:
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
-        publish_body = self._coerce_text(publish_payload.get("prBody"))
+        publish_body = self._coerce_text(
+            publish_payload.get("prBody"), flatten=False
+        )
         if publish_body:
             return publish_body
         default_summary = self._resolve_task_body_instructions(task_payload)
         if default_summary:
             return default_summary
-        if self._summary:
+        if self._summary and not self._is_transient_summary(self._summary):
             return self._summary
         return "Automated changes by MoonMind."
 
@@ -1349,6 +1400,10 @@ class MoonMindRunWorkflow:
         execution_profile_ref = str(
             node_inputs.get("executionProfileRef")
             or runtime_block.get("executionProfileRef")
+            or node_inputs.get("profileId")
+            or runtime_block.get("profileId")
+            or node_inputs.get("providerProfile")
+            or runtime_block.get("providerProfile")
             or f"default:{agent_id}"
         )
         wf_info = workflow.info()
@@ -1852,11 +1907,10 @@ class MoonMindRunWorkflow:
     async def _run_proposals_stage(self, *, parameters: dict[str, Any]) -> None:
         """Best-effort proposal generation phase.
 
-        Runs only when ``proposeTasks`` is set in ``initialParameters``.
+        Runs only when proposal generation is requested by the run payload.
         Failures are logged but do not fail the workflow.
         """
-        propose_tasks = parameters.get("proposeTasks")
-        if not _coerce_bool(propose_tasks, default=False):
+        if not self._proposal_generation_requested(parameters):
             return
 
         if workflow.patched("enable_task_proposals_gate"):
@@ -2017,9 +2071,7 @@ class MoonMindRunWorkflow:
                     ),
                 },
                 "proposals": {
-                    "requested": _coerce_bool(
-                        parameters.get("proposeTasks"), default=False
-                    ),
+                    "requested": self._proposal_generation_requested(parameters),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,

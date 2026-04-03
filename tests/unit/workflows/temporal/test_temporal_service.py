@@ -1969,6 +1969,99 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+
+        older = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="older",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="older-row",
+        )
+        newer = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="newer",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="newer-row",
+        )
+        tied_a = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="tied-a",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="tied-a-row",
+        )
+        tied_b = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="tied-b",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="tied-b-row",
+        )
+
+        older_updated_at = datetime(2026, 3, 6, 12, 0, tzinfo=UTC)
+        newer_updated_at = datetime(2026, 3, 6, 12, 5, tzinfo=UTC)
+        tied_updated_at = datetime(2026, 3, 6, 12, 3, tzinfo=UTC)
+        for workflow_id, updated_at in {
+            older.workflow_id: older_updated_at,
+            newer.workflow_id: newer_updated_at,
+            tied_a.workflow_id: tied_updated_at,
+            tied_b.workflow_id: tied_updated_at,
+        }.items():
+            source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            projection = await session.get(TemporalExecutionRecord, workflow_id)
+            assert source is not None
+            assert projection is not None
+            source.updated_at = updated_at
+            source.search_attributes["mm_updated_at"] = updated_at.isoformat()
+            projection.updated_at = updated_at
+            projection.search_attributes["mm_updated_at"] = updated_at.isoformat()
+        await session.commit()
+
+        listed = await service.list_executions(
+            workflow_type="MoonMind.Run",
+            state=None,
+            entry="run",
+            owner_type="user",
+            owner_id=owner_id,
+            repo=None,
+            integration=None,
+            page_size=10,
+            next_page_token=None,
+        )
+
+        expected_tied_order = sorted(
+            [tied_a.workflow_id, tied_b.workflow_id],
+            reverse=True,
+        )
+        assert [item.workflow_id for item in listed.items] == [
+            newer.workflow_id,
+            *expected_tied_order,
+            older.workflow_id,
+        ]
+
+
+@pytest.mark.asyncio
 async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
