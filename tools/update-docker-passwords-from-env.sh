@@ -9,11 +9,10 @@
 # PostgreSQL: uses docker compose exec + local psql (password not required for peer/trust
 # inside the container) to ALTER USER to match POSTGRES_PASSWORD.
 #
-# MinIO: uses a one-shot minio/mc container with --entrypoint /bin/sh (the mc image defaults
-# to entrypoint "mc", so a bare /bin/sh would be treated as an mc subcommand).
-# If MinIO already accepts the credentials in .env, nothing is changed. Otherwise the script
-# tries MINIO_ROOT_PASSWORD_PREVIOUS (env), then default minioadmin/minioadmin when applicable,
-# then prompts interactively for the secret MinIO currently accepts (TTY only).
+# MinIO: root credentials are configured from container environment, so the reliable way to
+# apply a changed MINIO_ROOT_PASSWORD is to recreate the MinIO container with the updated
+# .env, then verify the new credentials work. A one-shot minio/mc container is used only for
+# verification against the running MinIO API.
 #
 # After Postgres password changes, restart app services that cache connections if needed
 # (for example: docker compose restart api init-db).
@@ -27,8 +26,8 @@ Reads repo-root .env and updates:
   - Postgres role POSTGRES_USER (default postgres) password -> POSTGRES_PASSWORD
   - MinIO root user MINIO_ROOT_USER (default minioadmin) secret -> MINIO_ROOT_PASSWORD
 
-MinIO rotation: if .env is ahead of the server, use MINIO_ROOT_PASSWORD_PREVIOUS or answer
-the interactive prompt with the secret MinIO still accepts.
+If .env is ahead of the running MinIO container, the script recreates MinIO so it picks up
+the new MINIO_ROOT_PASSWORD, then verifies the updated credentials.
 
 Options:
   --help, -h   Show this help.
@@ -74,6 +73,8 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
 MINIO_MC_IMAGE="${MINIO_MC_IMAGE:-minio/mc:latest}"
+TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID="${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}"
+TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY="${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}"
 
 if [[ -z "$POSTGRES_PASSWORD" ]]; then
   echo "Error: POSTGRES_PASSWORD is empty in .env (required)." >&2
@@ -111,21 +112,6 @@ minio_try_admin_info() {
     -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin info mm' >/dev/null
 }
 
-minio_rotate_secret() {
-  local cid="$1"
-  local auth_user="$2"
-  local auth_secret="$3"
-  local new_secret="$4"
-  docker run --rm \
-    --entrypoint /bin/sh \
-    --network "container:${cid}" \
-    -e MC_AUTH_USER="$auth_user" \
-    -e MC_AUTH_SECRET="$auth_secret" \
-    -e MC_NEW_SECRET="$new_secret" \
-    "$MINIO_MC_IMAGE" \
-    -c 'mc alias set mm http://127.0.0.1:9000 "$MC_AUTH_USER" "$MC_AUTH_SECRET" && mc admin accesskey edit mm "$MC_AUTH_USER" --secret-key "$MC_NEW_SECRET"'
-}
-
 update_minio_password() {
   local cid
   cid="$(minio_container_id)"
@@ -141,41 +127,30 @@ update_minio_password() {
     return 0
   fi
 
-  if [[ -n "${MINIO_ROOT_PASSWORD_PREVIOUS:-}" ]]; then
-    if minio_try_admin_info "$cid" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD_PREVIOUS"; then
-      echo "[update-docker-passwords] MinIO: rotating secret using MINIO_ROOT_PASSWORD_PREVIOUS..."
-      minio_rotate_secret "$cid" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD_PREVIOUS" "$MINIO_ROOT_PASSWORD"
-      echo "[update-docker-passwords] MinIO: done."
-      return 0
-    fi
+  echo "[update-docker-passwords] MinIO: recreating container so it reloads .env credentials..."
+  "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate minio >/dev/null
+
+  cid="$(minio_container_id)"
+  if [[ -z "$cid" ]]; then
+    echo "Error: MinIO container was not found after recreation." >&2
+    exit 1
   fi
 
-  if [[ "$MINIO_ROOT_USER" == "minioadmin" && "$MINIO_ROOT_PASSWORD" != "minioadmin" ]]; then
-    echo "[update-docker-passwords] MinIO: trying default secret minioadmin (dev convenience)..." >&2
-    if minio_try_admin_info "$cid" "$MINIO_ROOT_USER" "minioadmin"; then
-      echo "[update-docker-passwords] MinIO: rotating from default credentials to .env..."
-      minio_rotate_secret "$cid" "$MINIO_ROOT_USER" "minioadmin" "$MINIO_ROOT_PASSWORD"
+  local attempt
+  for attempt in $(seq 1 30); do
+    if minio_try_admin_info "$cid" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; then
       echo "[update-docker-passwords] MinIO: done."
+      if [[ "$TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID" == "$MINIO_ROOT_USER" ]] && [[ "$TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY" != "$MINIO_ROOT_PASSWORD" ]]; then
+        echo "[update-docker-passwords] Warning: TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY in .env does not match MINIO_ROOT_PASSWORD." >&2
+        echo "[update-docker-passwords] Warning: artifact clients using ${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID} may fail until their secret is updated too." >&2
+      fi
       return 0
     fi
-  fi
+    sleep 2
+  done
 
-  local prompted=""
-  if [[ -t 0 ]]; then
-    echo "[update-docker-passwords] MinIO: credentials in .env did not authenticate." >&2
-    printf '%s' "Enter the root secret MinIO currently uses (input hidden): " >&2
-    read -rs prompted || true
-    echo >&2
-    if [[ -n "$prompted" ]] && minio_try_admin_info "$cid" "$MINIO_ROOT_USER" "$prompted"; then
-      echo "[update-docker-passwords] MinIO: rotating to MINIO_ROOT_PASSWORD from .env..."
-      minio_rotate_secret "$cid" "$MINIO_ROOT_USER" "$prompted" "$MINIO_ROOT_PASSWORD"
-      echo "[update-docker-passwords] MinIO: done."
-      return 0
-    fi
-  fi
-
-  echo "Error: could not authenticate to MinIO with MINIO_ROOT_PASSWORD from .env." >&2
-  echo "Set MINIO_ROOT_PASSWORD_PREVIOUS, re-run on a TTY to be prompted, or fix .env." >&2
+  echo "Error: MinIO did not accept MINIO_ROOT_PASSWORD from .env after recreation." >&2
+  echo "Check the MinIO container logs and verify the .env values are valid." >&2
   exit 1
 }
 
