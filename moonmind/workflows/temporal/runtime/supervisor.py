@@ -30,6 +30,9 @@ from .strategies.base import ManagedRuntimeExitResult
 from .output_parser import ParsedOutput
 
 HEARTBEAT_INTERVAL = 30  # seconds
+NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS = 30  # seconds
+_DUPLICATE_WARNING_THRESHOLD = 3
+_WARNING_SUBSTRINGS = ("warning", "warn", "deprecated", "rate limit")
 GRACEFUL_TERMINATE_WAIT_SECONDS = (
     1.0  # seconds to wait for graceful SIGTERM before SIGKILL
 )
@@ -83,14 +86,146 @@ class ManagedRunSupervisor:
             strategy = get_strategy(runtime_id) if runtime_id else None
             parser = strategy.create_output_parser() if strategy else None
             live_rate_limit_detected = asyncio.Event()
+            timed_out_by_supervisor = False
+            live_rate_limit_requested = False
+            last_output_seen_at = start_time
+            last_no_output_annotation_at = start_time
+            first_stdout_seen = False
+            first_stderr_seen = False
+            stderr_buffer = ""
+            warning_counts: dict[str, int] = {}
+            warning_dedup_announced: set[str] = set()
+
+            def _record_annotation(
+                annotation_type: str,
+                text: str,
+                *,
+                reason: str | None = None,
+                metadata: dict[str, Any] | None = None,
+            ) -> None:
+                metadata = dict(metadata or {})
+                metadata.setdefault("annotation_type", annotation_type)
+                if reason is not None:
+                    metadata["reason"] = reason
+                metadata.setdefault("source", "supervisor")
+                metadata["text"] = text
+                self._log_streamer.emit_system_annotation(
+                    run_id=run_id,
+                    workspace_path=record.workspace_path if record else None,
+                    text=text,
+                    metadata=metadata,
+                    annotation_type=annotation_type,
+                )
+
+            def _is_warning_text(text: str) -> bool:
+                lowered = text.lower()
+                return any(keyword in lowered for keyword in _WARNING_SUBSTRINGS)
+
+            def _handle_stream_chunk(stream_name: str, text: str) -> None:
+                nonlocal first_stdout_seen, first_stderr_seen, last_output_seen_at, stderr_buffer
+                if not text:
+                    return
+                if not text.isspace():
+                    last_output_seen_at = datetime.now(tz=UTC)
+                if not first_stdout_seen and stream_name == "stdout":
+                    first_stdout_seen = True
+                    _record_annotation(
+                        annotation_type="first_stdout_seen",
+                        text="Supervisor: first stdout output received.",
+                        reason="stream_observed",
+                    )
+                if not first_stderr_seen and stream_name == "stderr":
+                    first_stderr_seen = True
+                    _record_annotation(
+                        annotation_type="first_stderr_seen",
+                        text="Supervisor: first stderr output received.",
+                        reason="stream_observed",
+                    )
+                if stream_name != "stderr":
+                    return
+                
+                stderr_buffer += text
+                if "\n" not in stderr_buffer:
+                    return
+                
+                lines = stderr_buffer.split("\n")
+                # The last element is either an empty string (if text ended with \n)
+                # or a partial line that we need to buffer.
+                stderr_buffer = lines.pop()
+                
+                for raw_line in lines:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    line_key = line.lower()
+                    if not _is_warning_text(line_key):
+                        continue
+                    count = warning_counts.get(line_key, 0) + 1
+                    warning_counts[line_key] = count
+                    if (
+                        count >= _DUPLICATE_WARNING_THRESHOLD
+                        and line_key not in warning_dedup_announced
+                    ):
+                        _record_annotation(
+                            annotation_type="warning_deduplicated",
+                            text=(
+                                "Supervisor: repeated config warning observed "
+                                f"{count} times; suppressing duplicates in live view."
+                            ),
+                            reason="warning_deduplication",
+                            metadata={
+                                "duplicate_count": count,
+                                "warning_text": line,
+                            },
+                        )
+                        warning_dedup_announced.add(line_key)
+
+            _record_annotation(
+                annotation_type="run_started",
+                text="Supervisor: managed run started.",
+                reason="supervisor_state",
+            )
+            _record_annotation(
+                annotation_type="command_launched",
+                text="Supervisor: runtime command launched in managed mode.",
+                reason="supervisor_state",
+            )
+            if not (record and record.workspace_path):
+                _record_annotation(
+                    annotation_type="live_stream_unavailable",
+                    text="Supervisor: live streaming unavailable; durable artifact capture continues.",
+                    reason="stream_unavailable",
+                )
 
             async def _handle_stream_events(events: list[dict[str, Any]]) -> None:
+                nonlocal live_rate_limit_requested
                 if strategy is None or not strategy.terminate_on_live_rate_limit():
                     return
                 for event in events:
                     if self._is_live_rate_limit_event(event):
                         live_rate_limit_detected.set()
+                        live_rate_limit_requested = True
                         break
+
+            def _emit_no_output_annotation(now: datetime) -> None:
+                nonlocal last_no_output_annotation_at
+                if (
+                    now - last_output_seen_at
+                ).total_seconds() < NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS:
+                    return
+                if (
+                    now - last_no_output_annotation_at
+                ).total_seconds() < NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS:
+                    return
+                _record_annotation(
+                    annotation_type="no_output_interval",
+                    text=(
+                        "Supervisor: no stdout/stderr observed for "
+                        f"{NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS}s; process still running."
+                    ),
+                    reason="no_output",
+                )
+                last_no_output_annotation_at = now
 
             # Run heartbeat/wait and log streaming CONCURRENTLY so that OS
             # pipe buffers are drained in real-time.  Sequential streaming
@@ -100,7 +235,10 @@ class ManagedRunSupervisor:
             # output is captured as it is produced, enabling true live output.
             heartbeat_task = asyncio.create_task(
                 self._heartbeat_and_wait_with_timeout(
-                    run_id, process, timeout_seconds
+                    run_id,
+                    process,
+                    timeout_seconds,
+                    no_output_callback=_emit_no_output_annotation,
                 )
             )
             stream_task = asyncio.create_task(
@@ -110,6 +248,7 @@ class ManagedRunSupervisor:
                     run_id=run_id,
                     workspace_path=record.workspace_path if record else None,
                     parser=parser,
+                    chunk_callback=_handle_stream_chunk,
                     event_callback=_handle_stream_events,
                 )
             )
@@ -132,23 +271,35 @@ class ManagedRunSupervisor:
 
             if timed_out:
                 exit_code = None
-                await self._terminate_process(process)
+                timed_out_by_supervisor = True
             else:
-                exit_code = self._resolve_effective_exit_code(
-                    process_exit_code=process_exit_code,
-                    exit_code_path=exit_code_path,
+                if exit_code_path:
+                    exit_code = self._resolve_effective_exit_code(
+                        process_exit_code=process_exit_code,
+                        exit_code_path=exit_code_path,
+                    )
+                    _record_annotation(
+                        annotation_type="exit_code_resolved",
+                        text=f"Supervisor: authoritative exit code resolved to {exit_code}.",
+                        reason="exit_code",
+                    )
+                else:
+                    exit_code = process_exit_code
+            if timed_out_by_supervisor:
+                _record_annotation(
+                    annotation_type="termination_requested_timeout",
+                    text="Supervisor: process termination requested after timeout.",
+                    reason="timeout",
                 )
-
-            duration = (datetime.now(tz=UTC) - start_time).total_seconds()
-
-            diagnostics_ref = self._log_streamer.collect_diagnostics(
-                run_id=run_id,
-                exit_code=exit_code,
-                duration_seconds=duration,
-                log_refs=log_refs,
-                parsed_output=parsed_output,
-                events=events,
-            )
+            if live_rate_limit_requested:
+                _record_annotation(
+                    annotation_type="termination_requested_rate_limit",
+                    text=(
+                        "Supervisor: process termination requested due to "
+                        "live rate-limit detection."
+                    ),
+                    reason="rate_limit",
+                )
 
             # Classify exit
             exit_result = self._classify_exit(
@@ -174,6 +325,45 @@ class ManagedRunSupervisor:
                 error_message = (
                     f"Process timed out after {timeout_seconds}s"
                 )
+            if status == "completed":
+                _record_annotation(
+                    annotation_type="run_classified_completed",
+                    text="Supervisor: run classified as completed.",
+                    reason="classification",
+                )
+            elif status == "timed_out":
+                _record_annotation(
+                    annotation_type="run_classified_timed_out",
+                    text="Supervisor: run classified as timed_out.",
+                    reason="classification",
+                )
+            else:
+                _record_annotation(
+                    annotation_type="run_classified_failed",
+                    text=(
+                        f"Supervisor: run classified as failed "
+                        f"({failure_class or 'unknown'})."
+                    ),
+                    reason="classification",
+                    metadata={"failure_class": failure_class},
+                )
+            duration = (datetime.now(tz=UTC) - start_time).total_seconds()
+            _record_annotation(
+                annotation_type="diagnostics_collection_started",
+                text="Supervisor: persisting diagnostics bundle.",
+                reason="diagnostics",
+            )
+            annotations = self._log_streamer.consume_annotations(run_id)
+
+            diagnostics_ref = self._log_streamer.collect_diagnostics(
+                run_id=run_id,
+                exit_code=exit_code,
+                duration_seconds=duration,
+                log_refs=log_refs,
+                annotations=annotations,
+                parsed_output=parsed_output,
+                events=events,
+            )
 
             record = self._store.update_status(
                 run_id,
@@ -203,11 +393,15 @@ class ManagedRunSupervisor:
 
             return record
         finally:
+            self._log_streamer.consume_annotations(run_id)
             self._active_processes.pop(run_id, None)
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
 
     async def _heartbeat_and_wait(
-        self, run_id: str, process: asyncio.subprocess.Process
+        self,
+        run_id: str,
+        process: asyncio.subprocess.Process,
+        no_output_callback: Callable[[datetime], None] | None = None,
     ) -> int:
         """Send heartbeats while waiting for the process to complete."""
         while True:
@@ -217,6 +411,8 @@ class ManagedRunSupervisor:
                 )
                 return exit_code
             except asyncio.TimeoutError:
+                if no_output_callback is not None:
+                    no_output_callback(datetime.now(tz=UTC))
                 try:
                     activity.heartbeat({"run_id": run_id})
                 except Exception as e:
@@ -233,6 +429,7 @@ class ManagedRunSupervisor:
         run_id: str,
         process: asyncio.subprocess.Process,
         timeout_seconds: int,
+        no_output_callback: Callable[[datetime], None] | None = None,
     ) -> tuple[int | None, bool]:
         """Wrap _heartbeat_and_wait with a total timeout.
 
@@ -247,7 +444,11 @@ class ManagedRunSupervisor:
         """
         try:
             exit_code = await asyncio.wait_for(
-                self._heartbeat_and_wait(run_id, process),
+                self._heartbeat_and_wait(
+                    run_id,
+                    process,
+                    no_output_callback=no_output_callback,
+                ),
                 timeout=timeout_seconds,
             )
             return exit_code, False
@@ -255,22 +456,38 @@ class ManagedRunSupervisor:
             # Terminate the process so the concurrent streaming task sees EOF
             # and can complete, allowing asyncio.gather() to unblock.
             await self._terminate_process(process)
+            if no_output_callback is not None:
+                no_output_callback(datetime.now(tz=UTC))
             return None, True
 
     async def cancel(self, run_id: str) -> None:
         """Cancel a running managed process: terminate -> wait -> kill."""
         process = self._active_processes.get(run_id)
+        record = self._store.load(run_id)
+
+        def _record_cancel_annotation() -> None:
+            self._log_streamer.emit_system_annotation(
+                run_id=run_id,
+                workspace_path=record.workspace_path if record else None,
+                text="Supervisor: process termination requested due to operator cancel.",
+                annotation_type="termination_requested_cancel",
+                metadata={"source": "supervisor", "reason": "operator_cancel"},
+            )
+
         if process is None:
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
             self._cleanup_runtime_files(self._deferred_cleanup_paths.pop(run_id, ()))
+            _record_cancel_annotation()
             self._store.update_status(
                 run_id,
                 "canceled",
                 finished_at=datetime.now(tz=UTC),
                 error_message="Cancelled (process not found in supervisor)",
             )
+            self._log_streamer.consume_annotations(run_id)
             return
 
+        _record_cancel_annotation()
         await self._terminate_process(process)
         self._active_processes.pop(run_id, None)
         self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))

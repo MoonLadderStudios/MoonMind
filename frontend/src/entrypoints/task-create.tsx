@@ -11,6 +11,33 @@ const MODEL_OPTIONS_DATALIST_ID = 'queue-model-options';
 const EFFORT_OPTIONS_DATALIST_ID = 'queue-effort-options';
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(['pr-resolver', 'batch-pr-resolver']);
+const PROPOSE_TASKS_PREFERENCE_KEY = 'moonmind.task-create.propose-tasks';
+
+function readProposeTasksPreference(defaultValue: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(PROPOSE_TASKS_PREFERENCE_KEY);
+    if (raw === null) {
+      return defaultValue;
+    }
+    if (raw === 'true' || raw === '1') {
+      return true;
+    }
+    if (raw === 'false' || raw === '0') {
+      return false;
+    }
+  } catch {
+    // Preserve default behavior when localStorage is unavailable.
+  }
+  return defaultValue;
+}
+
+function writeProposeTasksPreference(value: boolean): void {
+  try {
+    window.localStorage.setItem(PROPOSE_TASKS_PREFERENCE_KEY, value ? 'true' : 'false');
+  } catch {
+    // Ignore localStorage write failures to keep task submission behavior unaffected.
+  }
+}
 
 type TemplateScope = 'global' | 'personal';
 type ScheduleMode = 'immediate' | 'once' | 'deferred_minutes' | 'recurring';
@@ -637,7 +664,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [publishMode, setPublishMode] = useState(defaultPublishMode);
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
-  const [proposeTasks, setProposeTasks] = useState(defaultProposeTasks);
+  const [proposeTasks, setProposeTasks] = useState(() => readProposeTasksPreference(defaultProposeTasks));
+  const isInitialMount = useRef(true);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('immediate');
   const [scheduledFor, setScheduledFor] = useState('');
   const [scheduleDeferredMinutes, setScheduleDeferredMinutes] = useState('');
@@ -722,6 +750,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setPublishMode('none');
     }
   }, [steps[0]?.skillId]);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    writeProposeTasksPreference(proposeTasks);
+  }, [proposeTasks]);
 
   const skillsQuery = useQuery({
     queryKey: ['task-create', 'skills'],
@@ -986,6 +1022,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleApplyPreset() {
+    if (isApplyingPreset) return;
     if (!selectedPreset) {
       setTemplateMessage('Choose a preset first.');
       return;
@@ -1691,8 +1728,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               />
             </label>
             <div className="actions">
-              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} disabled={isApplyingPreset}>
-                {isApplyingPreset ? 'Applying...' : 'Apply'}
+              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} aria-disabled={isApplyingPreset} aria-busy={isApplyingPreset}>
+                Apply
               </button>
               {taskTemplateSaveEnabled ? (
                 <button type="button" id="queue-template-save-current" onClick={handleSaveCurrentStepsAsPreset}>
@@ -1966,8 +2003,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
 
         <div className="actions">
-          <button type="submit" className="queue-submit-primary" disabled={isSubmitting}>
-            {isSubmitting ? 'Submitting...' : 'Create'}
+          <button type="submit" className="queue-submit-primary" aria-disabled={isSubmitting} aria-busy={isSubmitting}>
+            Create
           </button>
         </div>
 

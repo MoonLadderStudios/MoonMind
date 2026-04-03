@@ -207,9 +207,14 @@ def _iter_file_chunks(path: Path, *, chunk_size: int = 8192) -> Iterator[bytes]:
 def _iter_artifact_fallback_content(
     stdout_path: Path | None,
     stderr_path: Path | None,
+    diagnostics_path: Path | None = None,
 ) -> Iterator[bytes]:
+    annotations = list(_iter_diagnostics_annotations(diagnostics_path))
+
     yield b"--- system ---\n"
     yield b"[merged-order unavailable: spool metadata missing]\n"
+    for annotation in annotations:
+        yield f"{annotation}\n".encode("utf-8")
 
     for stream_name, artifact_path in (("stdout", stdout_path), ("stderr", stderr_path)):
         if artifact_path is None:
@@ -221,6 +226,39 @@ def _iter_artifact_fallback_content(
             yield chunk
         if last_chunk is not None and not last_chunk.endswith(b"\n"):
             yield b"\n"
+
+
+def _iter_diagnostics_annotations(
+    diagnostics_path: Path | None,
+) -> Iterator[str]:
+    if diagnostics_path is None or not diagnostics_path.is_file():
+        return
+    try:
+        raw = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return
+
+    annotations = raw.get("annotations")
+    if not isinstance(annotations, list):
+        return
+
+    def _sort_key(annotation: object) -> int:
+        if not isinstance(annotation, dict):
+            return 2**31 - 1
+        sequence = annotation.get("sequence")
+        return int(sequence) if isinstance(sequence, int) else 2**31 - 1
+
+    for annotation in sorted(annotations, key=_sort_key):
+        if not isinstance(annotation, dict):
+            continue
+        text = str(annotation.get("text") or "").strip()
+        if not text:
+            continue
+        sequence = annotation.get("sequence")
+        if isinstance(sequence, int):
+            yield f"[sequence={sequence}] {text}"
+        else:
+            yield text
 
 
 def _resolve_legacy_log_artifact_path(
@@ -433,6 +471,10 @@ async def stream_task_run_log(
                     record,
                     artifacts_root,
                 )
+                diagnostics_path = _resolve_safe_artifact_path(
+                    getattr(record, "diagnostics_ref", None),
+                    artifacts_root,
+                )
                 if legacy_log_path is not None:
                     content_stream = _iter_file_chunks(legacy_log_path)
                     order_source = "legacy-log-artifact"
@@ -448,6 +490,7 @@ async def stream_task_run_log(
                     content_stream = _iter_artifact_fallback_content(
                         stdout_path,
                         stderr_path,
+                        diagnostics_path=diagnostics_path,
                     )
                     order_source = "artifact-fallback"
 

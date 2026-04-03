@@ -71,6 +71,29 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(title[-10:], "(12345678)")
         self.assertEqual(title[:28], "[run_quality] Follow-up: AAA")
 
+    async def test_proposal_generate_uses_first_step_instructions_when_task_level_missing(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-steps-1",
+                "parameters": {
+                    "task": {
+                        "steps": [
+                            {"id": "s1", "instructions": "Investigate failed proposal hooks"},
+                            {"id": "s2", "instructions": "Add regression test coverage"},
+                        ]
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            result[0]["title"],
+            "[run_quality] Follow-up: Investigate failed proposal hooks (1)",
+        )
+
 
 
 class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):

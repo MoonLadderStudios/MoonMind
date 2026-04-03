@@ -291,6 +291,7 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     await workflow._run_finalizing_stage(
         parameters={"runtime": {"mode": "codex"}, "publishMode": "none"},

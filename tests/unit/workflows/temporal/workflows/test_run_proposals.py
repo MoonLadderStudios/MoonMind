@@ -135,6 +135,43 @@ async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
 
 
 @pytest.mark.asyncio
+async def test_run_proposals_stage_honors_nested_task_propose_tasks(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        dumped = json.loads(json.dumps(payload, default=_to_serializable))
+        captured.append((activity_type, dumped))
+        if activity_type == "proposal.generate":
+            return [{"title": "Generated proposal 1"}]
+        if activity_type == "proposal.submit":
+            return {"submitted_count": 1}
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={
+            "repo": "org/repo",
+            "task": {
+                "proposeTasks": True,
+            },
+        }
+    )
+
+    assert [activity for activity, _payload in captured] == [
+        "proposal.generate",
+        "proposal.submit",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_proposals_stage_skipped_when_proposeTasks_false(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
@@ -148,7 +185,9 @@ async def test_run_proposals_stage_skipped_when_proposeTasks_false(
 
     parameters = {
         "repo": "org/repo",
-        "proposeTasks": False,
+        "task": {
+            "proposeTasks": False,
+        },
     }
 
     await mock_run_workflow._run_proposals_stage(parameters=parameters)

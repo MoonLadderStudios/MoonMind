@@ -3830,6 +3830,53 @@ class CodexWorker:
             else {}
         )
 
+        def _augment_skill_args(
+            skill_id: str, skill_args: Mapping[str, Any]
+        ) -> dict[str, Any]:
+            effective_args = dict(skill_args)
+            if skill_id != "batch-pr-resolver":
+                return effective_args
+
+            runtime_node = task.get("runtime")
+            runtime = runtime_node if isinstance(runtime_node, Mapping) else {}
+
+            runtime_mode = str(
+                runtime.get("mode") or canonical_payload.get("targetRuntime") or ""
+            ).strip()
+            runtime_model = (
+                str(runtime.get("model")).strip()
+                if runtime.get("model") is not None
+                else ""
+            )
+            runtime_effort = (
+                str(runtime.get("effort")).strip()
+                if runtime.get("effort") is not None
+                else ""
+            )
+            runtime_provider_profile = (
+                runtime.get("providerProfile")
+                or runtime.get("profileId")
+                or canonical_payload.get("profileId")
+            )
+            runtime_provider_profile = (
+                str(runtime_provider_profile).strip()
+                if runtime_provider_profile is not None
+                else ""
+            )
+
+            if runtime_mode:
+                effective_args.setdefault("runtimeMode", runtime_mode)
+            if runtime_model:
+                effective_args.setdefault("runtimeModel", runtime_model)
+            if runtime_effort:
+                effective_args.setdefault("runtimeEffort", runtime_effort)
+            if runtime_provider_profile:
+                effective_args.setdefault(
+                    "runtimeProviderProfile",
+                    runtime_provider_profile,
+                )
+            return effective_args
+
         raw_steps = task.get("steps")
         if not isinstance(raw_steps, list) or not raw_steps:
             return [
@@ -3840,7 +3887,9 @@ class CodexWorker:
                     instructions=None,
                     effective_skill_id=task_skill_id,
                     effective_skill_args=(
-                        dict(task_skill_args) if task_skill_id != "auto" else {}
+                        _augment_skill_args(task_skill_id, task_skill_args)
+                        if task_skill_id != "auto"
+                        else {}
                     ),
                     has_step_instructions=False,
                 )
@@ -3862,17 +3911,24 @@ class CodexWorker:
                 if explicit_step_skill:
                     effective_skill_id = explicit_step_skill
                     step_skill_args_node = step_skill.get("args")
-                    effective_skill_args = (
-                        dict(step_skill_args_node)
+                    effective_skill_args = _augment_skill_args(
+                        effective_skill_id,
+                        step_skill_args_node
                         if isinstance(step_skill_args_node, Mapping)
-                        else {}
+                        else {},
                     )
                 else:
                     effective_skill_id = task_skill_id
-                    effective_skill_args = dict(task_skill_args)
+                    effective_skill_args = _augment_skill_args(
+                        effective_skill_id,
+                        task_skill_args,
+                    )
             else:
                 effective_skill_id = task_skill_id
-                effective_skill_args = dict(task_skill_args)
+                effective_skill_args = _augment_skill_args(
+                    effective_skill_id,
+                    task_skill_args,
+                )
 
             if not effective_skill_id:
                 effective_skill_id = "auto"
@@ -4182,6 +4238,15 @@ class CodexWorker:
             )
             runtime_model = str(runtime.get("model") or "").strip() or None
             runtime_effort = str(runtime.get("effort") or "").strip() or None
+            runtime_provider_profile = (
+                str(
+                    runtime.get("providerProfile")
+                    or runtime.get("profileId")
+                    or canonical_payload.get("profileId")
+                    or ""
+                ).strip()
+                or None
+            )
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -4296,6 +4361,8 @@ class CodexWorker:
                     "mode": runtime_mode,
                     "model": runtime_model,
                     "effort": runtime_effort,
+                    "providerProfile": runtime_provider_profile,
+                    "profileId": runtime_provider_profile,
                 },
                 "skill": {
                     "id": (

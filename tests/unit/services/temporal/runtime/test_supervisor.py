@@ -1,7 +1,8 @@
 import asyncio
 import os
+import json
 import pytest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
@@ -43,6 +44,15 @@ def _make_record(
     )
     store.save(record)
     return record
+
+
+def _resolve_diagnostics_path(
+    artifact_storage: _StubArtifactStorage,
+    record: ManagedRunRecord,
+) -> str | None:
+    if not record.diagnostics_ref:
+        return None
+    return str(artifact_storage.resolve_storage_path(record.diagnostics_ref))
 
 
 @pytest.fixture
@@ -126,7 +136,7 @@ async def test_timeout_exit_classification(supervisor_env):
 
 @pytest.mark.asyncio
 async def test_exit_code_file_is_authoritative(supervisor_env, tmp_path):
-    store, _, _, supervisor = supervisor_env
+    store, artifact_storage, _, supervisor = supervisor_env
     _make_record(store, "run-exit-file", "launching")
     exit_code_path = tmp_path / "run-exit-file.exit"
     exit_code_path.write_text("42\n", encoding="utf-8")
@@ -150,6 +160,18 @@ async def test_exit_code_file_is_authoritative(supervisor_env, tmp_path):
     assert record.exit_code == 42
     assert record.failure_class == "execution_error"
     assert not exit_code_path.exists()
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, record)
+    assert diagnostics_path is not None
+    diagnostics = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(encoding="utf-8")
+    )
+    annotations = diagnostics.get("annotations", [])
+    assert any(
+        isinstance(annotation, dict)
+        and annotation.get("annotation_type") == "exit_code_resolved"
+        and "42" in str(annotation.get("text", ""))
+        for annotation in annotations
+    )
 
 
 @pytest.mark.asyncio
@@ -205,6 +227,103 @@ async def test_timeout_ignores_exit_code_file_and_cleans_it(
     assert record.status == "timed_out"
     assert record.exit_code is None
     assert not exit_code_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_supervise_limits_repeated_warning_annotations(supervisor_env):
+    store, artifact_storage, _, supervisor = supervisor_env
+    _make_record(store, "run-warning", "launching")
+
+    process = await asyncio.create_subprocess_exec(
+        "sh",
+        "-c",
+        "printf 'warning: repeated config issue\\nwarning: repeated config issue\\nwarning: repeated config issue\\n' >&2",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-warning", process=process, timeout_seconds=30
+    )
+
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, record)
+    assert diagnostics_path is not None
+    diagnostics = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(encoding="utf-8")
+    )
+    warning_annotations = [
+        annotation
+        for annotation in diagnostics.get("annotations", [])
+        if (
+            isinstance(annotation, dict)
+            and annotation.get("annotation_type") == "warning_deduplicated"
+        )
+    ]
+    assert len(warning_annotations) == 1
+    assert (
+        "repeated config warning observed"
+        in str(warning_annotations[0].get("text", ""))
+    )
+    assert warning_annotations[0].get("metadata", {}).get("duplicate_count") == 3
+
+
+@pytest.mark.asyncio
+async def test_supervise_debounces_no_output_interval(supervisor_env):
+    store, artifact_storage, _, supervisor = supervisor_env
+    _make_record(store, "run-no-output", "launching")
+
+    async def _fake_heartbeat_and_wait_with_timeout(
+        self,
+        run_id: str,
+        process: asyncio.subprocess.Process,
+        timeout_seconds: int,
+        no_output_callback=None,
+    ) -> tuple[int | None, bool]:
+        base_time = datetime.now(tz=UTC)
+        if no_output_callback is None:
+            return 0, False
+        no_output_callback(base_time + timedelta(seconds=2.5))
+        no_output_callback(base_time + timedelta(seconds=4.9))
+        no_output_callback(base_time + timedelta(seconds=5.0))
+        return 0, False
+
+    process = await asyncio.create_subprocess_exec(
+        "true",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    with patch.object(
+        ManagedRunSupervisor,
+        "_heartbeat_and_wait_with_timeout",
+        _fake_heartbeat_and_wait_with_timeout,
+    ):
+        with patch(
+            "moonmind.workflows.temporal.runtime.supervisor.NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS",
+            2,
+        ):
+            record = await supervisor.supervise(
+                run_id="run-no-output",
+                process=process,
+                timeout_seconds=30,
+            )
+
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, record)
+    assert diagnostics_path is not None
+    diagnostics = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(encoding="utf-8")
+    )
+    no_output_annotations = [
+        annotation
+        for annotation in diagnostics.get("annotations", [])
+        if (
+            isinstance(annotation, dict)
+            and annotation.get("annotation_type") == "no_output_interval"
+        )
+    ]
+    assert len(no_output_annotations) == 2
 
 
 @pytest.mark.asyncio
