@@ -113,6 +113,9 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
     assert "templateSaveEnabled" in config["system"]["taskTemplateCatalog"]
+    assert config["system"]["taskTemplateCatalog"]["list"] == "/api/task-step-templates"
+    assert config["system"]["taskTemplateCatalog"]["detail"] == "/api/task-step-templates/{slug}"
+    assert config["system"]["taskTemplateCatalog"]["expand"] == "/api/task-step-templates/{slug}:expand"
     attachment_policy = config["system"]["attachmentPolicy"]
     assert attachment_policy["enabled"] is True
     assert attachment_policy["maxCount"] >= 1
@@ -352,4 +355,3 @@ def test_normalize_status_maps_temporal_awaiting_slot_to_queued() -> None:
 def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> None:
     """waiting_on_dependencies should map to waiting on the dashboard."""
     assert normalize_status("temporal", "waiting_on_dependencies") == "waiting"
-
