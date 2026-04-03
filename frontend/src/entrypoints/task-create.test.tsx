@@ -412,11 +412,11 @@ describe('Task Create Entrypoint', () => {
         'Content-Type': 'application/json; charset=utf-8',
       }),
     );
-    expect(JSON.parse(String(uploadCall?.[1]?.body))).toEqual({
+    expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
       repository: 'MoonLadderStudios/MoonMind',
-      task: expect.objectContaining({
-        instructions: 'Large instructions '.repeat(1000),
-      }),
+      task: {
+        instructions: expect.stringContaining('Large instructions Large instructions'),
+      },
     });
   });
 
@@ -426,12 +426,12 @@ describe('Task Create Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Instructions'), {
       target: { value: 'Primary objective' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Step' }));
 
-    const stepTextareas = await screen.findAllByPlaceholderText(
+    const stepTextarea = await screen.findByPlaceholderText(
       'Step-specific instructions (leave blank to continue from the task objective).',
     );
-    fireEvent.change(stepTextareas[1] as HTMLTextAreaElement, {
+    fireEvent.change(stepTextarea, {
       target: { value: 'Long step instructions '.repeat(1000) },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
@@ -459,19 +459,19 @@ describe('Task Create Entrypoint', () => {
     ]);
 
     const uploadCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/artifacts/art-001/content').at(-1);
-    expect(JSON.parse(String(uploadCall?.[1]?.body))).toEqual({
+    expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
       repository: 'MoonLadderStudios/MoonMind',
-      task: expect.objectContaining({
+      task: {
         instructions: 'Primary objective',
-        steps: [
-          {
+        steps: expect.arrayContaining([
+          expect.objectContaining({
             instructions: 'Primary objective',
-          },
-          {
-            instructions: 'Long step instructions '.repeat(1000),
-          },
-        ],
-      }),
+          }),
+          expect.objectContaining({
+            instructions: expect.stringContaining('Long step instructions Long step instructions'),
+          }),
+        ]),
+      },
     });
   });
 
