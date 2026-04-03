@@ -263,6 +263,7 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 RUN apt-get update && \
     apt-get install -y \
         build-essential \
+        bubblewrap \
         pkg-config \
         libcairo2-dev \
         libffi-dev \
