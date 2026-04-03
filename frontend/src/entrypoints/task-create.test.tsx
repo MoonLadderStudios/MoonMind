@@ -348,22 +348,40 @@ describe('Task Create Entrypoint', () => {
   });
 
   it('defaults publish mode to none when selecting pr-resolver skills', async () => {
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    const payload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        ...mockPayload.initialData,
+        dashboardConfig: {
+          ...mockPayload.initialData.dashboardConfig,
+          system: {
+            ...mockPayload.initialData.dashboardConfig.system,
+            defaultPublishMode: 'pr',
+          },
+        },
+      },
+    };
+
+    renderWithClient(<TaskCreatePage payload={payload} />);
 
     const primaryStep = (await screen.findByText('Step 1 (Primary)')).closest('section');
     expect(primaryStep).not.toBeNull();
 
     const publishSelect = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
-    expect(publishSelect).toHaveValue('pr');
+    expect(publishSelect.value).toBe(payload.initialData.dashboardConfig.system.defaultPublishMode);
     fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
       target: { value: 'pr-resolver' },
     });
-    expect(screen.getByLabelText('Publish Mode')).toHaveValue('none');
+    await waitFor(() => {
+      expect((screen.getByLabelText('Publish Mode') as HTMLSelectElement).value).toBe('none');
+    });
 
     fireEvent.change(within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/), {
       target: { value: 'batch-pr-resolver' },
     });
-    expect(screen.getByLabelText('Publish Mode')).toHaveValue('none');
+    await waitFor(() => {
+      expect((screen.getByLabelText('Publish Mode') as HTMLSelectElement).value).toBe('none');
+    });
   });
 
   it('submits publish mode none when the selected primary skill is pr-resolver', async () => {

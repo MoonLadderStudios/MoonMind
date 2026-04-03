@@ -653,7 +653,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
-  const previousPrimarySkillRef = useRef('');
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
 
@@ -719,15 +718,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     const primarySkill = String(steps[0]?.skillId || '').trim().toLowerCase();
-    const previousPrimarySkill = previousPrimarySkillRef.current;
-    previousPrimarySkillRef.current = primarySkill;
-    if (primarySkill === previousPrimarySkill) {
-      return;
-    }
     if (isResolverSkill(primarySkill)) {
       setPublishMode('none');
     }
-  }, [steps]);
+  }, [steps[0]?.skillId]);
 
   const skillsQuery = useQuery({
     queryKey: ['task-create', 'skills'],
