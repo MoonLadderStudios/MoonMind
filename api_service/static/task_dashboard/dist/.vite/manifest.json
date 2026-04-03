@@ -6,15 +6,15 @@
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_PageSizeSelector-CL2UEVG7.js": {
-    "file": "assets/PageSizeSelector-CL2UEVG7.js",
+  "_PageSizeSelector-OOSXp2SI.js": {
+    "file": "assets/PageSizeSelector-OOSXp2SI.js",
     "name": "PageSizeSelector",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_executionStatusPillClasses-B9JE78AA.js": {
-    "file": "assets/executionStatusPillClasses-B9JE78AA.js",
+  "_executionStatusPillClasses-C4O1mjPd.js": {
+    "file": "assets/executionStatusPillClasses-C4O1mjPd.js",
     "name": "executionStatusPillClasses",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
@@ -65,14 +65,14 @@
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-DyjYx6Zl.js",
+    "file": "assets/proposals-CN5pl5Lj.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_PageSizeSelector-CL2UEVG7.js",
-      "_executionStatusPillClasses-B9JE78AA.js"
+      "_PageSizeSelector-OOSXp2SI.js",
+      "_executionStatusPillClasses-C4O1mjPd.js"
     ]
   },
   "entrypoints/schedules.tsx": {
@@ -114,13 +114,13 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-OX-ydney.js",
+    "file": "assets/task-detail-BIA3WX-9.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_executionStatusPillClasses-B9JE78AA.js"
+      "_executionStatusPillClasses-C4O1mjPd.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
@@ -133,14 +133,14 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-BEi98dqr.js",
+    "file": "assets/tasks-list-DX8Ms9BW.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_PageSizeSelector-CL2UEVG7.js",
-      "_executionStatusPillClasses-B9JE78AA.js"
+      "_PageSizeSelector-OOSXp2SI.js",
+      "_executionStatusPillClasses-C4O1mjPd.js"
     ]
   }
 }

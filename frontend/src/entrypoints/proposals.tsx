@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
+import { formatTaskSkills } from '../utils/formatters';
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
@@ -291,7 +292,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                           </a>
                         </td>
                         <td>{row.taskPreview?.runtimeMode || '—'}</td>
-                        <td>{row.taskPreview?.taskSkills && row.taskPreview.taskSkills.length > 0 ? row.taskPreview.taskSkills.join(', ') : row.taskPreview?.skillId || '—'}</td>
+                        <td>{formatTaskSkills(row.taskPreview?.taskSkills, row.taskPreview?.skillId)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.status)}>
@@ -365,7 +366,7 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Skill</dt>
-                        <dd>{row.taskPreview?.taskSkills && row.taskPreview.taskSkills.length > 0 ? row.taskPreview.taskSkills.join(', ') : row.taskPreview?.skillId || '—'}</dd>
+                        <dd>{formatTaskSkills(row.taskPreview?.taskSkills, row.taskPreview?.skillId)}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>
