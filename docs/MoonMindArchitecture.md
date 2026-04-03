@@ -52,7 +52,7 @@ The FastAPI-based [API service](../api_service/) is MoonMind's central control p
 
 * **Execution lifecycle APIs** — exposes `/api/executions` for create/list/detail/update/signal/cancel and related Temporal-backed execution operations.
 * **Task-oriented product routes** — serves `/tasks/*` Mission Control routes and compatibility views that present workflow executions as tasks.
-* **Observability APIs** — exposes `/api/task-runs/*` for managed-run log, diagnostics, and live-follow surfaces.
+* **Observability APIs** — exposes `/api/task-runs/*` for managed-run log, diagnostics, and live-follow surfaces. The underlying `task_runs` router is mounted under the app-level `/api` prefix, so the public path family remains `/api/task-runs/*`.
 * **Artifact APIs** — manages artifact metadata, presigned upload/download grants, and artifact-to-execution linkage.
 * **Task templates and presets** — serves the task step template catalog used by Mission Control submission flows.
 * **Agent skill resolution** — accepts task/step skill-selection intent and resolves it into immutable `ResolvedSkillSet` snapshot refs for execution.

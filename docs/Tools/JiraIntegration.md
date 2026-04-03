@@ -265,25 +265,15 @@ ATLASSIAN_API_KEY=your-service-account-token
 
 For production, store credentials in MoonMind's managed secrets system and bind them by SecretRef.
 
-Illustrative pseudo-configuration:
+Example using actual SecretRef syntax:
 
 ```yaml
 jira_credentials:
-  auth_mode:
-    source: db_encrypted
-    secret_id: jira-auth-mode
-  api_key:
-    source: db_encrypted
-    secret_id: jira-api-key
-  email:
-    source: db_encrypted
-    secret_id: jira-email
-  cloud_id:
-    source: db_encrypted
-    secret_id: jira-cloud-id
-  site_url:
-    source: db_encrypted
-    secret_id: jira-site-url
+  auth_mode: db://jira-auth-mode
+  api_key: db://jira-api-key
+  email: db://jira-email
+  cloud_id: db://jira-cloud-id
+  site_url: db://jira-site-url
 ```
 
 Important:
@@ -322,7 +312,7 @@ else:
 
 ### Authorization header selection
 
-Service-account scoped token mode:
+Service-account scoped token mode against `api.atlassian.com`:
 
 ```python
 headers = {
@@ -331,6 +321,8 @@ headers = {
     "Content-Type": "application/json",
 }
 ```
+
+If an HTTP client or shared auth helper prefers `email:token` formatting, Atlassian's service-account token docs also allow Basic auth against the same gateway using the service-account email plus token. MoonMind should pick one mode per client implementation and document it clearly rather than mixing both on one request path.
 
 Compatibility/basic-auth mode:
 

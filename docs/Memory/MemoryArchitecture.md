@@ -145,8 +145,9 @@ Writeback is automatic, async-first, and idempotent by execution identity (`work
 ### 6.1 Sources of truth
 - **Postgres**: Temporal-backed execution records/projections, workflow support tables, system runs, and related event metadata.
 - **Artifact store**:
-  - workflow artifacts under `var/artifacts/<scope>/<run_id>/`
-  - managed-run workspace and observability artifacts under `/work/agent_jobs/<job_id>/...` in worker containers
+  - workflow artifacts default under `var/artifacts/workflows/<workflow_id>/` and may be relocated via `WORKFLOW_ARTIFACT_ROOT`
+  - local-dev Temporal artifact files default under `var/artifacts/temporal_artifacts/`
+  - managed-run workspace and observability files may exist under `/work/agent_jobs/<job_id>/...` in worker containers; treat that as runtime-local workspace layout rather than the primary durable artifact root
 - **Git**: code + Beads planning state.
 
 ### 6.2 Qdrant: retrieval indexes (not truth)

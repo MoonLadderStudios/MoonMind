@@ -15,6 +15,8 @@ MoonMind now splits this responsibility across:
 
 Mission Control still presents these executions as **tasks** in the product UI, but the active lifecycle API is execution-oriented.
 
+The public `/api/task-runs` path is intentional: the `task_runs` router itself uses `prefix="/task-runs"` and FastAPI mounts it under the app-level `/api` prefix.
+
 ## 2. API Surface
 
 Task runs are served by two active router families:
@@ -29,7 +31,7 @@ Task runs are served by two active router families:
 | `POST` | `/api/executions` | Create/start a Temporal-backed execution |
 | `GET`  | `/api/executions` | List executions visible to the caller |
 | `GET`  | `/api/executions/{workflowId}` | Get execution detail |
-| `POST` | `/api/executions/{workflowId}/update` | Apply a workflow update such as input edits or rerun requests |
+| `POST` | `/api/executions/{workflowId}/update` | Apply an in-place workflow update such as `UpdateInputs`, `SetTitle`, or `RequestRerun` (Continue-As-New on the same logical execution) |
 | `POST` | `/api/executions/{workflowId}/signal` | Send an asynchronous workflow signal such as pause, resume, or approve |
 | `POST` | `/api/executions/{workflowId}/cancel` | Cancel or terminate an execution |
 
@@ -44,7 +46,7 @@ These routes extend the main lifecycle surface for specific execution types:
 | `POST` | `/api/executions/{workflowId}/integration` | Register/update integration monitoring state |
 | `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results |
 | `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
-| `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters |
+| `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters and a new `workflowId` |
 
 ### 2.3 Managed-Run Observability (`/api/task-runs`)
 
