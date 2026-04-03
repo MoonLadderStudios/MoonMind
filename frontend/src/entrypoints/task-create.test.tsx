@@ -490,6 +490,84 @@ describe('Task Create Entrypoint', () => {
     });
   });
 
+  it('uploads task input through the same-origin artifact content endpoint when the API returns a presigned storage URL', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/v1/provider-profiles')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => providerProfiles,
+        } as Response);
+      }
+      if (url === '/api/executions') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: 'mm:workflow-123',
+            runId: 'run-123',
+            namespace: 'moonmind',
+            redirectPath: '/tasks/mm:workflow-123?source=temporal',
+          }),
+        } as Response);
+      }
+      if (url === '/api/artifacts') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifact_ref: {
+              artifact_id: 'art-001',
+            },
+            upload: {
+              mode: 'single_put',
+              upload_url: 'http://localhost:9000/moonmind-temporal-artifacts/demo-presigned-upload',
+              expires_at: '2026-04-02T00:00:00Z',
+              max_size_bytes: 100000,
+              required_headers: {},
+            },
+          }),
+        } as Response);
+      }
+      if (url === '/api/artifacts/art-001/content') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact_id: 'art-001' }),
+        } as Response);
+      }
+      if (url === '/api/artifacts/art-001/links') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact_id: 'art-001' }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: `Unhandled fetch for ${url} ${String(init?.method || 'GET')}`,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Instructions'), {
+      target: { value: 'Large instructions '.repeat(1000) },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/artifacts/art-001/content',
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url) === 'http://localhost:9000/moonmind-temporal-artifacts/demo-presigned-upload',
+      ),
+    ).toBe(false);
+  });
+
   it('uploads oversized step instructions as a JSON artifact and strips inline step text', async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 

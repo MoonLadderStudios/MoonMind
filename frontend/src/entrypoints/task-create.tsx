@@ -548,13 +548,21 @@ async function createInputArtifact(
   }
   const created = (await createResponse.json()) as {
     artifact_ref?: { artifact_id?: string };
-    upload?: { upload_url?: string };
+    upload?: { mode?: string; upload_url?: string };
   };
   const artifactId = String(created.artifact_ref?.artifact_id || '').trim();
-  const uploadUrl = String(created.upload?.upload_url || '').trim();
-  if (!artifactId || !uploadUrl) {
+  const uploadMode = String(created.upload?.mode || 'single_put').trim().toLowerCase();
+  if (!artifactId) {
     throw new Error('Artifact upload details were incomplete.');
   }
+  if (uploadMode === 'multipart') {
+    throw new Error(
+      'Task input artifact is too large for the current browser submission flow. ' +
+        'Reduce the submitted instructions or task step payload and retry.',
+    );
+  }
+
+  const uploadUrl = `/api/artifacts/${encodeURIComponent(artifactId)}/content`;
 
   let uploadResponse: Response;
   try {
@@ -569,11 +577,11 @@ async function createInputArtifact(
     if (error instanceof TypeError && error.message === 'Failed to fetch') {
       console.error('[TaskCreate] Network failure during artifact content upload.', {
         uploadUrl,
-        possibleCauses: 'Storage service (Minio) unreachable or CORS block.',
+        possibleCauses: 'API service unreachable, CORS block, or network issue.',
       });
       throw new Error(
         `Failed to upload artifact content (upload URL: ${uploadUrl}). ` +
-          'The storage service may be unreachable. Verify that Minio/S3 is running and accessible.',
+          'The API service may be unreachable or a CORS policy is blocking the request.',
         { cause: error },
       );
     }
