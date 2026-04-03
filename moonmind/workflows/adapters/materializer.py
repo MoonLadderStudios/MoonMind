@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -255,7 +256,11 @@ class ProviderProfileMaterializer:
         self.generated_files.clear()
         for path in reversed(self.generated_dirs):
             try:
-                Path(path).rmdir()
+                shutil.rmtree(path)
             except OSError:
-                logger.debug("Failed to remove generated directory %s", path)
+                logger.debug(
+                    "Failed to remove generated directory %s",
+                    path,
+                    exc_info=True,
+                )
         self.generated_dirs.clear()

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
@@ -111,3 +113,43 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
     materializer.cleanup()
     assert not os.path.exists(config_path), "Config file should be removed after cleanup()"
     assert materializer.generated_files == []
+
+
+@pytest.mark.asyncio
+async def test_materializer_cleanup_removes_generated_support_dir_tree():
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="test_temp_support_dir",
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        file_templates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "mergeStrategy": "replace",
+                "contentTemplate": {
+                    "model_provider": "openrouter",
+                },
+            }
+        ],
+        home_path_overrides={
+            "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+        },
+        command_template=["codex", "exec"],
+    )
+
+    env, _cmd = await materializer.materialize(profile)
+
+    support_dir = materializer.generated_dirs[0]
+    config_path = Path(env["CODEX_HOME"]) / "config.toml"
+
+    assert config_path.exists()
+    assert Path(support_dir).exists()
+
+    materializer.cleanup()
+
+    assert not Path(support_dir).exists()
+    assert materializer.generated_dirs == []

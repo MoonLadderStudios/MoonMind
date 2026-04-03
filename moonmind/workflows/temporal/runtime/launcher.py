@@ -810,6 +810,7 @@ class ManagedRuntimeLauncher:
 
         github_token = await self._resolve_github_token_for_launch(env_overrides)
         cleanup_paths: list[str] = list(materializer.generated_files)
+        cleanup_paths.extend(reversed(materializer.generated_dirs))
         deferred_cleanup_paths: list[str] = []
         github_socket_path: str | None = None
         real_gh_path = shutil.which("gh")
@@ -894,7 +895,10 @@ class ManagedRuntimeLauncher:
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:
-                    os.remove(path)
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
                 except OSError:
                     self._logger.debug(
                         "Best-effort cleanup failed for support path %s",

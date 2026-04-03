@@ -137,6 +137,34 @@ def test_managed_runtime_profile_allows_secret_passthrough_key_names() -> None:
     assert profile.passthrough_env_keys == ["GH_TOKEN", "GITHUB_TOKEN"]
 
 
+def test_managed_runtime_profile_coerces_legacy_file_templates_mapping() -> None:
+    profile = ManagedRuntimeProfile(
+        profileId="codex-openrouter",
+        runtimeId="codex_cli",
+        commandTemplate=["codex", "exec"],
+        fileTemplates={
+            "/tmp/codex.toml": 'model = "qwen/qwen3.6-plus:free"\n',
+        },
+    )
+
+    assert len(profile.file_templates) == 1
+    assert profile.file_templates[0].path == "/tmp/codex.toml"
+    assert profile.file_templates[0].format == "text"
+    assert profile.file_templates[0].merge_strategy == "replace"
+    assert profile.file_templates[0].content_template == 'model = "qwen/qwen3.6-plus:free"\n'
+
+
+def test_managed_runtime_profile_coerces_empty_legacy_file_templates_mapping() -> None:
+    profile = ManagedRuntimeProfile(
+        profileId="codex-openrouter",
+        runtimeId="codex_cli",
+        commandTemplate=["codex", "exec"],
+        fileTemplates={},
+    )
+
+    assert profile.file_templates == []
+
+
 def test_managed_runtime_profile_rejects_unsupported_secret_passthrough_keys() -> None:
     with pytest.raises(
         ValidationError,

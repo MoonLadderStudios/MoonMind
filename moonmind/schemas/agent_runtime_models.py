@@ -388,6 +388,36 @@ class ManagedRuntimeProfile(BaseModel):
     clear_env_keys: list[str] = Field(default_factory=list, alias="clearEnvKeys")
     secret_refs: dict[str, str | dict[str, str]] = Field(default_factory=dict, alias="secretRefs")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_file_templates_payload(
+        cls,
+        data: Any,
+    ) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        for field_name in ("fileTemplates", "file_templates"):
+            raw_file_templates = data.get(field_name)
+            if not isinstance(raw_file_templates, dict):
+                continue
+
+            coerced_templates = [
+                {
+                    "path": str(path),
+                    "format": "text",
+                    "mergeStrategy": "replace",
+                    "contentTemplate": content,
+                }
+                for path, content in raw_file_templates.items()
+            ]
+            return {
+                **data,
+                field_name: coerced_templates,
+            }
+
+        return data
+
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":
         self.runtime_id = _require_non_blank(

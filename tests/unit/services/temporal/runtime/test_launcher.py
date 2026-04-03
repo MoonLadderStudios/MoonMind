@@ -245,6 +245,80 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 778) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+        env_template={"OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        file_templates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "mergeStrategy": "replace",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+    )
+    request = _make_request()
+
+    _record, process, cleanup_paths, _deferred_cleanup = await launcher.launch(
+        run_id="run-support-dir-cleanup",
+        request=request,
+        profile=profile,
+    )
+    await process.wait()
+
+    cleanup_path_set = set(cleanup_paths)
+    support_dirs = [
+        Path(path)
+        for path in cleanup_path_set
+        if Path(path).name.startswith("mm_profile_support_")
+    ]
+
+    assert len(support_dirs) == 1
+    support_dir = support_dirs[0]
+    assert support_dir.exists()
+    assert str(support_dir / "codex-home" / "config.toml") in cleanup_path_set
+
+
+@pytest.mark.asyncio
 async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
