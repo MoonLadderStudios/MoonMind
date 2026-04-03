@@ -13,8 +13,8 @@
       "_mountPage-BvSZ22Ix.js"
     ]
   },
-  "_executionStatusPillClasses-B9JcpGtv.js": {
-    "file": "assets/executionStatusPillClasses-B9JcpGtv.js",
+  "_executionStatusPillClasses-BrOBSTcF.js": {
+    "file": "assets/executionStatusPillClasses-BrOBSTcF.js",
     "name": "executionStatusPillClasses",
     "imports": [
       "_mountPage-BvSZ22Ix.js"
@@ -65,14 +65,14 @@
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-4ldcGcDh.js",
+    "file": "assets/proposals-BREleDfj.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
       "_PageSizeSelector-CL2UEVG7.js",
-      "_executionStatusPillClasses-B9JcpGtv.js"
+      "_executionStatusPillClasses-BrOBSTcF.js"
     ]
   },
   "entrypoints/schedules.tsx": {
@@ -114,13 +114,13 @@
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-BCdmICx0.js",
+    "file": "assets/task-detail-DRO-lyVf.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
-      "_executionStatusPillClasses-B9JcpGtv.js"
+      "_executionStatusPillClasses-BrOBSTcF.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
@@ -133,14 +133,14 @@
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-DwaiY7G6.js",
+    "file": "assets/tasks-list-Zv-cobTU.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
       "_mountPage-BvSZ22Ix.js",
       "_PageSizeSelector-CL2UEVG7.js",
-      "_executionStatusPillClasses-B9JcpGtv.js"
+      "_executionStatusPillClasses-BrOBSTcF.js"
     ]
   }
 }

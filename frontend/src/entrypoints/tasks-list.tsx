@@ -95,12 +95,9 @@ function formatWhen(iso: string | null | undefined): string {
   return date.toLocaleString();
 }
 
-function formatRuntime(runtime: string | null | undefined): string {
-  return formatRuntimeLabel(runtime);
-}
-
 function summarizeRuntime(runtime: string | null | undefined): string {
-  return runtime ? formatRuntime(runtime) : '';
+  const label = formatRuntimeLabel(runtime);
+  return label === '—' ? '' : label;
 }
 
 function displayTemporalCount(count: number | null | undefined, countMode: string | undefined): string {
@@ -481,7 +478,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                             <code>{row.taskId}</code>
                           </a>
                         </td>
-                        <td>{formatRuntime(row.targetRuntime)}</td>
+                        <td>{formatRuntimeLabel(row.targetRuntime)}</td>
                         <td>{formatTaskSkills(row.taskSkills, row.targetSkill)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
@@ -533,7 +530,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Runtime</dt>
-                        <dd>{formatRuntime(row.targetRuntime)}</dd>
+                        <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
                       </div>
                       <div>
                         <dt>Skill</dt>
