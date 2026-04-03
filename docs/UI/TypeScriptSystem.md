@@ -313,9 +313,13 @@ In development, the backend should support two modes:
 
 ### B. FastAPI-Backed UI Dev Mode
 
-- Vite dev server runs with HMR via `npm run ui:dev`
-- FastAPI detects `MOONMIND_UI_DEV_SERVER_URL`
-- `ui_assets()` loads `@vite/client` plus `/entrypoints/<page>.tsx` from that dev server instead of the built manifest
+This mode requires **two processes running simultaneously**:
+
+1. **Vite dev server** — start with `npm run ui:dev` (serves HMR-capable modules on `http://127.0.0.1:5173` by default).
+2. **FastAPI with `MOONMIND_UI_DEV_SERVER_URL` set** — for example:
+   `MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <fastapi-start-command>`.
+
+When `MOONMIND_UI_DEV_SERVER_URL` is set, `ui_assets()` bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and `/entrypoints/<page>.tsx` directly from the Vite dev server. **Without this env var, FastAPI serves the built `dist/` bundle and live changes from Vite will not appear.**
 
 This preserves server-rendered pages while still giving fast frontend iteration against the real backend routes.
 

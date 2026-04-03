@@ -72,4 +72,41 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 MIT — free for personal and commercial use.
 
 ### UI Development
-To develop the frontend UI, run `npm install` first. For production-like FastAPI-backed Mission Control pages, run `npm run ui:build` so the backend has a fresh manifest-backed bundle to serve. For live FastAPI-backed development, run `npm run ui:dev` and start the backend with `MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173` (or your chosen Vite dev-server URL) so `ui_assets()` injects `@vite/client` plus the requested page entrypoints directly from Vite. Without `MOONMIND_UI_DEV_SERVER_URL`, FastAPI continues serving the built manifest-backed `dist/` bundle. Use `npm run ui:test`, `npm run ui:typecheck`, and `npm run ui:lint` for frontend verification. Use `npm run ui:build:check` to validate a clean Mission Control bundle build, and use `npm run generate` when you need to refresh checked-in generated frontend API types such as `frontend/src/generated/openapi.ts`. CI and Docker build Mission Control bundles from source; `api_service/static/task_dashboard/dist/` is generated output only and is not committed. Do not edit files in `dist/` directly.
+
+**Prerequisite:** run `npm install` once to install frontend dependencies.
+
+#### Production-like mode (no dev server)
+
+Build a fresh bundle and let FastAPI serve it from the manifest:
+
+```bash
+npm run ui:build
+# start FastAPI as usual (no special env vars needed)
+```
+
+#### Live dev mode with HMR (two processes required)
+
+UI dev mode requires **both** a Vite dev server **and** the `MOONMIND_UI_DEV_SERVER_URL` env var on the FastAPI backend:
+
+```bash
+# Terminal 1 — start the Vite dev server (default http://127.0.0.1:5173)
+npm run ui:dev
+
+# Terminal 2 — start FastAPI with the dev-server URL
+MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <your-fastapi-start-command>
+```
+
+When `MOONMIND_UI_DEV_SERVER_URL` is set, FastAPI bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and the requested page entrypoint (e.g. `/entrypoints/tasks-list.tsx`) directly from the Vite dev server. This enables hot module replacement while keeping FastAPI as the page host.
+
+**Without `MOONMIND_UI_DEV_SERVER_URL`, FastAPI serves the built `dist/` bundle** — changes made in the Vite dev server will **not** appear.
+
+#### Frontend verification
+
+```bash
+npm run ui:test        # Vitest unit tests
+npm run ui:typecheck   # TypeScript type checking
+npm run ui:lint        # ESLint
+npm run ui:build:check # Clean rebuild + manifest validation
+```
+
+Use `npm run generate` to refresh checked-in generated frontend API types (`frontend/src/generated/openapi.ts`). CI and Docker build Mission Control bundles from source; `api_service/static/task_dashboard/dist/` is generated output only and is not committed. Do not edit files in `dist/` directly.

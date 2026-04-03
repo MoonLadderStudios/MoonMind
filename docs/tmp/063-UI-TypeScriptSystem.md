@@ -56,7 +56,8 @@ Use this to avoid re-planning work that already exists:
 
 ### Verification checklist
 
-- [x] `npm ci` then `npm run ui:dev` serves Vite against `frontend/vite.config.ts` without extra env hacks.
+- [x] `npm ci` then `npm run ui:dev` serves Vite against `frontend/vite.config.ts`.
+- [x] `MOONMIND_UI_DEV_SERVER_URL` env var on FastAPI routes page entrypoints to the Vite dev server (FastAPI-backed UI dev mode).
 - [x] `npm run ui:build` succeeds and writes `api_service/static/task_dashboard/dist/` including `.vite/manifest.json`.
 - [x] A FastAPI-rendered page can inject assets via `ui_assets("<entrypoint>")` and load JS/CSS in a browser.
 - [x] `npm run ui:typecheck`, `ui:lint`, `ui:test` match what CI runs.
