@@ -1,0 +1,213 @@
+"""Unit tests for the low-level Jira REST client."""
+
+from __future__ import annotations
+
+import base64
+import logging
+from collections.abc import Callable
+from typing import Any
+
+import httpx
+import pytest
+
+from moonmind.integrations.jira.auth import ResolvedJiraConnection
+from moonmind.integrations.jira.client import JiraClient
+from moonmind.integrations.jira.errors import JiraToolError
+
+pytestmark = [pytest.mark.asyncio]
+
+
+def _build_connection(*, retry_attempts: int = 3) -> ResolvedJiraConnection:
+    basic_pair = "bot@example.com:secret-token"
+    basic_token = base64.b64encode(basic_pair.encode("utf-8")).decode("ascii")
+    authorization = f"Basic {basic_token}"
+    return ResolvedJiraConnection(
+        auth_mode="basic",
+        base_url="https://jira.example/rest/api/3",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": authorization,
+        },
+        connect_timeout_seconds=10.0,
+        read_timeout_seconds=30.0,
+        retry_attempts=retry_attempts,
+        redaction_values=(
+            "secret-token",
+            basic_pair,
+            authorization,
+            f"Authorization: {authorization}",
+        ),
+    )
+
+
+def _build_injected_client(
+    connection: ResolvedJiraConnection,
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=connection.base_url,
+        headers=connection.headers,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+async def test_request_json_sends_headers_and_decodes_json() -> None:
+    connection = _build_connection()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/api/3/issue/ENG-1"
+        assert request.headers["Authorization"] == connection.headers["Authorization"]
+        return httpx.Response(
+            200,
+            json={"key": "ENG-1", "ok": True},
+            headers={"content-type": "application/json"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        payload = await client.request_json(
+            method="GET",
+            path="/issue/ENG-1",
+            action="get_issue",
+            context={"issueKey": "ENG-1"},
+        )
+    finally:
+        await injected.aclose()
+
+    assert payload == {"key": "ENG-1", "ok": True}
+
+
+async def test_request_json_maps_auth_failures_to_sanitized_error() -> None:
+    connection = _build_connection()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            text="Authorization: Basic leaked secret-token",
+            headers={"content-type": "text/plain"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="GET",
+                path="/myself",
+                action="verify_connection",
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_auth_failed"
+    assert "secret-token" not in str(excinfo.value)
+
+
+async def test_request_json_retries_retry_after_and_surfaces_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _build_connection(retry_attempts=3)
+    sleep_calls: list[float] = []
+    attempts = {"count": 0}
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(
+            429,
+            json={"errorMessages": ["slow down"]},
+            headers={"Retry-After": "0.25", "content-type": "application/json"},
+        )
+
+    monkeypatch.setattr("moonmind.integrations.jira.client.asyncio.sleep", _fake_sleep)
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="POST",
+                path="/search",
+                action="search_issues",
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_rate_limited"
+    assert attempts["count"] == 3
+    assert sleep_calls == [0.25, 0.25]
+
+
+async def test_request_json_redacts_failure_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    connection = _build_connection(retry_attempts=1)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            text=(
+                "Authorization: Basic "
+                "Ym90QGV4YW1wbGUuY29tOnNlY3JldC10b2tlbg== secret-token"
+            ),
+            headers={"content-type": "text/plain"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(JiraToolError):
+                await client.request_json(
+                    method="POST",
+                    path="/issue",
+                    action="create_issue",
+                )
+    finally:
+        await injected.aclose()
+
+    assert "secret-token" not in caplog.text
+    assert "Ym90QGV4YW1wbGUuY29tOnNlY3JldC10b2tlbg==" not in caplog.text
+    assert "***" in caplog.text
+
+
+async def test_request_json_retries_transient_server_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _build_connection(retry_attempts=2)
+    attempts = {"count": 0}
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return httpx.Response(503, text="temporarily unavailable")
+        return httpx.Response(
+            200,
+            json={"ok": True},
+            headers={"content-type": "application/json"},
+        )
+
+    monkeypatch.setattr("moonmind.integrations.jira.client.asyncio.sleep", _fake_sleep)
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        payload = await client.request_json(
+            method="GET",
+            path="/myself",
+            action="verify_connection",
+        )
+    finally:
+        await injected.aclose()
+
+    assert payload == {"ok": True}
+    assert attempts["count"] == 2
+    assert sleep_calls == [1.0]

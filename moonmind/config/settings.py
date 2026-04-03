@@ -20,6 +20,23 @@ from moonmind.jules.runtime import (
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
+_JIRA_ALLOWED_ACTIONS = frozenset(
+    {
+        "create_issue",
+        "create_subtask",
+        "edit_issue",
+        "get_issue",
+        "search_issues",
+        "get_transitions",
+        "transition_issue",
+        "add_comment",
+        "list_create_issue_types",
+        "get_create_fields",
+        "get_edit_metadata",
+        "verify_connection",
+    }
+)
 
 
 class DatabaseSettings(BaseSettings):
@@ -1333,7 +1350,7 @@ class ConfluenceSettings(BaseSettings):
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="",
-        env_file=".env",
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -1345,11 +1362,70 @@ class JiraSettings(BaseSettings):
     jira_jql_query: Optional[str] = Field(None, alias="ATLASSIAN_JIRA_JQL_QUERY")
     jira_fetch_batch_size: int = Field(50, alias="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
     jira_enabled: bool = Field(False, alias="ATLASSIAN_JIRA_ENABLED")
+    jira_tool_enabled: bool = Field(False, alias="ATLASSIAN_JIRA_TOOL_ENABLED")
+    jira_allowed_projects: Optional[str] = Field(
+        None, alias="ATLASSIAN_JIRA_ALLOWED_PROJECTS"
+    )
+    jira_allowed_actions: Optional[str] = Field(
+        None, alias="ATLASSIAN_JIRA_ALLOWED_ACTIONS"
+    )
+    jira_require_explicit_transition_lookup: bool = Field(
+        True, alias="ATLASSIAN_JIRA_REQUIRE_EXPLICIT_TRANSITION_LOOKUP"
+    )
+    jira_connect_timeout_seconds: float = Field(
+        10.0, alias="ATLASSIAN_JIRA_CONNECT_TIMEOUT_SECONDS", ge=0.1
+    )
+    jira_read_timeout_seconds: float = Field(
+        30.0, alias="ATLASSIAN_JIRA_READ_TIMEOUT_SECONDS", ge=0.1
+    )
+    jira_retry_attempts: int = Field(
+        3, alias="ATLASSIAN_JIRA_RETRY_ATTEMPTS", ge=1
+    )
+
+    @field_validator("jira_allowed_projects", mode="before")
+    @classmethod
+    def _normalize_allowed_projects(cls, value: object) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        projects: list[str] = []
+        for item in raw.split(","):
+            normalized = item.strip().upper()
+            if not normalized:
+                continue
+            if not _JIRA_PROJECT_KEY_PATTERN.fullmatch(normalized):
+                raise ValueError(
+                    "ATLASSIAN_JIRA_ALLOWED_PROJECTS entries must match Jira project keys"
+                )
+            if normalized not in projects:
+                projects.append(normalized)
+        return ",".join(projects) if projects else None
+
+    @field_validator("jira_allowed_actions", mode="before")
+    @classmethod
+    def _normalize_allowed_actions(cls, value: object) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        actions: list[str] = []
+        for item in raw.split(","):
+            normalized = str(item).strip().lower()
+            if not normalized:
+                continue
+            if normalized.startswith("jira."):
+                normalized = normalized[5:]
+            if normalized not in _JIRA_ALLOWED_ACTIONS:
+                raise ValueError(
+                    "ATLASSIAN_JIRA_ALLOWED_ACTIONS contains an unsupported Jira action"
+                )
+            if normalized not in actions:
+                actions.append(normalized)
+        return ",".join(actions) if actions else None
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="",
-        env_file=".env",
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -1359,6 +1435,31 @@ class AtlassianSettings(BaseSettings):
     """Atlassian base settings"""
 
     atlassian_api_key: Optional[str] = Field(None, alias="ATLASSIAN_API_KEY")
+    atlassian_api_key_secret_ref: Optional[str] = Field(
+        None, alias="ATLASSIAN_API_KEY_SECRET_REF"
+    )
+    atlassian_auth_mode: Optional[str] = Field(None, alias="ATLASSIAN_AUTH_MODE")
+    atlassian_auth_mode_secret_ref: Optional[str] = Field(
+        None, alias="ATLASSIAN_AUTH_MODE_SECRET_REF"
+    )
+    atlassian_cloud_id: Optional[str] = Field(None, alias="ATLASSIAN_CLOUD_ID")
+    atlassian_cloud_id_secret_ref: Optional[str] = Field(
+        None, alias="ATLASSIAN_CLOUD_ID_SECRET_REF"
+    )
+    atlassian_email: Optional[str] = Field(None, alias="ATLASSIAN_EMAIL")
+    atlassian_email_secret_ref: Optional[str] = Field(
+        None, alias="ATLASSIAN_EMAIL_SECRET_REF"
+    )
+    atlassian_service_account_email: Optional[str] = Field(
+        None, alias="ATLASSIAN_SERVICE_ACCOUNT_EMAIL"
+    )
+    atlassian_service_account_email_secret_ref: Optional[str] = Field(
+        None, alias="ATLASSIAN_SERVICE_ACCOUNT_EMAIL_SECRET_REF"
+    )
+    atlassian_site_url: Optional[str] = Field(None, alias="ATLASSIAN_SITE_URL")
+    atlassian_site_url_secret_ref: Optional[str] = Field(
+        None, alias="ATLASSIAN_SITE_URL_SECRET_REF"
+    )
     atlassian_username: Optional[str] = Field(None, alias="ATLASSIAN_USERNAME")
     atlassian_url: Optional[str] = Field(None, alias="ATLASSIAN_URL")
 
@@ -1366,18 +1467,25 @@ class AtlassianSettings(BaseSettings):
     confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)
     jira: JiraSettings = Field(default_factory=JiraSettings)
 
+    @field_validator("atlassian_url", "atlassian_site_url", mode="before")
+    @classmethod
+    def _normalize_optional_atlassian_url(cls, value: object) -> str | None:
+        normalized = str(value or "").strip()
+        if normalized.startswith("https://https://"):
+            normalized = normalized[8:]
+        normalized = normalized.rstrip("/")
+        return normalized or None
+
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="",
-        env_file=".env",
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
     def __init__(self, **data):
         super().__init__(**data)
-        if self.atlassian_url and self.atlassian_url.startswith("https://https://"):
-            self.atlassian_url = self.atlassian_url[8:]
         # Pydantic does not automatically populate nested models from environment
         # variables when they are created with ``default_factory``. Explicitly
         # handle boolean flags for nested Confluence and Jira settings to ensure
@@ -1390,6 +1498,18 @@ class AtlassianSettings(BaseSettings):
         jira_env = os.getenv("ATLASSIAN_JIRA_ENABLED")
         if jira_env is not None:
             self.jira.jira_enabled = jira_env.lower() == "true"
+
+        jira_tool_env = os.getenv("ATLASSIAN_JIRA_TOOL_ENABLED")
+        if jira_tool_env is not None:
+            self.jira.jira_tool_enabled = jira_tool_env.lower() == "true"
+
+        jira_transition_env = os.getenv(
+            "ATLASSIAN_JIRA_REQUIRE_EXPLICIT_TRANSITION_LOOKUP"
+        )
+        if jira_transition_env is not None:
+            self.jira.jira_require_explicit_transition_lookup = (
+                jira_transition_env.lower() == "true"
+            )
 
 
 class QdrantSettings(BaseSettings):
