@@ -333,7 +333,13 @@ class ManagedAgentAdapter:
             profile_obj = ManagedRuntimeProfile(
                 profile_id=profile_id,
                 runtime_id=runtime_id_for_profile,
+                provider_id=profile.get("provider_id"),
+                provider_label=profile.get("provider_label"),
                 auth_mode=auth_mode,
+                credential_source=profile.get("credential_source"),
+                runtime_materialization_mode=profile.get(
+                    "runtime_materialization_mode"
+                ),
                 # Use delta_env_overrides (profile-specific additions only), NOT
                 # shaped_env (which contains the full base environment).  The
                 # launcher already starts from os.environ and overlays
@@ -346,6 +352,10 @@ class ManagedAgentAdapter:
                 default_model=profile.get("default_model") or runtime_default_model,
                 default_effort=profile.get("default_effort") or runtime_default_effort,
                 model_overrides=profile.get("model_overrides") or {},
+                command_behavior=profile.get("command_behavior") or {},
+                env_template=profile.get("env_template") or {},
+                file_templates=profile.get("file_templates") or [],
+                home_path_overrides=profile.get("home_path_overrides") or {},
                 secret_refs=profile.get("secret_refs") or {},
                 clear_env_keys=profile.get("clear_env_keys") or [],
             )

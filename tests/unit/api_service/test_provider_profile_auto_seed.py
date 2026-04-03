@@ -44,6 +44,7 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     seeded = await _auto_seed_provider_profiles()
     assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
@@ -72,6 +73,7 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     first = await _auto_seed_provider_profiles()
     assert len(first) == 3
@@ -107,6 +109,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     seeded = await _auto_seed_provider_profiles()
     assert "claude_code" in seeded  # seeded twice (default + minimax)
@@ -142,6 +145,7 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
 
     # First seed without MiniMax key.
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     first = await _auto_seed_provider_profiles()
     assert len(first) == 3
 
@@ -167,6 +171,7 @@ async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     await _auto_seed_provider_profiles()
 
     # Simulate a user setting an explicit model on the seeded profile.
@@ -194,6 +199,7 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     seeded = await _auto_seed_provider_profiles()
     assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
@@ -206,3 +212,66 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     assert "claude_minimax" not in profile_ids
     assert "claude_anthropic" in profile_ids
     assert len(profiles) == 3
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
+    _module_db, monkeypatch
+):
+    """OPENROUTER_API_KEY should seed a composite Codex provider profile."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+
+    seeded = await _auto_seed_provider_profiles()
+    assert "codex_cli" in seeded
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentProviderProfile))
+        profiles = result.scalars().all()
+
+    assert len(profiles) == 4
+    profile_ids = {p.profile_id for p in profiles}
+    assert "codex_openrouter_qwen36_plus" in profile_ids
+
+    profile = next(p for p in profiles if p.profile_id == "codex_openrouter_qwen36_plus")
+    assert profile.runtime_id == "codex_cli"
+    assert profile.provider_id == "openrouter"
+    assert profile.default_model == "qwen/qwen3.6-plus:free"
+    assert profile.secret_refs == {"provider_api_key": "env://OPENROUTER_API_KEY"}
+    assert profile.env_template == {
+        "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+    }
+    assert profile.file_templates == [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "replace",
+            "content_template": {
+                "model_provider": "openrouter",
+                "profile": "openrouter_qwen36_plus",
+                "model_providers": {
+                    "openrouter": {
+                        "name": "OpenRouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "env_key": "OPENROUTER_API_KEY",
+                        "wire_api": "responses",
+                    }
+                },
+                "profiles": {
+                    "openrouter_qwen36_plus": {
+                        "model_provider": "openrouter",
+                        "model": "qwen/qwen3.6-plus:free",
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+    assert profile.home_path_overrides == {
+        "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+    }
+    assert profile.command_behavior == {"suppress_default_model_flag": True}
+    assert profile.max_parallel_runs == 4
+    assert profile.cooldown_after_429_seconds == 300

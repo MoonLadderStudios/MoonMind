@@ -229,6 +229,49 @@ async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch(
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_launch_accepts_legacy_file_templates_payload():
+    launch_record = SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"})
+    mock_launcher = MagicMock()
+    mock_launcher.launch = AsyncMock(return_value=(launch_record, None, [], []))
+    mock_supervisor = MagicMock()
+
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=mock_launcher,
+        run_supervisor=mock_supervisor,
+    )
+
+    payload = {
+        "run_id": "run-legacy-file-templates",
+        "request": {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "executionProfileRef": "default",
+            "correlationId": "corr-1",
+            "idempotencyKey": "idem-1",
+        },
+        "profile": {
+            "runtimeId": "codex_cli",
+            "commandTemplate": ["codex", "exec"],
+            "defaultModel": "gpt-5.3-codex",
+            "defaultEffort": "medium",
+            "defaultTimeoutSeconds": 3600,
+            "workspaceMode": "tempdir",
+            "envOverrides": {},
+            "fileTemplates": {
+                "{{runtime_support_dir}}/codex-home/config.toml": 'model = "qwen"\n',
+            },
+        },
+    }
+
+    result = await activities.agent_runtime_launch(payload)
+
+    assert result == {"status": "launching"}
+    profile = mock_launcher.launch.await_args.kwargs["profile"]
+    assert profile.file_templates[0].path == "{{runtime_support_dir}}/codex-home/config.toml"
+    assert profile.file_templates[0].content_template == 'model = "qwen"\n'
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
     class _FakeProcess:
         stdout = None

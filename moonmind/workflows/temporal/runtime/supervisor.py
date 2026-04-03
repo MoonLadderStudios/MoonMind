@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from temporalio import activity
@@ -642,7 +643,10 @@ class ManagedRunSupervisor:
         """Best-effort cleanup for launcher runtime files."""
         for path in paths:
             with suppress(OSError):
-                os.remove(path)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
 
     @staticmethod
     def _build_completion_payload(

@@ -3825,11 +3825,11 @@ export interface components {
             clear_env_keys?: string[] | null;
             /** Env Template */
             env_template?: {
-                [key: string]: string;
+                [key: string]: unknown;
             } | null;
             /** File Templates */
             file_templates?: {
-                [key: string]: string;
+                [key: string]: unknown;
             }[] | null;
             /** Home Path Overrides */
             home_path_overrides?: {
@@ -3906,11 +3906,11 @@ export interface components {
             clear_env_keys?: string[] | null;
             /** Env Template */
             env_template?: {
-                [key: string]: string;
+                [key: string]: unknown;
             } | null;
             /** File Templates */
             file_templates?: {
-                [key: string]: string;
+                [key: string]: unknown;
             }[] | null;
             /** Home Path Overrides */
             home_path_overrides?: {
@@ -3969,11 +3969,11 @@ export interface components {
             clear_env_keys?: string[] | null;
             /** Env Template */
             env_template?: {
-                [key: string]: string;
+                [key: string]: unknown;
             } | null;
             /** File Templates */
             file_templates?: {
-                [key: string]: string;
+                [key: string]: unknown;
             }[] | null;
             /** Home Path Overrides */
             home_path_overrides?: {

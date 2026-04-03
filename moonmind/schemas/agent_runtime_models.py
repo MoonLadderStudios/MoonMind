@@ -329,6 +329,36 @@ class ManagedAgentProviderProfile(BaseModel):
 WorkspaceMode = Literal["tempdir", "shared", "none"]
 
 
+class RuntimeFileTemplate(BaseModel):
+    """Path-aware file materialization contract for managed runtime launch."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    path: str = Field(..., alias="path", min_length=1)
+    format: str = Field("text", alias="format")
+    merge_strategy: str = Field("replace", alias="mergeStrategy")
+    content_template: Any = Field(default="", alias="contentTemplate")
+    permissions: str | int | None = Field(None, alias="permissions")
+
+    @model_validator(mode="after")
+    def _validate_template(self) -> "RuntimeFileTemplate":
+        self.path = _require_non_blank(self.path, field_name="path")
+        normalized_format = str(self.format or "text").strip().lower()
+        if normalized_format not in {"text", "toml", "json"}:
+            raise ValueError(
+                "fileTemplates[].format must be one of: text, toml, json"
+            )
+        self.format = normalized_format
+
+        normalized_merge = str(self.merge_strategy or "replace").strip().lower()
+        if normalized_merge != "replace":
+            raise ValueError(
+                "fileTemplates[].mergeStrategy must be 'replace'"
+            )
+        self.merge_strategy = normalized_merge
+        return self
+
+
 class ManagedRuntimeProfile(BaseModel):
     """Runtime-specific execution parameters for managed agent launches."""
 
@@ -349,12 +379,44 @@ class ManagedRuntimeProfile(BaseModel):
     default_timeout_seconds: int = Field(3600, alias="defaultTimeoutSeconds", ge=1)
     workspace_mode: WorkspaceMode = Field("tempdir", alias="workspaceMode")
     env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")
-    env_template: dict[str, str] = Field(default_factory=dict, alias="envTemplate")
-    file_templates: dict[str, str] = Field(default_factory=dict, alias="fileTemplates")
+    env_template: dict[str, Any] = Field(default_factory=dict, alias="envTemplate")
+    file_templates: list[RuntimeFileTemplate] = Field(
+        default_factory=list, alias="fileTemplates"
+    )
     home_path_overrides: dict[str, str] = Field(default_factory=dict, alias="homePathOverrides")
     passthrough_env_keys: list[str] = Field(default_factory=list, alias="passthroughEnvKeys")
     clear_env_keys: list[str] = Field(default_factory=list, alias="clearEnvKeys")
     secret_refs: dict[str, str | dict[str, str]] = Field(default_factory=dict, alias="secretRefs")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_file_templates_payload(
+        cls,
+        data: Any,
+    ) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        for field_name in ("fileTemplates", "file_templates"):
+            raw_file_templates = data.get(field_name)
+            if not isinstance(raw_file_templates, dict):
+                continue
+
+            coerced_templates = [
+                {
+                    "path": str(path),
+                    "format": "text",
+                    "mergeStrategy": "replace",
+                    "contentTemplate": content,
+                }
+                for path, content in raw_file_templates.items()
+            ]
+            return {
+                **data,
+                field_name: coerced_templates,
+            }
+
+        return data
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":

@@ -406,6 +406,17 @@ async def test_supervise_preserves_deferred_cleanup_until_explicit_release(
     assert not deferred_cleanup_path.exists()
 
 
+def test_cleanup_runtime_files_removes_directories(tmp_path):
+    nested_dir = tmp_path / "cleanup.dir" / "nested"
+    nested_dir.mkdir(parents=True)
+    nested_file = nested_dir / "config.toml"
+    nested_file.write_text("keep", encoding="utf-8")
+
+    ManagedRunSupervisor._cleanup_runtime_files((str(tmp_path / "cleanup.dir"),))
+
+    assert not (tmp_path / "cleanup.dir").exists()
+
+
 @pytest.mark.asyncio
 async def test_cancel_without_process(supervisor_env):
     store, _, _, supervisor = supervisor_env

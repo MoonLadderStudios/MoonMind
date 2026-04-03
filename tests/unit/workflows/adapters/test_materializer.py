@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
@@ -22,7 +24,7 @@ async def test_materializer_generates_correct_env():
         secret_refs={"ANTHROPIC_API_KEY": "1234"},
         env_template={"API_URL": "https://api.anthropic.com/v1", "KEY_ECHO": "{{ANTHROPIC_API_KEY}}"},
         env_overrides={"OVERRIDE_VAR": "new_val"},
-        file_templates={},
+        file_templates=[],
         command_template=["claude", "start"]
     )
     
@@ -38,8 +40,8 @@ async def test_materializer_generates_correct_env():
 
 
 @pytest.mark.asyncio
-async def test_materializer_file_templates_written_and_cleanup():
-    """File templates should be written to disk with secrets interpolated."""
+async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_path):
+    """Path-aware file templates should be written to the requested runtime path."""
     import os
     base_env = {}
     resolver = MockSecretResolver()
@@ -48,29 +50,161 @@ async def test_materializer_file_templates_written_and_cleanup():
 
     profile = ManagedRuntimeProfile(
         profile_id="test_file_templates",
-        runtime_id="claude_code",
-        provider_id="anthropic",
-        secret_refs={"MY_SECRET": "ref_to_secret"},
-        file_templates={"CREDENTIALS_FILE": "token={{MY_SECRET}}\nextra=static"},
-        command_template=["claude", "start"]
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        secret_refs={"provider_api_key": "ref_to_secret"},
+        env_template={
+            "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"},
+        },
+        file_templates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "mergeStrategy": "replace",
+                "contentTemplate": {
+                    "model_provider": "openrouter",
+                    "profile": "openrouter_qwen36_plus",
+                    "model_providers": {
+                        "openrouter": {
+                            "name": "OpenRouter",
+                            "base_url": "https://openrouter.ai/api/v1",
+                            "env_key": "OPENROUTER_API_KEY",
+                            "wire_api": "responses",
+                        }
+                    },
+                    "profiles": {
+                        "openrouter_qwen36_plus": {
+                            "model_provider": "openrouter",
+                            "model": "qwen/qwen3.6-plus:free",
+                        }
+                    },
+                },
+            }
+        ],
+        home_path_overrides={
+            "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+        },
+        command_template=["codex", "exec"]
     )
 
-    env, cmd = await materializer.materialize(profile)
+    runtime_support_dir = tmp_path / ".moonmind"
+    env, cmd = await materializer.materialize(
+        profile,
+        workspace_path=str(tmp_path / "repo"),
+        runtime_support_dir=str(runtime_support_dir),
+    )
 
-    assert "CREDENTIALS_FILE" in env
-    tmp_path = env["CREDENTIALS_FILE"]
-    assert os.path.exists(tmp_path), "Temp file should exist after materialize()"
+    config_path = runtime_support_dir / "codex-home" / "config.toml"
+    assert env["OPENROUTER_API_KEY"] == "decrypted_ref_to_secret"
+    assert env["CODEX_HOME"] == str(runtime_support_dir / "codex-home")
+    assert os.path.exists(config_path), "Config file should exist after materialize()"
 
-    with open(tmp_path) as f:
+    with open(config_path) as f:
         content = f.read()
-    assert "decrypted_ref_to_secret" in content
-    assert "token=decrypted_ref_to_secret" in content
+    assert 'model_provider = "openrouter"' in content
+    assert 'base_url = "https://openrouter.ai/api/v1"' in content
+    assert 'model = "qwen/qwen3.6-plus:free"' in content
 
-    mode = oct(os.stat(tmp_path).st_mode & 0o777)
+    mode = oct(os.stat(config_path).st_mode & 0o777)
     assert mode == "0o600", f"Expected 0o600, got {mode}"
 
-    assert tmp_path in materializer.generated_files
+    assert str(config_path) in materializer.generated_files
 
     materializer.cleanup()
-    assert not os.path.exists(tmp_path), "Temp file should be removed after cleanup()"
+    assert not os.path.exists(config_path), "Config file should be removed after cleanup()"
     assert materializer.generated_files == []
+
+
+@pytest.mark.asyncio
+async def test_materializer_cleanup_removes_generated_support_dir_tree():
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="test_temp_support_dir",
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        file_templates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "mergeStrategy": "replace",
+                "contentTemplate": {
+                    "model_provider": "openrouter",
+                },
+            }
+        ],
+        home_path_overrides={
+            "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+        },
+        command_template=["codex", "exec"],
+    )
+
+    env, _cmd = await materializer.materialize(profile)
+
+    support_dir = materializer.generated_dirs[0]
+    config_path = Path(env["CODEX_HOME"]) / "config.toml"
+
+    assert config_path.exists()
+    assert Path(support_dir).exists()
+
+    materializer.cleanup()
+
+    assert not Path(support_dir).exists()
+    assert materializer.generated_dirs == []
+
+
+@pytest.mark.asyncio
+async def test_materializer_rejects_unknown_template_variables(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="test_unknown_template_variable",
+        runtime_id="codex_cli",
+        file_templates=[
+            {
+                "path": "{{missing_var}}/config.toml",
+                "format": "toml",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        command_template=["codex", "exec"],
+    )
+
+    with pytest.raises(ValueError, match="Unknown template variable: 'missing_var'"):
+        await materializer.materialize(
+            profile,
+            runtime_support_dir=str(tmp_path / ".moonmind"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_materializer_rejects_paths_outside_runtime_support_dir(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="test_path_escape",
+        runtime_id="codex_cli",
+        file_templates=[
+            {
+                "path": "../../escape.toml",
+                "format": "toml",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        command_template=["codex", "exec"],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="fileTemplates\\[\\]\\.path must stay within runtime_support_dir",
+    ):
+        await materializer.materialize(
+            profile,
+            runtime_support_dir=str(tmp_path / ".moonmind"),
+        )

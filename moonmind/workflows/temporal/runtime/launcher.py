@@ -687,7 +687,17 @@ class ManagedRuntimeLauncher:
             secret_resolver=AsyncDictSecretResolver()
         )
 
-        env_overrides, mat_cmd = await materializer.materialize(profile)
+        runtime_support_dir = None
+        if resolved_workspace_path is not None:
+            runtime_support_dir = str(
+                (Path(resolved_workspace_path).resolve().parent / ".moonmind").resolve()
+            )
+
+        env_overrides, mat_cmd = await materializer.materialize(
+            profile,
+            workspace_path=resolved_workspace_path,
+            runtime_support_dir=runtime_support_dir,
+        )
         # Update profile with the materialized command template so build_command uses it
         profile.command_template = mat_cmd
 
@@ -800,6 +810,7 @@ class ManagedRuntimeLauncher:
 
         github_token = await self._resolve_github_token_for_launch(env_overrides)
         cleanup_paths: list[str] = list(materializer.generated_files)
+        cleanup_paths.extend(reversed(materializer.generated_dirs))
         deferred_cleanup_paths: list[str] = []
         github_socket_path: str | None = None
         real_gh_path = shutil.which("gh")
@@ -884,7 +895,10 @@ class ManagedRuntimeLauncher:
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:
-                    os.remove(path)
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
                 except OSError:
                     self._logger.debug(
                         "Best-effort cleanup failed for support path %s",
