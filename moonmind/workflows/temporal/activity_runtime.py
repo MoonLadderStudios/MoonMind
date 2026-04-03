@@ -2865,13 +2865,23 @@ def _build_activity_wrapper(
                 "ArtifactWriteCompleteInput", ArtifactWriteCompleteInput
             )
         except ImportError:
-            pass
+            # These imports are optional; failures are expected in some environments.
+            logger.debug(
+                "Failed to import ArtifactReadInput/ArtifactWriteCompleteInput for type hint resolution"
+            )
+
+        try:
+            resolved_hints = get_type_hints(
+                func,
+                globalns=annotation_globals,
+            )
+        except (NameError, TypeError):
+            # Fall back to the original annotations if type hint resolution fails,
+            # rather than failing worker startup.
+            resolved_hints = dict(getattr(func, "__annotations__", {}) or {})
 
         _wrapper.__signature__ = original_signature  # type: ignore[attr-defined]
-        _wrapper.__annotations__ = get_type_hints(
-            func,
-            globalns=annotation_globals,
-        )
+        _wrapper.__annotations__ = resolved_hints
 
     return _wrapper
 

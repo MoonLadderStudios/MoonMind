@@ -952,29 +952,35 @@ async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_
                 )
             }
 
-            artifact_read_signature = inspect.signature(bindings["artifact.read"].handler)
-            artifact_write_signature = inspect.signature(
+            from typing import get_type_hints
+            from moonmind.schemas.temporal_activity_models import (
+                ArtifactReadInput,
+                ArtifactWriteCompleteInput,
+            )
+
+            read_handler_hints = get_type_hints(bindings["artifact.read"].handler)
+            write_handler_hints = get_type_hints(
                 bindings["artifact.write_complete"].handler
             )
 
-            assert (
-                artifact_read_signature.parameters["request"].annotation
-                == inspect.signature(TemporalArtifactActivities.artifact_read)
-                .parameters["request"]
-                .annotation
+            annotation_globals = dict(TemporalArtifactActivities.artifact_read.__globals__)
+            annotation_globals.update({
+                "ArtifactReadInput": ArtifactReadInput,
+                "ArtifactWriteCompleteInput": ArtifactWriteCompleteInput,
+            })
+
+            read_method_hints = get_type_hints(
+                TemporalArtifactActivities.artifact_read, globalns=annotation_globals
             )
-            assert artifact_read_signature.return_annotation == inspect.signature(
-                TemporalArtifactActivities.artifact_read
-            ).return_annotation
-            assert (
-                artifact_write_signature.parameters["request"].annotation
-                == inspect.signature(TemporalArtifactActivities.artifact_write_complete)
-                .parameters["request"]
-                .annotation
+            write_method_hints = get_type_hints(
+                TemporalArtifactActivities.artifact_write_complete, globalns=annotation_globals
             )
-            assert artifact_write_signature.return_annotation == inspect.signature(
-                TemporalArtifactActivities.artifact_write_complete
-            ).return_annotation
+
+            assert read_handler_hints["request"] == read_method_hints["request"]
+            assert read_handler_hints.get("return") == read_method_hints.get("return")
+
+            assert write_handler_hints["request"] == write_method_hints["request"]
+            assert write_handler_hints.get("return") == write_method_hints.get("return")
 
 
 async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapping(
