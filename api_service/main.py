@@ -221,19 +221,19 @@ async def _sync_env_managed_secrets() -> int:
 
     from api_service.services.secrets import SecretsService
 
-    github_token = (
-        _env_value("GITHUB_TOKEN")
-        or _env_value("GH_TOKEN")
-        or _env_value("GITHUB_PAT")
-    )
-    candidate_env_secrets = {
-        k: v
-        for k, v in {
-            "GITHUB_TOKEN": github_token,
-            "ATLASSIAN_API_KEY": _env_value("ATLASSIAN_API_KEY"),
-        }.items()
-        if v
-    }
+    # Check each GitHub token env var and store with the slug that was actually set.
+    # This ensures the frontend's slug-based lookup (GITHUB_TOKEN, GH_TOKEN, GITHUB_PAT)
+    # will find the token correctly.
+    candidate_env_secrets: dict[str, str] = {}
+    for slug in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT"):
+        value = _env_value(slug)
+        if value:
+            candidate_env_secrets[slug] = value
+            break  # Only import the first one that is set
+
+    atlassian_key = _env_value("ATLASSIAN_API_KEY")
+    if atlassian_key:
+        candidate_env_secrets["ATLASSIAN_API_KEY"] = atlassian_key
 
     if not candidate_env_secrets:
         logger.debug("No managed secret values found in environment; skipping sync.")
