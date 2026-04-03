@@ -54,6 +54,7 @@ from moonmind.schemas.temporal_models import (
     TASK_RUN_ID_MEMO_KEYS,
     TASK_RUN_ID_PARAM_KEYS,
     TASK_RUN_ID_SEARCH_ATTR_KEYS,
+    normalize_dependency_ids,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -364,7 +365,23 @@ def _serialize_execution(
     task_payload = params.get("task")
     if not isinstance(task_payload, dict):
         task_payload = {}
-        
+    depends_on = normalize_dependency_ids(task_payload.get("dependsOn"))
+    if not depends_on:
+        depends_on = normalize_dependency_ids(memo.get("depends_on"))
+    has_dependencies = bool(memo.get("has_dependencies") or depends_on)
+    dependency_wait_occurred = bool(memo.get("dependency_wait_occurred") or False)
+    raw_dependency_wait_duration = memo.get("dependency_wait_duration_ms")
+    dependency_wait_duration_ms = None
+    if raw_dependency_wait_duration is not None:
+        try:
+            dependency_wait_duration_ms = int(raw_dependency_wait_duration)
+        except (TypeError, ValueError):
+            dependency_wait_duration_ms = None
+    dependency_resolution = (
+        str(memo.get("dependency_resolution") or "").strip() or None
+    )
+    failed_dependency_id = str(memo.get("failed_dependency_id") or "").strip() or None
+
     resolved_skillset_ref = str(params.get("resolvedSkillsetRef") or params.get("resolved_skillset_ref") or "").strip() or None
     
     # task_skills can be passed explicitly via task payload
@@ -503,6 +520,12 @@ def _serialize_execution(
         ),
         latest_run_view=True,
         continue_as_new_cause=continue_as_new_cause,
+        depends_on=depends_on,
+        has_dependencies=has_dependencies,
+        dependency_wait_occurred=dependency_wait_occurred,
+        dependency_wait_duration_ms=dependency_wait_duration_ms,
+        dependency_resolution=dependency_resolution,
+        failed_dependency_id=failed_dependency_id,
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,
@@ -726,6 +749,96 @@ def _coerce_step_count(value: Any) -> int:
     return len(value)
 
 
+def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_steps = task_payload.get("steps")
+    if raw_steps is None:
+        return []
+    if not isinstance(raw_steps, list):
+        raise _invalid_task_request("payload.task.steps must be a JSON array.")
+    if len(raw_steps) > 50:
+        raise _invalid_task_request("payload.task.steps can have a maximum of 50 items.")
+
+    normalized_steps: list[dict[str, Any]] = []
+    forbidden = {
+        "runtime",
+        "targetRuntime",
+        "target_runtime",
+        "model",
+        "effort",
+        "repository",
+        "repo",
+        "git",
+        "publish",
+        "container",
+    }
+
+    for index, item in enumerate(raw_steps):
+        if not isinstance(item, Mapping):
+            raise _invalid_task_request(
+                f"payload.task.steps[{index}] must be an object."
+            )
+        step_payload = dict(item)
+        blocked = sorted(
+            key for key in step_payload.keys() if str(key).strip() in forbidden
+        )
+        if blocked:
+            formatted = ", ".join(blocked)
+            raise _invalid_task_request(
+                f"payload.task.steps[{index}] may not define task-scoped overrides: {formatted}"
+            )
+
+        normalized_step: dict[str, Any] = {}
+        for key in ("id", "title", "instructions"):
+            value = step_payload.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized_step[key] = value.strip()
+
+        raw_skill = (
+            step_payload.get("skill")
+            if isinstance(step_payload.get("skill"), Mapping)
+            else step_payload.get("tool")
+            if isinstance(step_payload.get("tool"), Mapping)
+            else {}
+        )
+        skill_id = str(
+            raw_skill.get("id") or raw_skill.get("name") or ""
+        ).strip()
+        if skill_id:
+            normalized_skill: dict[str, Any] = {"id": skill_id}
+            raw_args = raw_skill.get("args")
+            if not isinstance(raw_args, dict):
+                raw_args = raw_skill.get("inputs")
+            if isinstance(raw_args, dict) and raw_args:
+                normalized_skill["args"] = dict(raw_args)
+            raw_caps = raw_skill.get("requiredCapabilities")
+            if raw_caps is not None:
+                normalized_caps = _coerce_string_list(
+                    raw_caps,
+                    field_name=(
+                        f"payload.task.steps[{index}].skill.requiredCapabilities"
+                    ),
+                )
+                if normalized_caps:
+                    normalized_skill["requiredCapabilities"] = normalized_caps
+            normalized_step["skill"] = normalized_skill
+
+        for key, value in step_payload.items():
+            normalized_key = str(key).strip()
+            if normalized_key in {
+                "id",
+                "title",
+                "instructions",
+                "skill",
+                "tool",
+            }:
+                continue
+            normalized_step[normalized_key] = value
+
+        normalized_steps.append(normalized_step)
+
+    return normalized_steps
+
+
 def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     tool_payload = (
         task_payload.get("tool") if isinstance(task_payload.get("tool"), dict) else {}
@@ -811,6 +924,14 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
         return explicit
+    raw_steps = task_payload.get("steps")
+    if isinstance(raw_steps, list):
+        for item in raw_steps:
+            if not isinstance(item, Mapping):
+                continue
+            step_title = str(item.get("title") or "").strip()
+            if step_title:
+                return step_title[:_MAX_TASK_TITLE_LENGTH]
     instructions = str(task_payload.get("instructions") or "").strip()
     if not instructions:
         return None
@@ -824,6 +945,16 @@ def _derive_task_summary(
     task_payload: dict[str, Any], input_artifact_ref: str | None
 ) -> str:
     instructions = str(task_payload.get("instructions") or "").strip()
+    if not instructions:
+        raw_steps = task_payload.get("steps")
+        if isinstance(raw_steps, list):
+            for item in raw_steps:
+                if not isinstance(item, Mapping):
+                    continue
+                step_instructions = str(item.get("instructions") or "").strip()
+                if step_instructions:
+                    instructions = step_instructions
+                    break
     if instructions:
         normalized = " ".join(instructions.split())
         if len(normalized) > _MAX_TASK_SUMMARY_LENGTH:
@@ -896,6 +1027,7 @@ async def _create_execution_from_task_request(
     if len(depends_on) > 10:
         raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
     step_count = _coerce_step_count(task_payload.get("steps"))
+    normalized_steps = _normalize_task_steps(task_payload)
 
     repository = str(payload.get("repository") or "").strip() or None
     integration = (
@@ -940,6 +1072,8 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["inputs"] = dict(task_payload["inputs"])
     if runtime_payload:
         normalized_task_for_planner["runtime"] = dict(runtime_payload)
+    if normalized_steps:
+        normalized_task_for_planner["steps"] = normalized_steps
     git_payload = (
         task_payload.get("git") if isinstance(task_payload.get("git"), dict) else {}
     )

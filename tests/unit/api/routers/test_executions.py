@@ -313,6 +313,30 @@ def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_rejects_more_than_50_steps(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    steps = [{"title": f"Step {i}", "instructions": f"Do step {i}."} for i in range(51)]
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Too many steps.",
+                    "steps": steps,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -420,6 +444,73 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "startingBranch": "feature/resolve-pr",
         "targetBranch": "codex/pr-resolver",
     }
+
+
+def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "runtime": {
+                        "mode": "gemini_cli",
+                    },
+                    "steps": [
+                        {
+                            "id": "tpl:demo:1.0.0:01",
+                            "title": "Clarify the create-task recovery plan",
+                            "instructions": "Audit the regression and list the missing controls.",
+                            "skill": {
+                                "id": "speckit-clarify",
+                                "args": {"feature": "task-create"},
+                                "requiredCapabilities": ["git", "github"],
+                            },
+                        },
+                        {
+                            "id": "tpl:demo:1.0.0:02",
+                            "title": "Implement the restored builder",
+                            "instructions": "Restore presets and multi-step submission.",
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = called_kwargs["initial_parameters"]
+
+    assert called_kwargs["title"] == "Clarify the create-task recovery plan"
+    assert (
+        called_kwargs["summary"]
+        == "Audit the regression and list the missing controls."
+    )
+    assert initial_parameters["stepCount"] == 2
+    assert initial_parameters["task"]["steps"] == [
+        {
+            "id": "tpl:demo:1.0.0:01",
+            "title": "Clarify the create-task recovery plan",
+            "instructions": "Audit the regression and list the missing controls.",
+            "skill": {
+                "id": "speckit-clarify",
+                "args": {"feature": "task-create"},
+                "requiredCapabilities": ["git", "github"],
+            },
+        },
+        {
+            "id": "tpl:demo:1.0.0:02",
+            "title": "Implement the restored builder",
+            "instructions": "Restore presets and multi-step submission.",
+        },
+    ]
 
 
 def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
@@ -914,6 +1005,49 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
     assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     dumped = payload.model_dump(by_alias=True)
     assert dumped["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+
+
+def test_serialize_execution_surfaces_dependency_metadata() -> None:
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={
+            "title": "Dependent task",
+            "summary": "Waiting on dependencies.",
+            "depends_on": ["mm:dep-1", "mm:dep-2"],
+            "has_dependencies": True,
+            "dependency_wait_occurred": True,
+            "dependency_wait_duration_ms": 1500,
+            "dependency_resolution": "success",
+        },
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
+        workflow_id="mm:task-deps-1",
+        namespace="moonmind",
+        run_id="temporal-run-1",
+        artifact_refs=[],
+        created_at="2026-03-19T00:00:00Z",
+        started_at="2026-03-19T00:00:00Z",
+        updated_at="2026-03-19T00:00:00Z",
+        closed_at=None,
+        integration_state=None,
+        parameters={"task": {"dependsOn": ["mm:dep-1", "mm:dep-2"]}},
+        paused=False,
+        waiting_reason=None,
+        attention_required=False,
+    )
+
+    payload = _serialize_execution(record)
+
+    dumped = payload.model_dump(by_alias=True)
+    assert dumped["dependsOn"] == ["mm:dep-1", "mm:dep-2"]
+    assert dumped["hasDependencies"] is True
+    assert dumped["dependencyWaitOccurred"] is True
+    assert dumped["dependencyWaitDurationMs"] == 1500
+    assert dumped["dependencyResolution"] == "success"
+    assert dumped["failedDependencyId"] is None
 
 
 def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_scalar() -> None:

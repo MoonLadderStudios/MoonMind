@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence, get_type_hints
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
@@ -1813,8 +1813,50 @@ class TemporalProposalActivities:
         run_id: str = origin.get("temporal_run_id") or ""
         trigger_repo: str = origin.get("trigger_repo") or ""
 
-        max_items = int(policy.get("max_items", 10))
-        default_runtime = policy.get("default_runtime")
+        from moonmind.workflows.tasks.task_contract import (
+            TaskProposalPolicy,
+            build_effective_proposal_policy,
+        )
+
+        parsed_policy: TaskProposalPolicy | None = None
+        if isinstance(policy, Mapping) and policy:
+            try:
+                parsed_policy = TaskProposalPolicy.model_validate(policy)
+            except Exception as exc:
+                logger.warning("proposal.submit: invalid proposal policy: %s", exc)
+
+        effective_policy = build_effective_proposal_policy(
+            policy=parsed_policy,
+            default_targets=getattr(
+                settings.task_proposals,
+                "proposal_targets_default",
+                "project",
+            ),
+            default_max_items_project=getattr(
+                settings.task_proposals,
+                "max_items_project_default",
+                3,
+            ),
+            default_max_items_moonmind=getattr(
+                settings.task_proposals,
+                "max_items_moonmind_default",
+                2,
+            ),
+            default_moonmind_severity_floor=getattr(
+                settings.task_proposals,
+                "moonmind_severity_floor_default",
+                "high",
+            ),
+            severity_vocabulary=getattr(
+                settings.task_proposals,
+                "severity_vocabulary",
+                None,
+            ),
+        )
+        default_runtime = parsed_policy.default_runtime if parsed_policy else None
+        moonmind_repo = str(
+            getattr(settings.task_proposals, "moonmind_ci_repository", "") or ""
+        ).strip()
         generated_count = len(candidates)
         submitted_count = 0
         errors: list[str] = []
@@ -1850,7 +1892,7 @@ class TemporalProposalActivities:
             ctx = _wrap()
 
         async with ctx as service:
-            for candidate in candidates[:max_items]:
+            for candidate in candidates:
                 if not isinstance(candidate, Mapping):
                     errors.append("skipped non-object candidate")
                     continue
@@ -1878,6 +1920,32 @@ class TemporalProposalActivities:
                             payload_node["task"] = {
                                 "runtime": {"mode": default_runtime}
                             }
+
+                payload_node = stamped_request.get("payload")
+                target_repo = ""
+                if isinstance(payload_node, Mapping):
+                    target_repo = str(payload_node.get("repository") or "").strip()
+                
+                is_moonmind_target = bool(moonmind_repo) and target_repo.lower() == moonmind_repo.lower()
+                should_submit = False
+
+                if is_moonmind_target:
+                    severity = str(candidate.get("severity") or "medium")
+                    if effective_policy.severity_meets_floor(severity) and effective_policy.consume_moonmind_slot():
+                        should_submit = True
+                else:
+                    if effective_policy.consume_project_slot():
+                        should_submit = True
+                    else:
+                        severity = str(candidate.get("severity") or "medium")
+                        if bool(moonmind_repo) and effective_policy.severity_meets_floor(severity) and effective_policy.consume_moonmind_slot():
+                            is_moonmind_target = True
+                            should_submit = True
+                            if isinstance(payload_node, dict):
+                                payload_node["repository"] = moonmind_repo
+
+                if not should_submit:
+                    continue
 
                 try:
                     if service is not None:
@@ -2858,7 +2926,8 @@ class TemporalAgentRuntimeActivities:
 def _build_activity_wrapper(
     func: Callable[..., Any],
 ) -> Callable[[Any, Any], Awaitable[Any]]:
-    params = list(inspect.signature(func).parameters.values())
+    original_signature = inspect.signature(func)
+    params = list(original_signature.parameters.values())
     non_self_params = params[1:] if params else []
     accepts_positional_request = bool(non_self_params) and non_self_params[0].kind in {
         inspect.Parameter.POSITIONAL_ONLY,
@@ -2879,6 +2948,39 @@ def _build_activity_wrapper(
         if accepts_request_keyword or accepts_var_kwargs:
             return await func(self, request=request)
         return await func(self, request)
+
+    if all(
+        param.kind is not inspect.Parameter.KEYWORD_ONLY for param in non_self_params
+    ):
+        annotation_globals = dict(func.__globals__)
+        try:
+            from moonmind.schemas.temporal_activity_models import (
+                ArtifactReadInput,
+                ArtifactWriteCompleteInput,
+            )
+
+            annotation_globals.setdefault("ArtifactReadInput", ArtifactReadInput)
+            annotation_globals.setdefault(
+                "ArtifactWriteCompleteInput", ArtifactWriteCompleteInput
+            )
+        except ImportError:
+            # These imports are optional; failures are expected in some environments.
+            logger.debug(
+                "Failed to import ArtifactReadInput/ArtifactWriteCompleteInput for type hint resolution"
+            )
+
+        try:
+            resolved_hints = get_type_hints(
+                func,
+                globalns=annotation_globals,
+            )
+        except (NameError, TypeError):
+            # Fall back to the original annotations if type hint resolution fails,
+            # rather than failing worker startup.
+            resolved_hints = dict(getattr(func, "__annotations__", {}) or {})
+
+        _wrapper.__signature__ = original_signature  # type: ignore[attr-defined]
+        _wrapper.__annotations__ = resolved_hints
 
     return _wrapper
 

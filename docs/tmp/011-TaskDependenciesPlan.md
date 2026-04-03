@@ -49,15 +49,18 @@ All Phase 1 requirements verified complete as of 2026-03-29 (spec `117-task-dep-
 
 All Phase 2 requirements verified complete as of 2026-04-01 (spec `123-task-dep-phase2`).
 
-## Phase 3 - Finish Summary And Read Model Metadata
+## Phase 3 - Finish Summary And Read Model Metadata ✅ COMPLETE
 
-- [ ] Extend `reports/run_summary.json` with declared dependency IDs.
-- [ ] Extend `reports/run_summary.json` with whether a dependency wait occurred.
-- [ ] Extend `reports/run_summary.json` with dependency wait duration.
-- [ ] Extend `reports/run_summary.json` with dependency resolution outcome.
-- [ ] Extend `reports/run_summary.json` with failed dependency ID when applicable.
-- [ ] Include dependency presence metadata in workflow memo for list and detail surfaces.
-- [ ] Ensure execution serialization can surface dependency metadata cleanly for the detail page.
+- [x] Extend `reports/run_summary.json` with dependency outcome data:
+  - [x] declared dependency IDs
+  - [x] whether a dependency wait occurred
+  - [x] dependency wait duration
+  - [x] resolution outcome (success vs dependency failure)
+  - [x] failed dependency ID when applicable
+- [x] Include dependency presence metadata in workflow memo (for list/detail surfaces).
+- [x] Ensure execution serialization can surface dependency metadata cleanly for the detail page.
+
+All Phase 3 requirements verified complete as of 2026-03-29.
 
 ## Phase 4 - Mission Control Create And Detail UX
 

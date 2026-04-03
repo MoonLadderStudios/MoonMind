@@ -227,6 +227,10 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "templateSaveEnabled": bool(
                     settings.feature_flags.task_template_catalog_enabled
                 ),
+                "list": "/api/task-step-templates",
+                "detail": "/api/task-step-templates/{slug}",
+                "expand": "/api/task-step-templates/{slug}:expand",
+                "saveFromTask": "/api/task-step-templates/save-from-task",
             },
             "providerProfiles": {
                 "list": "/api/v1/provider-profiles",
