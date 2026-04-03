@@ -10,6 +10,33 @@ const SKILL_OPTIONS_DATALIST_ID = 'queue-skill-options';
 const MODEL_OPTIONS_DATALIST_ID = 'queue-model-options';
 const EFFORT_OPTIONS_DATALIST_ID = 'queue-effort-options';
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const PROPOSE_TASKS_PREFERENCE_KEY = 'moonmind.task-create.propose-tasks';
+
+function readProposeTasksPreference(defaultValue: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(PROPOSE_TASKS_PREFERENCE_KEY);
+    if (raw === null) {
+      return defaultValue;
+    }
+    if (raw === 'true' || raw === '1') {
+      return true;
+    }
+    if (raw === 'false' || raw === '0') {
+      return false;
+    }
+  } catch {
+    // Preserve default behavior when localStorage is unavailable.
+  }
+  return defaultValue;
+}
+
+function writeProposeTasksPreference(value: boolean): void {
+  try {
+    window.localStorage.setItem(PROPOSE_TASKS_PREFERENCE_KEY, value ? 'true' : 'false');
+  } catch {
+    // Ignore localStorage write failures to keep task submission behavior unaffected.
+  }
+}
 
 type TemplateScope = 'global' | 'personal';
 type ScheduleMode = 'immediate' | 'once' | 'deferred_minutes' | 'recurring';
@@ -55,6 +82,7 @@ interface DashboardConfig {
 interface ProviderProfile {
   profile_id: string;
   account_label?: string | null;
+  default_model?: string | null;
 }
 
 interface SkillsResponse {
@@ -620,6 +648,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [model, setModel] = useState(
     String(defaultTaskModelByRuntime[defaultRuntime] || dashboardConfig.system?.defaultTaskModel || ''),
   );
+  const [modelManualOverride, setModelManualOverride] = useState(false);
   const [effort, setEffort] = useState(
     String(defaultTaskEffortByRuntime[defaultRuntime] || dashboardConfig.system?.defaultTaskEffort || ''),
   );
@@ -630,7 +659,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [publishMode, setPublishMode] = useState(defaultPublishMode);
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
-  const [proposeTasks, setProposeTasks] = useState(defaultProposeTasks);
+  const [proposeTasks, setProposeTasks] = useState(() => readProposeTasksPreference(defaultProposeTasks));
+  const isInitialMount = useRef(true);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('immediate');
   const [scheduledFor, setScheduledFor] = useState('');
   const [scheduleDeferredMinutes, setScheduleDeferredMinutes] = useState('');
@@ -646,32 +676,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
-
-  useEffect(() => {
-    setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
-    setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
-    setProviderProfile('');
-  }, [
-    dashboardConfig.system?.defaultTaskEffort,
-    dashboardConfig.system?.defaultTaskModel,
-    defaultTaskEffortByRuntime,
-    defaultTaskModelByRuntime,
-    runtime,
-  ]);
-
-  const skillsQuery = useQuery({
-    queryKey: ['task-create', 'skills'],
-    queryFn: async (): Promise<string[]> => {
-      const response = await fetch('/api/tasks/skills', {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) {
-        throw new Error(await responseErrorMessage(response, 'Failed to load skills.'));
-      }
-      const data = (await response.json()) as SkillsResponse;
-      return data.items?.worker || [];
-    },
-  });
+  const prevRuntimeRef = useRef(runtime);
+  const prevProviderProfileRef = useRef(providerProfile);
 
   const providerProfilesQuery = useQuery({
     queryKey: ['task-create', 'provider-profiles', runtime],
@@ -689,6 +695,70 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return (await response.json()) as ProviderProfile[];
     },
     enabled: Boolean(runtime),
+  });
+
+  useEffect(() => {
+    const runtimeChanged = prevRuntimeRef.current !== runtime;
+    const profileChanged = prevProviderProfileRef.current !== providerProfile;
+
+    if (runtimeChanged || profileChanged) {
+      setModelManualOverride(false);
+    }
+
+    if (runtimeChanged) {
+      setProviderProfile('');
+      prevRuntimeRef.current = runtime;
+    }
+
+    if (profileChanged) {
+      prevProviderProfileRef.current = providerProfile;
+    }
+
+    setEffort(String(defaultTaskEffortByRuntime[runtime] || dashboardConfig.system?.defaultTaskEffort || ''));
+
+    if (modelManualOverride && !runtimeChanged && !profileChanged) {
+      return;
+    }
+
+    const profileIdForModel = runtimeChanged ? '' : providerProfile;
+    const profiles = providerProfilesQuery.data || [];
+    const selectedProfile = profiles.find((p) => p.profile_id === profileIdForModel);
+    if (selectedProfile?.default_model) {
+      setModel(selectedProfile.default_model);
+    } else {
+      setModel(String(defaultTaskModelByRuntime[runtime] || dashboardConfig.system?.defaultTaskModel || ''));
+    }
+  }, [
+    dashboardConfig.system?.defaultTaskEffort,
+    dashboardConfig.system?.defaultTaskModel,
+    defaultTaskEffortByRuntime,
+    defaultTaskModelByRuntime,
+    modelManualOverride,
+    providerProfilesQuery.data,
+    providerProfile,
+    runtime,
+  ]);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    writeProposeTasksPreference(proposeTasks);
+  }, [proposeTasks]);
+
+  const skillsQuery = useQuery({
+    queryKey: ['task-create', 'skills'],
+    queryFn: async (): Promise<string[]> => {
+      const response = await fetch('/api/tasks/skills', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, 'Failed to load skills.'));
+      }
+      const data = (await response.json()) as SkillsResponse;
+      return data.items?.worker || [];
+    },
   });
 
   const templateOptionsQuery = useQuery({
@@ -1704,7 +1774,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               list={MODEL_OPTIONS_DATALIST_ID}
               value={model}
               placeholder="runtime default"
-              onChange={(event) => setModel(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setModel(next);
+                setModelManualOverride(next !== '');
+              }}
             />
           </label>
           <label>

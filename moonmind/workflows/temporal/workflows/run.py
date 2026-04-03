@@ -1096,7 +1096,8 @@ class MoonMindRunWorkflow:
                     or last_node_inputs.get("branch")
                     or ""
                 )
-                base_branch = (
+                publish_payload = self._resolve_publish_payload(parameters)
+                base_branch = self._resolve_publish_base_branch(publish_payload) or (
                     ws.get("startingBranch")
                     or last_node_inputs.get("startingBranch")
                     or "main"
@@ -1258,7 +1259,6 @@ class MoonMindRunWorkflow:
             or normalized.startswith("executing plan step")
             or (normalized.startswith("executed") and "plan step" in normalized)
         )
-
     def _resolve_publish_payload(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         task_payload = self._mapping_value(parameters, "task")
         publish_payload = self._mapping_value(parameters, "publish")
@@ -1268,6 +1268,15 @@ class MoonMindRunWorkflow:
         if isinstance(nested_publish, Mapping):
             return self._json_mapping(nested_publish, path="parameters.task.publish")
         return {}
+
+    def _proposal_generation_requested(self, parameters: Mapping[str, Any]) -> bool:
+        if workflow.patched("run-workflow-nested-propose-tasks"):
+            task_node = parameters.get("task")
+            task_payload = task_node if isinstance(task_node, Mapping) else {}
+            task_flag = task_payload.get("proposeTasks", parameters.get("proposeTasks"))
+            return _coerce_bool(task_flag, default=False)
+        else:
+            return _coerce_bool(parameters.get("proposeTasks"), default=False)
 
     def _resolve_task_body_instructions(self, task_payload: Mapping[str, Any]) -> str | None:
         instructions = self._coerce_text(task_payload.get("instructions"), flatten=False)
@@ -1391,6 +1400,10 @@ class MoonMindRunWorkflow:
         execution_profile_ref = str(
             node_inputs.get("executionProfileRef")
             or runtime_block.get("executionProfileRef")
+            or node_inputs.get("profileId")
+            or runtime_block.get("profileId")
+            or node_inputs.get("providerProfile")
+            or runtime_block.get("providerProfile")
             or f"default:{agent_id}"
         )
         wf_info = workflow.info()
@@ -1894,11 +1907,10 @@ class MoonMindRunWorkflow:
     async def _run_proposals_stage(self, *, parameters: dict[str, Any]) -> None:
         """Best-effort proposal generation phase.
 
-        Runs only when ``proposeTasks`` is set in ``initialParameters``.
+        Runs only when proposal generation is requested by the run payload.
         Failures are logged but do not fail the workflow.
         """
-        propose_tasks = parameters.get("proposeTasks")
-        if not _coerce_bool(propose_tasks, default=False):
+        if not self._proposal_generation_requested(parameters):
             return
 
         if workflow.patched("enable_task_proposals_gate"):
@@ -2059,9 +2071,7 @@ class MoonMindRunWorkflow:
                     ),
                 },
                 "proposals": {
-                    "requested": _coerce_bool(
-                        parameters.get("proposeTasks"), default=False
-                    ),
+                    "requested": self._proposal_generation_requested(parameters),
                     "generatedCount": self._proposals_generated,
                     "submittedCount": self._proposals_submitted,
                     "errors": self._proposals_errors,

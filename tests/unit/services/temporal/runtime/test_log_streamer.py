@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
@@ -86,6 +87,58 @@ def test_diagnostics_json_structure(streamer, tmp_path):
     assert data["log_refs"]["stdout"] == "run-3/stdout.log"
     assert len(data["events"]) == 1
     assert data["events"][0]["type"] == "step"
+
+
+def test_diagnostics_json_includes_annotations(streamer, tmp_path):
+    log_streamer, storage = streamer
+    annotations = [
+        {"annotation_type": "run_started", "text": "Supervisor: managed run started."},
+        {"annotation_type": "run_classified_completed", "text": "Supervisor: run classified as completed."},
+    ]
+    ref = log_streamer.collect_diagnostics(
+        run_id="run-4",
+        exit_code=0,
+        duration_seconds=1.2,
+        log_refs={"stdout": "run-4/stdout.log"},
+        annotations=annotations,
+        events=[{"type": "step", "status": "running"}],
+    )
+
+    resolved = storage.resolve_storage_path(ref)
+    data = json.loads(resolved.read_text())
+    assert len(data["annotations"]) == 2
+    assert data["annotations"][0]["annotation_type"] == "run_started"
+
+
+@pytest.mark.asyncio
+async def test_emit_system_annotation_preserves_global_sequence_with_stream_chunks(streamer):
+    log_streamer, _ = streamer
+    mock_publisher = Mock()
+    log_streamer.publisher = mock_publisher
+    log_streamer._sequence_counter = 0
+
+    log_streamer.emit_system_annotation(
+        run_id="run-seq",
+        workspace_path=None,
+        text="Supervisor: managed run started.",
+        annotation_type="run_started",
+    )
+
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"hello\n")
+    reader.feed_eof()
+
+    await log_streamer.stream_to_artifact(
+        reader,
+        run_id="run-seq",
+        stream_name="stdout",
+    )
+
+    published_chunks = [
+        call_args[0][0] for call_args in mock_publisher.publish.call_args_list
+    ]
+    assert [chunk.stream for chunk in published_chunks] == ["system", "stdout"]
+    assert [chunk.sequence for chunk in published_chunks] == [1, 2]
 # ---------------------------------------------------------------------------
 # stream_and_parse tests
 # ---------------------------------------------------------------------------

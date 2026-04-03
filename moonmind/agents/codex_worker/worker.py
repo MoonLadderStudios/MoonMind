@@ -4182,6 +4182,15 @@ class CodexWorker:
             )
             runtime_model = str(runtime.get("model") or "").strip() or None
             runtime_effort = str(runtime.get("effort") or "").strip() or None
+            runtime_provider_profile = (
+                str(
+                    runtime.get("providerProfile")
+                    or runtime.get("profileId")
+                    or canonical_payload.get("profileId")
+                    or ""
+                ).strip()
+                or None
+            )
 
             repository = str(canonical_payload.get("repository") or "").strip()
             if not repository:
@@ -4296,6 +4305,8 @@ class CodexWorker:
                     "mode": runtime_mode,
                     "model": runtime_model,
                     "effort": runtime_effort,
+                    "providerProfile": runtime_provider_profile,
+                    "profileId": runtime_provider_profile,
                 },
                 "skill": {
                     "id": (

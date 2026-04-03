@@ -152,4 +152,29 @@ describe('Tasks List Entrypoint', () => {
 
     expect(screen.getByRole('button', { name: 'Previous page' }).getAttribute('disabled')).toBeNull();
   });
+
+  it('renders human-readable runtime labels in list rows', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-321',
+            source: 'temporal',
+            targetRuntime: 'codex_cli',
+            title: 'Readable runtime task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
+    expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
+  });
 });

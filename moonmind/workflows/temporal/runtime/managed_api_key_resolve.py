@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from sqlalchemy import select
+
 from moonmind.auth.secret_refs import parse_secret_ref, SecretBackend, VaultSecretResolver, load_vault_token
 from moonmind.auth.resolvers import (
     EnvSecretResolver,
@@ -13,6 +15,40 @@ from moonmind.auth.resolvers import (
     AdapterVaultSecretResolver,
     RootSecretResolver,
 )
+
+# Slugs tried when no profile secret_refs / env token / WORKFLOW_GITHUB_TOKEN_SECRET_REF
+# produced a token (matches api_service startup seeding and dashboard hints).
+_MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_PAT",
+)
+
+
+async def resolve_managed_github_token_from_store() -> str | None:
+    """Return an active GitHub PAT from managed secrets (Settings), if any.
+
+    This is separate from provider profile ``secret_refs``: operators store one
+    org-wide token under a well-known slug without binding it to each profile.
+    """
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import ManagedSecret, SecretStatus
+
+    async with async_session_maker() as session:
+        for slug in _MANAGED_GITHUB_TOKEN_SLUGS:
+            # Probe well-known slugs quietly so an expected "not configured"
+            # path does not emit one warning per candidate.
+            result = await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == slug,
+                    ManagedSecret.status == SecretStatus.ACTIVE,
+                )
+            )
+            secret = result.scalar_one_or_none()
+            candidate = str(secret.ciphertext if secret else "").strip()
+            if candidate:
+                return candidate
+    return None
 
 
 async def resolve_managed_api_key_reference(ref: str) -> str:
@@ -92,4 +128,7 @@ async def resolve_managed_api_key_reference(ref: str) -> str:
             await vault_resolver_instance.aclose()
 
 
-__all__ = ["resolve_managed_api_key_reference"]
+__all__ = [
+    "resolve_managed_api_key_reference",
+    "resolve_managed_github_token_from_store",
+]

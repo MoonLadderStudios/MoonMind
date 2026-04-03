@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
@@ -93,6 +93,11 @@ function formatWhen(iso: string | null | undefined): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString();
+}
+
+function summarizeRuntime(runtime: string | null | undefined): string {
+  const label = formatRuntimeLabel(runtime);
+  return label === '—' ? '' : label;
 }
 
 function displayTemporalCount(count: number | null | undefined, countMode: string | undefined): string {
@@ -473,7 +478,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                             <code>{row.taskId}</code>
                           </a>
                         </td>
-                        <td>{row.targetRuntime || '—'}</td>
+                        <td>{formatRuntimeLabel(row.targetRuntime)}</td>
                         <td>{formatTaskSkills(row.taskSkills, row.targetSkill)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
@@ -504,7 +509,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         <p className="queue-card-meta">
                           <code>{row.taskId}</code>
                           {` · ${
-                            [row.targetRuntime, row.targetSkill, row.workflowType].filter(Boolean).join(' · ') || 'Temporal task'
+                            [summarizeRuntime(row.targetRuntime), row.targetSkill, row.workflowType]
+                              .filter(Boolean)
+                              .join(' · ') || 'Temporal task'
                           }`}
                         </p>
                       </div>
@@ -523,7 +530,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Runtime</dt>
-                        <dd>{row.targetRuntime || '—'}</dd>
+                        <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
                       </div>
                       <div>
                         <dt>Skill</dt>
