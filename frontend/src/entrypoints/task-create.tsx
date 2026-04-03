@@ -974,6 +974,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleApplyPreset() {
+    if (isApplyingPreset) {
+      return;
+    }
     if (!selectedPreset) {
       setTemplateMessage('Choose a preset first.');
       return;
@@ -1679,8 +1682,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               />
             </label>
             <div className="actions">
-              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} disabled={isApplyingPreset}>
-                {isApplyingPreset ? 'Applying...' : 'Apply'}
+              <button type="button" id="queue-template-apply" onClick={handleApplyPreset} aria-busy={isApplyingPreset}>
+                Apply
               </button>
               {taskTemplateSaveEnabled ? (
                 <button type="button" id="queue-template-save-current" onClick={handleSaveCurrentStepsAsPreset}>
@@ -1954,7 +1957,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
 
         <div className="actions">
-          <button type="submit" className="queue-submit-primary" disabled={isSubmitting}>
+          <button type="submit" className="queue-submit-primary" aria-busy={isSubmitting}>
             Create
           </button>
         </div>
