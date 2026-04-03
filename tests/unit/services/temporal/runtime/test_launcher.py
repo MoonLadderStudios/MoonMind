@@ -81,7 +81,7 @@ def test_build_command_codex_cli():
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(
         runtime_id="codex_cli",
-        command_template=["codex", "exec", "--full-auto"],
+        command_template=["codex", "exec"],
         default_model="gpt-5.3-codex",
         default_effort="high",
     )
@@ -91,7 +91,7 @@ def test_build_command_codex_cli():
     )
 
     cmd = launcher.build_command(profile, request)
-    assert cmd[:3] == ["codex", "exec", "--full-auto"]
+    assert cmd[:2] == ["codex", "exec"]
     assert "-m" in cmd
     assert "o3" in cmd
     # Codex does not support --effort or --model (long form)
