@@ -1212,7 +1212,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           : '';
       setTemplateMessage(`Applied preset '${selectedPreset.title}' (${expandedSteps.length} steps).${autoFillSuffix}`);
     } catch (error) {
-      setTemplateMessage(error instanceof Error ? `Failed to apply preset: ${error.message}` : 'Failed to apply preset.');
+      const failure = error instanceof Error ? error : new Error('Failed to apply preset.');
+      setTemplateMessage(`Failed to apply preset: ${failure.message}`);
     } finally {
       setIsApplyingPreset(false);
     }
@@ -1304,7 +1305,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setTemplateMessage(`Saved preset '${created.title || title.trim()}'.`);
       await templateOptionsQuery.refetch();
     } catch (error) {
-      setTemplateMessage(error instanceof Error ? `Failed to save preset: ${error.message}` : 'Failed to save preset.');
+      const failure = error instanceof Error ? error : new Error('Failed to save preset.');
+      setTemplateMessage(`Failed to save preset: ${failure.message}`);
     }
   }
 
@@ -1642,13 +1644,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       navigateTo(redirectPath);
     } catch (error) {
+      const failure = error instanceof Error ? error : new Error('Failed to create task.');
       // Detect network-level fetch failures (TypeError: "Failed to fetch")
       // and log additional diagnostics to help troubleshoot.
-      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      if (failure instanceof TypeError && failure.message === 'Failed to fetch') {
         console.error('[TaskCreate] Network-level fetch failure during task creation.', {
           endpoint: temporalCreateEndpoint,
-          errorName: error.name,
-          errorMessage: error.message,
+          errorName: failure.name,
+          errorMessage: failure.message,
           possibleCauses: [
             'API service may be unreachable or not running',
             'CORS policy is blocking the request (check browser devtools Network tab for CORS errors)',
@@ -1663,7 +1666,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           'or there is a network connectivity issue. Check the browser console for more details.',
         );
       } else {
-        setSubmitMessage(error instanceof Error ? error.message : 'Failed to create task.');
+        setSubmitMessage(failure.message);
       }
     } finally {
       setIsSubmitting(false);
