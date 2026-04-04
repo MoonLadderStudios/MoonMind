@@ -217,7 +217,7 @@ class ManagedRunSupervisor:
                         live_rate_limit_requested = True
                         break
 
-            def _latest_progress_at() -> datetime:
+            async def _latest_progress_at() -> datetime:
                 nonlocal progress_probe_warning_logged
                 latest = last_output_seen_at
                 if (
@@ -227,11 +227,15 @@ class ManagedRunSupervisor:
                     or not record.workspace_path
                 ):
                     return latest
+                progress_started_at = record.started_at or start_time
+                if progress_started_at.tzinfo is None:
+                    progress_started_at = progress_started_at.replace(tzinfo=UTC)
                 try:
-                    progress_at = strategy.probe_progress_at(
+                    progress_at = await asyncio.to_thread(
+                        strategy.probe_progress_at,
                         workspace_path=record.workspace_path,
                         run_id=run_id,
-                        started_at=start_time,
+                        started_at=progress_started_at,
                     )
                 except Exception:
                     if not progress_probe_warning_logged:
@@ -248,9 +252,9 @@ class ManagedRunSupervisor:
                     progress_at = progress_at.replace(tzinfo=UTC)
                 return max(latest, progress_at)
 
-            def _emit_no_output_annotation(now: datetime) -> None:
+            async def _emit_no_output_annotation(now: datetime) -> None:
                 nonlocal last_no_output_annotation_at, stalled_no_progress, stalled_progress_reason
-                latest_progress_at = _latest_progress_at()
+                latest_progress_at = await _latest_progress_at()
                 idle_progress_seconds = max(
                     0.0,
                     (now - latest_progress_at).total_seconds(),
@@ -344,13 +348,24 @@ class ManagedRunSupervisor:
                 (log_refs, stdout_content, stderr_content, parsed_output, events),
             ) = await asyncio.gather(heartbeat_task, stream_task)
             if terminate_on_rate_limit_task is not None:
-                terminate_on_rate_limit_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    _ = await terminate_on_rate_limit_task
+                if live_rate_limit_detected.is_set():
+                    with suppress(asyncio.CancelledError):
+                        _ = await terminate_on_rate_limit_task
+                else:
+                    terminate_on_rate_limit_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        _ = await terminate_on_rate_limit_task
+            stalled_progress_termination_performed = False
             if terminate_on_stall_task is not None:
-                terminate_on_stall_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    _ = await terminate_on_stall_task
+                if stalled_progress_detected.is_set():
+                    with suppress(asyncio.CancelledError):
+                        stalled_progress_termination_performed = bool(
+                            await terminate_on_stall_task
+                        )
+                else:
+                    terminate_on_stall_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        _ = await terminate_on_stall_task
 
             if timed_out:
                 exit_code = None
@@ -383,7 +398,7 @@ class ManagedRunSupervisor:
                     ),
                     reason="rate_limit",
                 )
-            if stalled_no_progress:
+            if stalled_no_progress and stalled_progress_termination_performed:
                 _record_annotation(
                     annotation_type="run_classified_stalled_progress",
                     text=(
@@ -392,9 +407,19 @@ class ManagedRunSupervisor:
                     ),
                     reason="stalled_no_progress",
                 )
+            elif stalled_no_progress:
+                _record_annotation(
+                    annotation_type="run_completed_before_stalled_progress_termination",
+                    text=(
+                        "Supervisor: stalled-progress threshold was reached, but the "
+                        "process exited before termination completed; using normal "
+                        "exit classification."
+                    ),
+                    reason="stalled_no_progress",
+                )
 
             # Classify exit
-            if stalled_no_progress:
+            if stalled_no_progress and stalled_progress_termination_performed:
                 exit_result = ManagedRuntimeExitResult(
                     status="failed",
                     failure_class="system_error",
@@ -413,7 +438,7 @@ class ManagedRunSupervisor:
 
             error_message = None
             if status == "failed":
-                if stalled_no_progress:
+                if stalled_no_progress and stalled_progress_termination_performed:
                     error_message = stalled_progress_reason or (
                         "Managed runtime stalled without observable progress"
                     )
@@ -503,7 +528,7 @@ class ManagedRunSupervisor:
         self,
         run_id: str,
         process: asyncio.subprocess.Process,
-        no_output_callback: Callable[[datetime], None] | None = None,
+        no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
     ) -> int:
         """Send heartbeats while waiting for the process to complete."""
         while True:
@@ -514,7 +539,7 @@ class ManagedRunSupervisor:
                 return exit_code
             except asyncio.TimeoutError:
                 if no_output_callback is not None:
-                    no_output_callback(datetime.now(tz=UTC))
+                    await no_output_callback(datetime.now(tz=UTC))
                 try:
                     activity.heartbeat({"run_id": run_id})
                 except Exception as e:
@@ -531,7 +556,7 @@ class ManagedRunSupervisor:
         run_id: str,
         process: asyncio.subprocess.Process,
         timeout_seconds: int,
-        no_output_callback: Callable[[datetime], None] | None = None,
+        no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
     ) -> tuple[int | None, bool]:
         """Wrap _heartbeat_and_wait with a total timeout.
 
@@ -559,7 +584,7 @@ class ManagedRunSupervisor:
             # and can complete, allowing asyncio.gather() to unblock.
             await self._terminate_process(process)
             if no_output_callback is not None:
-                no_output_callback(datetime.now(tz=UTC))
+                await no_output_callback(datetime.now(tz=UTC))
             return None, True
 
     async def cancel(self, run_id: str) -> None:
@@ -635,9 +660,12 @@ class ManagedRunSupervisor:
         *,
         process: asyncio.subprocess.Process,
         trigger: asyncio.Event,
-    ) -> None:
+    ) -> bool:
         await trigger.wait()
+        if process.returncode is not None:
+            return False
         await ManagedRunSupervisor._terminate_process(process)
+        return True
 
     @staticmethod
     def _is_live_rate_limit_event(event: dict[str, Any]) -> bool:

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -159,20 +160,65 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
 
         threshold_ts = started_at.timestamp() - _CODEX_PROGRESS_MTIME_PADDING_SECONDS
         latest_ts: float | None = None
-        for pattern in ("sessions/**/*.jsonl", "state_*.sqlite", "logs_*.sqlite"):
-            for candidate in codex_home.glob(pattern):
-                try:
-                    stat = candidate.stat()
-                except OSError:
-                    continue
-                if stat.st_mtime < threshold_ts:
-                    continue
-                if latest_ts is None or stat.st_mtime > latest_ts:
-                    latest_ts = stat.st_mtime
+        for candidate in self._iter_progress_candidates(
+            codex_home=codex_home,
+            started_at=started_at,
+        ):
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            if stat.st_mtime < threshold_ts:
+                continue
+            if latest_ts is None or stat.st_mtime > latest_ts:
+                latest_ts = stat.st_mtime
 
         if latest_ts is None:
             return None
         return datetime.fromtimestamp(latest_ts, tz=UTC)
+
+    @staticmethod
+    def _iter_progress_candidates(
+        *,
+        codex_home: Path,
+        started_at: datetime,
+    ) -> Iterator[Path]:
+        yield from codex_home.glob("state_*.sqlite")
+        yield from codex_home.glob("logs_*.sqlite")
+
+        sessions_root = codex_home / "sessions"
+        if not sessions_root.is_dir():
+            return
+
+        for session_day_dir in CodexCliStrategy._iter_session_day_dirs(
+            sessions_root=sessions_root,
+            started_at=started_at,
+        ):
+            if not session_day_dir.is_dir():
+                continue
+            yield from session_day_dir.rglob("*.jsonl")
+
+    @staticmethod
+    def _iter_session_day_dirs(
+        *,
+        sessions_root: Path,
+        started_at: datetime,
+    ) -> Iterator[Path]:
+        normalized_started_at = (
+            started_at
+            if started_at.tzinfo is not None
+            else started_at.replace(tzinfo=UTC)
+        )
+        utc_now = datetime.now(tz=UTC)
+        # Codex stores sessions under day-partitioned paths; scanning only the
+        # current/recent partitions avoids re-walking the entire session tree.
+        candidate_days = {
+            normalized_started_at.astimezone(UTC).date(),
+            utc_now.date(),
+            (utc_now - timedelta(days=1)).date(),
+        }
+        for day in sorted(candidate_days):
+            yield sessions_root / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
 
     @staticmethod
     def _resolve_codex_home(workspace_path: str | None) -> Path | None:
@@ -181,12 +227,8 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             return None
 
         resolved_workspace = Path(normalized).resolve()
-        run_root = (
-            resolved_workspace.parent
-            if resolved_workspace.name == "repo"
-            else resolved_workspace
-        )
+        run_root = resolved_workspace.parent
         codex_home = run_root / ".moonmind" / "codex-home"
-        if not codex_home.exists():
+        if not codex_home.is_dir():
             return None
         return codex_home
