@@ -272,6 +272,30 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
 
 
+async def test_create_uses_same_origin_content_endpoint_for_small_s3_uploads(
+    tmp_path: Path,
+) -> None:
+    """Small S3-backed uploads should stay on the API content route."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=_MultipartMemoryStore(),
+                direct_upload_max_bytes=1024,
+            )
+
+            artifact, upload = await service.create(
+                principal="user-1",
+                content_type="text/plain",
+                size_bytes=11,
+            )
+
+            assert upload.mode == "single_put"
+            assert upload.upload_url == f"/api/artifacts/{artifact.artifact_id}/content"
+
+
 async def test_compute_preview_redacts_token_like_pairs(tmp_path: Path) -> None:
     """Preview activity should redact token/password assignments."""
 

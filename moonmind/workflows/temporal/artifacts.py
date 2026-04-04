@@ -1204,14 +1204,7 @@ class TemporalArtifactService:
                 ),
             )
         else:
-            if self._store.backend is db_models.TemporalArtifactStorageBackend.S3:
-                upload_url, required_headers = self._store.presign_single_upload(
-                    storage_key=storage_key,
-                    content_type=content_type,
-                    expires_in_seconds=self._presign_ttl_seconds,
-                )
-            else:
-                upload_url = f"/api/artifacts/{artifact_id}/content"
+            upload_url = f"/api/artifacts/{artifact_id}/content"
 
         artifact = await self._repository.create_artifact(
             artifact_id=artifact_id,

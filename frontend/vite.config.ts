@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 
 export default defineConfig({
+  base: '/static/task_dashboard/dist/',
   plugins: [react()],
   root: resolve(__dirname, 'src'),
   build: {
