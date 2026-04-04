@@ -8265,13 +8265,6 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Redirect Response */
-            307: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
         };
     };
     task_workers_route_tasks_workers_get: {
@@ -8351,13 +8344,6 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
-            };
-            /** @description Redirect Response */
-            307: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
