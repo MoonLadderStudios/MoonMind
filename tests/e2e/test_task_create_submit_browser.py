@@ -313,7 +313,7 @@ def test_submit_error_restores_label(server):
         _assert_inflight_label(page, "Submitting...")
         _assert_inflight_label(page, original_label)
         assert _read_submit_label(page) == original_label
-        assert page.url.endswith("/tasks/new")
+        assert page.url.endswith("/tasks/create")
         assert calls["create"] == 1
         browser.close()
 

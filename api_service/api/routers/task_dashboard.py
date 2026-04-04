@@ -47,7 +47,9 @@ _SAFE_TASK_ID_SEGMENT = re.compile(
 )
 _STATIC_PATHS = {
     "list",
+    "tasks-list",
     "new",
+    "create",
     "proposals",
     "manifests",
     "manifests/new",
@@ -68,7 +70,7 @@ _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "code": "dashboard_route_not_found",
     "message": (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-        "/tasks/new, "
+        "/tasks/create, /tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "/tasks/schedules, /tasks/skills, or /tasks/settings."
     ),
@@ -350,13 +352,20 @@ async def task_list_route(
     )
 
 
-@router.get("/tasks/tasks-list")
+@router.get("/tasks/tasks-list", response_class=HTMLResponse)
 async def task_tasks_list_route(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> RedirectResponse:
-    """Redirect the legacy tasks-list alias into the canonical list route."""
-    return RedirectResponse(url="/tasks/list", status_code=307)
+) -> HTMLResponse:
+    """Serve the React-powered tasks list page (alternate canonical path)."""
+    list_path = "/tasks/tasks-list"
+    return _render_react_page(
+        request,
+        "tasks-list",
+        list_path,
+        initial_data={"dashboardConfig": build_runtime_config(list_path)},
+        data_wide_panel=True,
+    )
 
 
 @router.get("/tasks/workers")
@@ -405,13 +414,19 @@ async def task_create_route(
     )
 
 
-@router.get("/tasks/create")
+@router.get("/tasks/create", response_class=HTMLResponse)
 async def task_create_alias_route(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> RedirectResponse:
-    """Redirect the legacy create alias into the canonical create route."""
-    return RedirectResponse(url="/tasks/new", status_code=307)
+) -> HTMLResponse:
+    """Serve the React-powered task create alias page."""
+    current_path = "/tasks/create"
+    return _render_react_page(
+        request,
+        "task-create",
+        current_path,
+        initial_data={"dashboardConfig": build_runtime_config(current_path)},
+    )
 
 
 @router.get("/tasks/skills", response_class=HTMLResponse)

@@ -183,4 +183,4 @@ def test_submit_create_task_flow_error_restores_label(server):
             expect(page.locator("#queue-submit-message")).to_contain_text(
                 "Failed to create queue task"
             )
-            assert page.url.endswith("/tasks/new")
+            assert page.url.endswith("/tasks/create")

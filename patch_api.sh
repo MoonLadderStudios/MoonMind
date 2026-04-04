@@ -103,7 +103,7 @@ async def task_dashboard_route(
         content={
             "detail": (
                 "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-                "/tasks/new, "
+                "/tasks/create, /tasks/new, "
                 "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
                 "/tasks/schedules, /tasks/workers, /tasks/skills, or /tasks/settings."
             ),
