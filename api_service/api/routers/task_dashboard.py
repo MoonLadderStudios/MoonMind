@@ -47,6 +47,7 @@ _SAFE_TASK_ID_SEGMENT = re.compile(
 )
 _STATIC_PATHS = {
     "list",
+    "tasks-list",
     "new",
     "create",
     "proposals",
@@ -353,6 +354,22 @@ async def task_list_route(
 ) -> HTMLResponse:
     """Serve the React-powered tasks list page."""
     list_path = "/tasks/list"
+    return _render_react_page(
+        request,
+        "tasks-list",
+        list_path,
+        initial_data={"dashboardConfig": build_runtime_config(list_path)},
+        data_wide_panel=True,
+    )
+
+
+@router.get("/tasks/tasks-list", response_class=HTMLResponse)
+async def task_tasks_list_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered tasks list page (alternate canonical path)."""
+    list_path = "/tasks/tasks-list"
     return _render_react_page(
         request,
         "tasks-list",
