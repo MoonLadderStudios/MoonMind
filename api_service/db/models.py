@@ -982,11 +982,6 @@ class TemporalExecutionDependency(Base):
 
     __tablename__ = "execution_dependencies"
     __table_args__ = (
-        UniqueConstraint(
-            "dependent_workflow_id",
-            "prerequisite_workflow_id",
-            name="uq_execution_dependencies_edge",
-        ),
         Index(
             "ix_execution_dependencies_dependent_workflow_id",
             "dependent_workflow_id",

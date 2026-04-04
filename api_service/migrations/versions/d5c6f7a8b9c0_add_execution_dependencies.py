@@ -44,11 +44,6 @@ def upgrade() -> None:
             "dependent_workflow_id",
             "prerequisite_workflow_id",
         ),
-        sa.UniqueConstraint(
-            "dependent_workflow_id",
-            "prerequisite_workflow_id",
-            name="uq_execution_dependencies_edge",
-        ),
     )
     op.create_index(
         "ix_execution_dependencies_dependent_workflow_id",

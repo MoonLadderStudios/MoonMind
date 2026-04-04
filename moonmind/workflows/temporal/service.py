@@ -6,9 +6,9 @@ This module implements the workflow type catalog and lifecycle contract describe
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
-import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -246,11 +246,6 @@ class TemporalExecutionService:
         owner_id: str | None,
         owner_type: TemporalExecutionOwnerType,
     ) -> list[str]:
-        if len(depends_on) > 10:
-            raise TemporalExecutionValidationError(
-                "dependsOn can have a maximum of 10 items."
-            )
-
         normalized: list[str] = []
         seen: set[str] = set()
         for dependency_id in depends_on:
@@ -259,6 +254,11 @@ class TemporalExecutionService:
                 continue
             seen.add(canonical)
             normalized.append(canonical)
+
+        if len(normalized) > 10:
+            raise TemporalExecutionValidationError(
+                "dependsOn can have a maximum of 10 items."
+            )
 
         if new_workflow_id in normalized:
             raise TemporalExecutionValidationError(
@@ -380,10 +380,10 @@ class TemporalExecutionService:
     async def _scalars_all(self, stmt: Select[Any]) -> list[Any]:
         result = await self._session.execute(stmt)
         scalars = result.scalars()
-        if inspect.isawaitable(scalars):
+        if asyncio.isfuture(scalars) or asyncio.iscoroutine(scalars):
             scalars = await scalars
         rows = scalars.all()
-        if inspect.isawaitable(rows):
+        if asyncio.isfuture(rows) or asyncio.iscoroutine(rows):
             rows = await rows
         return list(rows)
 
@@ -530,14 +530,18 @@ class TemporalExecutionService:
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
-        if normalized_depends_on:
-            task_params = (
-                dict(params.get("task", {}))
-                if isinstance(params.get("task"), dict)
-                else {}
-            )
-            task_params["dependsOn"] = normalized_depends_on
-            params["task"] = task_params
+        task_params = (
+            dict(params.get("task", {})) if isinstance(params.get("task"), dict) else {}
+        )
+        if isinstance((initial_parameters or {}).get("task", {}).get("dependsOn"), list):
+            if normalized_depends_on:
+                task_params["dependsOn"] = normalized_depends_on
+            else:
+                task_params.pop("dependsOn", None)
+            if task_params:
+                params["task"] = task_params
+            else:
+                params.pop("task", None)
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
@@ -2028,20 +2032,24 @@ class TemporalExecutionService:
             return
 
         payload = self._build_dependency_resolved_signal(record)
-        for edge in dependent_edges:
+        async def _signal_safe(workflow_id: str) -> None:
             try:
                 await self._client_adapter.signal_workflow(
-                    edge.dependent_workflow_id,
+                    workflow_id,
                     "DependencyResolved",
                     payload,
                 )
             except Exception as exc:
                 logger.warning(
                     "DependencyResolved fan-out failed for dependent %s from prerequisite %s: %s",
-                    edge.dependent_workflow_id,
+                    workflow_id,
                     record.workflow_id,
                     exc,
                 )
+
+        await asyncio.gather(
+            *(_signal_safe(edge.dependent_workflow_id) for edge in dependent_edges)
+        )
 
     def _append_intervention_audit(
         self,

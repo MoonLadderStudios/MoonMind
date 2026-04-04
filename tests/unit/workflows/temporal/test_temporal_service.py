@@ -386,7 +386,7 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
 
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_non_run_dependency(tmp_path):
+async def test_create_execution_rejects_non_run_dependency(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         owner_id = uuid4()
@@ -525,6 +525,80 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         )
         assert snapshot[dep1.workflow_id].title == "Dependency 1"
         assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.Run"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_normalizes_depends_on_before_limit_and_persistence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        dependencies = [
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title=f"Dependency {index}",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={},
+                idempotency_key=None,
+            )
+            for index in range(1, 11)
+        ]
+        workflow_ids = [record.workflow_id for record in dependencies]
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Normalized dependent",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "dependsOn": workflow_ids + [workflow_ids[0], "   ", None],  # type: ignore[list-item]
+                }
+            },
+            idempotency_key=None,
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.parameters["task"]["dependsOn"] == workflow_ids
+
+
+@pytest.mark.asyncio
+async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Blank dependencies",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [None, "   "]}},
+            idempotency_key=None,
+        )
+
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert source is not None
+        assert source.parameters == {}
 
 
 @pytest.mark.asyncio
