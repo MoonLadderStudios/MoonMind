@@ -912,7 +912,8 @@ class ManagedRuntimeLauncher:
                     cwd=resolved_workspace_path,
                 )
         except Exception:
-            self._log_streamer.consume_annotations(run_id)
+            if self._log_streamer:
+                self._log_streamer.consume_annotations(run_id)
             await self.cleanup_run_support(run_id)
             for path in [*cleanup_paths, *deferred_cleanup_paths]:
                 try:

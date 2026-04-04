@@ -60,11 +60,24 @@ class GitHubAuthBrokerManager:
 
         path = Path(socket_path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path.parent.chmod(0o700)
+        # chmod is best-effort: it fails if we don't own the directory (e.g. stale
+        # state from a previous run as a different user). When it fails we log a
+        # warning but continue, since the directory at least exists.
+        try:
+            path.parent.chmod(0o700)
+        except PermissionError:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "Could not chmod %s to 0o700; it may be owned by another user. "
+                "Proceeding anyway.",
+                str(path.parent),
+            )
         try:
             path.unlink()
-        except FileNotFoundError:
-            # It's fine if the socket file does not exist yet.
+        except (FileNotFoundError, PermissionError):
+            # FileNotFoundError: socket does not exist yet - fine.
+            # PermissionError: socket is owned by another user (stale state) - skip.
             pass
 
         async def _handle_client(
