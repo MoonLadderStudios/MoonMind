@@ -1729,6 +1729,78 @@ class TemporalProposalActivities:
                     return step_instructions
         return ""
 
+    @staticmethod
+    def _normalize_proposal_text(value: object) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    @classmethod
+    def _comparison_key(cls, value: object) -> str:
+        normalized = cls._normalize_proposal_text(value).lower()
+        return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+
+    @classmethod
+    def _resolve_proposal_idea(
+        cls,
+        *,
+        payload: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+        task: Mapping[str, Any],
+        instructions: str,
+    ) -> str:
+        result_node = payload.get("result")
+        result = result_node if isinstance(result_node, Mapping) else {}
+        candidate_sources = (
+            payload.get("proposalTitle"),
+            payload.get("proposalIdea"),
+            payload.get("suggestedTitle"),
+            payload.get("titleSuggestion"),
+            payload.get("recommendedNextAction"),
+            payload.get("nextAction"),
+            payload.get("nextStep"),
+            result.get("proposalTitle"),
+            result.get("proposalIdea"),
+            result.get("suggestedTitle"),
+            result.get("titleSuggestion"),
+            result.get("recommendedNextAction"),
+            result.get("nextAction"),
+            result.get("nextStep"),
+            result.get("next_step"),
+            parameters.get("proposalTitle"),
+            parameters.get("proposalIdea"),
+            parameters.get("suggestedTitle"),
+            parameters.get("titleSuggestion"),
+            parameters.get("recommendedNextAction"),
+            parameters.get("nextAction"),
+            parameters.get("nextStep"),
+            parameters.get("next_step"),
+            task.get("proposalTitle"),
+            task.get("proposalIdea"),
+            task.get("suggestedTitle"),
+            task.get("titleSuggestion"),
+            task.get("recommendedNextAction"),
+            task.get("nextAction"),
+            task.get("nextStep"),
+            task.get("next_step"),
+        )
+        workflow_texts = {
+            cls._comparison_key(task.get("title")),
+            cls._comparison_key(parameters.get("title")),
+            cls._comparison_key(instructions.splitlines()[0] if instructions else ""),
+            cls._comparison_key(instructions),
+        }
+        workflow_texts.discard("")
+
+        for candidate in candidate_sources:
+            idea = cls._normalize_proposal_text(candidate)
+            if not idea:
+                continue
+            if cls._comparison_key(idea) in workflow_texts:
+                continue
+            return idea
+        return ""
+
     async def proposal_generate(
         self,
         request: Mapping[str, Any] | None = None,
@@ -1754,30 +1826,28 @@ class TemporalProposalActivities:
         task = dict(task_node) if isinstance(task_node, Mapping) else {}
         instructions = self._resolve_task_instructions(parameters)
 
-        if not instructions:
-            # Without instructions there is not enough context to derive a
-            # meaningful follow-up proposal.
+        proposal_idea = self._resolve_proposal_idea(
+            payload=payload,
+            parameters=parameters,
+            task=task,
+            instructions=instructions,
+        )
+
+        if not proposal_idea:
+            # Do not create generic proposals whose title simply repeats the
+            # completed workflow. The fallback path only emits a proposal when
+            # it receives an explicit next-step idea from upstream context.
             return []
 
-        # Derive a concise title from the first line of instructions.
-        first_line = instructions.splitlines()[0].strip()
-        title_prefix = "Follow-up: "
-
-        # Make the title unique and distinct from the parent workflow by appending a short ID.
-        short_id = workflow_id.split("-")[-1] if "-" in workflow_id else workflow_id[-8:]
-        run_suffix = f" ({short_id})" if short_id else ""
-
-        max_title_len = 180
-        budget = max(0, max_title_len - len(title_prefix) - len(run_suffix))
-        title_body = first_line[:budget]
-        title = f"{title_prefix}{title_body}{run_suffix}"
-        
-        if len(title) > max_title_len:
-            title = title[:max_title_len]
+        normalized_title = proposal_idea
+        if not normalized_title.lower().startswith("[run_quality]"):
+            normalized_title = f"[run_quality] {normalized_title}"
+        if len(normalized_title) > 194:
+            normalized_title = normalized_title[:194].rstrip()
 
         summary = (
             f"Automatic follow-up proposal generated from workflow {workflow_id}. "
-            f"Original instructions: {instructions[:500]}"
+            f"Proposed next step: {proposal_idea[:500]}"
         )
 
         # Reconstruct a task-create request envelope from the original
@@ -1804,7 +1874,7 @@ class TemporalProposalActivities:
         }
 
         candidate: dict[str, Any] = {
-            "title": f"[run_quality] {title}",
+            "title": normalized_title,
             "summary": summary,
             "category": "run_quality",
             "tags": ["artifact_gap", "auto-generated", "follow_up"],
