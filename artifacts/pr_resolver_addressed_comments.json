@@ -1,5 +1,45 @@
 [
   {
+    "id": 3034625986,
+    "disposition": "addressed",
+    "rationale": "Startup env seeding now refreshes the canonical GITHUB_TOKEN managed secret from the preferred GitHub env token so stale alias switches cannot leave runtime auth on an outdated stored token."
+  },
+  {
+    "id": 4057535157,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review summary only; the actionable inline finding was handled directly."
+  },
+  {
+    "id": 3034626826,
+    "disposition": "addressed",
+    "rationale": "Startup env seeding now imports every nonblank GitHub token alias present instead of stopping at the first one, and tests cover multi-alias import behavior."
+  },
+  {
+    "id": 4057535973,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Gemini review summary only; the underlying inline suggestion was addressed in code and tests."
+  },
+  {
+    "id": 3034631107,
+    "disposition": "addressed",
+    "rationale": "Added startup secret env-seeding coverage for GH_TOKEN and GITHUB_PAT, including canonical GITHUB_TOKEN refresh semantics."
+  },
+  {
+    "id": 3034631119,
+    "disposition": "addressed",
+    "rationale": "Whitespace-only env values are now normalized away before import so they cannot create active managed secrets or suppress the dashboard warning."
+  },
+  {
+    "id": 4057539970,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR overview only; it did not introduce an additional actionable request beyond the inline comments already classified."
+  },
+  {
+    "id": 3034940528,
+    "disposition": "addressed",
+    "rationale": "Removed the startup log detail derived from the managed-secret candidate map so the sync path no longer emits secret-adjacent data that GitHub Advanced Security flags as clear-text logging."
+  },
+  {
     "id": 3034751817,
     "disposition": "addressed",
     "rationale": "Changed the checklist's feature link from an absolute local path to the repo-relative ../spec.md target."
