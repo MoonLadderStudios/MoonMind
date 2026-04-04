@@ -62,6 +62,22 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             "[run_quality] Audit adjacent error handling paths",
         )
 
+    async def test_proposal_generate_reads_top_level_next_step_snake_case(self) -> None:
+        activities = TemporalProposalActivities()
+
+        req = {
+            "workflow_id": "snake-case-next-step",
+            "parameters": {"instructions": "Fix bug in Y"},
+            "next_step": "Audit adjacent error handling paths",
+        }
+
+        result = await activities.proposal_generate(req)
+
+        self.assertEqual(
+            result[0]["title"],
+            "[run_quality] Audit adjacent error handling paths",
+        )
+
     async def test_proposal_generate_truncates_long_explicit_idea(self) -> None:
         activities = TemporalProposalActivities()
 
@@ -94,6 +110,55 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, [])
+
+    async def test_proposal_generate_rejects_structured_proposal_text(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-structured",
+                "parameters": {"instructions": "Investigate failed proposal hooks"},
+                "proposalIdea": {"unexpected": "object"},
+            }
+        )
+
+        self.assertEqual(result, [])
+
+    async def test_proposal_generate_aligns_promoted_task_instructions(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-follow-up",
+                "parameters": {"instructions": "Implement feature X"},
+                "proposalIdea": "Add regression coverage for feature X",
+            }
+        )
+
+        self.assertEqual(
+            result[0]["taskCreateRequest"]["payload"]["task"]["instructions"],
+            "Add regression coverage for feature X\n\n"
+            "Context from the completed task:\n"
+            "Implement feature X",
+        )
+
+    async def test_proposal_generate_uses_proposal_idea_when_original_instructions_missing(
+        self,
+    ) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-empty-instructions",
+                "parameters": {},
+                "proposalIdea": "Add regression coverage for feature X",
+            }
+        )
+
+        self.assertEqual(
+            result[0]["taskCreateRequest"]["payload"]["task"]["instructions"],
+            "Add regression coverage for feature X",
+        )
 
     async def test_proposal_generate_rejects_next_step_that_matches_workflow_title(self) -> None:
         activities = TemporalProposalActivities()

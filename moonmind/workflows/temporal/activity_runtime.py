@@ -1731,7 +1731,12 @@ class TemporalProposalActivities:
 
     @staticmethod
     def _normalize_proposal_text(value: object) -> str:
-        text = str(value or "").strip()
+        if isinstance(value, str):
+            text = value.strip()
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            text = str(value).strip()
+        else:
+            text = ""
         text = re.sub(r"\s+", " ", text)
         return text
 
@@ -1751,39 +1756,17 @@ class TemporalProposalActivities:
     ) -> str:
         result_node = payload.get("result")
         result = result_node if isinstance(result_node, Mapping) else {}
-        candidate_sources = (
-            payload.get("proposalTitle"),
-            payload.get("proposalIdea"),
-            payload.get("suggestedTitle"),
-            payload.get("titleSuggestion"),
-            payload.get("recommendedNextAction"),
-            payload.get("nextAction"),
-            payload.get("nextStep"),
-            result.get("proposalTitle"),
-            result.get("proposalIdea"),
-            result.get("suggestedTitle"),
-            result.get("titleSuggestion"),
-            result.get("recommendedNextAction"),
-            result.get("nextAction"),
-            result.get("nextStep"),
-            result.get("next_step"),
-            parameters.get("proposalTitle"),
-            parameters.get("proposalIdea"),
-            parameters.get("suggestedTitle"),
-            parameters.get("titleSuggestion"),
-            parameters.get("recommendedNextAction"),
-            parameters.get("nextAction"),
-            parameters.get("nextStep"),
-            parameters.get("next_step"),
-            task.get("proposalTitle"),
-            task.get("proposalIdea"),
-            task.get("suggestedTitle"),
-            task.get("titleSuggestion"),
-            task.get("recommendedNextAction"),
-            task.get("nextAction"),
-            task.get("nextStep"),
-            task.get("next_step"),
+        keys = (
+            "proposalTitle",
+            "proposalIdea",
+            "suggestedTitle",
+            "titleSuggestion",
+            "recommendedNextAction",
+            "nextAction",
+            "nextStep",
+            "next_step",
         )
+        candidate_sources = (payload, result, parameters, task)
         workflow_texts = {
             cls._comparison_key(task.get("title")),
             cls._comparison_key(parameters.get("title")),
@@ -1792,14 +1775,31 @@ class TemporalProposalActivities:
         }
         workflow_texts.discard("")
 
-        for candidate in candidate_sources:
-            idea = cls._normalize_proposal_text(candidate)
-            if not idea:
-                continue
-            if cls._comparison_key(idea) in workflow_texts:
-                continue
-            return idea
+        for source in candidate_sources:
+            for key in keys:
+                idea = cls._normalize_proposal_text(source.get(key))
+                if not idea:
+                    continue
+                if cls._comparison_key(idea) in workflow_texts:
+                    continue
+                return idea
         return ""
+
+    @classmethod
+    def _build_follow_up_instructions(cls, proposal_idea: str, instructions: str) -> str:
+        normalized_idea = cls._normalize_proposal_text(proposal_idea)
+        normalized_instructions = cls._normalize_proposal_text(instructions)
+        if not normalized_instructions:
+            return normalized_idea
+        if cls._comparison_key(normalized_idea) == cls._comparison_key(
+            normalized_instructions
+        ):
+            return normalized_idea
+        return (
+            f"{normalized_idea}\n\n"
+            "Context from the completed task:\n"
+            f"{normalized_instructions}"
+        )
 
     async def proposal_generate(
         self,
@@ -1849,6 +1849,9 @@ class TemporalProposalActivities:
             f"Automatic follow-up proposal generated from workflow {workflow_id}. "
             f"Proposed next step: {proposal_idea[:500]}"
         )
+        follow_up_instructions = self._build_follow_up_instructions(
+            proposal_idea, instructions
+        )
 
         # Reconstruct a task-create request envelope from the original
         # execution context so that the proposal can be promoted to a
@@ -1865,7 +1868,7 @@ class TemporalProposalActivities:
             "payload": {
                 "repository": repo,
                 "task": {
-                    "instructions": instructions,
+                    "instructions": follow_up_instructions,
                     "runtime": runtime,
                     "git": git,
                     "publish": publish,
