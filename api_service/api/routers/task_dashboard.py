@@ -63,6 +63,8 @@ _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
     "system",
     "workers",
     "secrets",
+    "create",
+    "tasks-list",
 }
 _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "code": "dashboard_route_not_found",

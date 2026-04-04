@@ -191,6 +191,14 @@ def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
     assert tasks_list_resp.headers["location"] == "/tasks/list"
 
 
+def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
+    """Trailing-slash variants /tasks/create/ and /tasks/tasks-list/ must not render a detail shell."""
+    for path in ("/tasks/create/", "/tasks/tasks-list/"):
+        response = client.get(path)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+
+
 def test_react_shell_uses_vite_dev_server_assets_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
