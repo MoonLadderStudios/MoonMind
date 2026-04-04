@@ -892,6 +892,45 @@ class ManagedRuntimeLauncher:
                 env_overrides["HOME"] = "/home/app"
                 env_overrides["USER"] = "app"
                 env_overrides["LOGNAME"] = "app"
+
+                # Ensure Claude Code's config file exists in the app user's HOME.
+                # Without ~/.claude.json, claude CLI prints repeated warnings and
+                # may hang waiting for user interaction even with -p flag.
+                #
+                # Create the config as the app user (via runuser) to avoid:
+                # - Symlink traversal risks when writing as root
+                # - File ownership mismatches (root-owned files used by app user)
+                app_home_dir = Path(env_overrides["HOME"])
+                claude_config_dir = app_home_dir / ".claude"
+                claude_config_file = app_home_dir / ".claude.json"
+
+                if not claude_config_file.exists():
+                    try:
+                        # Create directory structure as app user
+                        await self._run_checked_command(
+                            "runuser", "-u", "app", "--",
+                            "python3", "-c",
+                            (
+                                "from pathlib import Path; "
+                                f"config_dir = Path('{claude_config_dir}'); "
+                                f"config_file = Path('{claude_config_file}'); "
+                                "config_dir.mkdir(parents=True, exist_ok=True); "
+                                "config_file.write_text("
+                                "'{\\\"version\\\": 1}\\n', encoding='utf-8'"
+                                ")"
+                            ),
+                        )
+                    except RuntimeError as exc:
+                        raise RuntimeError(
+                            f"Unable to ensure Claude config exists at {claude_config_file}"
+                        ) from exc
+
+                    # Verify the file was created and is readable
+                    if not claude_config_file.is_file():
+                        raise RuntimeError(
+                            f"Claude config file not created at {claude_config_file}"
+                        )
+
                 # Use runuser with env= so secrets do not appear in process argv.
                 process = await asyncio.create_subprocess_exec(
                     "runuser", "-u", "app", "--",
