@@ -1197,9 +1197,6 @@ class MoonMindRunWorkflow:
         if publish_mode == "pr" and pull_request_url:
             self._publish_status = "published"
             self._publish_reason = "published pull request"
-        elif publish_mode == "branch" and self._publish_status is None:
-            self._publish_status = "published"
-            self._publish_reason = "published branch"
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -1424,6 +1421,12 @@ class MoonMindRunWorkflow:
             self._publish_reason = push_error or "publish failed"
             return
 
+        if push_status == "skipped":
+            push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
+            self._publish_status = "failed"
+            self._publish_reason = push_error or "publish skipped"
+            return
+
         if push_status == "protected_branch":
             push_branch = self._coerce_text(outputs.get("push_branch"), max_chars=120)
             self._publish_status = "failed"
@@ -1458,10 +1461,25 @@ class MoonMindRunWorkflow:
                 True,
             )
 
-        if publish_mode == "pr" and self._pull_request_url is None:
+        if publish_mode == "branch" and self._publish_status is None:
+            self._publish_status = "failed"
+            self._publish_reason = "branch publish outcome unknown"
             return (
                 "failed",
-                "publishMode 'pr' requested but no PR was created",
+                self._publish_reason,
+                True,
+            )
+
+        if (
+            publish_mode == "pr"
+            and self._integration is None
+            and self._pull_request_url is None
+        ):
+            self._publish_status = "failed"
+            self._publish_reason = "publishMode 'pr' requested but no PR was created"
+            return (
+                "failed",
+                self._publish_reason,
                 True,
             )
 
@@ -2016,6 +2034,9 @@ class MoonMindRunWorkflow:
                     merged = self._get_from_result(merge_result, "merged")
                     merge_summary = self._get_from_result(merge_result, "summary") or ""
                     if merged:
+                        self._pull_request_url = pr_url
+                        self._publish_status = "published"
+                        self._publish_reason = "published branch"
                         self._get_logger().info(
                             "Jules branch-publish: PR merged: %s", merge_summary
                         )
