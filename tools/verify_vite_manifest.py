@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Verify Mission Control Vite manifest completeness (CI / local).
+"""Verify the shared Mission Control Vite manifest contract (CI / local).
 
-Asserts every rollup entry in frontend/vite.config.ts has a manifest record and
-that every manifest file reference exists under api_service/static/task_dashboard/dist/.
+Asserts frontend/vite.config.ts defines exactly one shared ``mission-control``
+entrypoint and that its manifest-recorded files exist under
+api_service/static/task_dashboard/dist/.
 """
 from __future__ import annotations
 
