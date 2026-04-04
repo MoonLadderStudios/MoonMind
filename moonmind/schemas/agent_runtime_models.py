@@ -297,13 +297,13 @@ class ManagedAgentProviderProfile(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    # -- Core identity (required) --
+    # -- Core identity --
     profile_id: str = Field(..., alias="profileId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     provider_id: str | None = Field(None, alias="providerId")
     provider_label: str | None = Field(None, alias="providerLabel")
     default_model: str | None = Field(None, alias="defaultModel")
-    model_overrides: dict[str, Any] = Field(default_factory=dict, alias="modelOverrides")
+    model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
 
     # -- Credential & materialization strategy (required) --
     credential_source: str = Field(..., alias="credentialSource", min_length=1)
@@ -315,7 +315,9 @@ class ManagedAgentProviderProfile(BaseModel):
     tags: list[str] = Field(default_factory=list, alias="tags")
     priority: int = Field(default=100, alias="priority", ge=0)
     max_parallel_runs: int = Field(default=1, alias="maxParallelRuns", ge=1)
-    cooldown_after_429: int = Field(default=0, alias="cooldownAfter429", ge=0)
+    cooldown_after_429_seconds: int = Field(
+        default=900, alias="cooldownAfter429Seconds", ge=0
+    )
     rate_limit_policy: dict[str, Any] = Field(
         default_factory=dict, alias="rateLimitPolicy"
     )
@@ -349,7 +351,7 @@ class ManagedAgentProviderProfile(BaseModel):
     _ALLOWED_CREDENTIAL_SOURCES: frozenset[str] = frozenset(
         {"oauth_volume", "secret_ref", "none"}
     )
-    _ALLOWED_MATIALIZATION_MODES: frozenset[str] = frozenset(
+    _ALLOWED_MATERIALIZATION_MODES: frozenset[str] = frozenset(
         {"oauth_home", "api_key_env", "env_bundle", "config_bundle", "composite"}
     )
 
@@ -381,8 +383,8 @@ class ManagedAgentProviderProfile(BaseModel):
                 f"got {self.credential_source!r}"
             )
 
-        if self.runtime_materialization_mode not in self._ALLOWED_MATIALIZATION_MODES:
-            allowed = ", ".join(sorted(self._ALLOWED_MATIALIZATION_MODES))
+        if self.runtime_materialization_mode not in self._ALLOWED_MATERIALIZATION_MODES:
+            allowed = ", ".join(sorted(self._ALLOWED_MATERIALIZATION_MODES))
             raise ValueError(
                 f"runtimeMaterializationMode must be one of: {allowed}; "
                 f"got {self.runtime_materialization_mode!r}"

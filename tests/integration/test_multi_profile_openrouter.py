@@ -25,7 +25,6 @@ from api_service.db.models import (
 )
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
-    ProfileResolutionError,
 )
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -123,40 +122,40 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
             )
             await session.commit()
 
-        service = TemporalArtifactService(
-            TemporalArtifactRepository(session),
-            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
-        )
-        activities = TemporalArtifactActivities(service)
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalArtifactActivities(service)
 
-        import api_service.db.base as _db_base_mod
+            import api_service.db.base as _db_base_mod
 
-        orig = _db_base_mod.get_async_session_context
-        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
-            session_factory
-        )
-        try:
-            result = await activities.provider_profile_list(runtime_id="codex_cli")
-        finally:
-            _db_base_mod.get_async_session_context = orig
+            orig = _db_base_mod.get_async_session_context
+            _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+                session_factory
+            )
+            try:
+                result = await activities.provider_profile_list(runtime_id="codex_cli")
+            finally:
+                _db_base_mod.get_async_session_context = orig
 
-        profiles = result["profiles"]
-        assert len(profiles) == 2
+            profiles = result["profiles"]
+            assert len(profiles) == 2
 
-        profile_map = {p["profile_id"]: p for p in profiles}
-        assert (
-            profile_map["codex_openrouter_qwen36_plus"]["default_model"]
-            == "qwen/qwen3.6-plus:free"
-        )
-        assert (
-            profile_map["codex_openrouter_claude_sonnet"]["default_model"]
-            == "anthropic/claude-sonnet-4-20250514"
-        )
+            profile_map = {p["profile_id"]: p for p in profiles}
+            assert (
+                profile_map["codex_openrouter_qwen36_plus"]["default_model"]
+                == "qwen/qwen3.6-plus:free"
+            )
+            assert (
+                profile_map["codex_openrouter_claude_sonnet"]["default_model"]
+                == "anthropic/claude-sonnet-4-20250514"
+            )
 
-        # Verify both profiles have credential_source and runtime_materialization_mode
-        for p in profiles:
-            assert p["credential_source"] == "secret_ref"
-            assert p["runtime_materialization_mode"] == "composite"
+            # Verify both profiles have credential_source and runtime_materialization_mode
+            for p in profiles:
+                assert p["credential_source"] == "secret_ref"
+                assert p["runtime_materialization_mode"] == "composite"
 
 
 # ---------------------------------------------------------------------------
@@ -313,51 +312,51 @@ async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> No
             )
             await session.commit()
 
-        service = TemporalArtifactService(
-            TemporalArtifactRepository(session),
-            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
-        )
-        activities = TemporalArtifactActivities(service)
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalArtifactActivities(service)
 
-        import api_service.db.base as _db_base_mod
+            import api_service.db.base as _db_base_mod
 
-        orig = _db_base_mod.get_async_session_context
-        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
-            session_factory
-        )
-        try:
-            result = await activities.provider_profile_list(runtime_id="codex_cli")
-        finally:
-            _db_base_mod.get_async_session_context = orig
+            orig = _db_base_mod.get_async_session_context
+            _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+                session_factory
+            )
+            try:
+                result = await activities.provider_profile_list(runtime_id="codex_cli")
+            finally:
+                _db_base_mod.get_async_session_context = orig
 
-        profiles = result["profiles"]
-        assert len(profiles) == 1
-        p = profiles[0]
+            profiles = result["profiles"]
+            assert len(profiles) == 1
+            p = profiles[0]
 
-        assert p["profile_id"] == "codex_openrouter_test"
-        assert p["provider_id"] == "openrouter"
-        assert p["provider_label"] == "OpenRouter (Test)"
-        assert p["credential_source"] == "secret_ref"
-        assert p["runtime_materialization_mode"] == "composite"
-        assert p["default_model"] == "qwen/qwen3.6-plus:free"
-        assert p["secret_refs"] == {"provider_api_key": "env://OPENROUTER_API_KEY"}
-        assert p["clear_env_keys"] == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
-        assert p["env_template"] == {
-            "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
-        }
-        assert p["file_templates"] == [
-            {
-                "path": "{{runtime_support_dir}}/codex-home/config.toml",
-                "format": "toml",
-                "merge_strategy": "replace",
-                "content_template": {"model_provider": "openrouter"},
+            assert p["profile_id"] == "codex_openrouter_test"
+            assert p["provider_id"] == "openrouter"
+            assert p["provider_label"] == "OpenRouter (Test)"
+            assert p["credential_source"] == "secret_ref"
+            assert p["runtime_materialization_mode"] == "composite"
+            assert p["default_model"] == "qwen/qwen3.6-plus:free"
+            assert p["secret_refs"] == {"provider_api_key": "env://OPENROUTER_API_KEY"}
+            assert p["clear_env_keys"] == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
+            assert p["env_template"] == {
+                "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
             }
-        ]
-        assert p["home_path_overrides"] == {
-            "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
-        }
-        assert p["command_behavior"] == {"suppress_default_model_flag": True}
-        assert p["priority"] == 200
-        assert p["tags"] == ["test", "openrouter"]
-        assert p["max_parallel_runs"] == 2
-        assert p["cooldown_after_429_seconds"] == 120
+            assert p["file_templates"] == [
+                {
+                    "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                    "format": "toml",
+                    "merge_strategy": "replace",
+                    "content_template": {"model_provider": "openrouter"},
+                }
+            ]
+            assert p["home_path_overrides"] == {
+                "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+            }
+            assert p["command_behavior"] == {"suppress_default_model_flag": True}
+            assert p["priority"] == 200
+            assert p["tags"] == ["test", "openrouter"]
+            assert p["max_parallel_runs"] == 2
+            assert p["cooldown_after_429_seconds"] == 120

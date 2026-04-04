@@ -26,7 +26,7 @@ This feature involves **Pydantic schema alignment only**. No database schema cha
 | `volume_ref` | `str | None`, optional | `str | None`, optional | Unchanged |
 | `account_label` | `str | None`, optional | `str | None`, optional | Unchanged |
 | `max_parallel_runs` | `int`, required | `int`, required | Unchanged |
-| `cooldown_after_429` | `int | None`, optional | `int | None`, optional | Unchanged |
+| `cooldown_after_429` | `int | None`, optional | `int` (default `900`) | Field renamed to `cooldown_after_429_seconds` in schema; default moved from nullable to 900. |
 | `rate_limit_policy` | `dict`, optional | `dict`, optional | Unchanged |
 | `enabled` | `bool`, optional | `bool`, optional | Unchanged |
 | **`credential_source`** | — | **`str`, required** | New. Allowed: `oauth_volume`, `secret_ref`, `none` |
@@ -48,7 +48,7 @@ This feature involves **Pydantic schema alignment only**. No database schema cha
 **Before (4 required):**
 - `profile_id`, `runtime_id`, `auth_mode`, `max_parallel_runs`
 
-**After (4 required):**
+**After (5 required):**
 - `profile_id`, `runtime_id`, `credential_source`, `runtime_materialization_mode`, `max_parallel_runs`
 
 Note: `max_parallel_runs` stays required (ge=1). `credential_source` and `runtime_materialization_mode` become required because they are fundamental to the provider-profile contract. The API's `ProviderProfileCreate` already requires them.

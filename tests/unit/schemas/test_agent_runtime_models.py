@@ -83,12 +83,12 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
         credentialSource="oauth_volume",
         runtimeMaterializationMode="oauth_home",
         maxParallelRuns=2,
-        cooldownAfter429=120,
+        cooldownAfter429Seconds=120,
         enabled=True,
         rateLimitPolicy={"strategy": "provider_backoff"},
     )
     assert profile.max_parallel_runs == 2
-    assert profile.cooldown_after_429 == 120
+    assert profile.cooldown_after_429_seconds == 120
 
 
 def test_managed_runtime_profile_rejects_github_tokens_in_env_overrides() -> None:
