@@ -90,12 +90,6 @@ class _MultipartMemoryStore(TemporalArtifactStore):
     def delete(self, storage_key: str) -> None:
         self._objects.pop(storage_key, None)
 
-    def presign_single_upload(
-        self, *, storage_key: str, content_type, expires_in_seconds: int
-    ):
-        _ = content_type, expires_in_seconds
-        return f"https://example.test/upload/{storage_key}", {}
-
     def create_multipart_upload(self, *, storage_key: str, content_type=None) -> str:
         _ = content_type
         upload_id = f"upload-{storage_key}"

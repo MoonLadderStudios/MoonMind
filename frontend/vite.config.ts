@@ -2,8 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 
-export default defineConfig({
-  base: '/static/task_dashboard/dist/',
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/static/task_dashboard/dist/' : '/',
   plugins: [react()],
   root: resolve(__dirname, 'src'),
   build: {
@@ -20,4 +20,4 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
   },
-});
+}));

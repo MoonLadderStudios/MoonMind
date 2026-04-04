@@ -252,15 +252,6 @@ class TemporalArtifactStore:
     def delete(self, storage_key: str) -> None:
         raise NotImplementedError
 
-    def presign_single_upload(
-        self,
-        *,
-        storage_key: str,
-        content_type: str | None,
-        expires_in_seconds: int,
-    ) -> tuple[str, dict[str, str]]:
-        raise NotImplementedError
-
     def create_multipart_upload(
         self,
         *,
@@ -377,16 +368,6 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
 
     def delete(self, storage_key: str) -> None:
         self.resolve_storage_key(storage_key).unlink(missing_ok=True)
-
-    def presign_single_upload(
-        self,
-        *,
-        storage_key: str,
-        content_type: str | None,
-        expires_in_seconds: int,
-    ) -> tuple[str, dict[str, str]]:
-        _ = storage_key, content_type, expires_in_seconds
-        return "", {}
 
     def presign_download(
         self,
@@ -549,29 +530,6 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
 
     def delete(self, storage_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=storage_key)
-
-    def presign_single_upload(
-        self,
-        *,
-        storage_key: str,
-        content_type: str | None,
-        expires_in_seconds: int,
-    ) -> tuple[str, dict[str, str]]:
-        params: dict[str, Any] = {
-            "Bucket": self._bucket,
-            "Key": storage_key,
-        }
-        required_headers: dict[str, str] = {}
-        if content_type:
-            params["ContentType"] = content_type
-            required_headers["content-type"] = content_type
-        url = self._client.generate_presigned_url(
-            "put_object",
-            Params=params,
-            ExpiresIn=expires_in_seconds,
-            HttpMethod="PUT",
-        )
-        return self._rewrite_presigned_url(url), required_headers
 
     def create_multipart_upload(
         self,
