@@ -9964,12 +9964,21 @@ class CodexWorker:
             "WORKSPACE:\n"
             "- Repo is already checked out on the working branch.\n"
             f"{workspace_publish_line}\n"
-            "- Skills are available via .agents/skills and .gemini/skills links.\n"
-            "- Selected skills are always materialized under ../skills_active/<skill-id>/.\n"
             "- Write logs to stdout/stderr; MoonMind captures them.\n\n"
             f"RUNTIME ADAPTER: {runtime_mode}"
         )
-        if step.effective_skill_id != "auto":
+        if step.effective_skill_id == "auto":
+            instruction += (
+                "\n\nSKILL USAGE:\n"
+                "- No explicit skill is selected for this step.\n"
+                "- Work directly from the task objective and repository code.\n"
+                "- Do not activate repo skill bundles unless a task/step explicitly selects one."
+            )
+        else:
+            instruction += (
+                "\n- Skills are available via .agents/skills and .gemini/skills links.\n"
+                "- Selected skills are always materialized under ../skills_active/<skill-id>/."
+            )
             instruction += (
                 "\n\nSKILL USAGE:\n"
                 "Use the selected skill's files under .agents/skills/{skill}/ as the procedure for this step. "

@@ -479,7 +479,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     ["failed"]
                 )
 
-    async def test_moonmind_run_workflow_pr_publish_without_changes_returns_no_changes(
+    async def test_moonmind_run_workflow_pr_publish_without_changes_fails(
         self,
     ) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -507,24 +507,35 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
-                result = await env.client.execute_workflow(
-                    MoonMindRunWorkflow.run,
-                    {
-                        "workflowType": "MoonMind.Run",
-                        "initialParameters": {
-                            "repo": "moonladder/moonmind",
-                            "publishMode": "pr",
+                with self.assertRaises(client.WorkflowFailureError) as exc_info:
+                    await env.client.execute_workflow(
+                        MoonMindRunWorkflow.run,
+                        {
+                            "workflowType": "MoonMind.Run",
+                            "initialParameters": {
+                                "repo": "moonladder/moonmind",
+                                "publishMode": "pr",
+                            },
                         },
-                    },
-                    id="test-workflow-pr-no-changes",
-                    task_queue="test-task-queue",
-                    search_attributes=_trusted_search_attributes(),
+                        id="test-workflow-pr-no-changes",
+                        task_queue="test-task-queue",
+                        search_attributes=_trusted_search_attributes(),
+                    )
+
+                self.assertIsInstance(
+                    exc_info.exception.cause, exceptions.ApplicationError
+                )
+                self.assertEqual(
+                    exc_info.exception.cause.message,
+                    "publishMode 'pr' requested but no local changes were produced",
                 )
 
-            self.assertEqual(result["status"], "no_changes")
-            self.assertEqual(
-                result["message"], "Workflow completed with no local changes"
-            )
+                handle = env.client.get_workflow_handle("test-workflow-pr-no-changes")
+                desc = await handle.describe()
+                self.assertEqual(
+                    desc.search_attributes.get("mm_state"),
+                    ["failed"],
+                )
 
     async def test_proposals_stage_enabled(self) -> None:
         """When proposeTasks is true, proposal activities are invoked."""

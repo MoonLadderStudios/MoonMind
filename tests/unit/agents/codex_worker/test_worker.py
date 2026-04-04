@@ -4320,6 +4320,9 @@ async def test_compose_step_instruction_dedupes_objective_text(
         in instruction
     )
     assert instruction.count("Implement direct worker to Qdrant retrieval path.") == 1
+    assert "No explicit skill is selected for this step." in instruction
+    assert "Do not activate repo skill bundles unless a task/step explicitly selects one." in instruction
+    assert "- Skills are available via .agents/skills and .gemini/skills links." not in instruction
 
 
 async def test_compose_step_instruction_keeps_distinct_step_text(
