@@ -16,6 +16,11 @@ export interface ProviderProfile {
   cooldown_after_429_seconds: number;
   rate_limit_policy: string;
   enabled: boolean;
+  command_behavior?: Record<string, unknown> | null;
+  tags?: string[] | null;
+  priority?: number | null;
+  clear_env_keys?: string[] | null;
+  account_label?: string | null;
 }
 
 interface Notice {
@@ -47,11 +52,16 @@ interface ProviderProfileFormState {
   cooldownAfter429Seconds: string;
   rateLimitPolicy: string;
   enabled: boolean;
+  commandBehavior: string;
+  tagsText: string;
+  priority: string;
+  clearEnvKeysText: string;
+  accountLabel: string;
 }
 
 const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
 
-function defaultFormState(): ProviderProfileFormState {
+export function defaultFormState(): ProviderProfileFormState {
   return {
     profileId: '',
     runtimeId: '',
@@ -67,10 +77,15 @@ function defaultFormState(): ProviderProfileFormState {
     cooldownAfter429Seconds: '300',
     rateLimitPolicy: 'backoff',
     enabled: true,
+    commandBehavior: '{}',
+    tagsText: '',
+    priority: '',
+    clearEnvKeysText: '',
+    accountLabel: '',
   };
 }
 
-function toFormState(profile: ProviderProfile): ProviderProfileFormState {
+export function toFormState(profile: ProviderProfile): ProviderProfileFormState {
   return {
     profileId: profile.profile_id,
     runtimeId: profile.runtime_id,
@@ -86,6 +101,11 @@ function toFormState(profile: ProviderProfile): ProviderProfileFormState {
     cooldownAfter429Seconds: String(profile.cooldown_after_429_seconds ?? 300),
     rateLimitPolicy: profile.rate_limit_policy ?? 'backoff',
     enabled: Boolean(profile.enabled),
+    commandBehavior: profile.command_behavior ? JSON.stringify(profile.command_behavior, null, 2) : '{}',
+    tagsText: (profile.tags ?? []).join(', '),
+    priority: profile.priority != null ? String(profile.priority) : '',
+    clearEnvKeysText: (profile.clear_env_keys ?? []).join('\n'),
+    accountLabel: profile.account_label ?? '',
   };
 }
 
@@ -105,6 +125,41 @@ function parseSecretRefs(text: string): Record<string, string> {
     secretRefs[key] = value;
   }
   return secretRefs;
+}
+
+export function parseCommandBehavior(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (trimmed === '' || trimmed === '{}') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error('Command behavior must be valid JSON.');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Command behavior must be a JSON object.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+export function parseTags(text: string): string[] | null {
+  const tags = text.split(',').map(t => t.trim()).filter(Boolean);
+  return tags.length > 0 ? tags : null;
+}
+
+export function parsePriority(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  const num = Number(trimmed);
+  if (isNaN(num) || !Number.isFinite(num)) {
+    throw new Error('Priority must be a valid number.');
+  }
+  return num;
+}
+
+export function parseClearEnvKeys(text: string): string[] | null {
+  const keys = text.split('\n').map(k => k.trim()).filter(Boolean);
+  return keys.length > 0 ? keys : null;
 }
 
 function summarizeSecretRefs(secretRefs: Record<string, string>): string {
@@ -146,6 +201,11 @@ export function ProviderProfilesManager({
         cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
         rate_limit_policy: form.rateLimitPolicy,
         enabled: form.enabled,
+        command_behavior: parseCommandBehavior(form.commandBehavior),
+        tags: parseTags(form.tagsText),
+        priority: parsePriority(form.priority),
+        clear_env_keys: parseClearEnvKeys(form.clearEnvKeysText),
+        account_label: form.accountLabel.trim() || null,
       };
 
       if (!payload.profile_id) {
@@ -628,6 +688,86 @@ export function ProviderProfilesManager({
               <option value="queue">queue</option>
               <option value="fail_fast">fail_fast</option>
             </select>
+          </label>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4 space-y-4">
+          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Advanced Options</h4>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span>Command behavior</span>
+              <textarea
+                rows={4}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
+                value={form.commandBehavior}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    commandBehavior: event.target.value,
+                  }))
+                }
+                placeholder='{"suppress_default_model_flag": true}'
+              />
+            </label>
+            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span>Tags</span>
+              <input
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={form.tagsText}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    tagsText: event.target.value,
+                  }))
+                }
+                placeholder="openrouter, qwen, codex"
+              />
+            </label>
+            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span>Priority</span>
+              <input
+                type="number"
+                min="0"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={form.priority}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    priority: event.target.value,
+                  }))
+                }
+                placeholder="100"
+              />
+            </label>
+            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span>Account label</span>
+              <input
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={form.accountLabel}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    accountLabel: event.target.value,
+                  }))
+                }
+                placeholder="team-default"
+              />
+            </label>
+          </div>
+          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300 block">
+            <span>Clear env keys</span>
+            <textarea
+              rows={4}
+              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
+              value={form.clearEnvKeysText}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  clearEnvKeysText: event.target.value,
+                }))
+              }
+              placeholder={"OPENAI_API_KEY\nOPENAI_BASE_URL"}
+            />
           </label>
         </div>
 

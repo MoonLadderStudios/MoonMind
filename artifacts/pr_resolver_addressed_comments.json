@@ -1,5 +1,135 @@
 [
   {
+    "id": 3034751817,
+    "disposition": "addressed",
+    "rationale": "Changed the checklist's feature link from an absolute local path to the repo-relative ../spec.md target."
+  },
+  {
+    "id": 3034751830,
+    "disposition": "addressed",
+    "rationale": "Unchecked the technology-agnostic checklist assertions and clarified the notes so the checklist now matches the spec's implementation-detail content."
+  },
+  {
+    "id": 4057656070,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary only; its actionable feedback is already represented by the inline review comments above."
+  },
+  {
+    "id": 4057666739,
+    "disposition": "not-applicable",
+    "rationale": "Positive review with no requested change."
+  },
+  {
+    "id": 3034774063,
+    "disposition": "addressed",
+    "rationale": "Updated parseCommandBehavior to throw on invalid JSON or non-object input instead of silently returning null."
+  },
+  {
+    "id": 3034774067,
+    "disposition": "addressed",
+    "rationale": "Updated test_profile_selector_provider_id_routes_to_openrouter to use execution_profile_ref='auto' with profile_selector={provider_id: 'openrouter'} instead of explicit profile ref."
+  },
+  {
+    "id": 3034774070,
+    "disposition": "addressed",
+    "rationale": "Updated test_profile_selector_falls_back_to_lower_priority_when_high_disabled to use profile_selector-based routing instead of explicit low-priority ref."
+  },
+  {
+    "id": 4057686128,
+    "disposition": "not-applicable",
+    "rationale": "Informational Gemini review summary, no action needed."
+  },
+  {
+    "id": 4057687424,
+    "disposition": "not-applicable",
+    "rationale": "Codex review header/footer, no action needed."
+  },
+  {
+    "id": 3034774995,
+    "disposition": "addressed",
+    "rationale": "Same as 3034774063 — parseCommandBehavior now throws on invalid input."
+  },
+  {
+    "id": 3034774996,
+    "disposition": "addressed",
+    "rationale": "Same as 3034774067 — routing test now uses profile_selector."
+  },
+  {
+    "id": 3034775000,
+    "disposition": "addressed",
+    "rationale": "Same as 3034774070 — fallback test now uses profile_selector."
+  },
+  {
+    "id": 3034775221,
+    "disposition": "addressed",
+    "rationale": "Replaced module self-import with sys.modules[__name__] in test_openrouter_profile_cooldown_attaches_to_profile."
+  },
+  {
+    "id": 3034775223,
+    "disposition": "addressed",
+    "rationale": "Replaced module self-import with sys.modules[__name__] in test_openrouter_profile_slot_leasing."
+  },
+  {
+    "id": 3034775227,
+    "disposition": "addressed",
+    "rationale": "Replaced module self-import with sys.modules[__name__] in test_openrouter_profile_cancellation_releases_slot."
+  },
+  {
+    "id": 3034775230,
+    "disposition": "addressed",
+    "rationale": "Replaced module self-import with sys.modules[__name__] in test_profile_selector_provider_id_routes_to_openrouter."
+  },
+  {
+    "id": 3034775237,
+    "disposition": "addressed",
+    "rationale": "Replaced module self-import with sys.modules[__name__] in test_profile_selector_falls_back_to_lower_priority_when_high_disabled."
+  },
+  {
+    "id": 3034778283,
+    "disposition": "addressed",
+    "rationale": "Updated parsePriority to throw on invalid numbers and removed ?? 100 fallback in save payload; priority is only sent when user provides a valid value."
+  },
+  {
+    "id": 3034778296,
+    "disposition": "addressed",
+    "rationale": "Same as 3034774063 — parseCommandBehavior now throws with user-visible error on invalid JSON."
+  },
+  {
+    "id": 3034778307,
+    "disposition": "addressed",
+    "rationale": "Added missing await to WorkflowEnvironment.start_time_skipping() in all 5 new tests to match existing test convention."
+  },
+  {
+    "id": 3034778312,
+    "disposition": "not-applicable",
+    "rationale": "This test verifies cooldown attachment at the manager workflow level. Exercising the full 429→cooldown-reporting path from the adapter would require adding a mock adapter that returns 429, which is out of scope for this PR's focus on manager-level cooldown tracking. The current approach correctly verifies that the manager stores cooldown against the right profile."
+  },
+  {
+    "id": 3034778322,
+    "disposition": "addressed",
+    "rationale": "Same as 3034774067 — routing test now uses profile_selector with execution_profile_ref='auto'."
+  },
+  {
+    "id": 3034778329,
+    "disposition": "addressed",
+    "rationale": "Same as 3034774070 — fallback test now uses profile_selector with execution_profile_ref='auto'."
+  },
+  {
+    "id": 3034778336,
+    "disposition": "addressed",
+    "rationale": "Changed to 'import type { ProviderProfile }' to avoid runtime import of a type-only symbol."
+  },
+  {
+    "id": 3034778340,
+    "disposition": "addressed",
+    "rationale": "Added unit tests for parseCommandBehavior, parseTags, parsePriority, and parseClearEnvKeys in ProviderProfilesManager.test.tsx."
+  },
+  {
+    "id": 4057691780,
+    "disposition": "not-applicable",
+    "rationale": "Copilot pull request overview summary, no action needed."
+  },
+  {
     "id": 3034926806,
     "disposition": "addressed",
     "rationale": "Restricted single-put completion retries to visibility errors only and added a regression test for non-visibility storage failures."
