@@ -1949,7 +1949,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!source) {
         return undefined;
       }
-      const firstLine = source.split('\n')[0].trim();
+      const firstLine = source.split('\n')[0]?.trim();
       if (!firstLine) {
         return undefined;
       }
@@ -1970,7 +1970,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       if (appliedTemplates.length > 0) {
         const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
-        return lastTemplate.slug;
+        return lastTemplate?.slug ?? primarySkillId;
       }
       return primarySkillId;
     })();
