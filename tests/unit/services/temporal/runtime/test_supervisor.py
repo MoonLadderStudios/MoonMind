@@ -3,12 +3,14 @@ import os
 import json
 import pytest
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.temporal.runtime.strategies.base import ManagedRuntimeExitResult
 
 
 class _StubArtifactStorage:
@@ -132,6 +134,188 @@ async def test_timeout_exit_classification(supervisor_env):
     assert record.status == "timed_out"
     assert record.failure_class == "execution_error"
     assert "timed out" in record.error_message
+
+
+@pytest.mark.asyncio
+async def test_supervise_terminates_stalled_runtime_progress(supervisor_env):
+    store, artifact_storage, _, supervisor = supervisor_env
+    record = ManagedRunRecord(
+        run_id="run-stalled-progress",
+        agent_id="codex_cli",
+        runtime_id="codex_cli",
+        status="launching",
+        started_at=datetime.now(tz=UTC),
+        workspace_path="/tmp/workspace",
+    )
+    store.save(record)
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "60",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stub_strategy = SimpleNamespace(
+        create_output_parser=lambda: None,
+        terminate_on_live_rate_limit=lambda: False,
+        progress_stall_timeout_seconds=lambda *, timeout_seconds: 2,
+        probe_progress_at=lambda **_: record.started_at,
+    )
+
+    with patch("moonmind.workflows.temporal.runtime.supervisor.get_strategy", return_value=stub_strategy):
+        with patch("moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 1):
+            with patch(
+                "moonmind.workflows.temporal.runtime.supervisor.NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS",
+                1,
+            ):
+                result = await supervisor.supervise(
+                    run_id="run-stalled-progress",
+                    process=process,
+                    timeout_seconds=30,
+                )
+
+    assert result.status == "failed"
+    assert result.failure_class == "system_error"
+    assert "no observable progress" in str(result.error_message)
+
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, result)
+    assert diagnostics_path is not None
+    diagnostics = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(encoding="utf-8")
+    )
+    annotations = diagnostics.get("annotations", [])
+    assert any(
+        isinstance(annotation, dict)
+        and annotation.get("annotation_type") == "termination_requested_stalled_progress"
+        for annotation in annotations
+    )
+
+
+@pytest.mark.asyncio
+async def test_supervise_uses_record_started_at_for_progress_probe(supervisor_env):
+    store, _, _, supervisor = supervisor_env
+    expected_started_at = datetime(2026, 4, 4, 6, 0, tzinfo=UTC)
+    record = ManagedRunRecord(
+        run_id="run-started-at",
+        agent_id="codex_cli",
+        runtime_id="codex_cli",
+        status="launching",
+        started_at=expected_started_at,
+        workspace_path="/tmp/workspace",
+    )
+    store.save(record)
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "60",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    captured_started_at: list[datetime] = []
+    to_thread_calls: list[str] = []
+
+    def _probe_progress_at(**kwargs):
+        captured_started_at.append(kwargs["started_at"])
+        return record.started_at
+
+    async def _fake_to_thread(func, /, *args, **kwargs):
+        to_thread_calls.append(getattr(func, "__name__", "probe_progress_at"))
+        return func(*args, **kwargs)
+
+    stub_strategy = SimpleNamespace(
+        create_output_parser=lambda: None,
+        terminate_on_live_rate_limit=lambda: False,
+        progress_stall_timeout_seconds=lambda *, timeout_seconds: 2,
+        probe_progress_at=_probe_progress_at,
+    )
+
+    with patch("moonmind.workflows.temporal.runtime.supervisor.get_strategy", return_value=stub_strategy):
+        with patch("moonmind.workflows.temporal.runtime.supervisor.asyncio.to_thread", new=_fake_to_thread):
+            with patch("moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 1):
+                with patch(
+                    "moonmind.workflows.temporal.runtime.supervisor.NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS",
+                    1,
+                ):
+                    result = await supervisor.supervise(
+                        run_id="run-started-at",
+                        process=process,
+                        timeout_seconds=30,
+                    )
+
+    assert result.status == "failed"
+    assert result.failure_class == "system_error"
+    assert to_thread_calls
+    assert captured_started_at == [expected_started_at, expected_started_at]
+
+
+@pytest.mark.asyncio
+async def test_stalled_progress_does_not_override_clean_exit_without_termination(supervisor_env):
+    store, artifact_storage, _, supervisor = supervisor_env
+    record = ManagedRunRecord(
+        run_id="run-stall-race",
+        agent_id="codex_cli",
+        runtime_id="codex_cli",
+        status="launching",
+        started_at=datetime.now(tz=UTC),
+        workspace_path="/tmp/workspace",
+    )
+    store.save(record)
+
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", "sleep 2; exit 0",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stub_strategy = SimpleNamespace(
+        create_output_parser=lambda: None,
+        terminate_on_live_rate_limit=lambda: False,
+        progress_stall_timeout_seconds=lambda *, timeout_seconds: 1,
+        probe_progress_at=lambda **_: record.started_at,
+        classify_result=lambda **_: ManagedRuntimeExitResult(
+            status="completed",
+            failure_class=None,
+        ),
+    )
+
+    async def _no_op_terminate_on_signal(*, process, trigger):
+        await trigger.wait()
+        return False
+
+    with patch("moonmind.workflows.temporal.runtime.supervisor.get_strategy", return_value=stub_strategy):
+        with patch(
+            "moonmind.workflows.temporal.runtime.supervisor.ManagedRunSupervisor._terminate_on_signal",
+            new=staticmethod(_no_op_terminate_on_signal),
+        ):
+            with patch("moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 1):
+                with patch(
+                    "moonmind.workflows.temporal.runtime.supervisor.NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS",
+                    1,
+                ):
+                    result = await supervisor.supervise(
+                        run_id="run-stall-race",
+                        process=process,
+                        timeout_seconds=30,
+                    )
+
+    assert result.status == "completed"
+    assert result.failure_class is None
+
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, result)
+    assert diagnostics_path is not None
+    diagnostics = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(encoding="utf-8")
+    )
+    annotations = diagnostics.get("annotations", [])
+    assert any(
+        isinstance(annotation, dict)
+        and annotation.get("annotation_type")
+        == "run_completed_before_stalled_progress_termination"
+        for annotation in annotations
+    )
 
 
 @pytest.mark.asyncio
@@ -283,9 +467,9 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
         base_time = datetime.now(tz=UTC)
         if no_output_callback is None:
             return 0, False
-        no_output_callback(base_time + timedelta(seconds=2.5))
-        no_output_callback(base_time + timedelta(seconds=4.9))
-        no_output_callback(base_time + timedelta(seconds=5.0))
+        await no_output_callback(base_time + timedelta(seconds=2.5))
+        await no_output_callback(base_time + timedelta(seconds=4.9))
+        await no_output_callback(base_time + timedelta(seconds=5.0))
         return 0, False
 
     process = await asyncio.create_subprocess_exec(

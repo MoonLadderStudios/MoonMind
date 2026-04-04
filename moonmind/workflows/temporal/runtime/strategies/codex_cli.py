@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ _CODEX_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
     "CODEX_CONFIG_HOME",
     "CODEX_CONFIG_PATH",
 })
+_CODEX_PROGRESS_TIMEOUT_SECONDS = 300
+_CODEX_PROGRESS_MTIME_PADDING_SECONDS = 5.0
 
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
@@ -40,6 +44,14 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
     @property
     def default_command_template(self) -> list[str]:
         return ["codex", "exec"]
+
+    def progress_stall_timeout_seconds(self, *, timeout_seconds: int) -> int | None:
+        """Cap how long a Codex run may stop advancing its session state."""
+
+        normalized_timeout = int(timeout_seconds) if timeout_seconds > 0 else 0
+        if normalized_timeout <= 0:
+            return _CODEX_PROGRESS_TIMEOUT_SECONDS
+        return min(normalized_timeout, _CODEX_PROGRESS_TIMEOUT_SECONDS)
 
     def build_command(
         self,
@@ -132,3 +144,91 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             request=request,
             workspace_path=workspace_path,
         )
+
+    def probe_progress_at(
+        self,
+        *,
+        workspace_path: str | None,
+        run_id: str,
+        started_at: datetime,
+    ) -> datetime | None:
+        """Use Codex session artifacts as the managed-run progress signal."""
+
+        codex_home = self._resolve_codex_home(workspace_path)
+        if codex_home is None:
+            return None
+
+        threshold_ts = started_at.timestamp() - _CODEX_PROGRESS_MTIME_PADDING_SECONDS
+        latest_ts: float | None = None
+        for candidate in self._iter_progress_candidates(
+            codex_home=codex_home,
+            started_at=started_at,
+        ):
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            if stat.st_mtime < threshold_ts:
+                continue
+            if latest_ts is None or stat.st_mtime > latest_ts:
+                latest_ts = stat.st_mtime
+
+        if latest_ts is None:
+            return None
+        return datetime.fromtimestamp(latest_ts, tz=UTC)
+
+    @staticmethod
+    def _iter_progress_candidates(
+        *,
+        codex_home: Path,
+        started_at: datetime,
+    ) -> Iterator[Path]:
+        yield from codex_home.glob("state_*.sqlite")
+        yield from codex_home.glob("logs_*.sqlite")
+
+        sessions_root = codex_home / "sessions"
+        if not sessions_root.is_dir():
+            return
+
+        for session_day_dir in CodexCliStrategy._iter_session_day_dirs(
+            sessions_root=sessions_root,
+            started_at=started_at,
+        ):
+            if not session_day_dir.is_dir():
+                continue
+            yield from session_day_dir.rglob("*.jsonl")
+
+    @staticmethod
+    def _iter_session_day_dirs(
+        *,
+        sessions_root: Path,
+        started_at: datetime,
+    ) -> Iterator[Path]:
+        normalized_started_at = (
+            started_at
+            if started_at.tzinfo is not None
+            else started_at.replace(tzinfo=UTC)
+        )
+        utc_now = datetime.now(tz=UTC)
+        # Codex stores sessions under day-partitioned paths; scanning only the
+        # current/recent partitions avoids re-walking the entire session tree.
+        candidate_days = {
+            normalized_started_at.astimezone(UTC).date(),
+            utc_now.date(),
+            (utc_now - timedelta(days=1)).date(),
+        }
+        for day in sorted(candidate_days):
+            yield sessions_root / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+
+    @staticmethod
+    def _resolve_codex_home(workspace_path: str | None) -> Path | None:
+        normalized = str(workspace_path or "").strip()
+        if not normalized:
+            return None
+
+        resolved_workspace = Path(normalized).resolve()
+        run_root = resolved_workspace.parent
+        codex_home = run_root / ".moonmind" / "codex-home"
+        if not codex_home.is_dir():
+            return None
+        return codex_home
