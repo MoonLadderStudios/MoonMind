@@ -71,6 +71,11 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 MIT — free for personal and commercial use.
 
+**Exception:** The `speckit-*` agent skills under `.agents/skills/` (except
+`speckit-orchestrate`) are licensed under AGPL-3.0, derived from
+[dceoy/speckit-agent-skills](https://github.com/dceoy/speckit-agent-skills).
+See `.agents/skills/LICENSE` for details.
+
 ### UI Development
 
 **Prerequisite:** run `npm install` once to install frontend dependencies.

@@ -1,3 +1,33 @@
+## License Scope Note
+
+The `speckit-*` skills (except `speckit-orchestrate`) in this directory are
+derived from [dceoy/speckit-agent-skills](https://github.com/dceoy/speckit-agent-skills).
+
+This LICENSE file (AGPL-3.0) applies to the following agent skills
+located under `.agents/skills/`:
+
+- continuation-proposal
+- fix-proposal
+- speckit-analyze
+- speckit-baseline
+- speckit-checklist
+- speckit-clarify
+- speckit-constitution
+- speckit-implement
+- speckit-plan
+- speckit-specify
+- speckit-tasks
+- speckit-taskstoissues
+
+**Excluded:** `speckit-orchestrate` is NOT covered by this license.
+It carries its own licensing terms (see the skill's own SKILL.md or
+applicable project-level licensing).
+
+All other skills in the list above are licensed under the GNU Affero
+General Public License v3.0 as described below.
+
+---
+
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 
