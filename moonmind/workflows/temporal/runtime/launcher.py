@@ -892,6 +892,25 @@ class ManagedRuntimeLauncher:
                 env_overrides["HOME"] = "/home/app"
                 env_overrides["USER"] = "app"
                 env_overrides["LOGNAME"] = "app"
+
+                # Ensure Claude Code's config file exists in the app user's HOME.
+                # Without ~/.claude.json, claude CLI prints repeated warnings and
+                # may hang waiting for user interaction even with -p flag.
+                claude_config_dir = Path("/home/app/.claude")
+                claude_config_file = Path("/home/app/.claude.json")
+                try:
+                    claude_config_dir.mkdir(parents=True, exist_ok=True)
+                    if not claude_config_file.exists():
+                        claude_config_file.write_text(
+                            '{"version": 1}\n', encoding="utf-8"
+                        )
+                except OSError:
+                    logger.warning(
+                        "Failed to create Claude config at %s",
+                        claude_config_file,
+                        exc_info=True,
+                    )
+
                 # Use runuser with env= so secrets do not appear in process argv.
                 process = await asyncio.create_subprocess_exec(
                     "runuser", "-u", "app", "--",
