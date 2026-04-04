@@ -7,7 +7,7 @@ import { navigateTo } from "../lib/navigation";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
-const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
+export const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
 const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
 const SKILL_OPTIONS_DATALIST_ID = "queue-skill-options";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
@@ -105,6 +105,11 @@ interface ExecutionCreateResponse {
   namespace?: string;
   redirectPath?: string;
   definitionId?: string;
+}
+
+interface ResponseErrorDetail {
+  code: string | null;
+  message: string;
 }
 
 interface TaskTemplateInputDefinition {
@@ -555,35 +560,43 @@ export function resolveObjectiveInstructions(
   return "";
 }
 
+async function responseErrorDetail(
+  response: Response,
+  fallback: string,
+): Promise<ResponseErrorDetail> {
+  try {
+    const rawText = (await response.text()).trim();
+    if (!rawText) {
+      return { code: null, message: fallback };
+    }
+    try {
+      const payload = JSON.parse(rawText) as {
+        detail?: string | { code?: string; message?: string };
+      };
+      if (typeof payload.detail === "string" && payload.detail.trim()) {
+        return { code: null, message: payload.detail.trim() };
+      }
+      if (payload.detail && typeof payload.detail === "object") {
+        const detailCode = String(payload.detail.code || "").trim() || null;
+        const detailMessage = String(payload.detail.message || "").trim();
+        if (detailMessage) {
+          return { code: detailCode, message: detailMessage };
+        }
+      }
+    } catch {
+      return { code: null, message: rawText };
+    }
+  } catch {
+    return { code: null, message: fallback };
+  }
+  return { code: null, message: fallback };
+}
+
 async function responseErrorMessage(
   response: Response,
   fallback: string,
 ): Promise<string> {
-  try {
-    const rawText = (await response.text()).trim();
-    if (!rawText) {
-      return fallback;
-    }
-    try {
-      const payload = JSON.parse(rawText) as {
-        detail?: string | { message?: string };
-      };
-      if (typeof payload.detail === "string" && payload.detail.trim()) {
-        return payload.detail.trim();
-      }
-      if (payload.detail && typeof payload.detail === "object") {
-        const detailMessage = String(payload.detail.message || "").trim();
-        if (detailMessage) {
-          return detailMessage;
-        }
-      }
-    } catch {
-      return rawText;
-    }
-  } catch {
-    return fallback;
-  }
-  return fallback;
+  return (await responseErrorDetail(response, fallback)).message;
 }
 
 async function createInputArtifact(
@@ -703,11 +716,12 @@ async function createInputArtifact(
 
   const completeUrl = `/api/artifacts/${encodeURIComponent(artifactId)}/complete`;
   let completeError: Error | null = null;
-  for (
-    let attempt = 0;
-    attempt <= ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length;
-    attempt += 1
-  ) {
+  const completeRetryScheduleMs = [0, ...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
+  for (let attempt = 0; attempt < completeRetryScheduleMs.length; attempt += 1) {
+    const delayMs = completeRetryScheduleMs[attempt];
+    if (delayMs > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
     let completeResponse: Response;
     try {
       completeResponse = await fetch(completeUrl, {
@@ -741,20 +755,19 @@ async function createInputArtifact(
       return { artifactId };
     }
 
-    const message = await responseErrorMessage(
+    const detail = await responseErrorDetail(
       completeResponse,
       "Failed to finalize task input artifact upload.",
     );
-    completeError = new Error(message);
+    completeError = new Error(detail.message);
     if (
-      !message.includes(ARTIFACT_COMPLETE_RETRY_MESSAGE) ||
-      attempt === ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length
+      completeResponse.status !== 409 ||
+      detail.code !== "artifact_state_error" ||
+      detail.message !== ARTIFACT_COMPLETE_RETRY_MESSAGE ||
+      attempt === completeRetryScheduleMs.length - 1
     ) {
       throw completeError;
     }
-    await new Promise((resolve) =>
-      window.setTimeout(resolve, ARTIFACT_COMPLETE_RETRY_DELAYS_MS[attempt]),
-    );
   }
 
   throw (

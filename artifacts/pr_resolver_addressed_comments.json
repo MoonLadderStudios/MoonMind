@@ -1,22 +1,42 @@
 [
   {
-    "id": 3034751817,
+    "id": 3034926806,
     "disposition": "addressed",
-    "rationale": "Changed the checklist's feature link from an absolute local path to the repo-relative ../spec.md target."
+    "rationale": "Restricted single-put completion retries to visibility errors only and added a regression test for non-visibility storage failures."
   },
   {
-    "id": 3034751830,
+    "id": 3034926820,
     "disposition": "addressed",
-    "rationale": "Unchecked the technology-agnostic checklist assertions and clarified the notes so the checklist now matches the spec's implementation-detail content."
+    "rationale": "Restructured the frontend completion retries to use an explicit initial-attempt plus retry-schedule loop with valid indexes on every iteration."
   },
   {
-    "id": 4057656070,
-    "disposition": "not-applicable",
-    "rationale": "Informational review summary only; its actionable feedback is already represented by the inline review comments above."
+    "id": 3034926825,
+    "disposition": "addressed",
+    "rationale": "Frontend completion retries now require a 409 response with structured `detail.code` and message instead of matching on plain error text alone."
   },
   {
-    "id": 4057666739,
+    "id": 3034926829,
+    "disposition": "addressed",
+    "rationale": "Backend retry tests now monkeypatch the single-put retry delays to zero so the unit suite stays fast and deterministic."
+  },
+  {
+    "id": 3034926834,
+    "disposition": "addressed",
+    "rationale": "The UI retry test now overrides the retry delay schedule to near-zero values instead of waiting for wall-clock backoff intervals."
+  },
+  {
+    "id": 4057871862,
     "disposition": "not-applicable",
-    "rationale": "Positive review with no requested change."
+    "rationale": "This was an informational PR overview summary, not an actionable review request."
+  },
+  {
+    "id": 3034928185,
+    "disposition": "addressed",
+    "rationale": "The backend now logs `retry pending` only when another retry is actually scheduled."
+  },
+  {
+    "id": 4057873595,
+    "disposition": "not-applicable",
+    "rationale": "This was a summary review comment; the only actionable point in it was captured and addressed in the inline logging comment."
   }
 ]
