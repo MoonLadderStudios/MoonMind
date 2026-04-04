@@ -404,9 +404,19 @@ class TestFetchProfileSnapshots(unittest.TestCase):
         """When provider_profile.list activity returns profiles, they should
         be stored in _profile_snapshots keyed by profile_id."""
         import asyncio
+        from datetime import timedelta
+        from temporalio.common import RetryPolicy
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
+
+        # Provide a mock _execute_kwargs_for_route that returns valid kwargs
+        wf._execute_kwargs_for_route = lambda route: {
+            "task_queue": "mm.activity.artifacts",
+            "start_to_close_timeout": timedelta(seconds=60),
+            "schedule_to_close_timeout": timedelta(seconds=120),
+            "retry_policy": RetryPolicy(maximum_attempts=1),
+        }
 
         async def run_test() -> None:
             async def mock_execute_activity(
@@ -460,9 +470,18 @@ class TestFetchProfileSnapshots(unittest.TestCase):
         """When provider_profile.list activity fails, _fetch_profile_snapshots
         should not raise and should continue with whatever profiles it got."""
         import asyncio
+        from datetime import timedelta
+        from temporalio.common import RetryPolicy
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
+
+        wf._execute_kwargs_for_route = lambda route: {
+            "task_queue": "mm.activity.artifacts",
+            "start_to_close_timeout": timedelta(seconds=60),
+            "schedule_to_close_timeout": timedelta(seconds=120),
+            "retry_policy": RetryPolicy(maximum_attempts=1),
+        }
 
         async def run_test() -> None:
             async def mock_execute_activity(
@@ -496,5 +515,39 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             # codex_cli profiles are missing, but claude_code profiles should be there
             self.assertIn("claude_anthropic_sonnet", wf._profile_snapshots)
             self.assertNotIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
+
+        asyncio.run(run_test())
+
+    def test_fetch_profile_snapshots_empty_result_does_not_set_snapshots(self) -> None:
+        """When all activity calls return empty profiles, _profile_snapshots
+        should NOT be set, so validation is skipped (best-effort behavior)."""
+        import asyncio
+        from datetime import timedelta
+        from temporalio.common import RetryPolicy
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        wf._execute_kwargs_for_route = lambda route: {
+            "task_queue": "mm.activity.artifacts",
+            "start_to_close_timeout": timedelta(seconds=60),
+            "schedule_to_close_timeout": timedelta(seconds=120),
+            "retry_policy": RetryPolicy(maximum_attempts=1),
+        }
+
+        async def run_test() -> None:
+            async def mock_execute_activity(
+                activity_name: str, *args: object, **kwargs: object
+            ) -> object:
+                return {"profiles": []}
+
+            with patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                side_effect=mock_execute_activity,
+            ):
+                await wf._fetch_profile_snapshots()
+
+            # Should NOT be set when no data was fetched
+            self.assertFalse(hasattr(wf, "_profile_snapshots"))
 
         asyncio.run(run_test())
