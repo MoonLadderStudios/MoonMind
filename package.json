@@ -23,6 +23,7 @@
     "ui:test:watch": "vitest --config frontend/vite.config.ts",
     "api:types": "bash tools/run_repo_python.sh tools/generate_openapi_types.py",
     "api:types:check": "npm run api:types && git diff --exit-code -- frontend/src/generated/openapi.ts",
+    "frontend:ci": "npm run ci:test",
     "ci:test": "npm run ui:typecheck && npm run ui:lint && npm run ui:test && npm run ui:build:check"
   },
   "repository": {
