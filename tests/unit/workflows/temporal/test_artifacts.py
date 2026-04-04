@@ -90,12 +90,6 @@ class _MultipartMemoryStore(TemporalArtifactStore):
     def delete(self, storage_key: str) -> None:
         self._objects.pop(storage_key, None)
 
-    def presign_single_upload(
-        self, *, storage_key: str, content_type, expires_in_seconds: int
-    ):
-        _ = content_type, expires_in_seconds
-        return f"https://example.test/upload/{storage_key}", {}
-
     def create_multipart_upload(self, *, storage_key: str, content_type=None) -> str:
         _ = content_type
         upload_id = f"upload-{storage_key}"
@@ -270,6 +264,30 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
                 principal="user-1",
             )
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
+
+
+async def test_create_uses_same_origin_content_endpoint_for_small_s3_uploads(
+    tmp_path: Path,
+) -> None:
+    """Small S3-backed uploads should stay on the API content route."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=_MultipartMemoryStore(),
+                direct_upload_max_bytes=1024,
+            )
+
+            artifact, upload = await service.create(
+                principal="user-1",
+                content_type="text/plain",
+                size_bytes=11,
+            )
+
+            assert upload.mode == "single_put"
+            assert upload.upload_url == f"/api/artifacts/{artifact.artifact_id}/content"
 
 
 async def test_compute_preview_redacts_token_like_pairs(tmp_path: Path) -> None:

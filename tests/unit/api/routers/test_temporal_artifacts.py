@@ -134,7 +134,10 @@ def test_create_artifact_returns_upload_descriptor() -> None:
         assert response.status_code == 201
         body = response.json()
         assert body["artifact_ref"]["artifact_id"] == artifact.artifact_id
-        assert body["upload"]["upload_url"].endswith(f"/{artifact.artifact_id}/content")
+        assert (
+            body["upload"]["upload_url"]
+            == f"http://testserver/api/artifacts/{artifact.artifact_id}/content"
+        )
 
 
 def test_upload_content_maps_validation_to_413() -> None:

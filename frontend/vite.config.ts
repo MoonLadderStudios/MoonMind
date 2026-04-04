@@ -1,8 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
+import { missionControlViteBase } from './src/vite-base';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: missionControlViteBase(command),
   plugins: [react()],
   root: resolve(__dirname, 'src'),
   build: {
@@ -19,4 +21,4 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
   },
-});
+}));
