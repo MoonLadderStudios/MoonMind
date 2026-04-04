@@ -1397,33 +1397,17 @@ class MoonMindRunWorkflow:
             )
 
         agent_kind = self._agent_kind_for_id(agent_id)
-        # Prefer runtime_block profile values (set by the runtime planner)
-        # over top-level node_inputs keys, which may have been corrupted
-        # by AI-generated plan modifications or template injection.
         raw_execution_profile_ref = (
-            runtime_block.get("executionProfileRef")
-            or runtime_block.get("profileId")
-            or runtime_block.get("providerProfile")
-            or node_inputs.get("executionProfileRef")
+            node_inputs.get("executionProfileRef")
             or node_inputs.get("profileId")
             or node_inputs.get("providerProfile")
+            or runtime_block.get("executionProfileRef")
+            or runtime_block.get("profileId")
+            or runtime_block.get("providerProfile")
         )
         execution_profile_ref = None
         if raw_execution_profile_ref is not None:
-            candidate = str(raw_execution_profile_ref).strip() or None
-            # Validate against known profiles when the manager has synced them.
-            # An invalid profile ref here usually means stale plan data or
-            # AI-hallucinated profile IDs — fall back to auto-selection.
-            profile_snapshots = getattr(self, "_profile_snapshots", None)
-            if candidate is not None and profile_snapshots is not None:
-                if candidate not in profile_snapshots:
-                    self._get_logger().warning(
-                        "Plan node execution_profile_ref '%s' is not a known "
-                        "profile for this runtime; falling back to auto-selection.",
-                        candidate,
-                    )
-                    candidate = None
-            execution_profile_ref = candidate
+            execution_profile_ref = str(raw_execution_profile_ref).strip() or None
         wf_info = workflow.info()
         correlation_id = wf_info.workflow_id
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
