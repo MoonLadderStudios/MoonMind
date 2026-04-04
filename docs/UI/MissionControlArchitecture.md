@@ -114,7 +114,7 @@ The canonical local commands are:
 
 `npm run ui:build:check` rebuilds `api_service/static/task_dashboard/dist/` from source and verifies the manifest. `npm run generate` regenerates `frontend/src/generated/openapi.ts`.
 
-The canonical CI drift gate for tracked generated files is `npm run generate:check`, which verifies `frontend/src/generated/openapi.ts` is synchronized with backend schema sources. OpenAPI generation writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
+The canonical CI drift gate for tracked generated files is `npm run contracts:check`, which verifies `frontend/src/generated/openapi.ts` is synchronized with backend schema sources when OpenAPI-affecting files change. OpenAPI generation writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
 
 Representative workflow:
 

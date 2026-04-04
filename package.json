@@ -16,14 +16,14 @@
     "ui:build": "vite build --config frontend/vite.config.ts",
     "ui:build:check": "npm run ui:clean-dist && npm run ui:build && npm run ui:verify-manifest",
     "ui:verify-manifest": "bash tools/run_repo_python.sh tools/verify_vite_manifest.py",
-    "generate:check": "npm run api:types:check",
+    "contracts:check": "npm run api:types:check",
     "ui:typecheck": "tsc --noEmit -p frontend/tsconfig.json",
     "ui:lint": "eslint -c frontend/eslint.config.mjs frontend/src",
     "ui:test": "vitest run --config frontend/vite.config.ts",
     "ui:test:watch": "vitest --config frontend/vite.config.ts",
     "api:types": "bash tools/run_repo_python.sh tools/generate_openapi_types.py",
     "api:types:check": "npm run api:types && git diff --exit-code -- frontend/src/generated/openapi.ts",
-    "ci:test": "npm run ui:typecheck && npm run ui:lint && npm run ui:test && npm run ui:build:check"
+    "frontend:ci": "npm run ui:typecheck && npm run ui:lint && npm run ui:test && npm run ui:build:check"
   },
   "repository": {
     "type": "git",
