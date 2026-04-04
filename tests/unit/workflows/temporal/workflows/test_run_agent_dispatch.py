@@ -244,3 +244,34 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         metadata = request.parameters.get("metadata") or {}
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
+
+    def test_build_agent_execution_request_overrides_stale_selected_skill(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                    "selectedSkill": "pr-resolver",
+                    "runtime": {
+                        "metadata": {
+                            "moonmind": {"selectedSkill": "auto"},
+                        }
+                    },
+                },
+                node_id="node-selected-skill-override",
+                tool_name="codex",
+            )
+
+        metadata = request.parameters.get("metadata") or {}
+        moonmind = metadata.get("moonmind") or {}
+        self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")

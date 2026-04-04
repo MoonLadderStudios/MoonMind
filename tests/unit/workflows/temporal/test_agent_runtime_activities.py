@@ -273,8 +273,33 @@ async def test_fetch_result_forwards_pr_resolver_expected_flag(tmp_path: Path) -
         assert result.failure_class == "user_error"
 
 
+async def test_fetch_result_string_request_defaults_pr_resolver_expected_false(
+    tmp_path: Path,
+) -> None:
+    """T5.4 — string request path must not call mapping-only accessors."""
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="fr-string", status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(return_value=AgentRunResult(summary="ok"))
+
+        result = await activities.agent_runtime_fetch_result("fr-string")
+
+        adapter.fetch_result.assert_awaited_once_with(
+            "fr-string", pr_resolver_expected=False
+        )
+        assert result.summary == "ok"
+
+
 async def test_fetch_result_no_record_returns_empty_typed_model(tmp_path: Path) -> None:
-    """T5.4 — no record in store returns empty AgentRunResult (not None, not dict)."""
+    """T5.5 — no record in store returns empty AgentRunResult (not None, not dict)."""
     store = _make_store(tmp_path)
 
     activities = TemporalAgentRuntimeActivities(run_store=store)
@@ -284,7 +309,7 @@ async def test_fetch_result_no_record_returns_empty_typed_model(tmp_path: Path) 
 
 
 async def test_fetch_result_missing_run_id_raises_error(tmp_path: Path) -> None:
-    """T5.5 — missing run_id raises TemporalActivityRuntimeError."""
+    """T5.6 — missing run_id raises TemporalActivityRuntimeError."""
     store = _make_store(tmp_path)
     activities = TemporalAgentRuntimeActivities(run_store=store)
 

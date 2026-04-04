@@ -1458,7 +1458,7 @@ class MoonMindRunWorkflow:
                 if isinstance(metadata_payload.get("moonmind"), dict)
                 else {}
             )
-            moonmind_payload.setdefault("selectedSkill", selected_skill)
+            moonmind_payload["selectedSkill"] = selected_skill
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
         bundle_payload: dict[str, Any] = {}
