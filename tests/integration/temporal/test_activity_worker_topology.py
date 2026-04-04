@@ -36,7 +36,7 @@ from moonmind.workflows.temporal.activity_runtime import (
 )
 from moonmind.workflows.temporal.workers import build_worker_activity_bindings
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @asynccontextmanager

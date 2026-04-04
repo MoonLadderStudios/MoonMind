@@ -16,7 +16,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @asynccontextmanager
