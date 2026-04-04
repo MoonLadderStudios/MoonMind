@@ -104,17 +104,17 @@ jobs:
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           base_sha="${{ github.event.pull_request.base.sha }}"
           head_sha="${{ github.event.pull_request.head.sha }}"
+          changed_files="$(git diff --name-only "$base_sha...$head_sha")"
         elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
           base_sha="${{ github.event.before }}"
           head_sha="${{ github.sha }}"
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
         else
           echo "run_check=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
-
-        if printf '%s\n' "$changed_files" | grep -Eq '^(api_service/|moonmind/|tools/(export_openapi\.py|generate_openapi_types\.py)|frontend/src/generated/openapi\.ts|pyproject\.toml|uv\.lock$)'; then
+        if printf '%s\n' "$changed_files" | grep -Eq '^(api_service/|moonmind/|tools/(export_openapi\.py|generate_openapi_types\.py|run_repo_python\.sh)|frontend/src/generated/openapi\.ts|package(-lock)?\.json|pyproject\.toml|uv\.lock)$'; then
           echo "run_check=true" >> "$GITHUB_OUTPUT"
         else
           echo "run_check=false" >> "$GITHUB_OUTPUT"
