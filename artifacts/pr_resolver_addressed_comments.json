@@ -1,22 +1,52 @@
 [
   {
-    "id": 3034176610,
+    "id": 3034477058,
     "disposition": "addressed",
-    "rationale": "Fixed _client_with_mock_service to override _get_temporal_service with a lambda returning the actual mock_service instance instead of a fresh AsyncMock. Removed unused _build_mock_temporal_service function."
+    "rationale": "Changed title derivation to use objectiveInstructions (already trimmed) instead of raw templateFeatureRequest, eliminating the leading-newline split bug."
   },
   {
-    "id": 3034173336,
+    "id": 3034477068,
     "disposition": "addressed",
-    "rationale": "Refactored _client_with_mock_service to accept optional monkeypatch parameter and use monkeypatch.setenv for environment variable management when available, making tests cleaner and more idiomatic to pytest."
+    "rationale": "Added resolvedTool/resolvedSkill objects that reflect effectiveSkillId when a template slug is used, keeping tool.name and skill.id in sync with the skills array."
   },
   {
-    "id": 4057082355,
+    "id": 4057383456,
     "disposition": "not-applicable",
-    "rationale": "Informational review summary from Gemini, no specific action required beyond the addressed review comment."
+    "rationale": "Informational Gemini review summary; no action needed."
   },
   {
-    "id": 4057086102,
+    "id": 4057390137,
     "disposition": "not-applicable",
-    "rationale": "Informational review summary from Copilot, no specific action required beyond the addressed review comment."
+    "rationale": "Boilerplate Codex review summary; no action needed."
+  },
+  {
+    "id": 3034482704,
+    "disposition": "addressed",
+    "rationale": "tool.name and skill.id now reflect effectiveSkillId (template slug) when no explicit skill is selected, so the persisted submission carries the preset slug."
+  },
+  {
+    "id": 3034482711,
+    "disposition": "addressed",
+    "rationale": "Derived title is now clamped to 150 chars (matching backend _MAX_TASK_TITLE_LENGTH) with ellipsis truncation."
+  },
+  {
+    "id": 3034495920,
+    "disposition": "addressed",
+    "rationale": "Title is now derived from objectiveInstructions (the same resolved objective text submitted to the backend) instead of only templateFeatureRequest."
+  },
+  {
+    "id": 3034495938,
+    "disposition": "addressed",
+    "rationale": "Derived title is clamped to 150 chars, matching backend storage constraints."
+  },
+  {
+    "id": 3034495957,
+    "disposition": "addressed",
+    "rationale": "Added assertions in the preset-submit test for skills array, derived title, tool.name, and skill.id."
+  },
+  {
+    "id": 4057404718,
+    "disposition": "not-applicable",
+    "rationale": "Informational Copilot PR overview summary; no action needed."
   }
 ]

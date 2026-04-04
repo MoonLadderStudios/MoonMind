@@ -667,6 +667,13 @@ describe('Task Create Entrypoint', () => {
     const executionCall = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions').at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request.payload.task.instructions).toBe('Task Create');
+    // Address: Copilot r3034495957 — assert skills and derived title in preset-submit.
+    // The first template step has an explicit skill (speckit-clarify), so effectiveSkillId
+    // stays as that explicit skill rather than the template slug.
+    expect(request.payload.task.skills).toEqual(['speckit-clarify']);
+    expect(request.payload.task.title).toBe('Task Create');
+    expect(request.payload.task.tool.name).toBe('speckit-clarify');
+    expect(request.payload.task.skill.id).toBe('speckit-clarify');
     expect(request.payload.task.steps).toEqual([
       {
         id: 'tpl:speckit-demo:1.2.3:01',
