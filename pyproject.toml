@@ -89,6 +89,10 @@ extend-ignore = ["E402", "E722", "F841"]
 [tool.pytest.ini_options]
 markers = [
     "integration: marks integration tests that exercise workflows.",
+    "integration_ci: Hermetic integration tests (Docker Compose-backed, no external credentials).",
+    "provider_verification: Tests requiring real third-party provider credentials.",
+    "jules: Jules-related tests.",
+    "requires_credentials: Tests requiring external service credentials.",
 ]
 
 [tool.pre-commit]
