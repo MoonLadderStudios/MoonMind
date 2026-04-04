@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from moonmind.workflows.temporal.runtime.strategies.base import (
@@ -63,6 +65,21 @@ class TestConcreteDefaults:
         parser = s.create_output_parser()
         from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser
         assert isinstance(parser, PlainTextOutputParser)
+
+    def test_default_progress_stall_timeout_is_disabled(self) -> None:
+        s = self._MinimalStrategy()
+        assert s.progress_stall_timeout_seconds(timeout_seconds=600) is None
+
+    def test_default_progress_probe_returns_none(self) -> None:
+        s = self._MinimalStrategy()
+        assert (
+            s.probe_progress_at(
+                workspace_path="/tmp/workspace",
+                run_id="run-1",
+                started_at=datetime.now(tz=UTC),
+            )
+            is None
+        )
 
     @pytest.mark.parametrize(
         ("failure_class", "expected"),
