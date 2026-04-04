@@ -12,7 +12,11 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
 import { renderWithClient } from "../utils/test-utils";
-import { resolveObjectiveInstructions, TaskCreatePage } from "./task-create";
+import {
+  ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
+  resolveObjectiveInstructions,
+  TaskCreatePage,
+} from "./task-create";
 
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
@@ -724,6 +728,128 @@ describe("Task Create Entrypoint", () => {
     expect(completeIndex).toBeGreaterThan(presignedUploadIndex);
     expect(executionIndex).toBeGreaterThan(completeIndex);
   });
+
+  it(
+    "retries transient artifact completion conflicts before creating the task",
+    async () => {
+      let completeAttempts = 0;
+      const originalRetryDelays = [...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
+
+      try {
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+          0,
+          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+          1,
+          1,
+          1,
+          1,
+          1,
+        );
+        fetchSpy.mockImplementation(
+          (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            if (url.includes("/api/v1/provider-profiles")) {
+              return Promise.resolve({
+                ok: true,
+                json: async () => [],
+              } as Response);
+            }
+            if (url === "/api/artifacts") {
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({
+                  artifact_ref: {
+                    artifact_id: "art-001",
+                  },
+                  upload: {
+                    mode: "single_put",
+                    upload_url: "/api/artifacts/art-001/content",
+                    expires_at: "2026-04-02T00:00:00Z",
+                    max_size_bytes: 100000,
+                    required_headers: {},
+                  },
+                }),
+              } as Response);
+            }
+            if (url === "/api/artifacts/art-001/content") {
+              return Promise.resolve({
+                ok: true,
+                text: async () => "",
+              } as Response);
+            }
+            if (url === "/api/artifacts/art-001/complete") {
+              completeAttempts += 1;
+              if (completeAttempts < 5) {
+                return Promise.resolve({
+                  ok: false,
+                  status: 409,
+                  text: async () =>
+                    JSON.stringify({
+                      detail: {
+                        code: "artifact_state_error",
+                        message: "artifact upload is not complete",
+                      },
+                    }),
+                } as Response);
+              }
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({ artifact_id: "art-001" }),
+              } as Response);
+            }
+            if (url === "/api/artifacts/art-001/links") {
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({ artifact_id: "art-001" }),
+              } as Response);
+            }
+            if (url === "/api/executions") {
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({
+                  workflowId: "mm:workflow-123",
+                  runId: "run-123",
+                  namespace: "moonmind",
+                  redirectPath: "/tasks/mm:workflow-123?source=temporal",
+                }),
+              } as Response);
+            }
+            return Promise.resolve({
+              ok: false,
+              status: 404,
+              statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
+              text: async () => "Unhandled fetch",
+            } as Response);
+          },
+        );
+
+        renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+        fireEvent.change(await screen.findByLabelText("Instructions"), {
+          target: { value: "Large instructions ".repeat(1000) },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+        await waitFor(
+          () => {
+            expect(completeAttempts).toBe(5);
+            expect(fetchSpy).toHaveBeenCalledWith(
+              "/api/executions",
+              expect.objectContaining({ method: "POST" }),
+            );
+          },
+          { timeout: 9000 },
+        );
+      } finally {
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+          0,
+          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+          ...originalRetryDelays,
+        );
+      }
+    },
+    10000,
+  );
 
   it("uploads oversized step instructions as a JSON artifact and strips inline step text", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
