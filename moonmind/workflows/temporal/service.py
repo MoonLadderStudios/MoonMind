@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import inspect
 import json
 from collections.abc import Mapping
-from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -26,6 +26,7 @@ from api_service.db.models import (
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
+    TemporalExecutionDependency,
     TemporalExecutionOwnerType,
     TemporalExecutionProjectionSourceMode,
     TemporalExecutionProjectionSyncState,
@@ -41,6 +42,7 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
+    DependencyResolvedSignalPayload,
     TASK_RUN_ID_MEMO_KEYS,
     TASK_RUN_ID_PARAM_KEYS,
     TASK_RUN_ID_SEARCH_ATTR_KEYS,
@@ -165,6 +167,18 @@ class TemporalExecutionListResult:
     count: int
 
 
+@dataclass(slots=True)
+class ExecutionDependencySummary:
+    """Compact execution metadata for dependency UI and reconciliation."""
+
+    workflow_id: str
+    title: str | None
+    summary: str | None
+    state: str | None
+    close_status: str | None
+    workflow_type: str | None
+
+
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
 
@@ -225,48 +239,58 @@ class TemporalExecutionService:
         return await self._client_adapter.send_batch_resume_signal()
 
     async def _validate_dependencies(
-        self, depends_on: list[str], new_workflow_id: str
-    ) -> None:
+        self,
+        *,
+        depends_on: list[str],
+        new_workflow_id: str,
+        owner_id: str | None,
+        owner_type: TemporalExecutionOwnerType,
+    ) -> list[str]:
         if len(depends_on) > 10:
             raise TemporalExecutionValidationError(
                 "dependsOn can have a maximum of 10 items."
             )
 
-        if new_workflow_id in depends_on:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for dependency_id in depends_on:
+            canonical = str(dependency_id or "").strip()
+            if not canonical or canonical in seen:
+                continue
+            seen.add(canonical)
+            normalized.append(canonical)
+
+        if new_workflow_id in normalized:
             raise TemporalExecutionValidationError(
                 f"Workflow cannot depend on itself: {new_workflow_id}"
             )
 
-        visited: set[str] = set()
-        queue: deque[tuple[str, int]] = deque([(dep_id, 1) for dep_id in depends_on])
-        total_nodes_checked = 0
-
-        while queue:
-            current_id, depth = queue.popleft()
-
-            if current_id in visited:
-                continue
-
-            visited.add(current_id)
-            total_nodes_checked += 1
-
-            if total_nodes_checked > 50:
+        for dependency_id in normalized:
+            if not dependency_id.startswith("mm:"):
+                if await self._dependency_identifier_is_run_id(dependency_id):
+                    raise TemporalExecutionValidationError(
+                        f"Dependency {dependency_id} must use workflowId, not runId."
+                    )
                 raise TemporalExecutionValidationError(
-                    "Dependency graph too large (exceeded 50 nodes)."
+                    f"Dependency {dependency_id} must be a workflowId."
                 )
 
-            if depth > 10:
+        dependency_records = await self._load_dependency_targets(normalized)
+        record_by_id = {record.workflow_id: record for record in dependency_records}
+        for dependency_id in normalized:
+            record = record_by_id.get(dependency_id)
+            if record is None:
                 raise TemporalExecutionValidationError(
-                    "Dependency graph too deep (exceeded depth 10)."
+                    f"Dependency not found: {dependency_id}"
                 )
-
-            try:
-                record = await self.describe_execution(current_id)
-            except TemporalExecutionNotFoundError:
+            if not self._can_reference_dependency_target(
+                record,
+                owner_id=owner_id,
+                owner_type=owner_type,
+            ):
                 raise TemporalExecutionValidationError(
-                    f"Dependency not found: {current_id}"
+                    f"Dependency unauthorized: {dependency_id}"
                 )
-
             if getattr(record, "workflow_type", None) is not TemporalWorkflowType.RUN:
                 wf_type_value = getattr(
                     getattr(record, "workflow_type", None),
@@ -274,19 +298,126 @@ class TemporalExecutionService:
                     getattr(record, "workflow_type", "unknown"),
                 )
                 raise TemporalExecutionValidationError(
-                    f"Dependency {current_id} is a {wf_type_value} workflow, not a MoonMind.Run workflow."
+                    f"Dependency {dependency_id} is a {wf_type_value} workflow, not a MoonMind.Run workflow."
                 )
+        return normalized
 
-            params = getattr(record, "parameters", {}) or {}
-            task_params = params.get("task", {}) or {}
-            transitive_deps = task_params.get("dependsOn", [])
+    async def _dependency_identifier_is_run_id(self, identifier: str) -> bool:
+        stmt = select(TemporalExecutionCanonicalRecord.workflow_id).where(
+            TemporalExecutionCanonicalRecord.run_id == identifier
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none() is not None
 
-            if isinstance(transitive_deps, list):
-                for td in transitive_deps:
-                    if isinstance(td, str):
-                        td_clean = td.strip()
-                        if td_clean:
-                            queue.append((td_clean, depth + 1))
+    async def _load_dependency_targets(
+        self, workflow_ids: list[str]
+    ) -> list[TemporalExecutionCanonicalRecord]:
+        if not workflow_ids:
+            return []
+        stmt = select(TemporalExecutionCanonicalRecord).where(
+            TemporalExecutionCanonicalRecord.workflow_id.in_(workflow_ids)
+        )
+        return await self._scalars_all(stmt)
+
+    def _can_reference_dependency_target(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        owner_id: str | None,
+        owner_type: TemporalExecutionOwnerType,
+    ) -> bool:
+        if record.owner_type is not owner_type:
+            return False
+        if owner_type is TemporalExecutionOwnerType.SYSTEM:
+            return True
+        return (record.owner_id or None) == owner_id
+
+    async def _write_dependency_edges(
+        self,
+        *,
+        dependent_workflow_id: str,
+        prerequisite_workflow_ids: list[str],
+    ) -> None:
+        for ordinal, prerequisite_workflow_id in enumerate(
+            prerequisite_workflow_ids, start=1
+        ):
+            self._session.add(
+                TemporalExecutionDependency(
+                    dependent_workflow_id=dependent_workflow_id,
+                    prerequisite_workflow_id=prerequisite_workflow_id,
+                    ordinal=ordinal,
+                )
+            )
+
+    async def list_prerequisites(
+        self, dependent_workflow_id: str
+    ) -> list[TemporalExecutionDependency]:
+        stmt = (
+            select(TemporalExecutionDependency)
+            .where(
+                TemporalExecutionDependency.dependent_workflow_id
+                == dependent_workflow_id
+            )
+            .order_by(TemporalExecutionDependency.ordinal.asc())
+        )
+        return await self._scalars_all(stmt)
+
+    async def list_dependents(
+        self, prerequisite_workflow_id: str
+    ) -> list[TemporalExecutionDependency]:
+        stmt = (
+            select(TemporalExecutionDependency)
+            .where(
+                TemporalExecutionDependency.prerequisite_workflow_id
+                == prerequisite_workflow_id
+            )
+            .order_by(
+                TemporalExecutionDependency.created_at.asc(),
+                TemporalExecutionDependency.dependent_workflow_id.asc(),
+            )
+        )
+        return await self._scalars_all(stmt)
+
+    async def _scalars_all(self, stmt: Select[Any]) -> list[Any]:
+        result = await self._session.execute(stmt)
+        scalars = result.scalars()
+        if inspect.isawaitable(scalars):
+            scalars = await scalars
+        rows = scalars.all()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        return list(rows)
+
+    async def get_dependency_status_snapshot(
+        self, workflow_ids: list[str]
+    ) -> dict[str, ExecutionDependencySummary]:
+        if not workflow_ids:
+            return {}
+        records = await self._load_dependency_targets(workflow_ids)
+        return {
+            record.workflow_id: ExecutionDependencySummary(
+                workflow_id=record.workflow_id,
+                title=str((record.memo or {}).get("title") or "").strip() or None,
+                summary=str((record.memo or {}).get("summary") or "").strip() or None,
+                state=getattr(getattr(record, "state", None), "value", record.state),
+                close_status=getattr(
+                    getattr(record, "close_status", None),
+                    "value",
+                    record.close_status,
+                ),
+                workflow_type=getattr(
+                    getattr(record, "workflow_type", None),
+                    "value",
+                    record.workflow_type,
+                ),
+            )
+            for record in records
+        }
+
+    async def enrich_dependency_summaries(
+        self, workflow_ids: list[str]
+    ) -> list[ExecutionDependencySummary]:
+        snapshot = await self.get_dependency_status_snapshot(workflow_ids)
+        return [snapshot[workflow_id] for workflow_id in workflow_ids if workflow_id in snapshot]
 
     async def _validate_readable_temporal_artifact_ref(
         self,
@@ -365,11 +496,17 @@ class TemporalExecutionService:
         now = _utc_now()
         workflow_id = f"mm:{uuid4()}"
         run_id = str(uuid4())
+        normalized_depends_on: list[str] = []
 
         if workflow_type_enum is TemporalWorkflowType.RUN:
             depends_on = (initial_parameters or {}).get("task", {}).get("dependsOn")
             if isinstance(depends_on, list) and depends_on:
-                await self._validate_dependencies(depends_on, workflow_id)
+                normalized_depends_on = await self._validate_dependencies(
+                    depends_on=depends_on,
+                    new_workflow_id=workflow_id,
+                    owner_id=owner,
+                    owner_type=owner_type_enum,
+                )
 
         if (
             failure_policy is not None
@@ -393,6 +530,14 @@ class TemporalExecutionService:
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
+        if normalized_depends_on:
+            task_params = (
+                dict(params.get("task", {}))
+                if isinstance(params.get("task"), dict)
+                else {}
+            )
+            task_params["dependsOn"] = normalized_depends_on
+            params["task"] = task_params
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
@@ -463,6 +608,11 @@ class TemporalExecutionService:
             closed_at=None,
         )
         self._session.add(record)
+        if normalized_depends_on:
+            await self._write_dependency_edges(
+                dependent_workflow_id=workflow_id,
+                prerequisite_workflow_ids=normalized_depends_on,
+            )
         if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
             initialize_manifest_projection(record)
         try:
@@ -1357,6 +1507,7 @@ class TemporalExecutionService:
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
+        await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
 
     async def mark_execution_succeeded(
@@ -1378,6 +1529,7 @@ class TemporalExecutionService:
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
+        await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
 
     async def mark_execution_planning(
@@ -1518,6 +1670,7 @@ class TemporalExecutionService:
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
+        await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
 
     async def mark_projection_stale(
@@ -1835,6 +1988,60 @@ class TemporalExecutionService:
         else:
             memo.pop("external_url", None)
         record.memo = memo
+
+    def _dependency_failure_category(
+        self, record: TemporalExecutionCanonicalRecord
+    ) -> str | None:
+        if record.state is MoonMindWorkflowState.COMPLETED:
+            return None
+        error_category = str((record.memo or {}).get("error_category") or "").strip()
+        if error_category:
+            return error_category
+        if record.close_status is TemporalExecutionCloseStatus.CANCELED:
+            return "dependency_canceled"
+        if record.close_status is TemporalExecutionCloseStatus.TERMINATED:
+            return "dependency_terminated"
+        if record.close_status is TemporalExecutionCloseStatus.TIMED_OUT:
+            return "dependency_timed_out"
+        if record.close_status is TemporalExecutionCloseStatus.FAILED:
+            return "dependency_failed"
+        return "dependency_failed"
+
+    def _build_dependency_resolved_signal(
+        self, record: TemporalExecutionCanonicalRecord
+    ) -> dict[str, Any]:
+        payload = DependencyResolvedSignalPayload(
+            prerequisiteWorkflowId=record.workflow_id,
+            terminalState=record.state.value,
+            closeStatus=record.close_status.value if record.close_status else None,
+            resolvedAt=record.closed_at or record.updated_at or _utc_now(),
+            failureCategory=self._dependency_failure_category(record),
+            message=str((record.memo or {}).get("summary") or "").strip() or None,
+        )
+        return payload.model_dump(by_alias=True, mode="json")
+
+    async def _fan_out_dependency_resolution(
+        self, record: TemporalExecutionCanonicalRecord
+    ) -> None:
+        dependent_edges = await self.list_dependents(record.workflow_id)
+        if not dependent_edges:
+            return
+
+        payload = self._build_dependency_resolved_signal(record)
+        for edge in dependent_edges:
+            try:
+                await self._client_adapter.signal_workflow(
+                    edge.dependent_workflow_id,
+                    "DependencyResolved",
+                    payload,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "DependencyResolved fan-out failed for dependent %s from prerequisite %s: %s",
+                    edge.dependent_workflow_id,
+                    record.workflow_id,
+                    exc,
+                )
 
     def _append_intervention_audit(
         self,

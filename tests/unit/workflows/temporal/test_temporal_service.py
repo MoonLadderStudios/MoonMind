@@ -333,7 +333,7 @@ async def test_create_execution_rejects_missing_dependency(tmp_path):
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="Dependency not found: non-existent",
+            match="Dependency not found: mm:non-existent",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.Run",
@@ -343,28 +343,34 @@ async def test_create_execution_rejects_missing_dependency(tmp_path):
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": ["non-existent"]}},
+                initial_parameters={"task": {"dependsOn": ["mm:non-existent"]}},
                 idempotency_key=None,
             )
 
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_non_run_dependency(tmp_path):
-    from unittest.mock import AsyncMock, MagicMock
-    from api_service.db.models import TemporalWorkflowType
-
+async def test_create_execution_rejects_dependency_run_id_identifier(
+    tmp_path, mock_client_adapter
+):
     async with temporal_db(tmp_path) as session:
-        service = TemporalExecutionService(session)
         owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
-        # Mock describe_execution to return a non-run record
-        mock_record = MagicMock()
-        mock_record.workflow_type = TemporalWorkflowType.MANIFEST_INGEST
-        service.describe_execution = AsyncMock(return_value=mock_record)
+        existing = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Existing dependency",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match=f"Dependency fake-id is a MoonMind.ManifestIngest workflow, not a MoonMind.Run workflow",
+            match=f"Dependency {existing.run_id} must use workflowId, not runId.",
         ):
             await service.create_execution(
                 workflow_type="MoonMind.Run",
@@ -374,88 +380,151 @@ async def test_create_execution_rejects_non_run_dependency(tmp_path):
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": ["fake-id"]}},
+                initial_parameters={"task": {"dependsOn": [existing.run_id]}},
                 idempotency_key=None,
             )
 
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_dependency_graph_too_deep(tmp_path):
-    from unittest.mock import AsyncMock, MagicMock
-    from api_service.db.models import TemporalWorkflowType
-
+async def test_create_execution_rejects_non_run_dependency(tmp_path):
     async with temporal_db(tmp_path) as session:
-        service = TemporalExecutionService(session)
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        owner_id = uuid4()
 
-        async def mock_describe(execution_id: str):
-            mock_record = MagicMock()
-            mock_record.workflow_type = TemporalWorkflowType.RUN
-            try:
-                num = int(execution_id.split("-")[1])
-                mock_record.parameters = {"task": {"dependsOn": [f"node-{num + 1}"]}}
-            except Exception:
-                mock_record.parameters = {}
-            return mock_record
-
-        service.describe_execution = AsyncMock(side_effect=mock_describe)
+        manifest = await service.create_execution(
+            workflow_type="MoonMind.ManifestIngest",
+            owner_id=owner_id,
+            title="Manifest dependency",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref="artifact://manifest/1",
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
 
         with pytest.raises(
             TemporalExecutionValidationError,
-            match="Dependency graph too deep \\(exceeded depth 10\\)",
+            match=(
+                f"Dependency {manifest.workflow_id} is a MoonMind.ManifestIngest "
+                "workflow, not a MoonMind.Run workflow."
+            ),
         ):
             await service.create_execution(
                 workflow_type="MoonMind.Run",
-                owner_id=uuid4(),
+                owner_id=owner_id,
                 title=None,
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={"task": {"dependsOn": ["node-1"]}},
+                initial_parameters={"task": {"dependsOn": [manifest.workflow_id]}},
                 idempotency_key=None,
             )
 
 
 @pytest.mark.asyncio
-async def test_create_execution_rejects_dependency_graph_too_large(tmp_path):
-    from unittest.mock import AsyncMock, MagicMock
-    from api_service.db.models import TemporalWorkflowType
-
+async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
-        service = TemporalExecutionService(session)
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        foreign_owner = uuid4()
+        current_owner = uuid4()
 
-        async def mock_describe(execution_id: str):
-            mock_record = MagicMock()
-            mock_record.workflow_type = TemporalWorkflowType.RUN
-            try:
-                num = int(execution_id.split("-")[1])
-                # Each node branches into 10 next nodes to quickly exceed 50
-                mock_record.parameters = {
-                    "task": {
-                        "dependsOn": [f"node-{num * 10 + i}" for i in range(1, 11)]
-                    }
+        foreign = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=foreign_owner,
+            title="Foreign dependency",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match=f"Dependency unauthorized: {foreign.workflow_id}",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=current_owner,
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": [foreign.workflow_id]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_persists_dependency_edges_and_supports_lookups(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        dep1 = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependency 1",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        dep2 = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependency 2",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        dependent = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "dependsOn": [dep1.workflow_id, dep2.workflow_id, dep1.workflow_id]
                 }
-            except Exception:
-                mock_record.parameters = {}
-            return mock_record
+            },
+            idempotency_key=None,
+        )
 
-        service.describe_execution = AsyncMock(side_effect=mock_describe)
+        source = await session.get(TemporalExecutionCanonicalRecord, dependent.workflow_id)
+        assert source is not None
+        assert source.parameters["task"]["dependsOn"] == [dep1.workflow_id, dep2.workflow_id]
 
-        with pytest.raises(
-            TemporalExecutionValidationError,
-            match="Dependency graph too large \\(exceeded 50 nodes\\)",
-        ):
-            await service.create_execution(
-                workflow_type="MoonMind.Run",
-                owner_id=uuid4(),
-                title=None,
-                input_artifact_ref=None,
-                plan_artifact_ref=None,
-                manifest_artifact_ref=None,
-                failure_policy=None,
-                initial_parameters={"task": {"dependsOn": ["node-1"]}},
-                idempotency_key=None,
-            )
+        prerequisites = await service.list_prerequisites(dependent.workflow_id)
+        assert [edge.prerequisite_workflow_id for edge in prerequisites] == [
+            dep1.workflow_id,
+            dep2.workflow_id,
+        ]
+        assert [edge.ordinal for edge in prerequisites] == [1, 2]
+
+        dependents = await service.list_dependents(dep1.workflow_id)
+        assert [edge.dependent_workflow_id for edge in dependents] == [dependent.workflow_id]
+
+        snapshot = await service.get_dependency_status_snapshot(
+            [dep1.workflow_id, dep2.workflow_id]
+        )
+        assert snapshot[dep1.workflow_id].title == "Dependency 1"
+        assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.Run"
 
 
 @pytest.mark.asyncio
@@ -472,7 +541,129 @@ async def test_validate_dependencies_rejects_self_dependency(tmp_path):
             await service._validate_dependencies(
                 depends_on=[self_id],
                 new_workflow_id=self_id,
+                owner_id=str(uuid4()),
+                owner_type=TemporalExecutionOwnerType.USER,
             )
+
+
+@pytest.mark.asyncio
+async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        prerequisite = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Prerequisite",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        dependent_one = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent one",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            idempotency_key=None,
+        )
+        dependent_two = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent two",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            idempotency_key=None,
+        )
+
+        mock_client_adapter.signal_workflow.reset_mock()
+        await service.mark_execution_succeeded(
+            workflow_id=prerequisite.workflow_id,
+            summary="Prerequisite completed.",
+        )
+
+        assert mock_client_adapter.signal_workflow.await_count == 2
+        called_ids = {
+            call.args[0] for call in mock_client_adapter.signal_workflow.await_args_list
+        }
+        assert called_ids == {dependent_one.workflow_id, dependent_two.workflow_id}
+        payload = mock_client_adapter.signal_workflow.await_args_list[0].args[2]
+        assert payload["prerequisiteWorkflowId"] == prerequisite.workflow_id
+        assert payload["terminalState"] == "completed"
+        assert payload["closeStatus"] == "completed"
+        assert payload["failureCategory"] is None
+
+
+@pytest.mark.asyncio
+async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client_adapter):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        prerequisite = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Prerequisite",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        dependent_one = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent one",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            idempotency_key=None,
+        )
+        dependent_two = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent two",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            idempotency_key=None,
+        )
+
+        mock_client_adapter.signal_workflow.reset_mock()
+        mock_client_adapter.signal_workflow.side_effect = [
+            RuntimeError("already closed"),
+            None,
+        ]
+
+        failed = await service.mark_execution_failed(
+            workflow_id=prerequisite.workflow_id,
+            error_category="execution_error",
+            message="boom",
+        )
+
+        assert failed.state is MoonMindWorkflowState.FAILED
+        assert mock_client_adapter.signal_workflow.await_count == 2
+        called_ids = {
+            call.args[0] for call in mock_client_adapter.signal_workflow.await_args_list
+        }
+        assert called_ids == {dependent_one.workflow_id, dependent_two.workflow_id}
 
 
 @pytest.mark.asyncio

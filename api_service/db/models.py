@@ -977,6 +977,42 @@ class TemporalExecutionCanonicalRecord(Base):
     )
 
 
+class TemporalExecutionDependency(Base):
+    """Durable direct dependency edge between top-level executions."""
+
+    __tablename__ = "execution_dependencies"
+    __table_args__ = (
+        UniqueConstraint(
+            "dependent_workflow_id",
+            "prerequisite_workflow_id",
+            name="uq_execution_dependencies_edge",
+        ),
+        Index(
+            "ix_execution_dependencies_dependent_workflow_id",
+            "dependent_workflow_id",
+        ),
+        Index(
+            "ix_execution_dependencies_prerequisite_workflow_id",
+            "prerequisite_workflow_id",
+        ),
+    )
+
+    dependent_workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    prerequisite_workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class TemporalExecutionRecord(Base):
     """Temporal execution projection used for lifecycle APIs and filtering."""
 
