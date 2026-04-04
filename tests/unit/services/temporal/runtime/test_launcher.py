@@ -1483,17 +1483,45 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     )
 
     chown_calls: list[tuple[object, ...]] = []
+    config_creation_calls: list[tuple[object, ...]] = []
 
     async def _fake_run_checked_command(self, *cmd, **kw):
         # Capture chown calls so we can verify the workspace ownership transfer
         if cmd[:2] == ("chown", "-R"):
             chown_calls.append(cmd)
+        # Capture config creation runuser calls
+        if cmd[:3] == ("runuser", "-u", "app") and "python3" in cmd:
+            config_creation_calls.append(cmd)
         return None
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
         _fake_run_checked_command,
     )
+
+    # Mock Path.exists to simulate the config file not existing initially
+    original_exists = Path.exists
+
+    def _mock_exists(self):
+        path_str = str(self)
+        # Simulate .claude.json doesn't exist so config creation is triggered
+        if path_str == "/home/app/.claude.json":
+            return False
+        # For is_file() checks after creation, simulate success
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _mock_exists)
+
+    # Mock Path.is_file to simulate successful creation
+    original_is_file = Path.is_file
+
+    def _mock_is_file(self):
+        path_str = str(self)
+        if path_str == "/home/app/.claude.json":
+            return True  # Pretend it was created successfully
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", _mock_is_file)
 
     # Simulate running as root (euid == 0)
     monkeypatch.setattr(os, "geteuid", lambda: 0)
@@ -1529,12 +1557,22 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert "app:app" in chown_call
     assert str(run_root) in chown_call
 
-    # Verify runuser was used instead of direct subprocess exec
-    runuser_call = next(
-        (args for args, _ in captured_calls if args[0] == "runuser"),
-        None
+    # Verify config creation was attempted via runuser
+    assert len(config_creation_calls) == 1, (
+        f"Expected 1 config creation call, got {len(config_creation_calls)}"
     )
-    assert runuser_call is not None, "runuser was not used for privilege dropping"
+    config_call_str = " ".join(str(arg) for arg in config_creation_calls[0])
+    assert "python3" in config_call_str
+    assert "pathlib" in config_call_str
+
+    # Verify runuser was used instead of direct subprocess exec
+    # Filter to find the final launch runuser (not the config creation one)
+    launch_runuser_calls = [
+        args for args, _ in captured_calls
+        if args[0] == "runuser" and "python3" not in args
+    ]
+    assert len(launch_runuser_calls) > 0, "runuser was not used for launching claude"
+    runuser_call = launch_runuser_calls[0]
     assert runuser_call[1:4] == ("-u", "app", "--"), f"Unexpected runuser args: {runuser_call[1:4]}"
 
     runuser_kwargs = next(
@@ -1592,6 +1630,28 @@ async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp
         "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
         _fake_run_checked_command,
     )
+
+    # Mock Path.exists to simulate the config file not existing initially
+    original_exists = Path.exists
+
+    def _mock_exists(self):
+        path_str = str(self)
+        if path_str == "/home/app/.claude.json":
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _mock_exists)
+
+    # Mock Path.is_file to simulate successful creation
+    original_is_file = Path.is_file
+
+    def _mock_is_file(self):
+        path_str = str(self)
+        if path_str == "/home/app/.claude.json":
+            return True
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", _mock_is_file)
 
     monkeypatch.setattr(os, "geteuid", lambda: 0)
 
