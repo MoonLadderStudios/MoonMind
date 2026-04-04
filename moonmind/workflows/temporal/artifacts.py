@@ -2276,9 +2276,6 @@ class TemporalArtifactActivities:
                     "provider_label": row.provider_label,
                     "tags": row.tags or [],
                     "priority": row.priority,
-                    "auth_mode": "oauth"
-                    if row.credential_source.value == "oauth_volume"
-                    else "api_key",
                     "credential_source": row.credential_source.value,
                     "runtime_materialization_mode": row.runtime_materialization_mode.value,
                     "volume_ref": row.volume_ref,

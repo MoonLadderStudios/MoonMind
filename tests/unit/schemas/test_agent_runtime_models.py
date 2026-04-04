@@ -68,7 +68,8 @@ def test_managed_agent_provider_profile_rejects_sensitive_policy_keys() -> None:
         ManagedAgentProviderProfile(
             profileId="gemini_oauth_user_a",
             runtimeId="gemini_cli",
-            authMode="oauth",
+            credentialSource="oauth_volume",
+            runtimeMaterializationMode="oauth_home",
             maxParallelRuns=1,
             enabled=True,
             rateLimitPolicy={"secret_token": "sensitive"},
@@ -79,7 +80,8 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
     profile = ManagedAgentProviderProfile(
         profileId="claude_team_profile",
         runtimeId="claude_code",
-        authMode="oauth",
+        credentialSource="oauth_volume",
+        runtimeMaterializationMode="oauth_home",
         maxParallelRuns=2,
         cooldownAfter429=120,
         enabled=True,
@@ -277,3 +279,150 @@ def test_live_log_chunk_accepts_valid_data() -> None:
     assert chunk.sequence == 42
     assert chunk.stream == "stdout"
     assert chunk.offset == 1024
+
+
+# ---------------------------------------------------------------------------
+# New validation tests for the full provider-profile contract (T004)
+# ---------------------------------------------------------------------------
+
+
+def test_managed_agent_provider_profile_accepts_full_provider_contract() -> None:
+    """Instantiate with all provider-profile fields and verify round-trip."""
+    profile = ManagedAgentProviderProfile(
+        profileId="codex-openrouter",
+        runtimeId="codex_cli",
+        providerId="openrouter",
+        providerLabel="OpenRouter",
+        defaultModel="qwen/qwen3.6-plus:free",
+        modelOverrides={"small_fast": "qwen/qwen3.6-plus:free"},
+        credentialSource="secret_ref",
+        runtimeMaterializationMode="composite",
+        tags=["openrouter", "codex"],
+        priority=150,
+        clearEnvKeys=["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+        envTemplate={"OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        fileTemplates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "contentTemplate": {"model_provider": "openrouter"},
+            }
+        ],
+        homePathOverrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+        commandBehavior={"suppress_default_model_flag": True},
+        secretRefs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+        volumeMountPath="/mnt/data",
+        maxLeaseDurationSeconds=3600,
+        ownerUserId="user-123",
+        maxParallelRuns=4,
+    )
+    # No ValidationError — assert all fields round-trip.
+    dump = profile.model_dump(by_alias=True)
+    assert dump["profileId"] == "codex-openrouter"
+    assert dump["credentialSource"] == "secret_ref"
+    assert dump["runtimeMaterializationMode"] == "composite"
+    assert dump["tags"] == ["openrouter", "codex"]
+    assert dump["priority"] == 150
+    assert dump["clearEnvKeys"] == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
+    assert dump["envTemplate"] == {
+        "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+    }
+    assert len(dump["fileTemplates"]) == 1
+    assert dump["fileTemplates"][0]["format"] == "toml"
+    assert dump["homePathOverrides"] == {
+        "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+    }
+    assert dump["commandBehavior"] == {"suppress_default_model_flag": True}
+    assert dump["secretRefs"] == {"provider_api_key": "env://OPENROUTER_API_KEY"}
+    assert dump["volumeMountPath"] == "/mnt/data"
+    assert dump["maxLeaseDurationSeconds"] == 3600
+    assert dump["ownerUserId"] == "user-123"
+    assert dump["maxParallelRuns"] == 4
+
+
+def test_managed_agent_provider_profile_rejects_invalid_credential_source() -> None:
+    """Invalid credentialSource raises ValidationError with allowed values."""
+    with pytest.raises(ValidationError, match="credentialSource must be one of"):
+        ManagedAgentProviderProfile(
+            profileId="test",
+            runtimeId="codex_cli",
+            credentialSource="invalid_value",
+            runtimeMaterializationMode="composite",
+        )
+
+
+def test_managed_agent_provider_profile_rejects_invalid_materialization_mode() -> None:
+    """Invalid runtimeMaterializationMode raises ValidationError with allowed values."""
+    with pytest.raises(ValidationError, match="runtimeMaterializationMode must be one of"):
+        ManagedAgentProviderProfile(
+            profileId="test",
+            runtimeId="codex_cli",
+            credentialSource="secret_ref",
+            runtimeMaterializationMode="invalid_mode",
+        )
+
+
+def test_managed_agent_provider_profile_rejects_legacy_auth_mode() -> None:
+    """Legacy authMode is rejected by extra='forbid'."""
+    with pytest.raises(ValidationError):
+        ManagedAgentProviderProfile(
+            profileId="test",
+            runtimeId="codex_cli",
+            authMode="oauth",
+            credentialSource="oauth_volume",
+            runtimeMaterializationMode="oauth_home",
+        )
+
+
+def test_managed_agent_provider_profile_forbids_unknown_fields() -> None:
+    """Arbitrary unknown fields are rejected by extra='forbid'."""
+    with pytest.raises(ValidationError):
+        ManagedAgentProviderProfile(
+            profileId="test",
+            runtimeId="codex_cli",
+            credentialSource="secret_ref",
+            runtimeMaterializationMode="composite",
+            someFutureField="value",
+        )
+
+
+def test_managed_agent_provider_profile_accepts_credential_source_none() -> None:
+    """credential_source='none' with config_bundle materialization is valid (EC-007)."""
+    profile = ManagedAgentProviderProfile(
+        profileId="config-only",
+        runtimeId="codex_cli",
+        credentialSource="none",
+        runtimeMaterializationMode="config_bundle",
+        defaultModel="local/mock",
+    )
+    assert profile.credential_source == "none"
+    assert profile.runtime_materialization_mode == "config_bundle"
+
+
+def test_managed_runtime_profile_roundtrips_file_templates() -> None:
+    """file_templates with TOML entries round-trip through model_dump and model_validate."""
+    profile = ManagedRuntimeProfile(
+        profileId="codex-openrouter",
+        runtimeId="codex_cli",
+        commandTemplate=["codex", "exec"],
+        fileTemplates=[
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "contentTemplate": {
+                    "model_provider": "openrouter",
+                    "model": "qwen/qwen3.6-plus:free",
+                },
+            }
+        ],
+    )
+    dumped = profile.model_dump(by_alias=True)
+    reparsed = ManagedRuntimeProfile.model_validate(dumped)
+    assert len(reparsed.file_templates) == 1
+    ft = reparsed.file_templates[0]
+    assert ft.path == "{{runtime_support_dir}}/codex-home/config.toml"
+    assert ft.format == "toml"
+    assert ft.content_template == {
+        "model_provider": "openrouter",
+        "model": "qwen/qwen3.6-plus:free",
+    }
