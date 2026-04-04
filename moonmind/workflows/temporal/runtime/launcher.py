@@ -27,17 +27,8 @@ from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_MANAGED_RUNTIME_JIRA_ENV_BLOCKLIST: frozenset[str] = frozenset(
-    {
-        "ATLASSIAN_API_KEY",
-        "ATLASSIAN_AUTH_MODE",
-        "ATLASSIAN_CLOUD_ID",
-        "ATLASSIAN_EMAIL",
-        "ATLASSIAN_SERVICE_ACCOUNT_EMAIL",
-        "ATLASSIAN_SITE_URL",
-        "ATLASSIAN_URL",
-        "ATLASSIAN_USERNAME",
-    }
+_MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
+    {"ATLASSIAN_"}
 )
 
 logger = logging.getLogger(__name__)
@@ -62,14 +53,18 @@ class ManagedRuntimeLauncher:
     def _build_managed_runtime_base_env() -> dict[str, str]:
         """Return ambient env inherited by managed-agent subprocesses.
 
-        Jira credentials stay on the trusted MoonMind side and must not leak into
-        managed agent subprocesses, even when they are configured on the worker.
+        Atlassian configuration stays on the trusted MoonMind side and must not
+        leak into managed agent subprocesses, even when it is configured on the
+        worker via direct values or secret refs.
         """
 
         return {
             key: value
             for key, value in os.environ.items()
-            if key not in _MANAGED_RUNTIME_JIRA_ENV_BLOCKLIST
+            if not any(
+                key.startswith(prefix)
+                for prefix in _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST
+            )
         }
 
     @staticmethod

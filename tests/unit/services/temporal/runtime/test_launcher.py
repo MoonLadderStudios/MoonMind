@@ -1058,8 +1058,11 @@ async def test_launch_filters_ambient_jira_credentials_from_child_env(
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
     monkeypatch.setenv("ATLASSIAN_API_KEY", "atl-secret-token")
+    monkeypatch.setenv("ATLASSIAN_API_KEY_SECRET_REF", "atlassian-api-key")
     monkeypatch.setenv("ATLASSIAN_EMAIL", "bot@example.com")
+    monkeypatch.setenv("ATLASSIAN_EMAIL_SECRET_REF", "atlassian-email")
     monkeypatch.setenv("ATLASSIAN_SITE_URL", "https://example.atlassian.net")
+    monkeypatch.setenv("ATLASSIAN_SITE_URL_SECRET_REF", "atlassian-site-url")
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
@@ -1102,9 +1105,7 @@ async def test_launch_filters_ambient_jira_credentials_from_child_env(
     assert captured_env["MM_SAFE"] == "1"
     assert captured_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
     assert captured_env["HOME"] == "/home/testuser"
-    assert "ATLASSIAN_API_KEY" not in captured_env
-    assert "ATLASSIAN_EMAIL" not in captured_env
-    assert "ATLASSIAN_SITE_URL" not in captured_env
+    assert not any(key.startswith("ATLASSIAN_") for key in captured_env)
 
 
 @pytest.mark.asyncio
