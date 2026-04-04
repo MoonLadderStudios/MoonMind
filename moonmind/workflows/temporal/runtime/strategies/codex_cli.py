@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ _CODEX_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
     "CODEX_CONFIG_HOME",
     "CODEX_CONFIG_PATH",
 })
+_CODEX_PROGRESS_TIMEOUT_SECONDS = 300
+_CODEX_PROGRESS_MTIME_PADDING_SECONDS = 5.0
 
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
@@ -40,6 +43,14 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
     @property
     def default_command_template(self) -> list[str]:
         return ["codex", "exec"]
+
+    def progress_stall_timeout_seconds(self, *, timeout_seconds: int) -> int | None:
+        """Cap how long a Codex run may stop advancing its session state."""
+
+        normalized_timeout = int(timeout_seconds) if timeout_seconds > 0 else 0
+        if normalized_timeout <= 0:
+            return _CODEX_PROGRESS_TIMEOUT_SECONDS
+        return min(normalized_timeout, _CODEX_PROGRESS_TIMEOUT_SECONDS)
 
     def build_command(
         self,
@@ -132,3 +143,50 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             request=request,
             workspace_path=workspace_path,
         )
+
+    def probe_progress_at(
+        self,
+        *,
+        workspace_path: str | None,
+        run_id: str,
+        started_at: datetime,
+    ) -> datetime | None:
+        """Use Codex session artifacts as the managed-run progress signal."""
+
+        codex_home = self._resolve_codex_home(workspace_path)
+        if codex_home is None:
+            return None
+
+        threshold_ts = started_at.timestamp() - _CODEX_PROGRESS_MTIME_PADDING_SECONDS
+        latest_ts: float | None = None
+        for pattern in ("sessions/**/*.jsonl", "state_*.sqlite", "logs_*.sqlite"):
+            for candidate in codex_home.glob(pattern):
+                try:
+                    stat = candidate.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime < threshold_ts:
+                    continue
+                if latest_ts is None or stat.st_mtime > latest_ts:
+                    latest_ts = stat.st_mtime
+
+        if latest_ts is None:
+            return None
+        return datetime.fromtimestamp(latest_ts, tz=UTC)
+
+    @staticmethod
+    def _resolve_codex_home(workspace_path: str | None) -> Path | None:
+        normalized = str(workspace_path or "").strip()
+        if not normalized:
+            return None
+
+        resolved_workspace = Path(normalized).resolve()
+        run_root = (
+            resolved_workspace.parent
+            if resolved_workspace.name == "repo"
+            else resolved_workspace
+        )
+        codex_home = run_root / ".moonmind" / "codex-home"
+        if not codex_home.exists():
+            return None
+        return codex_home

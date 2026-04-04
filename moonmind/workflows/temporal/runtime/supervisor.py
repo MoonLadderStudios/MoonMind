@@ -87,8 +87,11 @@ class ManagedRunSupervisor:
             strategy = get_strategy(runtime_id) if runtime_id else None
             parser = strategy.create_output_parser() if strategy else None
             live_rate_limit_detected = asyncio.Event()
+            stalled_progress_detected = asyncio.Event()
             timed_out_by_supervisor = False
             live_rate_limit_requested = False
+            stalled_no_progress = False
+            stalled_progress_reason: str | None = None
             last_output_seen_at = start_time
             last_no_output_annotation_at = start_time
             first_stdout_seen = False
@@ -96,6 +99,12 @@ class ManagedRunSupervisor:
             stderr_buffer = ""
             warning_counts: dict[str, int] = {}
             warning_dedup_announced: set[str] = set()
+            progress_probe_warning_logged = False
+            progress_timeout_seconds = (
+                strategy.progress_stall_timeout_seconds(timeout_seconds=timeout_seconds)
+                if strategy is not None
+                else None
+            )
 
             def _record_annotation(
                 annotation_type: str,
@@ -208,8 +217,69 @@ class ManagedRunSupervisor:
                         live_rate_limit_requested = True
                         break
 
+            def _latest_progress_at() -> datetime:
+                nonlocal progress_probe_warning_logged
+                latest = last_output_seen_at
+                if (
+                    strategy is None
+                    or progress_timeout_seconds is None
+                    or record is None
+                    or not record.workspace_path
+                ):
+                    return latest
+                try:
+                    progress_at = strategy.probe_progress_at(
+                        workspace_path=record.workspace_path,
+                        run_id=run_id,
+                        started_at=start_time,
+                    )
+                except Exception:
+                    if not progress_probe_warning_logged:
+                        logger.warning(
+                            "Progress probe failed for managed run %s",
+                            run_id,
+                            exc_info=True,
+                        )
+                        progress_probe_warning_logged = True
+                    return latest
+                if progress_at is None:
+                    return latest
+                if progress_at.tzinfo is None:
+                    progress_at = progress_at.replace(tzinfo=UTC)
+                return max(latest, progress_at)
+
             def _emit_no_output_annotation(now: datetime) -> None:
-                nonlocal last_no_output_annotation_at
+                nonlocal last_no_output_annotation_at, stalled_no_progress, stalled_progress_reason
+                latest_progress_at = _latest_progress_at()
+                idle_progress_seconds = max(
+                    0.0,
+                    (now - latest_progress_at).total_seconds(),
+                )
+                if (
+                    progress_timeout_seconds is not None
+                    and not stalled_progress_detected.is_set()
+                    and idle_progress_seconds >= progress_timeout_seconds
+                ):
+                    stalled_no_progress = True
+                    stalled_progress_reason = (
+                        "Managed runtime made no observable progress for "
+                        f"{int(idle_progress_seconds)}s."
+                    )
+                    _record_annotation(
+                        annotation_type="termination_requested_stalled_progress",
+                        text=(
+                            "Supervisor: process termination requested after "
+                            f"{int(idle_progress_seconds)}s without observable progress."
+                        ),
+                        reason="stalled_no_progress",
+                        metadata={
+                            "progress_timeout_seconds": progress_timeout_seconds,
+                            "idle_progress_seconds": int(idle_progress_seconds),
+                            "last_progress_at": latest_progress_at.isoformat(),
+                        },
+                    )
+                    stalled_progress_detected.set()
+                    return
                 if (
                     now - last_output_seen_at
                 ).total_seconds() < NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS:
@@ -256,9 +326,17 @@ class ManagedRunSupervisor:
             terminate_on_rate_limit_task = None
             if strategy is not None and strategy.terminate_on_live_rate_limit():
                 terminate_on_rate_limit_task = asyncio.create_task(
-                    self._terminate_on_live_rate_limit(
+                    self._terminate_on_signal(
                         process=process,
                         trigger=live_rate_limit_detected,
+                    )
+                )
+            terminate_on_stall_task = None
+            if progress_timeout_seconds is not None:
+                terminate_on_stall_task = asyncio.create_task(
+                    self._terminate_on_signal(
+                        process=process,
+                        trigger=stalled_progress_detected,
                     )
                 )
             (
@@ -269,6 +347,10 @@ class ManagedRunSupervisor:
                 terminate_on_rate_limit_task.cancel()
                 with suppress(asyncio.CancelledError):
                     _ = await terminate_on_rate_limit_task
+            if terminate_on_stall_task is not None:
+                terminate_on_stall_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    _ = await terminate_on_stall_task
 
             if timed_out:
                 exit_code = None
@@ -301,22 +383,41 @@ class ManagedRunSupervisor:
                     ),
                     reason="rate_limit",
                 )
+            if stalled_no_progress:
+                _record_annotation(
+                    annotation_type="run_classified_stalled_progress",
+                    text=(
+                        "Supervisor: managed runtime stalled without progress; "
+                        "classifying as failed."
+                    ),
+                    reason="stalled_no_progress",
+                )
 
             # Classify exit
-            exit_result = self._classify_exit(
-                runtime_id=runtime_id,
-                exit_code=exit_code,
-                timed_out=timed_out,
-                stdout=stdout_content,
-                stderr=stderr_content,
-                parsed_output=parsed_output,
-            )
+            if stalled_no_progress:
+                exit_result = ManagedRuntimeExitResult(
+                    status="failed",
+                    failure_class="system_error",
+                )
+            else:
+                exit_result = self._classify_exit(
+                    runtime_id=runtime_id,
+                    exit_code=exit_code,
+                    timed_out=timed_out,
+                    stdout=stdout_content,
+                    stderr=stderr_content,
+                    parsed_output=parsed_output,
+                )
             status = exit_result.status
             failure_class = exit_result.failure_class
 
             error_message = None
             if status == "failed":
-                if runtime_id == "gemini_cli" and exit_result.provider_error_code == "429":
+                if stalled_no_progress:
+                    error_message = stalled_progress_reason or (
+                        "Managed runtime stalled without observable progress"
+                    )
+                elif runtime_id == "gemini_cli" and exit_result.provider_error_code == "429":
                     error_message = "Gemini API rate limit exceeded"
                 else:
                     error_message = f"Process exited with code {exit_code}"
@@ -530,7 +631,7 @@ class ManagedRunSupervisor:
         self._cleanup_runtime_files(self._deferred_cleanup_paths.pop(run_id, ()))
 
     @staticmethod
-    async def _terminate_on_live_rate_limit(
+    async def _terminate_on_signal(
         *,
         process: asyncio.subprocess.Process,
         trigger: asyncio.Event,

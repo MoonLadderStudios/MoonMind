@@ -3,6 +3,7 @@ import os
 import json
 import pytest
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
@@ -132,6 +133,62 @@ async def test_timeout_exit_classification(supervisor_env):
     assert record.status == "timed_out"
     assert record.failure_class == "execution_error"
     assert "timed out" in record.error_message
+
+
+@pytest.mark.asyncio
+async def test_supervise_terminates_stalled_runtime_progress(supervisor_env):
+    store, artifact_storage, _, supervisor = supervisor_env
+    record = ManagedRunRecord(
+        run_id="run-stalled-progress",
+        agent_id="codex_cli",
+        runtime_id="codex_cli",
+        status="launching",
+        started_at=datetime.now(tz=UTC),
+        workspace_path="/tmp/workspace",
+    )
+    store.save(record)
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "60",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stub_strategy = SimpleNamespace(
+        create_output_parser=lambda: None,
+        terminate_on_live_rate_limit=lambda: False,
+        progress_stall_timeout_seconds=lambda *, timeout_seconds: 2,
+        probe_progress_at=lambda **_: record.started_at,
+    )
+
+    with patch("moonmind.workflows.temporal.runtime.supervisor.get_strategy", return_value=stub_strategy):
+        with patch("moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 1):
+            with patch(
+                "moonmind.workflows.temporal.runtime.supervisor.NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS",
+                1,
+            ):
+                result = await supervisor.supervise(
+                    run_id="run-stalled-progress",
+                    process=process,
+                    timeout_seconds=30,
+                )
+
+    assert result.status == "failed"
+    assert result.failure_class == "system_error"
+    assert "no observable progress" in str(result.error_message)
+
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, result)
+    assert diagnostics_path is not None
+    diagnostics = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(encoding="utf-8")
+    )
+    annotations = diagnostics.get("annotations", [])
+    assert any(
+        isinstance(annotation, dict)
+        and annotation.get("annotation_type") == "termination_requested_stalled_progress"
+        for annotation in annotations
+    )
 
 
 @pytest.mark.asyncio

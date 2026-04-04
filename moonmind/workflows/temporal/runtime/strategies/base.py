@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -186,6 +187,25 @@ class ManagedRuntimeStrategy(ABC):
     def terminate_on_live_rate_limit(self) -> bool:
         """Whether supervisor should stop the process on streamed rate-limit events."""
         return False
+
+    def progress_stall_timeout_seconds(self, *, timeout_seconds: int) -> int | None:
+        """Return the max allowed idle-progress window before the runtime is stalled.
+
+        ``None`` disables supervisor-owned stall termination for the runtime.
+        """
+
+        return None
+
+    def probe_progress_at(
+        self,
+        *,
+        workspace_path: str | None,
+        run_id: str,
+        started_at: datetime,
+    ) -> datetime | None:
+        """Return the latest runtime-specific progress timestamp, if observable."""
+
+        return None
 
     def should_retry_exit(self, failure_class: str | None) -> bool:
         """Determine if a failure class should trigger a self-heal retry.
