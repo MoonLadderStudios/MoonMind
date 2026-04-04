@@ -52,12 +52,16 @@ def _configured_manifest_path() -> str | None:
     return value if value else None
 
 
-def _default_manifest_path() -> str:
+def _manifest_entry_key(entrypoint: str) -> str:
+    return f"entrypoints/{entrypoint}.tsx"
+
+
+def _default_manifest_path(entrypoint: str = "mission-control") -> str:
     configured_path = _configured_manifest_path()
     if configured_path:
         return configured_path
 
-    return str(_manifest_path_for_dist_root(resolve_mission_control_dist_root()))
+    return str(_manifest_path_for_dist_root(resolve_mission_control_dist_root(entrypoint)))
 
 
 def _lenient_ui_assets() -> bool:
@@ -109,7 +113,7 @@ class ViteAssetResolver:
 
     def resolve_entrypoint(self, entrypoint: str) -> Dict[str, Any]:
         manifest = self.get_manifest()
-        key = f"entrypoints/{entrypoint}.tsx"
+        key = _manifest_entry_key(entrypoint)
         if key in manifest:
             return manifest[key]
         return {}
@@ -119,7 +123,26 @@ def _dist_root_for_manifest(manifest_path: str) -> Path:
     return Path(manifest_path).resolve().parent.parent
 
 
-def _manifest_tree_is_usable(dist_root: Path) -> bool:
+def _manifest_entry_is_usable(
+    dist_root: Path, manifest: Dict[str, Any], entrypoint: str
+) -> bool:
+    manifest_key = _manifest_entry_key(entrypoint)
+    asset_info = manifest.get(manifest_key)
+    if not isinstance(asset_info, dict):
+        return False
+
+    try:
+        for _, imported_asset_info in _walk_manifest_imports(manifest, manifest_key):
+            _verify_asset_paths(dist_root, imported_asset_info)
+    except AssetFileMissingError:
+        return False
+
+    return True
+
+
+def _manifest_tree_is_usable(
+    dist_root: Path, entrypoint: str | None = None
+) -> bool:
     manifest_path = _manifest_path_for_dist_root(dist_root)
     if not manifest_path.is_file():
         return False
@@ -146,16 +169,19 @@ def _manifest_tree_is_usable(dist_root: Path) -> bool:
             if not isinstance(import_key, str) or import_key not in manifest:
                 return False
 
+    if entrypoint and not _manifest_entry_is_usable(dist_root, manifest, entrypoint):
+        return False
+
     return True
 
 
-def resolve_mission_control_dist_root() -> Path:
+def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Path:
     configured_manifest_path = _configured_manifest_path()
     if configured_manifest_path:
         return _dist_root_for_manifest(configured_manifest_path)
 
     for candidate in (local_ui_dist_root(), bundled_ui_dist_root()):
-        if _manifest_tree_is_usable(candidate):
+        if _manifest_tree_is_usable(candidate, entrypoint):
             return candidate
 
     local_root = local_ui_dist_root()
@@ -274,8 +300,8 @@ def ui_assets(entrypoint: str) -> str:
     if dev_server_url:
         return _vite_dev_server_assets(entrypoint, dev_server_url)
 
-    manifest_path = _default_manifest_path()
-    manifest_key = f"entrypoints/{entrypoint}.tsx"
+    manifest_path = _default_manifest_path(entrypoint)
+    manifest_key = _manifest_entry_key(entrypoint)
     lenient = _lenient_ui_assets()
 
     if not os.path.isfile(manifest_path):

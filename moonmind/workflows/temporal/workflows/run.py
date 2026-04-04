@@ -1397,15 +1397,17 @@ class MoonMindRunWorkflow:
             )
 
         agent_kind = self._agent_kind_for_id(agent_id)
-        execution_profile_ref = str(
+        raw_execution_profile_ref = (
             node_inputs.get("executionProfileRef")
-            or runtime_block.get("executionProfileRef")
             or node_inputs.get("profileId")
-            or runtime_block.get("profileId")
             or node_inputs.get("providerProfile")
+            or runtime_block.get("executionProfileRef")
+            or runtime_block.get("profileId")
             or runtime_block.get("providerProfile")
-            or f"default:{agent_id}"
         )
+        execution_profile_ref = None
+        if raw_execution_profile_ref is not None:
+            execution_profile_ref = str(raw_execution_profile_ref).strip() or None
         wf_info = workflow.info()
         correlation_id = wf_info.workflow_id
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
@@ -1446,6 +1448,21 @@ class MoonMindRunWorkflow:
             parameters["metadata"] = self._json_mapping(
                 raw_metadata, path=f"node[{node_id}].metadata"
             )
+        selected_skill = str(node_inputs.get("selectedSkill") or "").strip()
+        if selected_skill:
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["selectedSkill"] = selected_skill
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
         bundle_payload: dict[str, Any] = {}
         for bundle_key in (
             "bundleId",

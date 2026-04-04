@@ -201,6 +201,7 @@ frontend/
       parseBootPayload.ts
       mountPage.tsx
     entrypoints/
+      mission-control.tsx
       tasks-home.tsx
       tasks-list.tsx
       task-detail.tsx
@@ -287,14 +288,14 @@ Vite should build with a manifest enabled.
 FastAPI should use a small asset helper that:
 
 1. reads the Vite manifest in production
-2. resolves the correct JS and CSS files for an entrypoint
+2. resolves the correct JS and CSS files for the shared Mission Control entrypoint
 3. injects those assets into the rendered template
 4. switches to Vite dev-server module URLs when `MOONMIND_UI_DEV_SERVER_URL` is configured for FastAPI-backed local development
 5. **fails loudly** (HTTP 503 with a clear HTML page) when the manifest is missing, the entrypoint key is absent, or referenced files are missing — never a silent blank region under the shell
 
 For local experiments without a built `dist/`, set **`MOONMIND_LENIENT_UI_ASSETS=1`** so the helper emits HTML comments instead of errors.
 
-CI validates manifest completeness for every rollup entry in `frontend/vite.config.ts` via **`python tools/verify_vite_manifest.py`** (`npm run ui:verify-manifest`) after a **clean** rebuild (`npm run ui:clean-dist` then `npm run ui:build`).
+CI validates the shared Mission Control manifest entry in `frontend/vite.config.ts` via **`python tools/verify_vite_manifest.py`** (`npm run ui:verify-manifest`) after a **clean** rebuild (`npm run ui:clean-dist` then `npm run ui:build`).
 
 A small backend utility module should own this lookup, for example:
 
@@ -313,9 +314,13 @@ In development, the backend should support two modes:
 
 ### B. FastAPI-Backed UI Dev Mode
 
-- Vite dev server runs with HMR via `npm run ui:dev`
-- FastAPI detects `MOONMIND_UI_DEV_SERVER_URL`
-- `ui_assets()` loads `@vite/client` plus `/entrypoints/<page>.tsx` from that dev server instead of the built manifest
+This mode requires **two processes running simultaneously**:
+
+1. **Vite dev server** — start with `npm run ui:dev` (serves HMR-capable modules on `http://127.0.0.1:5173` by default).
+2. **FastAPI with `MOONMIND_UI_DEV_SERVER_URL` set** — for example:
+   `MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <fastapi-start-command>`.
+
+When `MOONMIND_UI_DEV_SERVER_URL` is set, `ui_assets()` bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and `/entrypoints/mission-control.tsx` directly from the Vite dev server. The shared entrypoint then reads `payload.page` to lazy-load the requested page module. **Without this env var, FastAPI serves the built `dist/` bundle and live changes from Vite will not appear.**
 
 This preserves server-rendered pages while still giving fast frontend iteration against the real backend routes.
 
@@ -376,6 +381,8 @@ Example:
   {"page":"tasks-list","apiBase":"/api","features":{"oauth":true}}
 </script>
 ```
+
+The HTML shell does not need one script tag per page. FastAPI serves the shared Mission Control bundle once, and the bundle reads `page` from the boot payload to choose the page module.
 
 ## 9.2 Boot Payload Rules
 

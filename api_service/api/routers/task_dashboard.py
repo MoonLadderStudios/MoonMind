@@ -48,7 +48,6 @@ _SAFE_TASK_ID_SEGMENT = re.compile(
 _STATIC_PATHS = {
     "list",
     "new",
-    "create",
     "proposals",
     "manifests",
     "manifests/new",
@@ -64,12 +63,14 @@ _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
     "system",
     "workers",
     "secrets",
+    "create",
+    "tasks-list",
 }
 _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "code": "dashboard_route_not_found",
     "message": (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-        "/tasks/create, /tasks/new, "
+        "/tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "/tasks/schedules, /tasks/skills, or /tasks/settings."
     ),
@@ -218,7 +219,7 @@ async def _get_temporal_service(
     )
 
 
-def _mission_control_ui_error_response(entrypoint: str, detail: str) -> HTMLResponse:
+def _mission_control_ui_error_response(page: str, detail: str) -> HTMLResponse:
     """503 HTML when Vite assets are missing or incomplete (never a silent blank shell)."""
     body = f"""<!DOCTYPE html>
 <html lang="en">
@@ -229,7 +230,8 @@ def _mission_control_ui_error_response(entrypoint: str, detail: str) -> HTMLResp
 </head>
 <body>
   <h1>Mission Control UI unavailable</h1>
-  <p>Missing or incomplete Vite bundle for entrypoint <code>{escape(entrypoint)}</code>.</p>
+  <p>Missing or incomplete Vite bundle for the shared Mission Control entrypoint <code>mission-control</code>.</p>
+  <p>While rendering Mission Control page <code>{escape(page)}</code>.</p>
   <p>{escape(detail)}</p>
   <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
 </body>
@@ -237,39 +239,28 @@ def _mission_control_ui_error_response(entrypoint: str, detail: str) -> HTMLResp
     return HTMLResponse(status_code=503, content=body, media_type="text/html")
 
 
-def _vite_assets_or_error(entrypoint: str) -> HTMLResponse | str:
+def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     try:
-        return ui_assets(entrypoint)
+        return ui_assets("mission-control")
     except MissionControlUIAssetsError as exc:
-        return _mission_control_ui_error_response(entrypoint, str(exc))
-
-
-def _rendered_assets_or_error(*entrypoints: str) -> HTMLResponse | str:
-    rendered_assets: list[str] = []
-    seen: set[str] = set()
-    for entrypoint in entrypoints:
-        assets_html = _vite_assets_or_error(entrypoint)
-        if isinstance(assets_html, HTMLResponse):
-            return assets_html
-        for line in assets_html.splitlines():
-            normalized = line.strip()
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            rendered_assets.append(line)
-    return "\n".join(rendered_assets)
+        return _mission_control_ui_error_response(page, str(exc))
 
 
 def _render_react_page(
     request: Request,
-    entrypoint: str,
+    page: str,
     current_path: str,
     initial_data: dict | None = None,
     *,
     data_wide_panel: bool = False,
 ) -> HTMLResponse:
-    boot_payload = generate_boot_payload(entrypoint, initial_data=initial_data)
-    assets_html = _rendered_assets_or_error(entrypoint, "dashboard-alerts")
+    boot_initial_data = dict(initial_data or {})
+    boot_layout = dict(boot_initial_data.get("layout") or {})
+    boot_layout["dataWidePanel"] = data_wide_panel
+    boot_initial_data["layout"] = boot_layout
+
+    boot_payload = generate_boot_payload(page, initial_data=boot_initial_data)
+    assets_html = _vite_assets_or_error(page)
     if isinstance(assets_html, HTMLResponse):
         return assets_html
 
@@ -281,7 +272,6 @@ def _render_react_page(
             "boot_payload": boot_payload,
             "assets_html": assets_html,
             "current_path": current_path,
-            "data_wide_panel": data_wide_panel,
         },
     )
 
@@ -346,22 +336,6 @@ async def task_manifest_submit_route(
     )
 
 
-@router.get("/tasks/tasks-list", response_class=HTMLResponse)
-async def task_tasks_list_route(
-    request: Request,
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered tasks-list page."""
-    list_path = "/tasks/tasks-list"
-    return _render_react_page(
-        request,
-        "tasks-list",
-        list_path,
-        initial_data={"dashboardConfig": build_runtime_config(list_path)},
-        data_wide_panel=True,
-    )
-
-
 @router.get("/tasks/list", response_class=HTMLResponse)
 async def task_list_route(
     request: Request,
@@ -376,6 +350,15 @@ async def task_list_route(
         initial_data={"dashboardConfig": build_runtime_config(list_path)},
         data_wide_panel=True,
     )
+
+
+@router.get("/tasks/tasks-list")
+async def task_tasks_list_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> RedirectResponse:
+    """Redirect the legacy tasks-list alias into the canonical list route."""
+    return RedirectResponse(url="/tasks/list", status_code=307)
 
 
 @router.get("/tasks/workers")
@@ -424,19 +407,13 @@ async def task_create_route(
     )
 
 
-@router.get("/tasks/create", response_class=HTMLResponse)
+@router.get("/tasks/create")
 async def task_create_alias_route(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered task create alias page."""
-    current_path = "/tasks/create"
-    return _render_react_page(
-        request,
-        "task-create",
-        current_path,
-        initial_data={"dashboardConfig": build_runtime_config(current_path)},
-    )
+) -> RedirectResponse:
+    """Redirect the legacy create alias into the canonical create route."""
+    return RedirectResponse(url="/tasks/new", status_code=307)
 
 
 @router.get("/tasks/skills", response_class=HTMLResponse)

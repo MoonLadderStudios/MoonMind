@@ -13,6 +13,13 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalArtifact,
+    TemporalArtifactEncryption,
+    TemporalArtifactRedactionLevel,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactStatus,
+    TemporalArtifactStorageBackend,
+    TemporalArtifactUploadMode,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionOwnerType,
@@ -54,6 +61,28 @@ async def temporal_db(tmp_path):
             yield session
     finally:
         await engine.dispose()
+
+
+async def _create_temporal_artifact(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    status: TemporalArtifactStatus,
+) -> None:
+    session.add(
+        TemporalArtifact(
+            artifact_id=artifact_id,
+            storage_key=f"tests/{artifact_id}.json",
+            storage_backend=TemporalArtifactStorageBackend.S3,
+            encryption=TemporalArtifactEncryption.NONE,
+            status=status,
+            retention_class=TemporalArtifactRetentionClass.STANDARD,
+            redaction_level=TemporalArtifactRedactionLevel.NONE,
+            upload_mode=TemporalArtifactUploadMode.SINGLE_PUT,
+            metadata_json={},
+        )
+    )
+    await session.commit()
 
 
 @pytest.mark.asyncio
@@ -192,6 +221,35 @@ async def test_create_execution_rejects_missing_manifest_artifact_ref(tmp_path):
                 owner_id=uuid4(),
                 title=None,
                 input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_pending_upload_temporal_input_artifact_ref(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        await _create_temporal_artifact(
+            session,
+            artifact_id="art_01TESTPENDINGINPUT0000000000",
+            status=TemporalArtifactStatus.PENDING_UPLOAD,
+        )
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="inputArtifactRef must reference a readable artifact",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref="art_01TESTPENDINGINPUT0000000000",
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,

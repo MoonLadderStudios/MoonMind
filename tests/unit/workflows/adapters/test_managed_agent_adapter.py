@@ -154,8 +154,8 @@ async def test_shape_environment_for_api_key_without_ref():
 
 async def test_resolve_profile_by_id():
     profiles = [
-        {"profile_id": "prof-A", "auth_mode": "api_key"},
-        {"profile_id": "prof-B", "auth_mode": "oauth"},
+        {"profile_id": "prof-A", "credential_source": "secret_ref"},
+        {"profile_id": "prof-B", "credential_source": "oauth_volume"},
     ]
     calls: list[tuple] = []
 
@@ -182,7 +182,7 @@ async def test_resolve_profile_by_id():
     handle = await adapter.start(request)
     assert handle.agent_kind == "managed"
     assert handle.metadata["profile_id"] == "prof-B"
-    assert handle.metadata["auth_mode"] == "oauth"
+    assert handle.metadata["credential_source"] == "oauth_volume"
     # Slot acquisition is now handled by AgentRun before adapter.start(),
     # so the adapter should NOT send a redundant slot request.
     assert ("slot_request", "wf-123", "gemini_cli") not in calls
@@ -190,8 +190,8 @@ async def test_resolve_profile_by_id():
 
 async def test_resolve_profile_auto_picks_first():
     profiles = [
-        {"profile_id": "first", "auth_mode": "api_key"},
-        {"profile_id": "second", "auth_mode": "oauth"},
+        {"profile_id": "first", "credential_source": "secret_ref"},
+        {"profile_id": "second", "credential_source": "oauth_volume"},
     ]
 
     adapter = ManagedAgentAdapter(
@@ -219,7 +219,7 @@ async def test_resolve_profile_selector_filters():
     profiles = [
         {
             "profile_id": "prof-a",
-            "auth_mode": "api_key",
+            "credential_source": "secret_ref",
             "provider_id": "anthropic",
             "runtime_materialization_mode": "env",
             "tags": ["premium", "fast"],
@@ -227,7 +227,7 @@ async def test_resolve_profile_selector_filters():
         },
         {
             "profile_id": "prof-b",
-            "auth_mode": "oauth",
+            "credential_source": "oauth_volume",
             "provider_id": "anthropic",
             "runtime_materialization_mode": "oauth",
             "tags": ["standard"],
@@ -235,7 +235,7 @@ async def test_resolve_profile_selector_filters():
         },
         {
             "profile_id": "prof-c",
-            "auth_mode": "api_key",
+            "credential_source": "secret_ref",
             "provider_id": "openai",
             "runtime_materialization_mode": "env",
             "tags": ["premium"],
@@ -244,7 +244,7 @@ async def test_resolve_profile_selector_filters():
         },
         {
             "profile_id": "prof-d",
-            "auth_mode": "api_key",
+            "credential_source": "secret_ref",
             "provider_id": "openai",
             "runtime_materialization_mode": "env",
             "tags": ["premium"],
@@ -401,7 +401,7 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     profiles = [
         {
             "profile_id": "minimax",
-            "auth_mode": "api_key",
+            "credential_source": "secret_ref",
             "api_key_ref": "MINIMAX_API_KEY",
             "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
             "runtime_env_overrides": {
@@ -625,7 +625,7 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pyt
     profiles = [
         {
             "profile_id": "proxy-prof",
-            "auth_mode": "api_key",
+            "credential_source": "secret_ref",
             "api_key_ref": "db://123", # Not evaluated in proxy
             "command_template": ["claude"],
             "tags": ["proxy-first"],
@@ -675,7 +675,7 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pyt
 
 
 async def test_resolve_profile_raises_when_not_found():
-    profiles = [{"profile_id": "exists", "auth_mode": "api_key"}]
+    profiles = [{"profile_id": "exists", "credential_source": "secret_ref"}]
 
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles(profiles),
@@ -722,7 +722,7 @@ async def test_resolve_profile_raises_when_no_profiles():
 
 async def test_start_rejects_non_managed_agent_kind():
     adapter = ManagedAgentAdapter(
-        profile_fetcher=_fake_profiles([{"profile_id": "p", "auth_mode": "api_key"}]),
+        profile_fetcher=_fake_profiles([{"profile_id": "p", "credential_source": "secret_ref"}]),
         slot_requester=_async_noop,
         slot_releaser=_async_noop,
         cooldown_reporter=_async_noop,
@@ -755,7 +755,7 @@ async def test_release_slot_signals_manager():
             {"wf": requester_workflow_id, "profile_id": profile_id}
         )
 
-    profiles = [{"profile_id": "prof-release", "auth_mode": "api_key"}]
+    profiles = [{"profile_id": "prof-release", "credential_source": "secret_ref"}]
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles(profiles),
         slot_requester=_async_noop,
@@ -790,7 +790,7 @@ async def test_report_429_cooldown_uses_active_profile():
     async def _reporter(*, profile_id: str, cooldown_seconds: int):
         reported.append({"profile_id": profile_id, "secs": cooldown_seconds})
 
-    profiles = [{"profile_id": "prof-429", "auth_mode": "api_key"}]
+    profiles = [{"profile_id": "prof-429", "credential_source": "secret_ref"}]
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles(profiles),
         slot_requester=_async_noop,
@@ -1494,7 +1494,7 @@ async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
     profiles = [
         {
             "profile_id": "claude_minimax",
-            "auth_mode": "api_key",
+            "credential_source": "secret_ref",
             "api_key_ref": "MINIMAX_API_KEY",
             "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
             # Sensitive-keyed override: previously triggered ValidationError

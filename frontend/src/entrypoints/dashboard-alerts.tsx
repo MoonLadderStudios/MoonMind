@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { mountPage } from '../boot/mountPage';
 
 interface SecretMetadata {
   slug: string;
@@ -33,7 +32,7 @@ function hasActiveSlug(items: SecretMetadata[], slugs: readonly string[]): boole
   return items.some((s) => slugs.includes(s.slug) && s.status === 'active');
 }
 
-function DashboardAlerts() {
+export function DashboardAlerts() {
   const { data: secretsData, isLoading: secretsLoading } = useQuery<SecretsListResponse>({
     queryKey: ['secrets'],
     queryFn: async () => {
@@ -106,6 +105,4 @@ function DashboardAlerts() {
     </div>
   );
 }
-
-// Mount to a specific alert root
-mountPage(DashboardAlerts, 'dashboard-alerts-root');
+export default DashboardAlerts;

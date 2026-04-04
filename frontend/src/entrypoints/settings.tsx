@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { SecretManager } from '../components/secrets/SecretManager';
 import {
@@ -73,7 +72,7 @@ function updateSectionInLocation(section: SettingsSectionId): void {
   window.history.pushState({}, '', url.toString());
 }
 
-function SettingsPage({ payload }: { payload: BootPayload }) {
+export function SettingsPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [section, setSection] = useState<SettingsSectionId>(() => readSectionFromLocation());
@@ -310,5 +309,4 @@ function SettingsPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(SettingsPage);
+export default SettingsPage;

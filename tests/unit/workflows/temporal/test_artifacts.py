@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -22,11 +23,13 @@ from moonmind.workflows.temporal.artifacts import (
     S3TemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStateError,
     TemporalArtifactStore,
     TemporalArtifactValidationError,
     build_artifact_ref,
     generate_artifact_id,
 )
+from moonmind.workflows.temporal import artifacts as artifact_module
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -87,12 +90,6 @@ class _MultipartMemoryStore(TemporalArtifactStore):
     def delete(self, storage_key: str) -> None:
         self._objects.pop(storage_key, None)
 
-    def presign_single_upload(
-        self, *, storage_key: str, content_type, expires_in_seconds: int
-    ):
-        _ = content_type, expires_in_seconds
-        return f"https://example.test/upload/{storage_key}", {}
-
     def create_multipart_upload(self, *, storage_key: str, content_type=None) -> str:
         _ = content_type
         upload_id = f"upload-{storage_key}"
@@ -136,6 +133,21 @@ class _MultipartMemoryStore(TemporalArtifactStore):
     def put_part(self, upload_id: str, part_number: int, payload: bytes) -> str:
         self._uploads[upload_id][part_number] = payload
         return str(part_number)
+
+
+class _EventuallyVisibleMemoryStore(_MultipartMemoryStore):
+    """Store that hides uploaded bytes for a bounded number of initial reads."""
+
+    def __init__(self, missing_read_count: int) -> None:
+        super().__init__()
+        self._missing_read_count = missing_read_count
+        self.read_attempts = 0
+
+    def read_bytes(self, storage_key: str) -> bytes:
+        self.read_attempts += 1
+        if self.read_attempts <= self._missing_read_count:
+            raise KeyError(storage_key)
+        return super().read_bytes(storage_key)
 
 
 async def test_generate_artifact_id_uses_art_prefix_and_ulid_shape() -> None:
@@ -252,6 +264,30 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
                 principal="user-1",
             )
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
+
+
+async def test_create_uses_same_origin_content_endpoint_for_small_s3_uploads(
+    tmp_path: Path,
+) -> None:
+    """Small S3-backed uploads should stay on the API content route."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=_MultipartMemoryStore(),
+                direct_upload_max_bytes=1024,
+            )
+
+            artifact, upload = await service.create(
+                principal="user-1",
+                content_type="text/plain",
+                size_bytes=11,
+            )
+
+            assert upload.mode == "single_put"
+            assert upload.upload_url == f"/api/artifacts/{artifact.artifact_id}/content"
 
 
 async def test_compute_preview_redacts_token_like_pairs(tmp_path: Path) -> None:
@@ -381,6 +417,123 @@ async def test_complete_rejects_undeclared_single_put_over_size_limit(
             )
 
             with pytest.raises(TemporalArtifactValidationError, match="max bytes"):
+                await service.complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="user-1",
+                )
+
+
+async def test_complete_retries_single_put_reads_until_uploaded_bytes_are_visible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-put completion should tolerate short storage visibility delays."""
+
+    monkeypatch.setattr(
+        artifact_module,
+        "_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS",
+        (0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = _EventuallyVisibleMemoryStore(missing_read_count=3)
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=store,
+                direct_upload_max_bytes=1024,
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="text/plain",
+            )
+
+            store.write_bytes(
+                artifact.storage_key,
+                b"ready after retries",
+                content_type="text/plain",
+            )
+
+            completed = await service.complete(
+                artifact_id=artifact.artifact_id,
+                principal="user-1",
+            )
+
+            assert completed.status is TemporalArtifactStatus.COMPLETE
+            assert store.read_attempts == 4
+
+
+async def test_complete_still_fails_when_single_put_bytes_never_appear(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-put completion should still return state error after retry budget."""
+
+    monkeypatch.setattr(
+        artifact_module,
+        "_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS",
+        (0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = _EventuallyVisibleMemoryStore(missing_read_count=99)
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=store,
+                direct_upload_max_bytes=1024,
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="text/plain",
+            )
+
+            with pytest.raises(TemporalArtifactStateError, match="not complete"):
+                await service.complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="user-1",
+                )
+
+
+async def test_complete_single_put_raises_non_visibility_read_error_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-put completion should not mask non-visibility storage failures."""
+
+    class _AccessDeniedReadStore(_MultipartMemoryStore):
+        def read_bytes(self, storage_key: str) -> bytes:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+                "GetObject",
+            )
+
+    monkeypatch.setattr(
+        artifact_module,
+        "_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS",
+        (0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = _AccessDeniedReadStore()
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=store,
+                direct_upload_max_bytes=1024,
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="text/plain",
+            )
+
+            store.write_bytes(
+                artifact.storage_key,
+                b"present but unreadable",
+                content_type="text/plain",
+            )
+
+            with pytest.raises(ClientError, match="AccessDenied"):
                 await service.complete(
                     artifact_id=artifact.artifact_id,
                     principal="user-1",

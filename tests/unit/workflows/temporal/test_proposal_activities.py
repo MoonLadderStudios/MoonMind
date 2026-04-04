@@ -247,6 +247,45 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 3)
         self.assertEqual(mock_service.create_proposal.await_count, 3)
 
+    async def test_moonmind_repo_candidate_still_submits_as_project_by_default(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(
+            proposal_service_factory=factory,
+        )
+        candidates = [
+            {
+                "title": "[run_quality] Follow-up: Fix proposal routing",
+                "summary": "Proposal should remain project-targeted for MoonMind repo runs.",
+                "category": "run_quality",
+                "tags": ["artifact_gap"],
+                "taskCreateRequest": {
+                    "payload": {"repository": "MoonLadderStudios/MoonMind"}
+                },
+            }
+        ]
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {},
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["generated_count"], 1)
+        self.assertEqual(result["submitted_count"], 1)
+        mock_service.create_proposal.assert_awaited_once()
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(
+            call_kwargs["task_create_request"]["payload"]["repository"],
+            "MoonLadderStudios/MoonMind",
+        )
+
     async def test_service_factory_called(self) -> None:
         mock_service = AsyncMock()
         @contextlib.asynccontextmanager

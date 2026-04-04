@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
+_SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 
 
 class TemporalArtifactError(Exception):
@@ -59,6 +61,15 @@ class TemporalArtifactValidationError(TemporalArtifactError):
 
 class TemporalArtifactAuthorizationError(TemporalArtifactError):
     """Raised when principal is not permitted to access an artifact."""
+
+
+def _is_retryable_single_put_read_error(exc: Exception) -> bool:
+    if isinstance(exc, (FileNotFoundError, KeyError)):
+        return True
+    if isinstance(exc, ClientError):
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        return code in _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES
+    return False
 
 
 @dataclass(slots=True, frozen=True)
@@ -241,15 +252,6 @@ class TemporalArtifactStore:
     def delete(self, storage_key: str) -> None:
         raise NotImplementedError
 
-    def presign_single_upload(
-        self,
-        *,
-        storage_key: str,
-        content_type: str | None,
-        expires_in_seconds: int,
-    ) -> tuple[str, dict[str, str]]:
-        raise NotImplementedError
-
     def create_multipart_upload(
         self,
         *,
@@ -366,16 +368,6 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
 
     def delete(self, storage_key: str) -> None:
         self.resolve_storage_key(storage_key).unlink(missing_ok=True)
-
-    def presign_single_upload(
-        self,
-        *,
-        storage_key: str,
-        content_type: str | None,
-        expires_in_seconds: int,
-    ) -> tuple[str, dict[str, str]]:
-        _ = storage_key, content_type, expires_in_seconds
-        return "", {}
 
     def presign_download(
         self,
@@ -538,29 +530,6 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
 
     def delete(self, storage_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=storage_key)
-
-    def presign_single_upload(
-        self,
-        *,
-        storage_key: str,
-        content_type: str | None,
-        expires_in_seconds: int,
-    ) -> tuple[str, dict[str, str]]:
-        params: dict[str, Any] = {
-            "Bucket": self._bucket,
-            "Key": storage_key,
-        }
-        required_headers: dict[str, str] = {}
-        if content_type:
-            params["ContentType"] = content_type
-            required_headers["content-type"] = content_type
-        url = self._client.generate_presigned_url(
-            "put_object",
-            Params=params,
-            ExpiresIn=expires_in_seconds,
-            HttpMethod="PUT",
-        )
-        return self._rewrite_presigned_url(url), required_headers
 
     def create_multipart_upload(
         self,
@@ -1193,14 +1162,7 @@ class TemporalArtifactService:
                 ),
             )
         else:
-            if self._store.backend is db_models.TemporalArtifactStorageBackend.S3:
-                upload_url, required_headers = self._store.presign_single_upload(
-                    storage_key=storage_key,
-                    content_type=content_type,
-                    expires_in_seconds=self._presign_ttl_seconds,
-                )
-            else:
-                upload_url = f"/api/artifacts/{artifact_id}/content"
+            upload_url = f"/api/artifacts/{artifact_id}/content"
 
         artifact = await self._repository.create_artifact(
             artifact_id=artifact_id,
@@ -1399,14 +1361,7 @@ class TemporalArtifactService:
                 None, self._store.read_bytes, artifact.storage_key
             )
         else:
-            try:
-                payload = await asyncio.get_running_loop().run_in_executor(
-                    None, self._store.read_bytes, artifact.storage_key
-                )
-            except Exception as exc:
-                raise TemporalArtifactStateError(
-                    "artifact upload is not complete"
-                ) from exc
+            payload = await self._read_single_put_payload_with_retry(artifact)
 
         digest, actual_size = self._compute_digest_and_size(payload)
         if (
@@ -1449,6 +1404,34 @@ class TemporalArtifactService:
             artifact.artifact_id,
         )
         return artifact
+
+    async def _read_single_put_payload_with_retry(
+        self,
+        artifact: db_models.TemporalArtifact,
+    ) -> bytes:
+        last_error: Exception | None = None
+        attempt_delays = (0.0, *_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS)
+        for attempt, delay_seconds in enumerate(attempt_delays, start=1):
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            try:
+                return await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
+            except Exception as exc:
+                if not _is_retryable_single_put_read_error(exc):
+                    raise
+                last_error = exc
+                if attempt < len(attempt_delays):
+                    logger.debug(
+                        "Temporal artifact single-put completion read retry pending "
+                        "artifact_id=%s attempt=%s",
+                        artifact.artifact_id,
+                        attempt,
+                    )
+        raise TemporalArtifactStateError(
+            "artifact upload is not complete"
+        ) from last_error
 
     async def read(
         self,
@@ -2244,9 +2227,6 @@ class TemporalArtifactActivities:
                     "provider_label": row.provider_label,
                     "tags": row.tags or [],
                     "priority": row.priority,
-                    "auth_mode": "oauth"
-                    if row.credential_source.value == "oauth_volume"
-                    else "api_key",
                     "credential_source": row.credential_source.value,
                     "runtime_materialization_mode": row.runtime_materialization_mode.value,
                     "volume_ref": row.volume_ref,

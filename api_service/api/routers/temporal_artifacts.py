@@ -174,6 +174,7 @@ async def _resolve_principal(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_artifact(
+    request: Request,
     payload: CreateArtifactRequest,
     principal: str = Depends(_resolve_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
@@ -194,11 +195,15 @@ async def create_artifact(
         _raise_temporal_artifact_http(exc)
         raise
 
+    upload_url = upload.upload_url
+    if upload_url and upload_url.startswith("/"):
+        upload_url = str(request.base_url).rstrip("/") + upload_url
+
     return CreateArtifactResponse(
         artifact_ref=ArtifactRefModel(**asdict(build_artifact_ref(artifact))),
         upload={
             "mode": upload.mode,
-            "upload_url": upload.upload_url,
+            "upload_url": upload_url,
             "upload_id": upload.upload_id,
             "expires_at": upload.expires_at,
             "max_size_bytes": upload.max_size_bytes,

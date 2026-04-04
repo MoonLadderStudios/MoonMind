@@ -8,7 +8,7 @@ router = APIRouter()
 @router.get("/test-tasks-home", response_class=HTMLResponse)
 def test_tasks_home():
     boot_payload = generate_boot_payload("tasks-home")
-    assets_html = ui_assets("tasks-home")
+    assets_html = ui_assets("mission-control")
 
     html = f"""
     <!DOCTYPE html>

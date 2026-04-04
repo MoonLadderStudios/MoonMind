@@ -37,10 +37,10 @@ def test_ui_assets_uses_vite_dev_server_when_configured(monkeypatch: pytest.Monk
     monkeypatch.setenv("MOONMIND_UI_DEV_SERVER_URL", "http://127.0.0.1:5173/")
     monkeypatch.setenv("VITE_MANIFEST_PATH", "non-existent-manifest.json")
 
-    html = ui_assets("tasks-list")
+    html = ui_assets("mission-control")
 
     assert 'src="http://127.0.0.1:5173/@vite/client"' in html
-    assert 'src="http://127.0.0.1:5173/entrypoints/tasks-list.tsx"' in html
+    assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in html
     assert "/static/task_dashboard/dist/" not in html
 
 

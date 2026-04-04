@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { marked } from 'marked';
 
-import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
 
 interface SkillItem {
@@ -90,12 +90,7 @@ function sanitizeHtml(html: string): string {
 }
 
 function renderMarkdown(markdown: string): string {
-  if (window.marked && typeof window.marked.parse === 'function') {
-    return sanitizeHtml(window.marked.parse(markdown));
-  }
-  return sanitizeHtml(
-    `<pre>${markdown.replace(/[&<>]/g, (value) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[value] || value))}</pre>`,
-  );
+  return sanitizeHtml(marked.parse(markdown, { async: false }));
 }
 
 export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
@@ -284,5 +279,4 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(SkillsPage);
+export default SkillsPage;

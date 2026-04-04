@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { mountPage } from '../boot/mountPage';
 import { DataTable } from '../components/tables/DataTable';
 
 import { z } from 'zod';
@@ -24,7 +23,7 @@ const SchedulesResponseSchema = z.object({
   items: z.array(ScheduleSchema),
 });
 
-function SchedulesPage({ payload }: { payload: BootPayload }) {
+export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
@@ -139,5 +138,4 @@ function SchedulesPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(SchedulesPage);
+export default SchedulesPage;

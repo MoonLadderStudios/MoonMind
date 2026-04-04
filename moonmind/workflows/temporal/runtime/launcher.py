@@ -27,6 +27,9 @@ from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
+    {"ATLASSIAN_"}
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,24 @@ class ManagedRuntimeLauncher:
         self._logger = logging.getLogger(__name__)
         self._github_auth_brokers = GitHubAuthBrokerManager()
         self._log_streamer = log_streamer
+
+    @staticmethod
+    def _build_managed_runtime_base_env() -> dict[str, str]:
+        """Return ambient env inherited by managed-agent subprocesses.
+
+        Atlassian configuration stays on the trusted MoonMind side and must not
+        leak into managed agent subprocesses, even when it is configured on the
+        worker via direct values or secret refs.
+        """
+
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if not any(
+                key.startswith(prefix)
+                for prefix in _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST
+            )
+        }
 
     @staticmethod
     def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
@@ -683,8 +704,8 @@ class ManagedRuntimeLauncher:
                 return {k: resolved_secrets[k] for k in secret_refs if k in resolved_secrets}
 
         materializer = ProviderProfileMaterializer(
-            base_env=dict(os.environ),
-            secret_resolver=AsyncDictSecretResolver()
+            base_env=self._build_managed_runtime_base_env(),
+            secret_resolver=AsyncDictSecretResolver(),
         )
 
         runtime_support_dir = None

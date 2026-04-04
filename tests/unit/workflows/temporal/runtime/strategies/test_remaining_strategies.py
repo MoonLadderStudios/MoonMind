@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -241,6 +243,78 @@ class TestCodexCliProperties:
 
     def test_default_auth_mode(self) -> None:
         assert CodexCliStrategy().default_auth_mode == "api_key"
+
+    def test_progress_stall_timeout_is_bounded(self) -> None:
+        strategy = CodexCliStrategy()
+        assert strategy.progress_stall_timeout_seconds(timeout_seconds=120) == 120
+        assert strategy.progress_stall_timeout_seconds(timeout_seconds=900) == 300
+
+    def test_probe_progress_uses_codex_session_files(self, tmp_path) -> None:
+        strategy = CodexCliStrategy()
+        run_root = tmp_path / "run-1"
+        workspace_path = run_root / "repo"
+        sessions_dir = (
+            run_root / ".moonmind" / "codex-home" / "sessions" / "2026" / "04" / "04"
+        )
+        workspace_path.mkdir(parents=True)
+        sessions_dir.mkdir(parents=True)
+        rollout_path = sessions_dir / "rollout.jsonl"
+        rollout_path.write_text("{}", encoding="utf-8")
+
+        started_at = datetime(2026, 4, 4, 5, 34, 13, tzinfo=UTC)
+        expected_progress_at = datetime(2026, 4, 4, 5, 34, 59, tzinfo=UTC)
+        ts = expected_progress_at.timestamp()
+        os.utime(rollout_path, (ts, ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-1",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
+    def test_probe_progress_uses_workspace_parent_for_custom_workspace_name(self, tmp_path) -> None:
+        strategy = CodexCliStrategy()
+        run_root = tmp_path / "run-2"
+        workspace_path = run_root / "project"
+        sessions_dir = (
+            run_root / ".moonmind" / "codex-home" / "sessions" / "2026" / "04" / "04"
+        )
+        workspace_path.mkdir(parents=True)
+        sessions_dir.mkdir(parents=True)
+        rollout_path = sessions_dir / "rollout.jsonl"
+        rollout_path.write_text("{}", encoding="utf-8")
+
+        started_at = datetime(2026, 4, 4, 5, 34, 13, tzinfo=UTC)
+        expected_progress_at = datetime(2026, 4, 4, 5, 34, 59, tzinfo=UTC)
+        ts = expected_progress_at.timestamp()
+        os.utime(rollout_path, (ts, ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-2",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
+    def test_probe_progress_ignores_non_directory_codex_home(self, tmp_path) -> None:
+        strategy = CodexCliStrategy()
+        run_root = tmp_path / "run-3"
+        workspace_path = run_root / "repo"
+        codex_home = run_root / ".moonmind" / "codex-home"
+        workspace_path.mkdir(parents=True)
+        codex_home.parent.mkdir(parents=True)
+        codex_home.write_text("not a directory", encoding="utf-8")
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-3",
+            started_at=datetime(2026, 4, 4, 5, 34, 13, tzinfo=UTC),
+        )
+
+        assert observed is None
 
 
 class TestCodexCliBuildCommand:

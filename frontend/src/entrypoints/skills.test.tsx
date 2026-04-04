@@ -55,14 +55,6 @@ describe('Skills Entrypoint', () => {
         text: async () => 'Unhandled fetch',
       } as Response);
     });
-    // Provide the global marked surface that the template normally loads.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).marked = {
-      parse(markdown: string) {
-        const [heading = '', ...rest] = markdown.split('\n');
-        return `<h1>${heading.replace(/^#\s*/, '')}</h1><p>${rest.join(' ').trim()}</p>`;
-      },
-    };
   });
 
   afterEach(() => {
@@ -118,12 +110,6 @@ describe('Skills Entrypoint', () => {
   });
 
   it('sanitizes rendered markdown before injecting preview HTML', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).marked = {
-      parse() {
-        return '<h1>Unsafe</h1><p><img src="x" onerror="alert(1)"></p><a href="javascript:alert(1)">click</a>';
-      },
-    };
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/tasks/skills?includeContent=true')) {

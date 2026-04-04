@@ -218,3 +218,114 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
         self.assertEqual(request.agent_id, "codex")
         self.assertEqual(request.execution_profile_ref, "codex-provider-profile")
+
+    def test_build_agent_execution_request_leaves_profile_unset_when_not_explicit(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex",
+                    },
+                },
+                node_id="node-default-profile",
+                tool_name="speckit-orchestrate",
+            )
+
+        self.assertEqual(request.agent_id, "codex")
+        self.assertIsNone(request.execution_profile_ref)
+
+    def test_build_agent_execution_request_prefers_top_level_profile_fields_over_runtime_defaults(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "profileId": "legacy-top-level-profile",
+                    "runtime": {
+                        "mode": "codex",
+                        "executionProfileRef": "runtime-default-profile",
+                    },
+                },
+                node_id="node-profile-priority",
+                tool_name="pr-resolver",
+            )
+
+        self.assertEqual(request.agent_id, "codex")
+        self.assertEqual(request.execution_profile_ref, "legacy-top-level-profile")
+
+    def test_build_agent_execution_request_carries_selected_skill_in_metadata(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                    "selectedSkill": "pr-resolver",
+                },
+                node_id="node-selected-skill",
+                tool_name="codex",
+            )
+
+        metadata = request.parameters.get("metadata") or {}
+        moonmind = metadata.get("moonmind") or {}
+        self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
+
+    def test_build_agent_execution_request_overrides_stale_selected_skill(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex",
+                    "selectedSkill": "pr-resolver",
+                    "runtime": {
+                        "metadata": {
+                            "moonmind": {"selectedSkill": "auto"},
+                        }
+                    },
+                },
+                node_id="node-selected-skill-override",
+                tool_name="codex",
+            )
+
+        metadata = request.parameters.get("metadata") or {}
+        moonmind = metadata.get("moonmind") or {}
+        self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")

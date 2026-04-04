@@ -24,6 +24,7 @@ from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
+from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
@@ -1944,23 +1945,21 @@ class TemporalProposalActivities:
                 if isinstance(payload_node, Mapping):
                     target_repo = str(payload_node.get("repository") or "").strip()
                 
-                is_moonmind_target = bool(moonmind_repo) and target_repo.lower() == moonmind_repo.lower()
                 should_submit = False
-
-                if is_moonmind_target:
-                    severity = str(candidate.get("severity") or "medium")
-                    if effective_policy.severity_meets_floor(severity) and effective_policy.consume_moonmind_slot():
-                        should_submit = True
+                if effective_policy.consume_project_slot():
+                    should_submit = True
                 else:
-                    if effective_policy.consume_project_slot():
+                    severity = str(candidate.get("severity") or "medium")
+                    is_moonmind_repo = (
+                        bool(moonmind_repo)
+                        and target_repo.lower() == moonmind_repo.lower()
+                    )
+                    if (
+                        is_moonmind_repo
+                        and effective_policy.severity_meets_floor(severity)
+                        and effective_policy.consume_moonmind_slot()
+                    ):
                         should_submit = True
-                    else:
-                        severity = str(candidate.get("severity") or "medium")
-                        if bool(moonmind_repo) and effective_policy.severity_meets_floor(severity) and effective_policy.consume_moonmind_slot():
-                            is_moonmind_target = True
-                            should_submit = True
-                            if isinstance(payload_node, dict):
-                                payload_node["repository"] = moonmind_repo
 
                 if not should_submit:
                     continue
@@ -2388,6 +2387,17 @@ class TemporalAgentRuntimeActivities:
         async def _unused_slot_signal(**_kwargs: Any) -> None:
             return None
 
+        if isinstance(request, Mapping):
+            raw_pr_resolver_expected = (
+                request.get("pr_resolver_expected")
+                or request.get("prResolverExpected")
+            )
+        else:
+            raw_pr_resolver_expected = None
+        pr_resolver_expected = _coerce_bool(
+            raw_pr_resolver_expected, default=False
+        )
+
         adapter = ManagedAgentAdapter(
             profile_fetcher=_unused_profile_fetcher,
             slot_requester=_unused_slot_signal,
@@ -2397,7 +2407,9 @@ class TemporalAgentRuntimeActivities:
             run_store=self._run_store,
         )
         try:
-            result = await adapter.fetch_result(run_id)
+            result = await adapter.fetch_result(
+                run_id, pr_resolver_expected=pr_resolver_expected
+            )
             record = self._run_store.load(run_id)
             if record is not None:
                 result = self._maybe_enrich_gemini_failure_result(

@@ -68,7 +68,7 @@ Mission Control is a **server-hosted React/Vite UI**:
 - FastAPI serves the HTML shell and owns canonical routes
 - FastAPI can optionally load page modules from a configured Vite dev server during local development
 - a frontend-owned shared stylesheet is emitted through the Vite build
-- page behavior is implemented through Vite-built React entrypoints
+- page behavior is implemented through one Vite-built React entrypoint that selects the requested page module from the boot payload
 - runtime config is generated server-side
 - REST APIs remain the only supported browser/backend boundary
 
@@ -76,7 +76,8 @@ Representative pieces:
 
 - HTML shell: `api_service/templates/react_dashboard.html`
 - navigation partials: `api_service/templates/_navigation.html`
-- page entrypoints: `frontend/src/entrypoints/`
+- shared entrypoint: `frontend/src/entrypoints/mission-control.tsx`
+- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx`
 - shared stylesheet source: `frontend/src/styles/mission-control.css`
 - generated JS/CSS bundles: `api_service/static/task_dashboard/dist/`
 - React/Vite build output: `api_service/static/task_dashboard/dist/`

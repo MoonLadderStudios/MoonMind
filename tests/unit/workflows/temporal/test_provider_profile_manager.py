@@ -290,6 +290,53 @@ class TestProviderProfileManagerHelpers:
         # Test finding unknown
         assert wf._find_available_profile({"providerId": "openai"}) is None
 
+    def test_find_available_profile_honors_exact_profile_ref(self):
+        wf = self._make_workflow()
+        wf._profiles["openai-profile"] = ProfileSlotState(
+            profile_id="openai-profile",
+            max_parallel_runs=5,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="openai",
+            priority=50,
+        )
+        wf._profiles["openrouter-profile"] = ProfileSlotState(
+            profile_id="openrouter-profile",
+            max_parallel_runs=5,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="openrouter",
+            priority=200,
+        )
+
+        best = wf._find_available_profile(
+            execution_profile_ref="openai-profile",
+        )
+        assert best is not None
+        assert best.profile_id == "openai-profile"
+
+    def test_find_available_profile_exact_ref_requires_available_profile(self):
+        wf = self._make_workflow()
+        wf._profiles["busy-profile"] = ProfileSlotState(
+            profile_id="busy-profile",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            current_leases=["wf-1"],
+        )
+
+        assert (
+            wf._find_available_profile(execution_profile_ref="busy-profile")
+            is None
+        )
+        assert (
+            wf._find_available_profile(execution_profile_ref="missing-profile")
+            is None
+        )
+
     def test_find_available_profile_sorts_by_priority(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
