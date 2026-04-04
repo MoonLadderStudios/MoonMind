@@ -36,9 +36,11 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         activities = TemporalProposalActivities()
 
         # Test normal instructions with varying workflow IDs
+        # Note: instructions must be inside task, not at top level of parameters,
+        # to avoid confusion with workflow title that might be at top level
         req_normal = {
             "workflow_id": "test-wf-12345",
-            "parameters": {"instructions": "Implement feature X"}
+            "parameters": {"task": {"instructions": "Implement feature X"}}
         }
         res_normal = await activities.proposal_generate(req_normal)
         self.assertEqual(len(res_normal), 1)
@@ -49,7 +51,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
 
         req_uuid = {
             "workflow_id": "8e3b0e11-4a1d-40c9-94fc-0d3f2a1b9c8e",
-            "parameters": {"instructions": "Fix bug in Y"}
+            "parameters": {"task": {"instructions": "Fix bug in Y"}}
         }
         res_uuid = await activities.proposal_generate(req_uuid)
         self.assertEqual(
@@ -61,7 +63,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         long_instr = "A" * 300
         req_long = {
             "workflow_id": "very-long-id-12345678",
-            "parameters": {"instructions": long_instr}
+            "parameters": {"task": {"instructions": long_instr}}
         }
         res_long = await activities.proposal_generate(req_long)
         title = res_long[0]["title"]

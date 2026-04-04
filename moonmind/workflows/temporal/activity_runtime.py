@@ -1713,9 +1713,7 @@ class TemporalProposalActivities:
         task_node = parameters.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
 
-        instructions = str(
-            task.get("instructions") or parameters.get("instructions") or ""
-        ).strip()
+        instructions = str(task.get("instructions") or "").strip()
         if instructions:
             return instructions
 
