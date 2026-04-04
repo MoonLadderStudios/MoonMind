@@ -539,3 +539,30 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
     assert all(c[0] != "integration.jules.send_message" for c in captured)
     assert len(status_calls) == 1
     assert mock_run_workflow._external_status == "completed"
+
+
+def test_determine_publish_completion_returns_no_changes_for_no_commit_pr_publish(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._publish_status = "skipped"
+    mock_run_workflow._publish_reason = "publish skipped: no local changes"
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "no_changes"
+    assert message == "Workflow completed with no local changes"
+    assert publish_failure is False
+
+
+def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "failed"
+    assert message == "publishMode 'pr' requested but no PR was created"
+    assert publish_failure is True

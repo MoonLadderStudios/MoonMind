@@ -104,6 +104,7 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
+RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -171,6 +172,8 @@ class MoonMindRunWorkflow:
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
         self._pull_request_url: Optional[str] = None
+        self._publish_status: Optional[str] = None
+        self._publish_reason: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int | None = None
@@ -606,34 +609,41 @@ class MoonMindRunWorkflow:
 
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
+        output_status = "success"
+        output_message = "Workflow completed successfully"
+        finalizing_status = "success"
+        finalizing_error: str | None = None
+        publish_failure = False
+
+        if workflow.patched(RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH):
+            output_status, output_message, publish_failure = (
+                self._determine_publish_completion(parameters=parameters)
+            )
+            if publish_failure:
+                finalizing_status = "failed"
+                finalizing_error = output_message
+            elif output_status == "no_changes":
+                finalizing_error = self._publish_reason or output_message
+
         await self._run_finalizing_stage(
-            parameters=parameters, status="success", error=None
+            parameters=parameters, status=finalizing_status, error=finalizing_error
         )
 
-        self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_COMPLETED, summary="Workflow completed successfully.")
+        if publish_failure:
+            self._close_status = CLOSE_STATUS_FAILED
+            self._set_state(STATE_FAILED, summary=output_message)
+            raise exceptions.ApplicationError(
+                output_message,
+                non_retryable=True,
+            )
 
-        publish_mode = self._publish_mode(parameters)
-        # When publish mode is "pr" but no PR was created (tracked via
-        # _pull_request_url from execution stage), the workflow did not
-        # achieve its business objective. Guard with workflow.patched for
-        # replay safety on in-flight executions.
-        if workflow.patched("run-workflow-pr-status-v1"):
-            if publish_mode == "pr" and self._pull_request_url is None:
-                output: RunWorkflowOutput = {
-                    "status": "no_pr_created",
-                    "message": "Workflow completed but no PR was created",
-                }
-            else:
-                output = {
-                    "status": "success",
-                    "message": "Workflow completed successfully",
-                }
-        else:
-            output = {
-                "status": "success",
-                "message": "Workflow completed successfully",
-            }
+        self._close_status = CLOSE_STATUS_COMPLETED
+        self._set_state(STATE_COMPLETED, summary=output_message)
+
+        output: RunWorkflowOutput = {
+            "status": output_status,
+            "message": output_message,
+        }
         if self._proposals_generated > 0 or self._proposals_submitted > 0:
             output["proposals_generated"] = self._proposals_generated
             output["proposals_submitted"] = self._proposals_submitted
@@ -1002,6 +1012,10 @@ class MoonMindRunWorkflow:
             if result_status is None or result_status != "COMPLETED":
                 continue
 
+            self._record_publish_result(
+                parameters=parameters,
+                execution_result=execution_result,
+            )
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
@@ -1179,6 +1193,13 @@ class MoonMindRunWorkflow:
                         ) from e
         # Persist the PR URL so the workflow output can determine if a PR was created.
         self._pull_request_url = pull_request_url
+        publish_mode = self._publish_mode(parameters)
+        if publish_mode == "pr" and pull_request_url:
+            self._publish_status = "published"
+            self._publish_reason = "published pull request"
+        elif publish_mode == "branch" and self._publish_status is None:
+            self._publish_status = "published"
+            self._publish_reason = "published branch"
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -1373,6 +1394,78 @@ class MoonMindRunWorkflow:
             if match is not None:
                 return match.group(0)
         return None
+
+    def _record_publish_result(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        execution_result: Any,
+    ) -> None:
+        publish_mode = self._publish_mode(parameters)
+        if publish_mode not in {"pr", "branch"}:
+            return
+
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return
+
+        push_status = self._coerce_text(outputs.get("push_status"))
+        if push_status is None:
+            return
+
+        if push_status == "no_commits":
+            self._publish_status = "skipped"
+            self._publish_reason = "publish skipped: no local changes"
+            return
+
+        if push_status == "failed":
+            push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
+            self._publish_status = "failed"
+            self._publish_reason = push_error or "publish failed"
+            return
+
+        if push_status == "protected_branch":
+            push_branch = self._coerce_text(outputs.get("push_branch"), max_chars=120)
+            self._publish_status = "failed"
+            if push_branch:
+                self._publish_reason = (
+                    f"publish failed: working branch '{push_branch}' is protected"
+                )
+            else:
+                self._publish_reason = "publish failed: working branch is protected"
+            return
+
+        if push_status == "pushed" and publish_mode == "branch":
+            self._publish_status = "published"
+            self._publish_reason = "published branch"
+
+    def _determine_publish_completion(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+    ) -> tuple[str, str, bool]:
+        publish_mode = self._publish_mode(parameters)
+        if publish_mode == "none":
+            return ("success", "Workflow completed successfully", False)
+
+        if self._publish_status == "skipped":
+            return ("no_changes", "Workflow completed with no local changes", False)
+
+        if self._publish_status == "failed":
+            return (
+                "failed",
+                self._publish_reason or "Publish failed",
+                True,
+            )
+
+        if publish_mode == "pr" and self._pull_request_url is None:
+            return (
+                "failed",
+                "publishMode 'pr' requested but no PR was created",
+                True,
+            )
+
+        return ("success", "Workflow completed successfully", False)
 
     def _build_agent_execution_request(
         self,
@@ -2046,28 +2139,63 @@ class MoonMindRunWorkflow:
         try:
             self._get_logger().info("Generating finish summary.")
 
-            # Map Temporal status back to FinishOutcome code
+            publish_mode = self._publish_mode(parameters)
+            publish_status = "skipped" if status != "success" else "published"
+            publish_reason = (
+                "run did not complete successfully"
+                if status in ("failed", "canceled")
+                else (
+                    "publishing disabled"
+                    if publish_mode == "none"
+                    else "published successfully"
+                )
+            )
+
+            # Map Temporal status back to FinishOutcome code.
             code = "FAILED" if status == "failed" else "NO_CHANGES"
             if status == "canceled":
                 code = "CANCELLED"
-            # Try to refine it based on publish if it was successful
-            if status == "success":
-                publish_mode = self._publish_mode(parameters)
-                if publish_mode == "pr":
-                    # Guard with workflow.patched for replay safety.
-                    if workflow.patched("run-workflow-pr-status-v1"):
-                        # Use explicit PR URL tracking from execution stage
-                        code = (
-                            "PUBLISHED_PR"
-                            if self._pull_request_url
-                            else "NO_PR_CREATED"
+
+            if workflow.patched(RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH):
+                if status == "success":
+                    if publish_mode == "none":
+                        code = "PUBLISH_DISABLED"
+                        publish_status = "skipped"
+                        publish_reason = "publishing disabled"
+                    elif self._publish_status == "skipped":
+                        code = "NO_CHANGES"
+                        publish_status = "skipped"
+                        publish_reason = (
+                            self._publish_reason or "publish skipped: no local changes"
                         )
-                    else:
+                    elif publish_mode == "pr":
                         code = "PUBLISHED_PR"
-                elif publish_mode == "branch":
-                    code = "PUBLISHED_BRANCH"
-                elif publish_mode == "none":
-                    code = "PUBLISH_DISABLED"
+                        publish_status = "published"
+                        publish_reason = self._publish_reason or "published pull request"
+                    elif publish_mode == "branch":
+                        code = "PUBLISHED_BRANCH"
+                        publish_status = "published"
+                        publish_reason = self._publish_reason or "published branch"
+                elif self._publish_status == "failed":
+                    publish_status = "failed"
+                    publish_reason = self._publish_reason or error or "publish failed"
+            else:
+                if status == "success":
+                    if publish_mode == "pr":
+                        # Guard with workflow.patched for replay safety.
+                        if workflow.patched("run-workflow-pr-status-v1"):
+                            # Use explicit PR URL tracking from execution stage
+                            code = (
+                                "PUBLISHED_PR"
+                                if self._pull_request_url
+                                else "NO_PR_CREATED"
+                            )
+                        else:
+                            code = "PUBLISHED_PR"
+                    elif publish_mode == "branch":
+                        code = "PUBLISHED_BRANCH"
+                    elif publish_mode == "none":
+                        code = "PUBLISH_DISABLED"
 
             finish_summary = {
                 "schemaVersion": "v1",
@@ -2087,21 +2215,9 @@ class MoonMindRunWorkflow:
                     "reason": error or "completed",
                 },
                 "publish": {
-                    "mode": self._publish_mode(parameters),
-                    "status": "skipped" if status != "success" else "published",
-                    "reason": (
-                        "run did not complete successfully"
-                        if status in ("failed", "canceled")
-                        else (
-                            "publishing disabled"
-                            if self._publish_mode(parameters) == "none"
-                            else (
-                                "published successfully"
-                                if status == "success"
-                                else "no local changes"
-                            )
-                        )
-                    ),
+                    "mode": publish_mode,
+                    "status": publish_status,
+                    "reason": publish_reason,
                 },
                 "proposals": {
                     "requested": self._proposal_generation_requested(parameters),

@@ -178,6 +178,18 @@ async def mock_skill_execute_failed(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@activity.defn(name="mm.skill.execute")
+async def mock_skill_execute_no_commits(args: Dict[str, Any]) -> Dict[str, Any]:
+    SKILL_EXECUTE_CALLS.append(args)
+    return {
+        "status": "COMPLETED",
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+        },
+    }
+
+
 @activity.defn(name="sandbox.run_command")
 async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
     SANDBOX_COMMAND_CALLS.append(args)
@@ -466,6 +478,53 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     desc.search_attributes.get("mm_state"),
                     ["failed"]
                 )
+
+    async def test_moonmind_run_workflow_pr_publish_without_changes_returns_no_changes(
+        self,
+    ) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[mock_plan_generate],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[mock_artifact_read],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=SANDBOX_TASK_QUEUE,
+                    activities=[mock_sandbox_command, mock_skill_execute_no_commits],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+            ):
+                result = await env.client.execute_workflow(
+                    MoonMindRunWorkflow.run,
+                    {
+                        "workflowType": "MoonMind.Run",
+                        "initialParameters": {
+                            "repo": "moonladder/moonmind",
+                            "publishMode": "pr",
+                        },
+                    },
+                    id="test-workflow-pr-no-changes",
+                    task_queue="test-task-queue",
+                    search_attributes=_trusted_search_attributes(),
+                )
+
+            self.assertEqual(result["status"], "no_changes")
+            self.assertEqual(
+                result["message"], "Workflow completed with no local changes"
+            )
 
     async def test_proposals_stage_enabled(self) -> None:
         """When proposeTasks is true, proposal activities are invoked."""
