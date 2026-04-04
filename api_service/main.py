@@ -261,8 +261,7 @@ async def _sync_env_managed_secrets() -> int:
             )
             if imported:
                 logger.info(
-                    "Synced managed secrets from environment on startup: slugs=%s imported_count=%s",
-                    sorted(candidate_env_secrets.keys()),
+                    "Synced managed secrets from environment on startup: imported_count=%s",
                     imported,
                 )
             return imported

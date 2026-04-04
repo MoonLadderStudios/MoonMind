@@ -33,5 +33,10 @@
     "id": 4057539970,
     "disposition": "not-applicable",
     "rationale": "Copilot PR overview only; it did not introduce an additional actionable request beyond the inline comments already classified."
+  },
+  {
+    "id": 3034940528,
+    "disposition": "addressed",
+    "rationale": "Removed the startup log detail derived from the managed-secret candidate map so the sync path no longer emits secret-adjacent data that GitHub Advanced Security flags as clear-text logging."
   }
 ]
