@@ -245,7 +245,10 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.agent_id, "codex")
         self.assertIsNone(request.execution_profile_ref)
 
-    def test_build_agent_execution_request_prefers_top_level_profile_fields_over_runtime_defaults(self) -> None:
+    def test_build_agent_execution_request_prefers_runtime_block_profile_over_top_level(self) -> None:
+        """Runtime planner sets profile fields inside the runtime block; these
+        should take precedence over top-level node_inputs keys which may have
+        been corrupted by AI-generated plan modifications."""
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
@@ -260,10 +263,11 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         ):
             request = wf._build_agent_execution_request(
                 node_inputs={
-                    "profileId": "legacy-top-level-profile",
+                    "profileId": "stale-top-level-profile",
+                    "executionProfileRef": "stale-top-level-ref",
                     "runtime": {
                         "mode": "codex",
-                        "executionProfileRef": "runtime-default-profile",
+                        "profileId": "runtime-planner-profile",
                     },
                 },
                 node_id="node-profile-priority",
@@ -271,7 +275,69 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             )
 
         self.assertEqual(request.agent_id, "codex")
-        self.assertEqual(request.execution_profile_ref, "legacy-top-level-profile")
+        self.assertEqual(request.execution_profile_ref, "runtime-planner-profile")
+
+    def test_build_agent_execution_request_falls_back_on_invalid_profile_ref(self) -> None:
+        """When a plan node carries a profile ID that doesn't match any known
+        profile for the runtime (e.g. AI-hallucinated 'default:codex_cli'),
+        the dispatcher should reject it and fall back to auto-selection."""
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        # Simulate profile snapshots synced from the provider profile manager
+        wf._profile_snapshots = {"codex_openrouter_qwen36_plus", "codex_default"}
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex",
+                        "profileId": "default:codex_cli",  # Invalid / not in snapshots
+                    },
+                },
+                node_id="node-invalid-profile",
+                tool_name="pr-resolver",
+            )
+
+        self.assertEqual(request.agent_id, "codex")
+        self.assertIsNone(request.execution_profile_ref)
+
+    def test_build_agent_execution_request_accepts_valid_profile_ref(self) -> None:
+        """When a plan node carries a profile ID that is in the known snapshots,
+        it should be passed through."""
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {"codex_openrouter_qwen36_plus", "codex_default"}
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex",
+                        "profileId": "codex_openrouter_qwen36_plus",
+                    },
+                },
+                node_id="node-valid-profile",
+                tool_name="pr-resolver",
+            )
+
+        self.assertEqual(request.agent_id, "codex")
+        self.assertEqual(request.execution_profile_ref, "codex_openrouter_qwen36_plus")
 
     def test_build_agent_execution_request_carries_selected_skill_in_metadata(self) -> None:
         from unittest.mock import patch
