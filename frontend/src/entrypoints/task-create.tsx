@@ -717,8 +717,7 @@ async function createInputArtifact(
   const completeUrl = `/api/artifacts/${encodeURIComponent(artifactId)}/complete`;
   let completeError: Error | null = null;
   const completeRetryScheduleMs = [0, ...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
-  for (let attempt = 0; attempt < completeRetryScheduleMs.length; attempt += 1) {
-    const delayMs = completeRetryScheduleMs[attempt];
+  for (const [attempt, delayMs] of completeRetryScheduleMs.entries()) {
     if (delayMs > 0) {
       await new Promise((resolve) => window.setTimeout(resolve, delayMs));
     }
