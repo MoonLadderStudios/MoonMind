@@ -1,32 +1,30 @@
-import { Suspense, lazy, useMemo, type ComponentType, type ReactNode } from 'react';
+import { Suspense, lazy, type ComponentType, type ReactNode } from 'react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
-type PageModule = { default: PageComponent };
+const PAGE_COMPONENTS = {
+  'manifest-submit': lazy(() => import('./manifest-submit')),
+  manifests: lazy(() => import('./manifests')),
+  proposals: lazy(() => import('./proposals')),
+  schedules: lazy(() => import('./schedules')),
+  settings: lazy(() => import('./settings')),
+  skills: lazy(() => import('./skills')),
+  'task-create': lazy(() => import('./task-create')),
+  'task-detail': lazy(() => import('./task-detail')),
+  'tasks-home': lazy(() => import('./tasks-home')),
+  'tasks-list': lazy(() => import('./tasks-list')),
+} satisfies Record<string, PageComponent>;
 
-const PAGE_LOADERS = {
-  'manifest-submit': () => import('./manifest-submit'),
-  manifests: () => import('./manifests'),
-  proposals: () => import('./proposals'),
-  schedules: () => import('./schedules'),
-  settings: () => import('./settings'),
-  skills: () => import('./skills'),
-  'task-create': () => import('./task-create'),
-  'task-detail': () => import('./task-detail'),
-  'tasks-home': () => import('./tasks-home'),
-  'tasks-list': () => import('./tasks-list'),
-} satisfies Record<string, () => Promise<PageModule>>;
-
-type SupportedPage = keyof typeof PAGE_LOADERS;
+type SupportedPage = keyof typeof PAGE_COMPONENTS;
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
 };
 
 function isSupportedPage(page: string): page is SupportedPage {
-  return page in PAGE_LOADERS;
+  return Object.hasOwn(PAGE_COMPONENTS, page);
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -78,11 +76,7 @@ function AppShell({
 
 export function MissionControlApp({ payload }: { payload: BootPayload }) {
   const layout = readSharedLayout(payload);
-  const pageLoader = isSupportedPage(payload.page) ? PAGE_LOADERS[payload.page] : null;
-  const LazyPage = useMemo(
-    () => (pageLoader ? lazy(pageLoader) : null),
-    [pageLoader],
-  );
+  const LazyPage = isSupportedPage(payload.page) ? PAGE_COMPONENTS[payload.page] : null;
 
   return (
     <AppShell dataWidePanel={layout.dataWidePanel === true}>

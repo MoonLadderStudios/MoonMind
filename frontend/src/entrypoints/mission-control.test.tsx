@@ -63,4 +63,13 @@ describe('Mission Control shared entry', () => {
     expect(await screen.findByText(/Unknown Mission Control page:/i)).toBeTruthy();
     expect(screen.getByText('not-a-page')).toBeTruthy();
   });
+
+  it('treats inherited object keys as unsupported pages', async () => {
+    renderWithClient(
+      <MissionControlApp payload={{ page: 'toString', apiBase: '/api' }} />,
+    );
+
+    expect(await screen.findByText(/Unknown Mission Control page:/i)).toBeTruthy();
+    expect(screen.getByText('toString')).toBeTruthy();
+  });
 });

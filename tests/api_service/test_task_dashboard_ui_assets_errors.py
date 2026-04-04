@@ -24,6 +24,8 @@ def test_tasks_list_returns_503_when_manifest_entry_missing(
 
     assert response.status_code == 503
     assert "Mission Control UI unavailable" in response.text
+    assert "shared Mission Control entrypoint" in response.text
+    assert "mission-control" in response.text
     assert "tasks-list" in response.text
 
 

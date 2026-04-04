@@ -229,7 +229,8 @@ def _mission_control_ui_error_response(page: str, detail: str) -> HTMLResponse:
 </head>
 <body>
   <h1>Mission Control UI unavailable</h1>
-  <p>Missing or incomplete Vite bundle for Mission Control page <code>{escape(page)}</code>.</p>
+  <p>Missing or incomplete Vite bundle for the shared Mission Control entrypoint <code>mission-control</code>.</p>
+  <p>While rendering Mission Control page <code>{escape(page)}</code>.</p>
   <p>{escape(detail)}</p>
   <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
 </body>
@@ -270,7 +271,6 @@ def _render_react_page(
             "boot_payload": boot_payload,
             "assets_html": assets_html,
             "current_path": current_path,
-            "data_wide_panel": data_wide_panel,
         },
     )
 
