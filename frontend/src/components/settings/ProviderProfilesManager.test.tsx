@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ProviderProfile, defaultFormState, toFormState } from './ProviderProfilesManager';
+import type { ProviderProfile } from './ProviderProfilesManager';
+import { defaultFormState, toFormState, parseCommandBehavior, parseTags, parsePriority, parseClearEnvKeys } from './ProviderProfilesManager';
 
 describe('defaultFormState', () => {
   it('includes advanced fields with correct defaults', () => {
@@ -106,5 +107,90 @@ describe('toFormState', () => {
     expect(state.defaultModel).toBe('');
     expect(state.volumeRef).toBe('');
     expect(state.volumeMountPath).toBe('');
+  });
+});
+
+describe('parseCommandBehavior', () => {
+  it('returns null for empty or blank input', () => {
+    expect(parseCommandBehavior('')).toBe(null);
+    expect(parseCommandBehavior('   ')).toBe(null);
+  });
+
+  it('returns null for empty object literal', () => {
+    expect(parseCommandBehavior('{}')).toBe(null);
+    expect(parseCommandBehavior('  {}  ')).toBe(null);
+  });
+
+  it('parses a valid object', () => {
+    const result = parseCommandBehavior('{"suppress_default_model_flag": true}');
+    expect(result).toEqual({ suppress_default_model_flag: true });
+  });
+
+  it('throws on invalid JSON', () => {
+    expect(() => parseCommandBehavior('{bad json')).toThrow('Command behavior must be a JSON object.');
+  });
+
+  it('throws on non-object values (array)', () => {
+    expect(() => parseCommandBehavior('[1, 2, 3]')).toThrow('Command behavior must be a JSON object.');
+  });
+
+  it('throws on non-object values (string)', () => {
+    expect(() => parseCommandBehavior('"just a string"')).toThrow('Command behavior must be a JSON object.');
+  });
+
+  it('throws on non-object values (null)', () => {
+    expect(() => parseCommandBehavior('null')).toThrow('Command behavior must be a JSON object.');
+  });
+});
+
+describe('parseTags', () => {
+  it('returns null for empty input', () => {
+    expect(parseTags('')).toBe(null);
+    expect(parseTags('   ')).toBe(null);
+  });
+
+  it('splits comma-separated values', () => {
+    expect(parseTags('openrouter, qwen, codex')).toEqual(['openrouter', 'qwen', 'codex']);
+  });
+
+  it('filters blank entries', () => {
+    expect(parseTags('openrouter, , codex')).toEqual(['openrouter', 'codex']);
+  });
+});
+
+describe('parsePriority', () => {
+  it('returns null for empty input', () => {
+    expect(parsePriority('')).toBe(null);
+    expect(parsePriority('   ')).toBe(null);
+  });
+
+  it('parses valid numbers', () => {
+    expect(parsePriority('100')).toBe(100);
+    expect(parsePriority('0')).toBe(0);
+    expect(parsePriority('-5')).toBe(-5);
+  });
+
+  it('throws on invalid input', () => {
+    expect(() => parsePriority('abc')).toThrow('Priority must be a valid number.');
+    expect(() => parsePriority('NaN')).toThrow('Priority must be a valid number.');
+  });
+
+  it('throws on Infinity', () => {
+    expect(() => parsePriority('Infinity')).toThrow('Priority must be a valid number.');
+  });
+});
+
+describe('parseClearEnvKeys', () => {
+  it('returns null for empty input', () => {
+    expect(parseClearEnvKeys('')).toBe(null);
+    expect(parseClearEnvKeys('   ')).toBe(null);
+  });
+
+  it('splits newline-separated values', () => {
+    expect(parseClearEnvKeys('OPENAI_API_KEY\nOPENAI_BASE_URL')).toEqual(['OPENAI_API_KEY', 'OPENAI_BASE_URL']);
+  });
+
+  it('filters blank lines', () => {
+    expect(parseClearEnvKeys('OPENAI_API_KEY\n\nOPENAI_BASE_URL')).toEqual(['OPENAI_API_KEY', 'OPENAI_BASE_URL']);
   });
 });

@@ -127,28 +127,32 @@ function parseSecretRefs(text: string): Record<string, string> {
   return secretRefs;
 }
 
-function parseCommandBehavior(text: string): Record<string, any> | null {
-  if (text.trim() === '' || text.trim() === '{}') return null;
-  try {
-    const parsed = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
+export function parseCommandBehavior(text: string): Record<string, any> | null {
+  const trimmed = text.trim();
+  if (trimmed === '' || trimmed === '{}') return null;
+  const parsed: unknown = JSON.parse(trimmed);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Command behavior must be a JSON object.');
   }
+  return parsed as Record<string, any>;
 }
 
-function parseTags(text: string): string[] | null {
+export function parseTags(text: string): string[] | null {
   const tags = text.split(',').map(t => t.trim()).filter(Boolean);
   return tags.length > 0 ? tags : null;
 }
 
-function parsePriority(text: string): number | null {
-  if (text.trim() === '') return null;
-  const num = Number(text);
-  return isNaN(num) ? null : num;
+export function parsePriority(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed === '') return null;
+  const num = Number(trimmed);
+  if (isNaN(num) || !Number.isFinite(num)) {
+    throw new Error('Priority must be a valid number.');
+  }
+  return num;
 }
 
-function parseClearEnvKeys(text: string): string[] | null {
+export function parseClearEnvKeys(text: string): string[] | null {
   const keys = text.split('\n').map(k => k.trim()).filter(Boolean);
   return keys.length > 0 ? keys : null;
 }
@@ -194,7 +198,7 @@ export function ProviderProfilesManager({
         enabled: form.enabled,
         command_behavior: parseCommandBehavior(form.commandBehavior),
         tags: parseTags(form.tagsText),
-        priority: parsePriority(form.priority) ?? 100,
+        priority: parsePriority(form.priority),
         clear_env_keys: parseClearEnvKeys(form.clearEnvKeysText),
         account_label: form.accountLabel.trim() || null,
       };

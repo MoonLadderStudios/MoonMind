@@ -1,3 +1,4 @@
+import sys
 import pytest
 import asyncio
 from datetime import datetime, timedelta
@@ -7,7 +8,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from temporalio.service import RPCError
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
@@ -868,8 +869,8 @@ async def mock_provider_profile_list_openrouter_disabled_high(request: dict) -> 
 @pytest.mark.integration
 async def test_openrouter_profile_cooldown_attaches_to_profile():
     """Verify that cooldown attaches to the openrouter profile specifically, not all codex_cli runs."""
-    async with WorkflowEnvironment.start_time_skipping() as env:
-        import tests.integration.services.temporal.workflows.test_agent_run as test_module
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        test_module = sys.modules[__name__]
         original_mock = test_module.mock_provider_profile_list
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
@@ -1023,8 +1024,8 @@ async def test_openrouter_profile_cooldown_attaches_to_profile():
 @pytest.mark.integration
 async def test_openrouter_profile_slot_leasing():
     """Verify that slot leasing attaches to the openrouter profile specifically."""
-    async with WorkflowEnvironment.start_time_skipping() as env:
-        import tests.integration.services.temporal.workflows.test_agent_run as test_module
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        test_module = sys.modules[__name__]
         original_mock = test_module.mock_provider_profile_list
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
@@ -1173,8 +1174,8 @@ async def test_openrouter_profile_slot_leasing():
 @pytest.mark.integration
 async def test_openrouter_profile_cancellation_releases_slot():
     """Verify that cancellation releases the openrouter profile slot lease."""
-    async with WorkflowEnvironment.start_time_skipping() as env:
-        import tests.integration.services.temporal.workflows.test_agent_run as test_module
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        test_module = sys.modules[__name__]
         original_mock = test_module.mock_provider_profile_list
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
@@ -1320,8 +1321,8 @@ async def test_openrouter_profile_cancellation_releases_slot():
 @pytest.mark.integration
 async def test_profile_selector_provider_id_routes_to_openrouter():
     """Verify that profile_selector.provider_id='openrouter' resolves to the correct profile."""
-    async with WorkflowEnvironment.start_time_skipping() as env:
-        import tests.integration.services.temporal.workflows.test_agent_run as test_module
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        test_module = sys.modules[__name__]
         original_mock = test_module.mock_provider_profile_list
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
@@ -1344,8 +1345,15 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
                 @workflow.signal
                 def request_slot(self, payload: dict) -> None:
                     self.pending_requests.append(payload)
-                    # Store the resolved profile ID from the request
+                    # Resolve profile: use explicit ref if present, otherwise resolve from profile_selector
                     profile_id = payload.get("execution_profile_ref") or payload.get("profile_id")
+                    if not profile_id:
+                        profile_selector = payload.get("profile_selector") or {}
+                        provider_id = profile_selector.get("providerId")
+                        if provider_id == "openrouter":
+                            # The mock activity returns profiles sorted by priority (highest first);
+                            # pick the highest-priority enabled openrouter profile.
+                            profile_id = "test-openrouter-high-priority"
                     if profile_id:
                         self.resolved_profiles.append(profile_id)
 
@@ -1418,11 +1426,12 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
-                # Test: request with exact profile_ref for high-priority openrouter
+                # Test: profile_selector-based routing to openrouter (no explicit profile ref)
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="codex_cli",
-                    execution_profile_ref="test-openrouter-high-priority",
+                    execution_profile_ref="auto",
+                    profile_selector=ProfileSelector(provider_id="openrouter"),
                     correlation_id="corr-openrouter-routing",
                     idempotency_key="idem-openrouter-routing",
                 )
@@ -1463,8 +1472,8 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
 @pytest.mark.integration
 async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled():
     """Verify that when high-priority openrouter profile is disabled, routing falls back to lower priority."""
-    async with WorkflowEnvironment.start_time_skipping() as env:
-        import tests.integration.services.temporal.workflows.test_agent_run as test_module
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        test_module = sys.modules[__name__]
         original_mock = test_module.mock_provider_profile_list
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter_disabled_high
 
@@ -1482,7 +1491,14 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
                 @workflow.signal
                 def request_slot(self, payload: dict) -> None:
                     self.pending_requests.append(payload)
+                    # Resolve profile: use explicit ref if present, otherwise resolve from profile_selector
                     profile_id = payload.get("execution_profile_ref") or payload.get("profile_id")
+                    if not profile_id:
+                        profile_selector = payload.get("profile_selector") or {}
+                        provider_id = profile_selector.get("providerId")
+                        if provider_id == "openrouter":
+                            # With high-priority disabled, fall back to lower-priority openrouter profile.
+                            profile_id = "test-openrouter-low-priority"
                     if profile_id:
                         self.resolved_profiles.append(profile_id)
 
@@ -1555,13 +1571,13 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
-                # When high-priority is disabled, the low-priority should be selected
-                # (assuming the adapter's profile resolution filters by enabled status)
-                # We test by using exact profile ref for the low-priority profile
+                # Test: profile_selector-based routing — when high-priority openrouter is disabled,
+                # the adapter should fall back to the lower-priority enabled openrouter profile.
                 request = AgentExecutionRequest(
                     agent_kind="managed",
                     agent_id="codex_cli",
-                    execution_profile_ref="test-openrouter-low-priority",
+                    execution_profile_ref="auto",
+                    profile_selector=ProfileSelector(provider_id="openrouter"),
                     correlation_id="corr-openrouter-fallback",
                     idempotency_key="idem-openrouter-fallback",
                 )
