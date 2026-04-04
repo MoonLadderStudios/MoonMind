@@ -22,10 +22,7 @@ def _load_verify_module():
 def test_expected_entrypoints_matches_vite_config() -> None:
     mod = _load_verify_module()
     names = mod.expected_entrypoints()
-    assert "tasks-list" in names
-    assert "task-detail" in names
-    assert "task-create" in names
-    assert "skills" in names
+    assert names == ["mission-control"]
 
 
 def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
@@ -46,11 +43,10 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
             import { resolve } from 'path';
 
             export default {
-              build: {
+                  build: {
                 rollupOptions: {
                   input: {
-                    'tasks-list': resolve(__dirname, 'src/entrypoints/tasks-list.tsx'),
-                    'task-detail': resolve(__dirname, 'src/entrypoints/task-detail.tsx'),
+                    'mission-control': resolve(__dirname, 'src/entrypoints/mission-control.tsx'),
                   },
                 },
               },
@@ -65,12 +61,9 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
         textwrap.dedent(
             """
             {
-              "entrypoints/tasks-list.tsx": {
-                "file": "assets/tasks-list.js",
+              "entrypoints/mission-control.tsx": {
+                "file": "assets/mission-control.js",
                 "css": ["assets/shared.css"]
-              },
-              "entrypoints/task-detail.tsx": {
-                "file": "assets/task-detail.js"
               }
             }
             """
@@ -79,8 +72,10 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
         encoding="utf-8",
     )
 
-    (assets_dir / "tasks-list.js").write_text("console.log('tasks-list');\n", encoding="utf-8")
-    (assets_dir / "task-detail.js").write_text("console.log('task-detail');\n", encoding="utf-8")
+    (assets_dir / "mission-control.js").write_text(
+        "console.log('mission-control');\n",
+        encoding="utf-8",
+    )
     (assets_dir / "shared.css").write_text("body { color: black; }\n", encoding="utf-8")
 
     mod = _load_verify_module()

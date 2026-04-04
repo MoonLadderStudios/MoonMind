@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 
-import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
 
 interface SkillItem {
@@ -280,5 +279,4 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(SkillsPage);
+export default SkillsPage;

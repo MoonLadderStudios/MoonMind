@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-import { mountPage } from '../boot/mountPage';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
 
@@ -214,5 +213,4 @@ export function ManifestSubmitPage({ payload: _payload }: { payload: BootPayload
     </div>
   );
 }
-
-mountPage(ManifestSubmitPage);
+export default ManifestSubmitPage;

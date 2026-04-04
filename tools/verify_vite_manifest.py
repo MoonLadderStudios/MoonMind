@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SHARED_ENTRYPOINT = "mission-control"
 
 
 def expected_entrypoints() -> list[str]:
@@ -27,7 +28,15 @@ def expected_entrypoints() -> list[str]:
             file=sys.stderr,
         )
         sys.exit(1)
-    return sorted(set(keys))
+    names = sorted(set(keys))
+    if names != [SHARED_ENTRYPOINT]:
+        print(
+            "Expected frontend/vite.config.ts to define exactly one shared "
+            f"Mission Control entrypoint: {SHARED_ENTRYPOINT!r}. Found: {names!r}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return names
 
 
 def _file_refs(meta: dict) -> list[tuple[str, str]]:
@@ -92,7 +101,7 @@ def main() -> int:
         return 1
 
     print(
-        f"OK: {len(names)} Mission Control entrypoints; manifest {manifest_path.relative_to(ROOT)}"
+        f"OK: shared Mission Control entrypoint {SHARED_ENTRYPOINT!r}; manifest {manifest_path.relative_to(ROOT)}"
     )
     return 0
 

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { mountPage } from "../boot/mountPage";
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
 
@@ -2672,5 +2671,4 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(TaskCreatePage);
+export default TaskCreatePage;

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
-import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
@@ -570,5 +569,4 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(TasksListPage);
+export default TasksListPage;
