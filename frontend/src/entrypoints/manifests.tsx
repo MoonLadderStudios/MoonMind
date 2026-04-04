@@ -1,6 +1,5 @@
 import { DataTable } from '../components/tables/DataTable';
 import { useQuery } from '@tanstack/react-query';
-import { mountPage } from '../boot/mountPage';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 
@@ -16,7 +15,7 @@ const ManifestsResponseSchema = z.object({
   items: z.array(ManifestRunSchema),
 });
 
-function ManifestsPage({ payload }: { payload: BootPayload }) {
+export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['manifests'],
     queryFn: async () => {
@@ -55,5 +54,4 @@ function ManifestsPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(ManifestsPage);
+export default ManifestsPage;

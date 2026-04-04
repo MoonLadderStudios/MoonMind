@@ -38,27 +38,14 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
             "css": ["assets/mountPage.css"],
         }
     }
-    for entrypoint in (
-        "dashboard-alerts",
-        "manifest-submit",
-        "manifests",
-        "proposals",
-        "schedules",
-        "settings",
-        "skills",
-        "task-create",
-        "task-detail",
-        "tasks-home",
-        "tasks-list",
-    ):
-        manifest[f"entrypoints/{entrypoint}.tsx"] = {
-            "file": f"assets/{entrypoint}.js",
-            "imports": [shared_key],
-        }
-        (assets_dir / f"{entrypoint}.js").write_text(
-            f"console.log('{entrypoint}');",
-            encoding="utf-8",
-        )
+    manifest["entrypoints/mission-control.tsx"] = {
+        "file": "assets/mission-control.js",
+        "imports": [shared_key],
+    }
+    (assets_dir / "mission-control.js").write_text(
+        "console.log('mission-control');",
+        encoding="utf-8",
+    )
 
     (assets_dir / "mountPage.js").write_text("console.log('shared');", encoding="utf-8")
     (assets_dir / "mountPage.css").write_text("body { color: red; }", encoding="utf-8")
@@ -171,7 +158,8 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "/static/task_dashboard/dist/assets/" in response.text
         assert "task-dashboard-config" not in response.text
         assert "/static/task_dashboard/dashboard.js" not in response.text
-        assert 'id="dashboard-alerts-root"' in response.text
+        assert 'id="mission-control-root"' in response.text
+        assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
 
@@ -188,7 +176,8 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
-        assert 'id="dashboard-alerts-root"' in response.text
+        assert 'id="mission-control-root"' in response.text
+        assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
 
@@ -203,11 +192,7 @@ def test_react_shell_uses_vite_dev_server_assets_when_configured(
 
     assert response.status_code == 200
     assert response.text.count('src="http://127.0.0.1:5173/@vite/client"') == 1
-    assert 'src="http://127.0.0.1:5173/entrypoints/tasks-list.tsx"' in response.text
-    assert (
-        'src="http://127.0.0.1:5173/entrypoints/dashboard-alerts.tsx"'
-        in response.text
-    )
+    assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in response.text
     assert "/static/task_dashboard/dist/assets/" not in response.text
 
 
@@ -231,11 +216,11 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in ("/tasks/list", "/tasks/tasks-list", "/tasks/proposals"):
         response = client.get(path)
         assert response.status_code == 200
-        assert "panel--data-wide" in response.text
+        assert '"dataWidePanel":true' in response.text
     for path in ("/tasks/manifests", "/tasks/settings"):
         response = client.get(path)
         assert response.status_code == 200
-        assert "panel--data-wide" not in response.text
+        assert '"dataWidePanel":false' in response.text
 
 
 def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:

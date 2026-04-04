@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
@@ -1463,5 +1462,4 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(TaskDetailPage);
+export default TaskDetailPage;

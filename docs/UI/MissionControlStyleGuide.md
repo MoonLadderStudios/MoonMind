@@ -291,10 +291,9 @@ body {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 ```
 
-2. Keep the no-flash theme bootstrap in `<head>` and let React entrypoints mount inside the shared shell:
+2. Keep the no-flash theme bootstrap in `<head>` and let the shared Mission Control entrypoint mount inside the shell:
 
 ```html
-<div id="dashboard-alerts-root"></div>
 <div id="mission-control-root"></div>
 ```
 

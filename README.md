@@ -96,7 +96,7 @@ npm run ui:dev
 MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <your-fastapi-start-command>
 ```
 
-When `MOONMIND_UI_DEV_SERVER_URL` is set, FastAPI bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and the requested page entrypoint (e.g. `/entrypoints/tasks-list.tsx`) directly from the Vite dev server. This enables hot module replacement while keeping FastAPI as the page host.
+When `MOONMIND_UI_DEV_SERVER_URL` is set, FastAPI bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and the shared Mission Control entrypoint (`/entrypoints/mission-control.tsx`) directly from the Vite dev server. The page still comes from the boot payload (`payload.page`), so FastAPI remains the page host while Vite provides HMR for the shared bundle.
 
 **Without `MOONMIND_UI_DEV_SERVER_URL`, FastAPI serves the built `dist/` bundle** — changes made in the Vite dev server will **not** appear.
 

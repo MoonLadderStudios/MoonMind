@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { formatTaskSkills } from '../utils/formatters';
-import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
@@ -49,7 +48,7 @@ function replaceUrlQuery(params: URLSearchParams) {
   window.history.replaceState({}, '', queryText ? `${path}?${queryText}` : path);
 }
 
-function ProposalsPage({ payload }: { payload: BootPayload }) {
+export function ProposalsPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
@@ -420,5 +419,4 @@ function ProposalsPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-
-mountPage(ProposalsPage);
+export default ProposalsPage;
