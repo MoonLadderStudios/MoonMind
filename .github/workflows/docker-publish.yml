@@ -54,16 +54,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Check and Test Frontend
+      - name: Check frontend and generated contracts
         run: |
           npm ci
-          npm run ui:typecheck
-          npm run ui:lint
-          npm run ui:test
-          npm run ui:clean-dist
-          npm run ui:build
-          npm run ui:verify-manifest
-          npm run api:types:check
+          npm run frontend:ci
+          npm run contracts:check
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
