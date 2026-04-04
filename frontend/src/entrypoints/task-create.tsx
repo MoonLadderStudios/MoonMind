@@ -7,6 +7,8 @@ import { navigateTo } from "../lib/navigation";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
+const ARTIFACT_COMPLETE_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000];
+const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
 const SKILL_OPTIONS_DATALIST_ID = "queue-skill-options";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
@@ -701,7 +703,11 @@ async function createInputArtifact(
 
   const completeUrl = `/api/artifacts/${encodeURIComponent(artifactId)}/complete`;
   let completeError: Error | null = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt <= ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
     let completeResponse: Response;
     try {
       completeResponse = await fetch(completeUrl, {
@@ -740,11 +746,14 @@ async function createInputArtifact(
       "Failed to finalize task input artifact upload.",
     );
     completeError = new Error(message);
-    if (!message.includes("artifact upload is not complete") || attempt === 2) {
+    if (
+      !message.includes(ARTIFACT_COMPLETE_RETRY_MESSAGE) ||
+      attempt === ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length
+    ) {
       throw completeError;
     }
     await new Promise((resolve) =>
-      window.setTimeout(resolve, 200 * (attempt + 1)),
+      window.setTimeout(resolve, ARTIFACT_COMPLETE_RETRY_DELAYS_MS[attempt]),
     );
   }
 

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 
 
 class TemporalArtifactError(Exception):
@@ -1399,14 +1400,7 @@ class TemporalArtifactService:
                 None, self._store.read_bytes, artifact.storage_key
             )
         else:
-            try:
-                payload = await asyncio.get_running_loop().run_in_executor(
-                    None, self._store.read_bytes, artifact.storage_key
-                )
-            except Exception as exc:
-                raise TemporalArtifactStateError(
-                    "artifact upload is not complete"
-                ) from exc
+            payload = await self._read_single_put_payload_with_retry(artifact)
 
         digest, actual_size = self._compute_digest_and_size(payload)
         if (
@@ -1449,6 +1443,33 @@ class TemporalArtifactService:
             artifact.artifact_id,
         )
         return artifact
+
+    async def _read_single_put_payload_with_retry(
+        self,
+        artifact: db_models.TemporalArtifact,
+    ) -> bytes:
+        last_error: Exception | None = None
+        for attempt, delay_seconds in enumerate(
+            (0.0, *_SINGLE_PUT_READ_RETRY_DELAYS_SECONDS),
+            start=1,
+        ):
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            try:
+                return await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.debug(
+                    "Temporal artifact single-put completion read retry pending "
+                    "artifact_id=%s attempt=%s",
+                    artifact.artifact_id,
+                    attempt,
+                )
+        raise TemporalArtifactStateError(
+            "artifact upload is not complete"
+        ) from last_error
 
     async def read(
         self,
