@@ -24,6 +24,7 @@ from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
+from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
@@ -2386,6 +2387,17 @@ class TemporalAgentRuntimeActivities:
         async def _unused_slot_signal(**_kwargs: Any) -> None:
             return None
 
+        if isinstance(request, Mapping):
+            raw_pr_resolver_expected = (
+                request.get("pr_resolver_expected")
+                or request.get("prResolverExpected")
+            )
+        else:
+            raw_pr_resolver_expected = None
+        pr_resolver_expected = _coerce_bool(
+            raw_pr_resolver_expected, default=False
+        )
+
         adapter = ManagedAgentAdapter(
             profile_fetcher=_unused_profile_fetcher,
             slot_requester=_unused_slot_signal,
@@ -2395,7 +2407,9 @@ class TemporalAgentRuntimeActivities:
             run_store=self._run_store,
         )
         try:
-            result = await adapter.fetch_result(run_id)
+            result = await adapter.fetch_result(
+                run_id, pr_resolver_expected=pr_resolver_expected
+            )
             record = self._run_store.load(run_id)
             if record is not None:
                 result = self._maybe_enrich_gemini_failure_result(

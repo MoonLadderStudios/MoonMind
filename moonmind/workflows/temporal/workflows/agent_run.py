@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
 from temporalio import workflow, activity
@@ -102,6 +103,22 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+
+
+def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
+    """Return the selected agent skill recorded in request metadata, if present."""
+
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    moonmind = metadata_map.get("moonmind")
+    moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
+    selected_skill = str(
+        moonmind_map.get("selectedSkill")
+        or metadata_map.get("selectedSkill")
+        or ""
+    ).strip()
+    return selected_skill or None
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     return f"auth-profile-manager:{runtime_id}"
@@ -1137,6 +1154,8 @@ class MoonMindAgentRun:
                                 activity_input["publish_mode"] = publish_mode
                             if target_branch:
                                 activity_input["target_branch"] = target_branch
+                            if _request_selected_skill(request) == "pr-resolver":
+                                activity_input["pr_resolver_expected"] = True
 
                             result_payload = await self._execute_routed_activity(
                                 "agent_runtime.fetch_result",
@@ -1151,7 +1170,12 @@ class MoonMindAgentRun:
                             )
                         else:
                             # Managed agent legacy path.
-                            self.final_result = await adapter.fetch_result(self.run_id)
+                            self.final_result = await adapter.fetch_result(
+                                self.run_id,
+                                pr_resolver_expected=(
+                                    _request_selected_skill(request) == "pr-resolver"
+                                ),
+                            )
 
                 if (
                     request.agent_kind == "external"
