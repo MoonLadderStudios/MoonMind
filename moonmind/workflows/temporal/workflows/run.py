@@ -1502,6 +1502,16 @@ class MoonMindRunWorkflow:
             return ("success", "Workflow completed successfully", False)
 
         if self._publish_status == "skipped":
+            if publish_mode == "pr":
+                self._publish_status = "failed"
+                self._publish_reason = (
+                    "publishMode 'pr' requested but no local changes were produced"
+                )
+                return (
+                    "failed",
+                    self._publish_reason,
+                    True,
+                )
             return ("no_changes", "Workflow completed with no local changes", False)
 
         if self._publish_status == "failed":

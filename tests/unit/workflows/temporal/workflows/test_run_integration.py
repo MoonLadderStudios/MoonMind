@@ -541,7 +541,7 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
     assert mock_run_workflow._external_status == "completed"
 
 
-def test_determine_publish_completion_returns_no_changes_for_no_commit_pr_publish(
+def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     mock_run_workflow._publish_status = "skipped"
@@ -551,9 +551,12 @@ def test_determine_publish_completion_returns_no_changes_for_no_commit_pr_publis
         parameters={"publishMode": "pr"}
     )
 
-    assert status == "no_changes"
-    assert message == "Workflow completed with no local changes"
-    assert publish_failure is False
+    assert status == "failed"
+    assert (
+        message
+        == "publishMode 'pr' requested but no local changes were produced"
+    )
+    assert publish_failure is True
 
 
 def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(

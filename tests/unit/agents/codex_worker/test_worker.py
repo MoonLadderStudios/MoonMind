@@ -4320,6 +4320,9 @@ async def test_compose_step_instruction_dedupes_objective_text(
         in instruction
     )
     assert instruction.count("Implement direct worker to Qdrant retrieval path.") == 1
+    assert "No explicit skill is selected for this step." in instruction
+    assert "Do not activate repo skill bundles unless a task/step explicitly selects one." in instruction
+    assert "- Skills are available via .agents/skills and .gemini/skills links." not in instruction
 
 
 async def test_compose_step_instruction_keeps_distinct_step_text(
@@ -4418,6 +4421,60 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
     assert (
         "Do NOT commit or push. Publish is handled by MoonMind publish stage."
         not in instruction
+    )
+
+
+async def test_compose_step_instruction_keeps_skill_workspace_lines_under_workspace_section(
+    tmp_path: Path,
+) -> None:
+    """Non-auto steps should keep skill-location guidance within WORKSPACE."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    instruction = worker._compose_step_instruction_for_runtime(
+        canonical_payload={
+            "task": {
+                "instructions": "Apply the selected workflow.",
+            }
+        },
+        runtime_mode="codex",
+        step=ResolvedTaskStep(
+            step_index=0,
+            step_id="step-1",
+            title="Execute",
+            instructions="Follow the selected skill.",
+            effective_skill_id="pr-resolver",
+            effective_skill_args={},
+            has_step_instructions=True,
+        ),
+        total_steps=1,
+    )
+
+    workspace_index = instruction.index("WORKSPACE:\n")
+    runtime_index = instruction.index("\n\nRUNTIME ADAPTER: codex")
+    skills_index = instruction.index(
+        "- Skills are available via .agents/skills and .gemini/skills links."
+    )
+    selected_index = instruction.index(
+        "- Selected skills are always materialized under ../skills_active/<skill-id>/."
+    )
+
+    assert workspace_index < skills_index < selected_index < runtime_index
+    assert (
+        "SKILL USAGE:\nUse the selected skill's files under .agents/skills/pr-resolver/ as the procedure for this step."
+        in instruction
     )
 
 
