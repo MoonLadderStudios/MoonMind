@@ -213,23 +213,36 @@ async def _sync_env_managed_secrets() -> int:
             return None
         return None
 
+    github_token_slugs = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT")
+
     def _env_value(name: str) -> str | None:
-        return (
-            os.environ.get(name)
-            or _read_value_from_dotenv(name)
-        )
+        value = os.environ.get(name)
+        if value is None:
+            value = _read_value_from_dotenv(name)
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     from api_service.services.secrets import SecretsService
 
-    # Check each GitHub token env var and store with the slug that was actually set.
-    # This ensures the frontend's slug-based lookup (GITHUB_TOKEN, GH_TOKEN, GITHUB_PAT)
-    # will find the token correctly.
     candidate_env_secrets: dict[str, str] = {}
-    for slug in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT"):
+    preferred_github_token: str | None = None
+    for slug in github_token_slugs:
         value = _env_value(slug)
         if value:
             candidate_env_secrets[slug] = value
-            break  # Only import the first one that is set
+            if preferred_github_token is None:
+                preferred_github_token = value
+
+    if (
+        preferred_github_token
+        and candidate_env_secrets.get("GITHUB_TOKEN") != preferred_github_token
+    ):
+        # Keep the canonical managed-secret slug aligned with the token that
+        # managed-runtime resolution would prefer so alias changes cannot leave a
+        # stale GITHUB_TOKEN record active in the store.
+        candidate_env_secrets["GITHUB_TOKEN"] = preferred_github_token
 
     atlassian_key = _env_value("ATLASSIAN_API_KEY")
     if atlassian_key:
@@ -248,9 +261,9 @@ async def _sync_env_managed_secrets() -> int:
             )
             if imported:
                 logger.info(
-                    "Synced managed secrets from environment on startup",
-                    slugs=sorted(candidate_env_secrets.keys()),
-                    imported_count=imported,
+                    "Synced managed secrets from environment on startup: slugs=%s imported_count=%s",
+                    sorted(candidate_env_secrets.keys()),
+                    imported,
                 )
             return imported
     except Exception as exc:
