@@ -6,7 +6,7 @@ Bridge contract between MoonMind's **task-oriented product surfaces** and **Temp
 
 **Status:** Normative (evolves with the compatibility layer)
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-30
+**Last updated:** 2026-04-04
 **Audience:** backend, dashboard, API, workflow authors
 
 ---
@@ -253,6 +253,7 @@ Recommended required fields:
 | `updatedAt` | Last meaningful update |
 | `closedAt` | Close time when terminal |
 | `artifactRefs` | Linked execution artifacts |
+| `progress` | Lightweight execution-level progress summary for the current/latest run |
 | `searchAttributes` | Canonical indexed execution metadata |
 | `memo` | Canonical display/debug metadata |
 
@@ -261,12 +262,14 @@ Recommended optional detail fields:
 - `inputArtifactRef`
 - `planArtifactRef`
 - `manifestArtifactRef`
+- `stepsHref` pointing to `/api/executions/{workflowId}/steps`
 - `actions` block describing currently enabled controls
 - `debug` block with `namespace`, `workflowType`, `workflowId`, `temporalRunId`, and close information
 
 Rules:
 
 - detail pages may show `temporalRunId`, but must still anchor the route to `taskId == workflowId`
+- product-facing task detail may expose a step ledger without becoming raw Temporal event history; the canonical step-detail surface is a separate step-ledger read
 - `searchAttributes` and `memo` should be available to operators even if the default UI renders only selected fields
 - execution `parameters` should not be blindly surfaced; adapters should expose only reviewed, task-safe fields
 - Search Attributes and Memo must remain bounded and secret-safe in compatibility payloads

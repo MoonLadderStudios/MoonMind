@@ -2,7 +2,7 @@
 
 Status: Draft
 Owners: MoonMind Platform + UI
-Last updated: 2026-03-30
+Last updated: 2026-04-04
 
 ## 1. Purpose
 
@@ -344,6 +344,7 @@ Common modes:
 - all artifacts for the execution
 - filtered artifacts by `link_type`
 - latest artifact for one known execution/link pair
+- step-scoped grouped artifacts driven by server-returned step refs
 
 Default list call:
 - `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts`
@@ -354,6 +355,11 @@ Artifact detail drawer/page should:
 - fetch `GET /api/artifacts/{artifact_id}`
 - render metadata plus the default content target
 - expose raw download only when `raw_access_allowed=true`
+
+Task-detail rule:
+
+- the generic execution artifacts panel is secondary evidence
+- step expanders should prefer semantically grouped step refs (`outputPrimary`, `runtimeStdout`, `runtimeDiagnostics`, etc.) over client-side artifact grouping heuristics
 
 ### 9.2 Default read and download behavior
 
@@ -413,6 +419,7 @@ Rules:
 - if the UI wants "latest output" for a known artifact kind, it should specify `link_type`
 - if the UI wants cross-link aggregation later, add an explicit server mode instead of collapsing client-side
 - "latest output" for runtime/provider artifacts should be server-driven, not client-grouped
+- step panels must consume server-grouped step refs instead of sorting the execution artifact list in the browser
 - this applies equally to `output.primary`, `output.provider_snapshot`, `runtime.diagnostics`, and all other link types
 
 ---

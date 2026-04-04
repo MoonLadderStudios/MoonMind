@@ -2,7 +2,7 @@
 
 Status: Draft
 Owners: MoonMind Platform
-Last updated: 2026-03-26
+Last updated: 2026-04-04
 
 ## 1. Purpose
 
@@ -360,6 +360,8 @@ All spans and logs that relate to execution should carry, when available:
 - `temporal.namespace`
 - `temporal.workflow_id`
 - `temporal.run_id`
+- `moonmind.logical_step_id` when the event is step-scoped
+- `moonmind.step_attempt` when the event is step-scoped
 
 ### 10.2 Required activity attributes
 
@@ -388,6 +390,9 @@ Where relevant and safe:
 - `moonmind.repo`
 - `moonmind.artifact_id`
 - `moonmind.artifact_link_type`
+- `moonmind.task_run_id`
+- `moonmind.child_workflow_id`
+- `moonmind.child_run_id`
 
 ### 10.4 Attributes that must not be recorded by default
 

@@ -5,7 +5,7 @@
 MoonMind system design (Temporal-first)
 
 Status: **Implemented** (contracts active, runtime live)
-Last updated: 2026-03-30
+Last updated: 2026-04-04
 Related: [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md)
 
 ---
@@ -376,11 +376,13 @@ A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and p
   "nodes": [
     {
       "id": "n1",
+      "title": "Run test suite",
       "tool": { "type": "skill", "name": "repo.run_tests", "version": "1.2.0" },
       "inputs": { "repo_ref": "git:org/repo#branch" }
     },
     {
       "id": "n2",
+      "title": "Generate follow-up plan",
       "tool": { "type": "skill", "name": "plan.generate", "version": "1.0.0" },
       "inputs": { "context_artifact": "art:sha256:…" }
     }
@@ -397,6 +399,12 @@ A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and p
 
   * `to` may start only after `from` succeeds (v1).
   * `to.inputs` may reference `from` outputs via references (see below).
+
+Operator-facing plan rule:
+
+* every node must have a stable `id`
+* every node should have a display-safe `title`
+* dependency information must be sufficient to reconstruct `dependsOn` for the step ledger
 
 ### 6.4 Data references between nodes
 
@@ -526,13 +534,16 @@ Progress is represented as a small structured object:
 }
 ```
 
+This progress object is the lightweight execution-detail summary only. The canonical live per-step surface is the step-ledger query described in `docs/Temporal/StepLedgerAndProgressModel.md`.
+
 ### 10.2 How progress is exposed (v1)
 
 * Workflow maintains progress state internally.
 * Workflow exposes a **Query** that returns the progress object.
+* Workflow exposes a separate **step-ledger Query** for detailed per-step state, attempts, checks, and refs.
 * Additionally, the workflow periodically writes a `progress.json` artifact for durable retrieval (optional but recommended).
 
-> Search Attributes/Memo updates for dashboard display are specified in the Workflow Lifecycle doc; this doc only defines the progress contract.
+> Search Attributes/Memo updates for dashboard display are specified in the Workflow Lifecycle doc; this doc defines the plan and bounded progress contract, while the step-ledger schema lives in `docs/Temporal/StepLedgerAndProgressModel.md`.
 
 ### 10.3 Intermediate outputs
 

@@ -383,23 +383,34 @@ During review cycles, the workflow memo updates to reflect:
 "Executing plan step 2/5: repo.apply_patch (review attempt 2/3)"
 ```
 
+This memo update is a compact execution summary only. The canonical per-step review state belongs on the step ledger.
+
 ### 8.2 Search Attributes
 
 Add `mm_approval_policy_active` (bool) search attribute for filtering in Temporal Visibility and Mission Control.
 
-### 8.3 Mission Control Terminal Widget
+### 8.3 Step ledger `checks[]`
 
-Review verdicts are emitted to the Mission Control live output as scoped blocks:
+Review verdicts should attach to the reviewed step as structured `checks[]` entries.
 
+Representative shape:
+
+```json
+{
+  "kind": "approval_policy",
+  "status": "failed",
+  "summary": "Missing import statement for datetime in utils.py",
+  "retryCount": 1,
+  "artifactRef": "art:..."
+}
 ```
-───── Approval Policy: step n1 (attempt 1) ─────
-Verdict: FAIL (confidence: 0.85)
-Issues:
-  [error] Missing import statement for 'datetime' in utils.py
-Feedback: The patch was applied but the test suite still has 3 failing tests...
-Retrying step with feedback...
-────────────────────────────────────────────
-```
+
+Rules:
+
+- review state must be visible without parsing logs
+- verdict summaries should be bounded and operator-safe
+- large review feedback and issue detail belong in the linked artifact
+- Mission Control should render review evidence inside the expanded step row, not as a terminal-widget-only affordance
 
 ### 8.4 Finish Summary Integration
 

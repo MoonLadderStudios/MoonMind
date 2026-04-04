@@ -21,6 +21,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | [`docs/Api/ExecutionsApiContract.md`](../Api/ExecutionsApiContract.md) | Migration posture for `/api/executions` and compatibility during the task-oriented / Temporal migration (incl. §16 compatibility contract). |
 | [`docs/Temporal/TaskExecutionCompatibilityModel.md`](../Temporal/TaskExecutionCompatibilityModel.md) | Bridge contract for task-shaped surfaces and Temporal; compatibility maturity (sequencing in `remaining-work`). |
 | [`docs/Temporal/SourceOfTruthAndProjectionModel.md`](../Temporal/SourceOfTruthAndProjectionModel.md) | Migration stance for projections vs Temporal; migration-phase exception matrix. |
+| [`docs/Temporal/StepLedgerAndProgressModel.md`](../Temporal/StepLedgerAndProgressModel.md) | Canonical step-ledger ownership doc for planned-step source, live step state, attempts, checks, refs, and latest-run behavior. |
 | [`docs/Temporal/VisibilityAndUiQueryModel.md`](../Temporal/VisibilityAndUiQueryModel.md) | Projection rules; target contract vs implementation gaps (tracker). |
 | [`docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`](../Temporal/WorkflowTypeCatalogAndLifecycle.md) | Temporal-native lifecycle contract; task vs workflow terminology at compatibility boundaries. |
 | [`docs/Temporal/RoutingPolicy.md`](../Temporal/RoutingPolicy.md) | § Migration & Rollout. |

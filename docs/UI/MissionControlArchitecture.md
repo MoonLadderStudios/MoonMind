@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last updated: 2026-03-30
+Last updated: 2026-04-04
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlArchitecture.md`](../tmp/remaining-work/UI-MissionControlArchitecture.md)
 
@@ -31,6 +31,7 @@ Detailed backend contracts live in the Temporal docs. This document defines the 
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/Temporal/StepLedgerAndProgressModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
@@ -243,6 +244,7 @@ Secondary or overflow metadata should move to detail or row expansion.
 The detail page is the right place for:
 
 - exact execution state
+- step ledger state
 - workflow ID and run ID
 - namespace
 - repository
@@ -251,6 +253,7 @@ The detail page is the right place for:
 - waiting reason
 - attention requirement
 - execution-context metadata
+- step evidence and checks
 - artifact evidence
 - managed-run observability (artifact-backed logs, diagnostics — not terminal embeds)
 - action surfaces
@@ -284,6 +287,7 @@ Representative shape:
       "list": "/api/executions",
       "create": "/api/executions",
       "detail": "/api/executions/{workflowId}",
+      "steps": "/api/executions/{workflowId}/steps",
       "update": "/api/executions/{workflowId}/update",
       "signal": "/api/executions/{workflowId}/signal",
       "cancel": "/api/executions/{workflowId}/cancel",
@@ -366,11 +370,13 @@ The long-term goal is server-side canonical source resolution, not route-level g
 Minimum fetch sequence for a Temporal-backed detail page:
 
 1. `GET /api/executions/{workflowId}`
-2. `GET /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts`
-3. optional per-artifact metadata/download requests as the user expands or downloads artifacts
+2. `GET /api/executions/{workflowId}/steps`
+3. `GET /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts`
+4. optional per-artifact metadata/download requests as the user expands or downloads artifacts
 
 Rules:
 
+* the Steps surface should load before generic artifact browsing because it is the primary operator comprehension surface
 * artifact fetch must use the latest `temporalRunId` returned by the detail response
 * detail routing remains anchored to `taskId == workflowId`
 * reruns or Continue-As-New should not force a route identity change
@@ -428,11 +434,41 @@ Temporal-backed detail should render:
 
 * durable evidence section:
 
+  * steps
+  * step-scoped logs, diagnostics, and checks
   * artifacts
   * outcome summaries
   * timeline/state transitions
 
-## 12.2 Observability section
+## 12.2 Steps and Observability sections
+
+The task detail page must include a dedicated **Steps** section above Timeline and above the generic Artifacts panel.
+
+Each step row should show:
+
+* step number and title
+* exact step status
+* short summary
+* elapsed time or timestamps
+* attempt count
+* dependency blockers when present
+* quick evidence links
+
+Expanded step rows should group:
+
+* **Summary**
+* **Checks**
+* **Logs & Diagnostics**
+* **Artifacts**
+* **Metadata**
+
+Rules:
+
+* the default Steps view is for the latest/current run only
+* the plan artifact is the canonical planned-step source; the step-ledger API is the canonical live-state source
+* step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId`
+* when a step has `taskRunId`, the Logs & Diagnostics area should embed or deep-link the existing `/api/task-runs/*` observability surfaces for that step
+* the client must not infer step completion or “latest output” by parsing logs or sorting raw artifacts locally
 
 The task detail page must include a dedicated **Observability** area for managed-run evidence. This is the canonical UI hierarchy:
 
@@ -444,6 +480,7 @@ The task detail page must include a dedicated **Observability** area for managed
 
 Rules:
 
+* Steps remains the primary task-detail comprehension surface; generic Observability and Artifacts are supporting evidence areas
 * managed-run observability is artifact-backed and MoonMind-native — it does not use terminal embeds
 * `xterm.js` must not appear in this area; it is reserved for OAuth sessions only
 * the observability area follows the fetch sequence defined in §11.4
@@ -521,6 +558,7 @@ Rollout posture: default-on with an explicit disable path. The read-first fetch 
 Temporal-backed detail should show a synthesized execution timeline based on:
 
 * exact execution state
+* step-ledger transitions and summaries
 * waiting metadata
 * notable action results
 * artifact evidence
@@ -823,6 +861,8 @@ Execution-scoped artifact listing is keyed by:
 * `temporalRunId`
 
 Default to showing artifacts for the **latest run**. Prior-run browsing, if added later, should be an explicit detail feature.
+
+The generic artifact panel remains secondary to the step-expander artifact groups. When step-scoped evidence is available, the UI should use server-grouped step refs rather than trying to derive “latest step output” client-side from the execution-wide artifact list.
 
 ---
 

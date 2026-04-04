@@ -4,7 +4,7 @@
 
 **Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-06  
+**Last updated:** 2026-04-04  
 **Audience:** backend, dashboard, workflow authors, API owners
 
 ## 1. Purpose
@@ -278,6 +278,8 @@ The main detail page should present:
 
 - task/execution title
 - current domain state and Temporal close status
+- current/latest run progress summary
+- current/latest run step ledger
 - workflow type / entry label
 - artifact references and summaries
 - current/latest `runId` in an advanced metadata or operator section
@@ -288,6 +290,12 @@ Artifact implication:
 
 - execution detail should fetch artifacts using the latest `runId` from the execution detail response
 - the route stays anchored to `workflowId` even when the latest `runId` changes after Continue-As-New
+
+Step implication:
+
+- the default Steps panel shows the latest/current run only
+- attempt counts are scoped to the current `runId`
+- historical runs and cross-run step history remain future explicit surfaces
 
 ### 10.3 List rendering
 

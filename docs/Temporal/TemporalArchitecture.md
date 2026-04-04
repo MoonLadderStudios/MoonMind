@@ -4,7 +4,7 @@
 
 **Status:** Draft (migration-oriented, but core runtime shape is now live)  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-30  
+**Last updated:** 2026-04-04  
 **Audience:** backend, infra, dashboard, workflow authors
 
 ---
@@ -210,6 +210,7 @@ To prevent ambiguity across the architecture:
 
 - **Tool** = executable Temporal-facing capability
 - **Plan** = MoonMind execution graph or ordered work definition
+- **Step Ledger** = compact workflow-owned state for current/latest run step truth
 - **Artifact** = large durable input/output outside workflow history
 - **Agent Skill** = deployment-scoped instruction bundle
 - **ResolvedSkillSet** = immutable artifact-backed run/step context
@@ -523,12 +524,19 @@ Memo should carry compact presentation metadata such as:
 
 Search attributes should remain bounded. Detail surfaces should use memo, queries, and artifacts rather than overloading visibility.
 
+Operator-facing step progress follows the same split:
+
+- the plan artifact owns planned structure
+- workflow query/state owns the live step ledger
+- artifacts and `/api/task-runs/*` own rich evidence
+- logs and heartbeats must not be the primary transport for step truth
+
 ## 13.3 Query vs visibility split
 
 Maintain a strict separation:
 
 - **Visibility + projections** → lists, counts, filtering, history, dashboards
-- **Queries** → live execution detail, current progress, awaiting reason, active step, intervention point
+- **Queries** → live execution detail, current progress, step ledger, awaiting reason, active step, intervention point
 
 ## 13.4 Read models are never execution truth
 

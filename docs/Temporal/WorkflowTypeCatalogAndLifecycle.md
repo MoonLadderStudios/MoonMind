@@ -6,7 +6,7 @@ MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed executi
 
 **Status:** Normative (Temporal application layer)  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-30  
+**Last updated:** 2026-04-04  
 **Audience:** backend, infra, dashboard
 
 ---
@@ -107,7 +107,7 @@ Rules:
 
 | Workflow Type | Primary responsibility | Typical inputs | Typical outputs | Expected duration |
 | --- | --- | --- | --- | --- |
-| `MoonMind.Run` | Execute a user-requested run: plan work, execute steps, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, final state | seconds → hours |
+| `MoonMind.Run` | Execute a user-requested run: plan work, own step state/progress, orchestrate child agent runs, integrate results, produce artifacts | input refs, optional plan ref, parameters | output artifacts, summary, progress, step refs | seconds → hours |
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
@@ -499,8 +499,9 @@ stateDiagram-v2
 Key notes:
 
 * planning is an Activity-driven concern, not a separate orchestration substrate
+* the plan artifact owns planned step structure; `MoonMind.Run` owns the live step ledger and operator-facing progress
 * execution may mix direct activities and child workflows
-* true agent steps dispatch to `MoonMind.AgentRun`
+* true agent steps dispatch to `MoonMind.AgentRun`, while the parent tracks only bounded step status, refs, and summaries
 * `child_state_changed`-style coordination may bubble child state to the parent domain state
 
 ## 11.2 `MoonMind.ManifestIngest` lifecycle
