@@ -1409,26 +1409,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/tasks/tasks-list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Task Tasks List Route
-         * @description Serve the React-powered tasks-list page.
-         */
-        get: operations["task_tasks_list_route_tasks_tasks_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/tasks/list": {
         parameters: {
             query?: never;
@@ -1441,6 +1421,26 @@ export interface paths {
          * @description Serve the React-powered tasks list page.
          */
         get: operations["task_list_route_tasks_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/tasks-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Tasks List Route
+         * @description Serve the React-powered tasks list page (alternate canonical path).
+         */
+        get: operations["task_tasks_list_route_tasks_tasks_list_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8227,7 +8227,7 @@ export interface operations {
             };
         };
     };
-    task_tasks_list_route_tasks_tasks_list_get: {
+    task_list_route_tasks_list_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -8247,7 +8247,7 @@ export interface operations {
             };
         };
     };
-    task_list_route_tasks_list_get: {
+    task_tasks_list_route_tasks_tasks_list_get: {
         parameters: {
             query?: never;
             header?: never;

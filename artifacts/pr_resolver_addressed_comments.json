@@ -1,5 +1,65 @@
 [
   {
+    "id": 3034625986,
+    "disposition": "addressed",
+    "rationale": "Startup env seeding now refreshes the canonical GITHUB_TOKEN managed secret from the preferred GitHub env token so stale alias switches cannot leave runtime auth on an outdated stored token."
+  },
+  {
+    "id": 4057535157,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review summary only; the actionable inline finding was handled directly."
+  },
+  {
+    "id": 3034626826,
+    "disposition": "addressed",
+    "rationale": "Startup env seeding now imports every nonblank GitHub token alias present instead of stopping at the first one, and tests cover multi-alias import behavior."
+  },
+  {
+    "id": 4057535973,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Gemini review summary only; the underlying inline suggestion was addressed in code and tests."
+  },
+  {
+    "id": 3034631107,
+    "disposition": "addressed",
+    "rationale": "Added startup secret env-seeding coverage for GH_TOKEN and GITHUB_PAT, including canonical GITHUB_TOKEN refresh semantics."
+  },
+  {
+    "id": 3034631119,
+    "disposition": "addressed",
+    "rationale": "Whitespace-only env values are now normalized away before import so they cannot create active managed secrets or suppress the dashboard warning."
+  },
+  {
+    "id": 4057539970,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR overview only; it did not introduce an additional actionable request beyond the inline comments already classified."
+  },
+  {
+    "id": 3034940528,
+    "disposition": "addressed",
+    "rationale": "Removed the startup log detail derived from the managed-secret candidate map so the sync path no longer emits secret-adjacent data that GitHub Advanced Security flags as clear-text logging."
+  },
+  {
+    "id": 3034751817,
+    "disposition": "addressed",
+    "rationale": "Changed the checklist's feature link from an absolute local path to the repo-relative ../spec.md target."
+  },
+  {
+    "id": 3034751830,
+    "disposition": "addressed",
+    "rationale": "Unchecked the technology-agnostic checklist assertions and clarified the notes so the checklist now matches the spec's implementation-detail content."
+  },
+  {
+    "id": 4057656070,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary only; its actionable feedback is already represented by the inline review comments above."
+  },
+  {
+    "id": 4057666739,
+    "disposition": "not-applicable",
+    "rationale": "Positive review with no requested change."
+  },
+  {
     "id": 4057869899,
     "disposition": "not-applicable",
     "rationale": "Top-level review summary only; no actionable change request beyond the inline comments handled separately."
@@ -57,17 +117,17 @@
   {
     "id": 3034774995,
     "disposition": "addressed",
-    "rationale": "Same as 3034774063 - parseCommandBehavior now throws on invalid input."
+    "rationale": "Same as 3034774063 — parseCommandBehavior now throws on invalid input."
   },
   {
     "id": 3034774996,
     "disposition": "addressed",
-    "rationale": "Same as 3034774067 - routing test now uses profile_selector."
+    "rationale": "Same as 3034774067 — routing test now uses profile_selector."
   },
   {
     "id": 3034775000,
     "disposition": "addressed",
-    "rationale": "Same as 3034774070 - fallback test now uses profile_selector."
+    "rationale": "Same as 3034774070 — fallback test now uses profile_selector."
   },
   {
     "id": 3034775221,
@@ -102,7 +162,7 @@
   {
     "id": 3034778296,
     "disposition": "addressed",
-    "rationale": "Same as 3034774063 - parseCommandBehavior now throws with user-visible error on invalid JSON."
+    "rationale": "Same as 3034774063 — parseCommandBehavior now throws with user-visible error on invalid JSON."
   },
   {
     "id": 3034778307,
@@ -112,17 +172,17 @@
   {
     "id": 3034778312,
     "disposition": "not-applicable",
-    "rationale": "This test verifies cooldown attachment at the manager workflow level. Exercising the full 429 to cooldown-reporting path from the adapter would require adding a mock adapter that returns 429, which is out of scope for this PR's focus on manager-level cooldown tracking. The current approach correctly verifies that the manager stores cooldown against the right profile."
+    "rationale": "This test verifies cooldown attachment at the manager workflow level. Exercising the full 429→cooldown-reporting path from the adapter would require adding a mock adapter that returns 429, which is out of scope for this PR's focus on manager-level cooldown tracking. The current approach correctly verifies that the manager stores cooldown against the right profile."
   },
   {
     "id": 3034778322,
     "disposition": "addressed",
-    "rationale": "Same as 3034774067 - routing test now uses profile_selector with execution_profile_ref='auto'."
+    "rationale": "Same as 3034774067 — routing test now uses profile_selector with execution_profile_ref='auto'."
   },
   {
     "id": 3034778329,
     "disposition": "addressed",
-    "rationale": "Same as 3034774070 - fallback test now uses profile_selector with execution_profile_ref='auto'."
+    "rationale": "Same as 3034774070 — fallback test now uses profile_selector with execution_profile_ref='auto'."
   },
   {
     "id": 3034778336,
@@ -138,5 +198,45 @@
     "id": 4057691780,
     "disposition": "not-applicable",
     "rationale": "Copilot pull request overview summary, no action needed."
+  },
+  {
+    "id": 3034926806,
+    "disposition": "addressed",
+    "rationale": "Restricted single-put completion retries to visibility errors only and added a regression test for non-visibility storage failures."
+  },
+  {
+    "id": 3034926820,
+    "disposition": "addressed",
+    "rationale": "Restructured the frontend completion retries to use an explicit initial-attempt plus retry-schedule loop with valid indexes on every iteration."
+  },
+  {
+    "id": 3034926825,
+    "disposition": "addressed",
+    "rationale": "Frontend completion retries now require a 409 response with structured `detail.code` and message instead of matching on plain error text alone."
+  },
+  {
+    "id": 3034926829,
+    "disposition": "addressed",
+    "rationale": "Backend retry tests now monkeypatch the single-put retry delays to zero so the unit suite stays fast and deterministic."
+  },
+  {
+    "id": 3034926834,
+    "disposition": "addressed",
+    "rationale": "The UI retry test now overrides the retry delay schedule to near-zero values instead of waiting for wall-clock backoff intervals."
+  },
+  {
+    "id": 4057871862,
+    "disposition": "not-applicable",
+    "rationale": "This was an informational PR overview summary, not an actionable review request."
+  },
+  {
+    "id": 3034928185,
+    "disposition": "addressed",
+    "rationale": "The backend now logs `retry pending` only when another retry is actually scheduled."
+  },
+  {
+    "id": 4057873595,
+    "disposition": "not-applicable",
+    "rationale": "This was a summary review comment; the only actionable point in it was captured and addressed in the inline logging comment."
   }
 ]
