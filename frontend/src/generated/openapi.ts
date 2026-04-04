@@ -1438,7 +1438,7 @@ export interface paths {
         };
         /**
          * Task Tasks List Route
-         * @description Serve the React-powered tasks list page (alternate canonical path).
+         * @description Redirect the legacy tasks-list alias into the canonical list route.
          */
         get: operations["task_tasks_list_route_tasks_tasks_list_get"];
         put?: never;
@@ -1518,7 +1518,7 @@ export interface paths {
         };
         /**
          * Task Create Alias Route
-         * @description Serve the React-powered task create alias page.
+         * @description Redirect the legacy create alias into the canonical create route.
          */
         get: operations["task_create_alias_route_tasks_create_get"];
         put?: never;
@@ -8262,7 +8262,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };
@@ -8342,7 +8342,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };
