@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-02
+Last Updated: 2026-04-04
 
 ## 1. Purpose
 
@@ -43,6 +43,7 @@ These routes extend the main lifecycle surface for specific execution types:
 |--------|------|-------------|
 | `GET` | `/api/executions/{workflowId}/manifest-status` | Fetch manifest-run status summary |
 | `GET` | `/api/executions/{workflowId}/manifest-nodes` | Page manifest node state |
+| `GET` | `/api/executions/{workflowId}/steps` | Fetch the latest/current run step ledger |
 | `POST` | `/api/executions/{workflowId}/integration` | Register/update integration monitoring state |
 | `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results |
 | `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution |
@@ -67,14 +68,15 @@ MoonMind currently uses three related identifiers around task runs:
 
 - **`workflowId`** — the canonical durable execution identifier for `/api/executions`
 - **`taskId`** — the task-oriented product identifier; for Temporal-backed work, `taskId == workflowId`
-- **`taskRunId`** — the managed-run observability record identifier used by `/api/task-runs`
+- **`taskRunId`** — the managed-run observability record identifier used by `/api/task-runs`; it may appear on top-level execution detail and on individual step rows
 
 The normal control-plane flow is:
 
 1. Create or list work through `/api/executions`
 2. Use `workflowId` for lifecycle actions and detail fetches
-3. Read `taskRunId` from execution detail when managed-run observability is available
-4. Use `/api/task-runs/{taskRunId}` for logs, diagnostics, and live follow
+3. Read the step ledger from `/api/executions/{workflowId}/steps`
+4. Resolve the relevant step's `taskRunId` when managed-run observability is available
+5. Use `/api/task-runs/{taskRunId}` for logs, diagnostics, and live follow
 
 ## 4. Observability Behavior
 

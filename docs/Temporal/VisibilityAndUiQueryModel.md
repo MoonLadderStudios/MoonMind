@@ -4,7 +4,7 @@
 
 **Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-30  
+**Last updated:** 2026-04-04  
 **Audience:** backend, dashboard, API, workflow authors
 
 ---
@@ -176,6 +176,8 @@ A Temporal-backed detail model may additionally include:
 - `runId`
 - `closeStatus`
 - `artifactRefs[]`
+- `progress`
+- `stepsHref`
 - `waitingReason?`
 - `attentionRequired?`
 - `searchAttributes`
@@ -198,6 +200,7 @@ All MoonMind-owned Search Attributes for this query model follow these rules:
 - bounded values only
 - no secrets
 - no large free text
+- no step-ledger rows or attempt history
 - no display-only user prose
 
 ## 6.2 Required Search Attributes
@@ -306,11 +309,13 @@ Rules:
 | `manifest_ref` | No | Safe reference for manifest-driven workflows | reference only |
 | `error_category` | No | Debug/detail classification for failures | display/debug only |
 | `entry_label` | No | Optional human-friendly display label | small, bounded |
+| `progress_hint` | No | Compact execution-level progress hint when useful | small, bounded, never a step ledger |
 
 ## 7.3 Memo rules
 
 - keep Memo small and human-readable
 - never store secrets, full prompts, manifests, or large payloads in Memo
+- never store step-ledger rows, attempts, `checks[]`, or long error bodies in Memo
 - Memo is for **display metadata**, not filtering
 - list views should rely on `title` and `summary`, not raw artifact payloads
 
@@ -408,6 +413,7 @@ Task queues are plumbing, not a user-visible ordering model.
 - pause/resume/cancel/rerun actions
 - terminal success/failure transitions
 - bounded progress checkpoints that materially affect UI recency
+- step-ready, step-started, step-reviewing, step-succeeded, step-failed, step-skipped, and step-canceled transitions
 - title/summary changes that materially alter visible list/detail presentation
 
 `mm_updated_at` should **not** move on every:
@@ -416,6 +422,7 @@ Task queues are plumbing, not a user-visible ordering model.
 - log line
 - low-level retry
 - internal polling tick
+- low-level retry/backoff detail inside one step attempt
 
 Implementation guidance:
 
@@ -682,6 +689,7 @@ This document is operationally done when:
 6. adapter/projection layers are explicitly bound to these semantics
 7. the identifier bridge is fixed (`taskId == workflowId` for Temporal-backed rows)
 8. owner semantics are fixed (`mm_owner_type` + `mm_owner_id`)
+9. step-ledger truth is explicitly kept out of Visibility and Memo
 9. waiting metadata is fixed (`waitingReason` + `attentionRequired`)
 10. `mm_entry` values are fixed and cover the current workflow catalog
 11. the UI path for Temporal-backed rows is implemented as a first-class source

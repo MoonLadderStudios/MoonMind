@@ -4,7 +4,7 @@
 **Doc type:** API contract  
 **Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-27 (America/Los_Angeles)  
+**Last updated:** 2026-04-04 (UTC)  
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Api-ExecutionsApiContract.md`](../tmp/remaining-work/Api-ExecutionsApiContract.md)
@@ -70,6 +70,7 @@ That implementation detail is important for current behavior, but it is **not** 
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
 - `docs/Temporal/RunHistoryAndRerunSemantics.md`
+- `docs/Temporal/StepLedgerAndProgressModel.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
 - `docs/UI/MissionControlArchitecture.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
@@ -220,6 +221,8 @@ The current allowed values for `state` are:
 | `state` | string | yes | MoonMind domain lifecycle state |
 | `temporalStatus` | `running \| completed \| failed \| canceled` | yes | Simplified lifecycle state |
 | `closeStatus` | string or `null` | no | Terminal close status when closed |
+| `taskRunId` | string or `null` | no | Managed-run observability binding when one top-level run is directly associated with the execution detail |
+| `progress` | object or `null` | no | Lightweight execution progress summary; full step ledger is a separate read |
 | `searchAttributes` | object | yes | Indexed execution metadata |
 | `memo` | object | yes | Small display-oriented metadata |
 | `artifactRefs` | string[] | yes | Artifact references linked to this execution |
@@ -227,7 +230,34 @@ The current allowed values for `state` are:
 | `updatedAt` | datetime | yes | Last meaningful lifecycle/progress update |
 | `closedAt` | datetime or `null` | no | Terminal close timestamp |
 
-### 8.2 Search attributes and memo expectations
+### 8.2 `ExecutionProgress`
+
+`progress` is an execution-level summary object used for cheap detail polling.
+
+Representative fields:
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `total` | integer | yes | Total planned steps for the current/latest run |
+| `pending` | integer | yes | Steps not yet ready |
+| `ready` | integer | no | Ready-to-run steps when the executor distinguishes this state |
+| `running` | integer | yes | Active steps |
+| `awaitingExternal` | integer | no | Steps waiting on external progress |
+| `reviewing` | integer | no | Steps currently under structured review/check processing |
+| `succeeded` | integer | yes | Successfully completed steps |
+| `failed` | integer | yes | Failed steps |
+| `skipped` | integer | no | Intentionally skipped steps |
+| `canceled` | integer | no | Canceled steps |
+| `currentStepTitle` | string or `null` | no | Operator-facing title for the most relevant active step |
+| `updatedAt` | datetime | no | Last meaningful progress mutation |
+
+Rules:
+
+- `progress` must remain bounded and display-safe
+- this object is not a substitute for step detail
+- the authoritative detailed step surface is `GET /api/executions/{workflowId}/steps`
+
+### 8.3 Search attributes and memo expectations
 
 Current execution responses are expected to carry the following baseline metadata:
 
@@ -265,7 +295,7 @@ Current staging note:
 
 - the current projection-backed implementation still returns projection-authored lifecycle state, but owner metadata now uses explicit `mm_owner_type` + `mm_owner_id` values instead of `"unknown"` placeholders
 
-### 8.3 `ExecutionListResponse`
+### 8.4 `ExecutionListResponse`
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -342,6 +372,15 @@ Example:
   "state": "initializing",
   "temporalStatus": "running",
   "closeStatus": null,
+  "taskRunId": null,
+  "progress": {
+    "total": 0,
+    "pending": 0,
+    "running": 0,
+    "succeeded": 0,
+    "failed": 0,
+    "currentStepTitle": null
+  },
   "searchAttributes": {
     "mm_owner_id": "<user-id>",
     "mm_state": "initializing",
@@ -494,6 +533,100 @@ Status: `200 OK`
 Body: `ExecutionModel`
 
 ### 11.4 Error responses
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `404` | `execution_not_found` | Execution does not exist or is not visible to the caller |
+| `401` / `403` | auth-layer specific | Authentication/authorization failure |
+
+### 11.5 Describe execution steps
+
+`GET /api/executions/{workflowId}/steps`
+
+Purpose:
+
+- return the latest/current run's step ledger
+- keep `GET /api/executions/{workflowId}` lightweight
+- expose step identity, status, attempts, checks, refs, and step-scoped artifact refs without forcing clients to parse generic logs
+
+Representative response:
+
+```json
+{
+  "workflowId": "mm:3cf79b7f-0fc2-4ab4-a0f8-f2d8a65d8c4a",
+  "runId": "84ee7f53-06c5-49e5-9f56-bb42f5d79f33",
+  "runScope": "latest",
+  "steps": [
+    {
+      "logicalStepId": "run-tests",
+      "order": 4,
+      "title": "Run test suite",
+      "tool": { "type": "skill", "name": "repo.run_tests", "version": "1" },
+      "dependsOn": ["apply-patch"],
+      "status": "running",
+      "waitingReason": null,
+      "attentionRequired": false,
+      "attempt": 1,
+      "startedAt": "2026-04-04T18:10:00Z",
+      "updatedAt": "2026-04-04T18:11:15Z",
+      "summary": "Executing tests in sandbox",
+      "checks": [],
+      "refs": {
+        "childWorkflowId": null,
+        "childRunId": null,
+        "taskRunId": null
+      },
+      "artifacts": {
+        "outputSummary": null,
+        "outputPrimary": null,
+        "runtimeStdout": null,
+        "runtimeStderr": null,
+        "runtimeMergedLogs": null,
+        "runtimeDiagnostics": null,
+        "providerSnapshot": null
+      },
+      "lastError": null
+    }
+  ]
+}
+```
+
+Per-step required fields:
+
+- `logicalStepId`
+- `order`
+- `title`
+- `tool`
+- `dependsOn`
+- `status`
+- `waitingReason`
+- `attentionRequired`
+- `attempt`
+- `startedAt`
+- `updatedAt`
+- `summary`
+- `checks[]`
+- `refs.childWorkflowId`
+- `refs.childRunId`
+- `refs.taskRunId`
+- `artifacts.outputSummary`
+- `artifacts.outputPrimary`
+- `artifacts.runtimeStdout`
+- `artifacts.runtimeStderr`
+- `artifacts.runtimeMergedLogs`
+- `artifacts.runtimeDiagnostics`
+- `artifacts.providerSnapshot`
+- `lastError`
+
+Rules:
+
+- the default response is for the latest/current run only
+- `logicalStepId` comes from the plan node and is stable within that plan
+- `attempt` is scoped to `(workflowId, runId, logicalStepId)`
+- `checks[]` is the structured place for review/check verdicts and retry summaries
+- `taskRunId` may appear on a step row even when the top-level execution detail also exposes a managed-run binding
+
+### 11.6 Step-route error responses
 
 | Status | Code | Meaning |
 | --- | --- | --- |

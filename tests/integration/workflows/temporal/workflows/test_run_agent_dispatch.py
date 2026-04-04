@@ -131,6 +131,38 @@ async def mock_artifact_read_agent(args: Dict[str, Any]) -> bytes:
     return json.dumps(payload).encode("utf-8")
 
 
+@activity.defn(name="artifact.read")
+async def mock_artifact_read_jules_missing_pr(args: Dict[str, Any]) -> bytes:
+    ARTIFACT_READ_CALLS.append(args)
+    payload = {
+        "plan_version": "1.0",
+        "metadata": {
+            "title": "Jules missing PR plan",
+            "created_at": "2026-04-04T00:00:00Z",
+            "registry_snapshot": {
+                "digest": "reg:sha256:" + ("c" * 64),
+                "artifact_ref": "artifact://registry/jules-missing-pr",
+            },
+        },
+        "policy": {"failure_mode": "FAIL_FAST"},
+        "nodes": [
+            {
+                "id": "agent-step-1",
+                "tool": {
+                    "type": "agent_runtime",
+                    "name": "jules",
+                },
+                "inputs": {
+                    "targetRuntime": "jules",
+                    "instructions": "Fix the bug",
+                    "repo": "moonladder/moonmind",
+                },
+            }
+        ],
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
 @activity.defn(name="artifact.create")
 async def mock_artifact_create(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"artifact_id": "test-artifact-id", "artifact_ref": f"artifact://{args.get('artifact_id', 'test')}"}
@@ -186,6 +218,21 @@ class MockProviderProfileManager:
                 handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
                 await handle.signal("slot_assigned", {"profile_id": profile_id})
         return {}
+
+
+@workflow.defn(name="MoonMind.AgentRun")
+class MockNoPrAgentRun:
+    @workflow.run
+    async def run(self, _input_payload: dict) -> dict:
+        return {
+            "summary": "Completed without creating a PR",
+            "metadata": {},
+            "outputRefs": [],
+            "diagnosticsRef": None,
+            "failureClass": None,
+            "providerErrorCode": None,
+            "retryRecommendation": None,
+        }
 
 
 @activity.defn(name="mm.skill.execute")
@@ -319,6 +366,60 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertIn(
                     "must be 'skill' or 'agent_runtime'",
+                    exc_info.exception.cause.message,
+                )
+
+    async def test_jules_agent_runtime_pr_publish_without_pr_fails_in_finalization(
+        self,
+    ) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[mock_plan_generate_agent],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[
+                        mock_artifact_read_jules_missing_pr,
+                        mock_artifact_create,
+                        mock_artifact_write_complete,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                    workflows=[MockNoPrAgentRun],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+            ):
+                with self.assertRaises(client.WorkflowFailureError) as exc_info:
+                    await env.client.execute_workflow(
+                        MoonMindRunWorkflow.run,
+                        {
+                            "workflowType": "MoonMind.Run",
+                            "title": "Jules missing PR failure",
+                            "initialParameters": {
+                                "repo": "moonladder/moonmind",
+                                "publishMode": "pr",
+                            },
+                        },
+                        id="test-jules-agent-runtime-missing-pr",
+                        task_queue="test-task-queue",
+                        search_attributes=_trusted_search_attributes(),
+                    )
+
+                self.assertIn(
+                    "publishMode 'pr' requested but no PR was created",
                     exc_info.exception.cause.message,
                 )
 

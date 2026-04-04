@@ -116,10 +116,16 @@ The task detail page should include an **Observability** section with these tabs
 The default operator workflow should be:
 
 1. open task
-2. see status and summary
-3. open Live Logs for real-time observation
+2. inspect the relevant expanded step row in the Steps section
+3. open Live Logs for that step's managed run when `taskRunId` is present
 4. inspect Stdout / Stderr / Diagnostics as needed
 5. use separate Intervention controls if action is required
+
+Integration rule:
+
+- Logs & Diagnostics should open inside the expanded step when a step row has `taskRunId`
+- the existing fetch sequence remains `observability-summary` -> merged tail -> optional SSE live follow
+- task-level observability panels remain valid for top-level managed runs, but step-contextual consumption is the primary operator flow for plan-driven work
 
 ## 5.2 Live Logs panel
 

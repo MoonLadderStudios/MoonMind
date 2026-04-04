@@ -43,7 +43,7 @@ Other platforms make you rebuild agents in their SDK. MoonMind operates at a hig
 
 ### 1️⃣ Orchestration Starts At One
 You don't need ten agents to benefit from a task execution system. MoonMind supercharges the planning, resiliency, and context management of even a single agent.
-- **Mission Control:** See what your agent is doing in real time. Track run status, browse generated artifacts, monitor intervention requests, and audit full execution histories from a single UI.
+- **Mission Control:** See what your agent is doing in real time. Track run status, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
 - **Scheduled & Recurring Tasks:** Schedule a heavy job to run overnight when tokens are cheaper, plan a server reboot and get an alert if it fails, or set up a recurring cron schedule for daily issue triaging.
 - **Fire-and-Forget Resiliency:** Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Backed by [Temporal](https://temporal.io/), workflows survive container crashes and restarts. Automatic stuck detection and smart retries keep your agent on track — and off your API bill.
 - **Step-Based Context Management:** Agents perform better on small, focused tasks. Inject the right context into each step and clear it between steps.
@@ -63,7 +63,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, and external integrations. |
-| **Mission Control** | Operational dashboard for managing tasks and reviewing artifacts. |
+| **Mission Control** | Operational dashboard for managing tasks, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
 | **Docker Proxy** | Restricted Docker socket access for sandboxed worker containers. |
 

@@ -2,7 +2,7 @@
 
 Status: Draft  
 Owners: MoonMind Platform  
-Last updated: 2026-03-30
+Last updated: 2026-04-04
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md)
 
@@ -355,6 +355,12 @@ Representative stable `link_type` values:
 * `debug.skill_resolution_trace`
 * `debug.trace`
 
+Recommended bounded `artifact_links` metadata for step-aware presentation:
+
+* `step_id`
+* `attempt`
+* optional `scope` such as `step`
+
 ### `artifact_pins`
 
 Optional explicit pinning beyond retention class.
@@ -371,10 +377,16 @@ Optional explicit pinning beyond retention class.
 Representative rules:
 
 * for a given `(namespace, workflow_id, run_id, link_type)`, return max by `created_at`
+* for a given step attempt, group by `(namespace, workflow_id, run_id, metadata.step_id, metadata.attempt, link_type)`
 * for a workflow across runs, define UI behavior explicitly:
 
   * latest by `created_at`, or
   * latest run only
+
+Client rule:
+
+* Mission Control must not derive latest step evidence locally by sorting execution-wide artifacts in the browser
+* server-side grouping determines the canonical latest artifact for a step attempt and link type
 
 Not all link types are intended as “outputs.”
 For example:
