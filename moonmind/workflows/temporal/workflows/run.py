@@ -104,6 +104,7 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
+ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -750,6 +751,43 @@ class MoonMindRunWorkflow:
             self._update_memo()
         return resolved_plan_ref
 
+    async def _fetch_profile_snapshots(self) -> None:
+        """Best-effort fetch of provider profile snapshots for all managed runtimes.
+
+        Populates ``self._profile_snapshots`` so that
+        ``_build_agent_execution_request`` can validate plan node profile refs
+        against known profiles before spawning child workflows.
+        """
+        self._profile_snapshots: dict[str, dict[str, Any]] = {}
+        runtime_ids = ("codex_cli", "claude_code", "gemini_cli")
+        for runtime_id in runtime_ids:
+            try:
+                result = await workflow.execute_activity(
+                    "provider_profile.list",
+                    {"runtime_id": runtime_id},
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=2),
+                        backoff_coefficient=2.0,
+                        maximum_interval=timedelta(seconds=30),
+                        maximum_attempts=3,
+                    ),
+                )
+                if isinstance(result, dict):
+                    for profile in result.get("profiles", []):
+                        if isinstance(profile, dict):
+                            pid = str(profile.get("profile_id", "")).strip()
+                            if pid:
+                                self._profile_snapshots[pid] = profile
+            except Exception:
+                self._get_logger().warning(
+                    "Failed to fetch provider profiles for runtime_id=%s; "
+                    "profile validation will be skipped for this runtime.",
+                    runtime_id,
+                    exc_info=True,
+                )
+
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
@@ -760,6 +798,10 @@ class MoonMindRunWorkflow:
                 "Ensure the planning activity returns a non-None 'plan_ref'."
             )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
+
+        # Fetch provider profile snapshots so that _build_agent_execution_request
+        # can validate plan node profile refs against known profiles.
+        await self._fetch_profile_snapshots()
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await execute_typed_activity(

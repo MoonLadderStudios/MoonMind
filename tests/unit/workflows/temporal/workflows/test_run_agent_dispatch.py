@@ -395,3 +395,106 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         metadata = request.parameters.get("metadata") or {}
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
+
+
+class TestFetchProfileSnapshots(unittest.TestCase):
+    """Verify the _fetch_profile_snapshots method populates profile snapshots."""
+
+    def test_fetch_profile_snapshots_populates_dict(self) -> None:
+        """When provider_profile.list activity returns profiles, they should
+        be stored in _profile_snapshots keyed by profile_id."""
+        import asyncio
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        async def run_test() -> None:
+            async def mock_execute_activity(
+                activity_name: str, *args: object, **kwargs: object
+            ) -> object:
+                if activity_name == "provider_profile.list":
+                    runtime_id = args[0].get("runtime_id") if args else kwargs.get("runtime_id")
+                    if runtime_id == "codex_cli":
+                        return {
+                            "profiles": [
+                                {
+                                    "profile_id": "codex_openrouter_qwen36_plus",
+                                    "runtime_id": "codex_cli",
+                                    "provider_id": "openrouter",
+                                },
+                                {
+                                    "profile_id": "codex_default",
+                                    "runtime_id": "codex_cli",
+                                    "provider_id": "openai",
+                                },
+                            ]
+                        }
+                    elif runtime_id == "claude_code":
+                        return {
+                            "profiles": [
+                                {
+                                    "profile_id": "claude_anthropic_sonnet",
+                                    "runtime_id": "claude_code",
+                                    "provider_id": "anthropic",
+                                },
+                            ]
+                        }
+                    elif runtime_id == "gemini_cli":
+                        return {"profiles": []}
+                return {}
+
+            with patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                side_effect=mock_execute_activity,
+            ):
+                await wf._fetch_profile_snapshots()
+
+            self.assertIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
+            self.assertIn("codex_default", wf._profile_snapshots)
+            self.assertIn("claude_anthropic_sonnet", wf._profile_snapshots)
+            self.assertNotIn("default:codex_cli", wf._profile_snapshots)
+
+        asyncio.run(run_test())
+
+    def test_fetch_profile_snapshots_tolerates_activity_failure(self) -> None:
+        """When provider_profile.list activity fails, _fetch_profile_snapshots
+        should not raise and should continue with whatever profiles it got."""
+        import asyncio
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        async def run_test() -> None:
+            async def mock_execute_activity(
+                activity_name: str, *args: object, **kwargs: object
+            ) -> object:
+                if activity_name == "provider_profile.list":
+                    runtime_id = args[0].get("runtime_id") if args else kwargs.get("runtime_id")
+                    if runtime_id == "codex_cli":
+                        raise RuntimeError("DB connection failed")
+                    elif runtime_id == "claude_code":
+                        return {
+                            "profiles": [
+                                {
+                                    "profile_id": "claude_anthropic_sonnet",
+                                    "runtime_id": "claude_code",
+                                    "provider_id": "anthropic",
+                                },
+                            ]
+                        }
+                    elif runtime_id == "gemini_cli":
+                        return {"profiles": []}
+                return {}
+
+            with patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                side_effect=mock_execute_activity,
+            ):
+                # Should not raise — best-effort fetch
+                await wf._fetch_profile_snapshots()
+
+            # codex_cli profiles are missing, but claude_code profiles should be there
+            self.assertIn("claude_anthropic_sonnet", wf._profile_snapshots)
+            self.assertNotIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
+
+        asyncio.run(run_test())
