@@ -127,7 +127,7 @@ describe('parseCommandBehavior', () => {
   });
 
   it('throws on invalid JSON', () => {
-    expect(() => parseCommandBehavior('{bad json')).toThrow('Command behavior must be a JSON object.');
+    expect(() => parseCommandBehavior('{bad json')).toThrow('Command behavior must be valid JSON.');
   });
 
   it('throws on non-object values (array)', () => {

@@ -130,7 +130,12 @@ function parseSecretRefs(text: string): Record<string, string> {
 export function parseCommandBehavior(text: string): Record<string, unknown> | null {
   const trimmed = text.trim();
   if (trimmed === '' || trimmed === '{}') return null;
-  const parsed: unknown = JSON.parse(trimmed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error('Command behavior must be valid JSON.');
+  }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('Command behavior must be a JSON object.');
   }
