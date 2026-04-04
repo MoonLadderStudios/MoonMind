@@ -1397,15 +1397,17 @@ class MoonMindRunWorkflow:
             )
 
         agent_kind = self._agent_kind_for_id(agent_id)
-        execution_profile_ref = str(
+        raw_execution_profile_ref = (
             node_inputs.get("executionProfileRef")
             or runtime_block.get("executionProfileRef")
             or node_inputs.get("profileId")
             or runtime_block.get("profileId")
             or node_inputs.get("providerProfile")
             or runtime_block.get("providerProfile")
-            or f"default:{agent_id}"
         )
+        execution_profile_ref = None
+        if raw_execution_profile_ref is not None:
+            execution_profile_ref = str(raw_execution_profile_ref).strip() or None
         wf_info = workflow.info()
         correlation_id = wf_info.workflow_id
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
