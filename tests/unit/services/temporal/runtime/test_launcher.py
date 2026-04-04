@@ -1052,6 +1052,63 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_launch_filters_ambient_jira_credentials_from_child_env(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/home/testuser")
+    monkeypatch.setenv("ATLASSIAN_API_KEY", "atl-secret-token")
+    monkeypatch.setenv("ATLASSIAN_API_KEY_SECRET_REF", "atlassian-api-key")
+    monkeypatch.setenv("ATLASSIAN_EMAIL", "bot@example.com")
+    monkeypatch.setenv("ATLASSIAN_EMAIL_SECRET_REF", "atlassian-email")
+    monkeypatch.setenv("ATLASSIAN_SITE_URL", "https://example.atlassian.net")
+    monkeypatch.setenv("ATLASSIAN_SITE_URL_SECRET_REF", "atlassian-site-url")
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        command_template=["echo", "hello"],
+        env_overrides={"MM_SAFE": "1"},
+        passthrough_env_keys=[],
+    )
+    request = _make_request()
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1000) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-jira-env-filter-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    assert captured_env["MM_SAFE"] == "1"
+    assert captured_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
+    assert captured_env["HOME"] == "/home/testuser"
+    assert not any(key.startswith("ATLASSIAN_") for key in captured_env)
+
+
+@pytest.mark.asyncio
 async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
 

@@ -172,6 +172,8 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "task-dashboard-config" not in response.text
         assert "/static/task_dashboard/dashboard.js" not in response.text
         assert 'id="dashboard-alerts-root"' in response.text
+        assert "marked.min.js" not in response.text
+        assert "__moonmind_customElementsDefineGuard" not in response.text
 
     for path in (
         "/tasks/list",
@@ -187,6 +189,8 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
         assert 'id="dashboard-alerts-root"' in response.text
+        assert "marked.min.js" not in response.text
+        assert "__moonmind_customElementsDefineGuard" not in response.text
 
 
 def test_react_shell_uses_vite_dev_server_assets_when_configured(
