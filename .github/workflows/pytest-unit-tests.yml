@@ -60,7 +60,7 @@ jobs:
         set -euo pipefail
         ./tools/test_unit.sh --python-only
 
-  test-frontend:
+  frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -77,36 +77,19 @@ jobs:
         cache: npm
     - name: Install Node dependencies
       run: npm ci
-    - name: Set up Python for OpenAPI generation
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-    - name: Install system dependencies for backend API check
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libcairo2-dev pkg-config
-    - name: Cache pip dependencies
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    - name: Install backend dependencies via uv
-      run: |
-        python -m pip install --upgrade pip uv
-        uv pip install --system -e .[tests]
-    - name: Verify generated frontend API types are in sync
-      run: npm run generate:check
-    - name: Run frontend tests and build
-      run: npm run ci:test
+    - name: Run frontend typecheck
+      run: npm run ui:typecheck
+    - name: Run frontend lint
+      run: npm run ui:lint
+    - name: Run frontend unit tests
+      run: npm run ui:test
+    - name: Build frontend
+      run: npm run ui:build
+    - name: Verify generated artifact
+      run: npm run ui:verify-manifest
     - name: Upload Mission Control dist artifact
       uses: actions/upload-artifact@v7
       with:
         name: mission-control-dist
         path: api_service/static/task_dashboard/dist/
         if-no-files-found: error
-    - name: Run frontend unit tests via canonical shell wrapper
-      run: |
-        set -euo pipefail
-        ./tools/test_unit.sh --dashboard-only

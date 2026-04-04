@@ -1,0 +1,58 @@
+name: Contract Check
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'api_service/**'
+      - 'tools/export_openapi.py'
+      - 'tools/generate_openapi_types.py'
+      - 'frontend/src/generated/openapi.ts'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'api_service/**'
+      - 'tools/export_openapi.py'
+      - 'tools/generate_openapi_types.py'
+      - 'frontend/src/generated/openapi.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Python for OpenAPI generation
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libcairo2-dev pkg-config
+    - name: Cache pip dependencies
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    - name: Install backend dependencies via uv
+      run: |
+        python -m pip install --upgrade pip uv
+        uv pip install --system -e .
+    - name: Verify generated frontend API types are in sync
+      run: npm run generate:check
