@@ -147,7 +147,6 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
         "/tasks/new",
-        "/tasks/create",
         "/tasks/manifests/new",
         "/tasks/skills",
     ):
@@ -169,7 +168,6 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         "/tasks/schedules",
         "/tasks/settings",
         "/tasks/proposals",
-        "/tasks/tasks-list",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -180,6 +178,17 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
+
+
+def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
+    """GET /tasks/create and /tasks/tasks-list must return 307 redirects to canonical routes."""
+    create_resp = client.get("/tasks/create", follow_redirects=False)
+    assert create_resp.status_code == 307
+    assert create_resp.headers["location"] == "/tasks/new"
+
+    tasks_list_resp = client.get("/tasks/tasks-list", follow_redirects=False)
+    assert tasks_list_resp.status_code == 307
+    assert tasks_list_resp.headers["location"] == "/tasks/list"
 
 
 def test_react_shell_uses_vite_dev_server_assets_when_configured(
@@ -213,7 +222,7 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
 
 
 def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
-    for path in ("/tasks/list", "/tasks/tasks-list", "/tasks/proposals"):
+    for path in ("/tasks/list", "/tasks/proposals"):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":true' in response.text
@@ -234,10 +243,9 @@ def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClie
 
 
 def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestClient) -> None:
-    for path in ("/tasks/list", "/tasks/tasks-list"):
-        response = client.get(path)
-        assert response.status_code == 200
-        assert "dashboardConfig" in response.text
+    response = client.get("/tasks/list")
+    assert response.status_code == 200
+    assert "dashboardConfig" in response.text
     detail = client.get(f"/tasks/{uuid4()}")
     assert detail.status_code == 200
     assert "dashboardConfig" in detail.text
@@ -294,7 +302,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-        "/tasks/create, /tasks/new, "
+        "/tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "/tasks/schedules, /tasks/skills, or /tasks/settings."
     )
