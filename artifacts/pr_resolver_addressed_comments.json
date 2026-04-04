@@ -1,4 +1,24 @@
 [
+  {
+    "id": 3034751817,
+    "disposition": "addressed",
+    "rationale": "Changed the checklist's feature link from an absolute local path to the repo-relative ../spec.md target."
+  },
+  {
+    "id": 3034751830,
+    "disposition": "addressed",
+    "rationale": "Unchecked the technology-agnostic checklist assertions and clarified the notes so the checklist now matches the spec's implementation-detail content."
+  },
+  {
+    "id": 4057656070,
+    "disposition": "not-applicable",
+    "rationale": "Informational review summary only; its actionable feedback is already represented by the inline review comments above."
+  },
+  {
+    "id": 4057666739,
+    "disposition": "not-applicable",
+    "rationale": "Positive review with no requested change."
+  },
   {"id": 3034774063, "disposition": "addressed", "rationale": "Updated parseCommandBehavior to throw on invalid JSON or non-object input instead of silently returning null."},
   {"id": 3034774067, "disposition": "addressed", "rationale": "Updated test_profile_selector_provider_id_routes_to_openrouter to use execution_profile_ref='auto' with profile_selector={provider_id: 'openrouter'} instead of explicit profile ref."},
   {"id": 3034774070, "disposition": "addressed", "rationale": "Updated test_profile_selector_falls_back_to_lower_priority_when_high_disabled to use profile_selector-based routing instead of explicit low-priority ref."},
