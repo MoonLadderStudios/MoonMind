@@ -130,6 +130,7 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     )
     assert '"pr": "123"' in node_inputs["instructions"]
     assert node_inputs["repo"] == "MoonLadderStudios/MoonMind"
+    assert node_inputs["selectedSkill"] == "pr-resolver"
 
 
 def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():

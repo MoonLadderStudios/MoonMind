@@ -314,6 +314,8 @@ def _build_runtime_planner():
         if isinstance(repository, str) and repository.strip():
             node_inputs["repository"] = repository.strip()
             node_inputs["repo"] = repository.strip()
+        if selected_skill_name:
+            node_inputs["selectedSkill"] = selected_skill_name
 
         for git_key in ("startingBranch", "targetBranch", "branch"):
             git_val = (

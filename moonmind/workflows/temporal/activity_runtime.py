@@ -2386,6 +2386,22 @@ class TemporalAgentRuntimeActivities:
         async def _unused_slot_signal(**_kwargs: Any) -> None:
             return None
 
+        raw_pr_resolver_expected = (
+            request.get("pr_resolver_expected")
+            or request.get("prResolverExpected")
+            if isinstance(request, Mapping)
+            else False
+        )
+        if isinstance(raw_pr_resolver_expected, str):
+            pr_resolver_expected = raw_pr_resolver_expected.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        else:
+            pr_resolver_expected = bool(raw_pr_resolver_expected)
+
         adapter = ManagedAgentAdapter(
             profile_fetcher=_unused_profile_fetcher,
             slot_requester=_unused_slot_signal,
@@ -2395,7 +2411,9 @@ class TemporalAgentRuntimeActivities:
             run_store=self._run_store,
         )
         try:
-            result = await adapter.fetch_result(run_id)
+            result = await adapter.fetch_result(
+                run_id, pr_resolver_expected=pr_resolver_expected
+            )
             record = self._run_store.load(run_id)
             if record is not None:
                 result = self._maybe_enrich_gemini_failure_result(

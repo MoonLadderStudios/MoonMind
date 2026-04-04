@@ -1446,6 +1446,21 @@ class MoonMindRunWorkflow:
             parameters["metadata"] = self._json_mapping(
                 raw_metadata, path=f"node[{node_id}].metadata"
             )
+        selected_skill = str(node_inputs.get("selectedSkill") or "").strip()
+        if selected_skill:
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload.setdefault("selectedSkill", selected_skill)
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
         bundle_payload: dict[str, Any] = {}
         for bundle_key in (
             "bundleId",
