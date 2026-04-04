@@ -288,31 +288,83 @@ class AgentRunResult(BaseModel):
 
 
 class ManagedAgentProviderProfile(BaseModel):
-    """Named managed-runtime auth and execution policy contract."""
+    """Named managed-runtime provider profile contract.
+
+    Aligned with the DB model and provider-profile contract.  Uses
+    ``credential_source`` and ``runtime_materialization_mode`` instead of the
+    legacy ``auth_mode`` field (which is rejected by ``extra="forbid"``).
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    # -- Core identity --
     profile_id: str = Field(..., alias="profileId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     provider_id: str | None = Field(None, alias="providerId")
     provider_label: str | None = Field(None, alias="providerLabel")
     default_model: str | None = Field(None, alias="defaultModel")
     model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
-    auth_mode: str = Field(..., alias="authMode", min_length=1)
-    volume_ref: str | None = Field(None, alias="volumeRef")
-    account_label: str | None = Field(None, alias="accountLabel")
-    max_parallel_runs: int = Field(..., alias="maxParallelRuns", ge=1)
-    cooldown_after_429: int | None = Field(None, alias="cooldownAfter429", ge=0)
+
+    # -- Credential & materialization strategy (required) --
+    credential_source: str = Field(..., alias="credentialSource", min_length=1)
+    runtime_materialization_mode: str = Field(
+        ..., alias="runtimeMaterializationMode", min_length=1
+    )
+
+    # -- Policy & routing --
+    tags: list[str] = Field(default_factory=list, alias="tags")
+    priority: int = Field(default=100, alias="priority", ge=0)
+    max_parallel_runs: int = Field(default=1, alias="maxParallelRuns", ge=1)
+    cooldown_after_429_seconds: int = Field(
+        default=900, alias="cooldownAfter429Seconds", ge=0
+    )
     rate_limit_policy: dict[str, Any] = Field(
         default_factory=dict, alias="rateLimitPolicy"
     )
     enabled: bool = Field(True, alias="enabled")
 
+    # -- Volume & account binding (optional) --
+    volume_ref: str | None = Field(None, alias="volumeRef")
+    account_label: str | None = Field(None, alias="accountLabel")
+    volume_mount_path: str | None = Field(None, alias="volumeMountPath")
+    owner_user_id: str | None = Field(None, alias="ownerUserId")
+
+    # -- Environment & config materialization --
+    clear_env_keys: list[str] = Field(default_factory=list, alias="clearEnvKeys")
+    env_template: dict[str, Any] = Field(default_factory=dict, alias="envTemplate")
+    file_templates: list[RuntimeFileTemplate] = Field(
+        default_factory=list, alias="fileTemplates"
+    )
+    home_path_overrides: dict[str, str] = Field(
+        default_factory=dict, alias="homePathOverrides"
+    )
+    command_behavior: dict[str, Any] = Field(
+        default_factory=dict, alias="commandBehavior"
+    )
+    secret_refs: dict[str, str] = Field(default_factory=dict, alias="secretRefs")
+
+    # -- Lifecycle limits --
+    max_lease_duration_seconds: int = Field(
+        default=7200, alias="maxLeaseDurationSeconds", ge=60
+    )
+
+    _ALLOWED_CREDENTIAL_SOURCES: frozenset[str] = frozenset(
+        {"oauth_volume", "secret_ref", "none"}
+    )
+    _ALLOWED_MATERIALIZATION_MODES: frozenset[str] = frozenset(
+        {"oauth_home", "api_key_env", "env_bundle", "config_bundle", "composite"}
+    )
+
     @model_validator(mode="after")
     def _validate_policy(self) -> "ManagedAgentProviderProfile":
         self.profile_id = _require_non_blank(self.profile_id, field_name="profileId")
         self.runtime_id = _require_non_blank(self.runtime_id, field_name="runtimeId")
-        self.auth_mode = _require_non_blank(self.auth_mode, field_name="authMode")
+        self.credential_source = _require_non_blank(
+            self.credential_source, field_name="credentialSource"
+        )
+        self.runtime_materialization_mode = _require_non_blank(
+            self.runtime_materialization_mode, field_name="runtimeMaterializationMode"
+        )
         volume_ref = self.volume_ref
         if volume_ref is not None:
             self.volume_ref = _require_non_blank(volume_ref, field_name="volumeRef")
@@ -323,6 +375,21 @@ class ManagedAgentProviderProfile(BaseModel):
             )
         if _contains_sensitive_key(self.rate_limit_policy):
             raise ValueError("rateLimitPolicy must not contain raw credential keys")
+
+        if self.credential_source not in self._ALLOWED_CREDENTIAL_SOURCES:
+            allowed = ", ".join(sorted(self._ALLOWED_CREDENTIAL_SOURCES))
+            raise ValueError(
+                f"credentialSource must be one of: {allowed}; "
+                f"got {self.credential_source!r}"
+            )
+
+        if self.runtime_materialization_mode not in self._ALLOWED_MATERIALIZATION_MODES:
+            allowed = ", ".join(sorted(self._ALLOWED_MATERIALIZATION_MODES))
+            raise ValueError(
+                f"runtimeMaterializationMode must be one of: {allowed}; "
+                f"got {self.runtime_materialization_mode!r}"
+            )
+
         return self
 
 

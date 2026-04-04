@@ -209,7 +209,13 @@ class ManagedAgentAdapter:
             if _strategy is not None
             else "api_key"
         )
-        auth_mode: str = profile.get("auth_mode", default_auth)
+        # Map legacy strategy auth_mode values to credential_source equivalents.
+        default_credential_source = (
+            "oauth_volume" if default_auth == "oauth" else "secret_ref"
+        )
+        credential_source: str = profile.get(
+            "credential_source", default_credential_source
+        )
 
         # Build a safe delta-only env_overrides dict for ManagedRuntimeProfile.
         #
@@ -335,8 +341,7 @@ class ManagedAgentAdapter:
                 runtime_id=runtime_id_for_profile,
                 provider_id=profile.get("provider_id"),
                 provider_label=profile.get("provider_label"),
-                auth_mode=auth_mode,
-                credential_source=profile.get("credential_source"),
+                credential_source=credential_source,
                 runtime_materialization_mode=profile.get(
                     "runtime_materialization_mode"
                 ),
@@ -400,7 +405,7 @@ class ManagedAgentAdapter:
             startedAt=datetime.now(tz=UTC),
             metadata={
                 "profile_id": profile_id,
-                "auth_mode": auth_mode,
+                "credential_source": credential_source,
                 "env_keys_count": len(shaped_env),
             },
         )
