@@ -16,7 +16,7 @@ export interface ProviderProfile {
   cooldown_after_429_seconds: number;
   rate_limit_policy: string;
   enabled: boolean;
-  command_behavior?: Record<string, any> | null;
+  command_behavior?: Record<string, unknown> | null;
   tags?: string[] | null;
   priority?: number | null;
   clear_env_keys?: string[] | null;
@@ -127,14 +127,14 @@ function parseSecretRefs(text: string): Record<string, string> {
   return secretRefs;
 }
 
-export function parseCommandBehavior(text: string): Record<string, any> | null {
+export function parseCommandBehavior(text: string): Record<string, unknown> | null {
   const trimmed = text.trim();
   if (trimmed === '' || trimmed === '{}') return null;
   const parsed: unknown = JSON.parse(trimmed);
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('Command behavior must be a JSON object.');
   }
-  return parsed as Record<string, any>;
+  return parsed as Record<string, unknown>;
 }
 
 export function parseTags(text: string): string[] | null {

@@ -1,6 +1,6 @@
 # Requirements Traceability: Codex CLI OpenRouter Phase 2
 
-| DOC-REQ | Functional Requirement | Implementation Task | Validation Task | Status |
+| DOC-REQ | Functional Requirement | Implementation Task | Validation Evidence | Status |
 |---------|----------------------|-------------------|-----------------|--------|
 | DOC-REQ-006: Mission Control creation/editing for OpenRouter Codex profiles | FR-006: Mission Control UI supports OpenRouter Codex profile CRUD with validation | T1: Extend ProviderProfileFormState with advanced fields | T2: Unit test form state conversions | Planned |
 | DOC-REQ-007: profile_selector.provider_id = openrouter dynamic routing | FR-007: Dynamic routing via provider_id=openrouter resolves correctly | — (plumbing exists) | T3: Integration test for dynamic routing | Planned |
