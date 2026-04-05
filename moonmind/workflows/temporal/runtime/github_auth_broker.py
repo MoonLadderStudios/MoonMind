@@ -201,6 +201,7 @@ def run_gh_wrapper(*, socket_path: str, real_gh_path: str) -> int:
     """Exec the real gh binary with a token fetched from the local broker."""
     token = request_github_token(socket_path)
     env = dict(os.environ)
+    env.pop("GH_TOKEN", None)
     env["GITHUB_TOKEN"] = token
     os.execvpe(real_gh_path, [real_gh_path, *sys.argv[1:]], env)
     return 0

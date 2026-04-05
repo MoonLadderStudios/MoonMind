@@ -54,9 +54,9 @@ def resolve_token(cli_token: str | None) -> str | None:
     if cli_token:
         return cli_token
 
-    for env_name in ("GITHUB_TOKEN",):
-        if os.environ.get(env_name):
-            return os.environ[env_name]
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        return token
 
     try:
         token = (
@@ -272,7 +272,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--token",
-        help="GitHub token. Falls back to GITHUB_TOKEN, then `gh auth token`.",
+        help="GitHub token. Falls back to GITHUB_TOKEN then `gh auth token`.",
     )
     parser.add_argument(
         "--include-empty-reviews",

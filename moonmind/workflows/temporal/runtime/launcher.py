@@ -397,7 +397,7 @@ class ManagedRuntimeLauncher:
 
     @staticmethod
     async def _resolve_github_token_for_launch(env: dict[str, str]) -> str | None:
-        token = str(env.get("GITHUB_TOKEN") or "").strip()
+        token = env.get("GITHUB_TOKEN", "").strip()
         if token:
             return token
 

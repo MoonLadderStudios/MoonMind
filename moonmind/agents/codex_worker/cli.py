@@ -434,17 +434,17 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
         ],
         input_text=github_token,
         redaction_values=redaction_values,
-        unset_env_keys=("GITHUB_TOKEN",),
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
     _run_checked_command(
         [gh_path, "auth", "setup-git"],
         redaction_values=redaction_values,
-        unset_env_keys=("GITHUB_TOKEN",),
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
     _run_checked_command(
         [gh_path, "auth", "status", "--hostname", "github.com"],
         redaction_values=redaction_values,
-        unset_env_keys=("GITHUB_TOKEN",),
+        unset_env_keys=("GITHUB_TOKEN", "GH_TOKEN"),
     )
 
 

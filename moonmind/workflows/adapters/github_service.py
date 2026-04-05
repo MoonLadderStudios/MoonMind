@@ -69,7 +69,7 @@ class GitHubService:
     @staticmethod
     def _missing_auth_summary(action: str) -> str:
         return (
-            "GitHub auth is not configured; set GITHUB_TOKEN, "
+            "GitHub auth is not configured; set GITHUB_TOKEN "
             f"or configure GITHUB_TOKEN_SECRET_REF / WORKFLOW_GITHUB_TOKEN_SECRET_REF to {action}."
         )
 
@@ -97,10 +97,7 @@ class GitHubService:
         explicit_token: str | None = None,
     ) -> tuple[str, str | None]:
         """Resolve a GitHub token from explicit input, env, or secret ref."""
-        token = str(
-            explicit_token
-            or os.environ.get("GITHUB_TOKEN", "")
-        ).strip()
+        token = (explicit_token or os.environ.get("GITHUB_TOKEN", "")).strip()
         if token:
             return token, None
 
