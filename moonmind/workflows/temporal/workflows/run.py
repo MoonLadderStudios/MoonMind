@@ -177,6 +177,11 @@ class MoonMindRunWorkflow:
         self._pull_request_url: Optional[str] = None
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
+        self._publish_context: dict[str, Any] = {}
+        self._operator_summary: Optional[str] = None
+        self._last_step_id: Optional[str] = None
+        self._last_step_summary: Optional[str] = None
+        self._last_diagnostics_ref: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int | None = None
@@ -1062,6 +1067,10 @@ class MoonMindRunWorkflow:
             if result_status is None or result_status != "COMPLETED":
                 continue
 
+            self._record_execution_context(
+                node_id=node_id,
+                execution_result=execution_result,
+            )
             self._record_publish_result(
                 parameters=parameters,
                 execution_result=execution_result,
@@ -1203,6 +1212,8 @@ class MoonMindRunWorkflow:
                     self._get_logger().info(
                         f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
                     )
+                    self._publish_context["branch"] = head_branch
+                    self._publish_context["baseRef"] = base_branch
                     create_payload = {
                         "repo": self._repo,
                         "head": head_branch,
@@ -1247,6 +1258,7 @@ class MoonMindRunWorkflow:
         if publish_mode == "pr" and pull_request_url:
             self._publish_status = "published"
             self._publish_reason = "published pull request"
+            self._publish_context["pullRequestUrl"] = pull_request_url
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -1462,7 +1474,10 @@ class MoonMindRunWorkflow:
 
         if push_status == "no_commits":
             self._publish_status = "skipped"
-            self._publish_reason = "publish skipped: no local changes"
+            self._publish_reason = self._compose_no_change_publish_reason(
+                publish_mode=publish_mode,
+                outputs=outputs,
+            )
             return
 
         if push_status == "failed":
@@ -1492,6 +1507,115 @@ class MoonMindRunWorkflow:
             self._publish_status = "published"
             self._publish_reason = "published branch"
 
+    def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return
+
+        self._last_step_id = node_id
+        operator_summary = self._coerce_text(
+            outputs.get("operator_summary") or outputs.get("operatorSummary"),
+            max_chars=1600,
+        )
+        if operator_summary:
+            self._operator_summary = operator_summary
+
+        last_step_summary = self._coerce_text(
+            operator_summary
+            or outputs.get("summary")
+            or outputs.get("message"),
+            max_chars=1600,
+        )
+        if last_step_summary:
+            self._last_step_summary = last_step_summary
+
+        diagnostics_ref = self._coerce_text(
+            outputs.get("diagnostics_ref") or outputs.get("diagnosticsRef"),
+            max_chars=200,
+        )
+        if diagnostics_ref:
+            self._last_diagnostics_ref = diagnostics_ref
+
+        publish_branch = self._coerce_text(
+            outputs.get("push_branch") or outputs.get("branch"),
+            max_chars=120,
+        )
+        if publish_branch:
+            self._publish_context["branch"] = publish_branch
+
+        publish_base_ref = self._coerce_text(
+            outputs.get("push_base_ref") or outputs.get("pushBaseRef"),
+            max_chars=120,
+        )
+        if publish_base_ref:
+            self._publish_context["baseRef"] = publish_base_ref
+
+        push_commit_count = outputs.get("push_commit_count")
+        if push_commit_count is None:
+            push_commit_count = outputs.get("pushCommitCount")
+        if isinstance(push_commit_count, bool):
+            push_commit_count = None
+        if isinstance(push_commit_count, (int, float)):
+            self._publish_context["commitCount"] = int(push_commit_count)
+        elif isinstance(push_commit_count, str) and push_commit_count.strip().isdigit():
+            self._publish_context["commitCount"] = int(push_commit_count.strip())
+
+        pull_request_url = self._extract_pull_request_url(execution_result)
+        if pull_request_url:
+            self._publish_context["pullRequestUrl"] = pull_request_url
+
+    def _compose_no_change_publish_reason(
+        self,
+        *,
+        publish_mode: str,
+        outputs: Mapping[str, Any],
+    ) -> str:
+        branch = self._coerce_text(
+            outputs.get("push_branch") or outputs.get("branch"),
+            max_chars=120,
+        )
+        base_ref = self._coerce_text(
+            outputs.get("push_base_ref") or outputs.get("pushBaseRef"),
+            max_chars=120,
+        )
+        operator_summary = self._coerce_text(
+            outputs.get("operator_summary") or outputs.get("operatorSummary"),
+            max_chars=700,
+        )
+        commit_count_value = outputs.get("push_commit_count")
+        if commit_count_value is None:
+            commit_count_value = outputs.get("pushCommitCount")
+        commit_count: int | None = None
+        if isinstance(commit_count_value, bool):
+            commit_count_value = None
+        if isinstance(commit_count_value, (int, float)):
+            commit_count = int(commit_count_value)
+        elif isinstance(commit_count_value, str) and commit_count_value.strip().isdigit():
+            commit_count = int(commit_count_value.strip())
+
+        parts: list[str] = []
+        if publish_mode == "pr":
+            parts.append(
+                "publishMode 'pr' requested, but no publishable diff was produced"
+            )
+        else:
+            parts.append("publish skipped because no local changes were produced")
+
+        if branch and base_ref and commit_count is not None:
+            parts.append(
+                f"branch '{branch}' has {commit_count} commits ahead of {base_ref}"
+            )
+        elif branch and base_ref:
+            parts.append(f"branch '{branch}' has no commits ahead of {base_ref}")
+        elif branch:
+            parts.append(f"branch '{branch}' has no commits to publish")
+
+        if operator_summary:
+            parts.append(f"final agent report: {operator_summary}")
+
+        reason = ". ".join(part.rstrip(".") for part in parts if part)
+        return f"{reason}." if reason else "publish skipped: no local changes"
+
     def _determine_publish_completion(
         self,
         *,
@@ -1504,12 +1628,10 @@ class MoonMindRunWorkflow:
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
-                self._publish_reason = (
-                    "publishMode 'pr' requested but no local changes were produced"
-                )
                 return (
                     "failed",
-                    self._publish_reason,
+                    self._publish_reason
+                    or "publishMode 'pr' requested but no local changes were produced",
                     True,
                 )
             return ("no_changes", "Workflow completed with no local changes", False)
@@ -2314,6 +2436,16 @@ class MoonMindRunWorkflow:
                     "failedDependencyId": self._failed_dependency_id,
                 },
             }
+            if self._operator_summary:
+                finish_summary["operatorSummary"] = self._operator_summary
+            if self._publish_context:
+                finish_summary["publishContext"] = dict(self._publish_context)
+            if self._last_step_id or self._last_step_summary or self._last_diagnostics_ref:
+                finish_summary["lastStep"] = {
+                    "id": self._last_step_id,
+                    "summary": self._last_step_summary,
+                    "diagnosticsRef": self._last_diagnostics_ref,
+                }
 
             artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "artifact.create"

@@ -544,18 +544,28 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
 def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
-    mock_run_workflow._publish_status = "skipped"
-    mock_run_workflow._publish_reason = "publish skipped: no local changes"
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "no_commits",
+                "push_branch": "feature/no-op",
+                "push_base_ref": "origin/main",
+                "push_commit_count": 0,
+                "operator_summary": "Files edited in this run: none.",
+            }
+        },
+    )
 
     status, message, publish_failure = mock_run_workflow._determine_publish_completion(
         parameters={"publishMode": "pr"}
     )
 
     assert status == "failed"
-    assert (
-        message
-        == "publishMode 'pr' requested but no local changes were produced"
-    )
+    assert "no publishable diff was produced" in message
+    assert "feature/no-op" in message
+    assert "origin/main" in message
+    assert "Files edited in this run: none." in message
     assert publish_failure is True
 
 

@@ -2420,6 +2420,13 @@ class TemporalAgentRuntimeActivities:
             # Build merged metadata from the typed result, then enrich with
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
+            if record is not None:
+                operator_summary = await self._collect_operator_summary(
+                    record=record,
+                    result=result,
+                )
+                if operator_summary:
+                    meta["operator_summary"] = operator_summary
 
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
@@ -2442,6 +2449,110 @@ class TemporalAgentRuntimeActivities:
             return result
         finally:
             await self._cleanup_managed_run_publish_support_best_effort(run_id)
+
+    async def _collect_operator_summary(
+        self,
+        *,
+        record: ManagedRunRecord,
+        result: AgentRunResult,
+    ) -> str | None:
+        stdout_summary = await self._extract_stdout_operator_summary(record)
+        if stdout_summary:
+            return stdout_summary
+
+        summary = self._sanitize_operator_summary(result.summary)
+        if summary and summary != "Completed with status completed":
+            return summary
+        return None
+
+    async def _extract_stdout_operator_summary(
+        self,
+        record: ManagedRunRecord,
+    ) -> str | None:
+        if self._artifact_service is None or not record.stdout_artifact_ref:
+            return None
+
+        try:
+            _, payload = await self._artifact_service.read_bytes(
+                artifact_id=record.stdout_artifact_ref,
+                principal="system:agent_runtime",
+            )
+        except Exception:
+            logger.debug(
+                "Failed to read stdout artifact for managed run %s",
+                record.run_id,
+                exc_info=True,
+            )
+            return None
+
+        text = payload.decode("utf-8", errors="replace")
+        extracted = self._extract_operator_summary_from_text(text)
+        return self._sanitize_operator_summary(extracted)
+
+    @staticmethod
+    def _extract_operator_summary_from_text(text: str) -> str | None:
+        normalized = str(text or "").replace("\r\n", "\n").strip()
+        if not normalized:
+            return None
+
+        report_start = normalized.rfind("**Final Report**")
+        if report_start >= 0:
+            normalized = normalized[report_start + len("**Final Report**") :].strip()
+        else:
+            report_start = normalized.rfind("Final Report")
+            if report_start >= 0:
+                normalized = normalized[report_start + len("Final Report") :].strip()
+
+        stop_markers = (
+            "\ncodex\n",
+            "\nexec\n",
+            "\ntokens used",
+            "\nCommand:",
+            "\n/bin/bash -lc",
+        )
+        for marker in stop_markers:
+            marker_index = normalized.find(marker)
+            if marker_index >= 0:
+                normalized = normalized[:marker_index].strip()
+
+        filtered_lines: list[str] = []
+        for raw_line in normalized.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                if filtered_lines and filtered_lines[-1] != "":
+                    filtered_lines.append("")
+                continue
+            if stripped in {"**Final Report**", "Final Report", "codex"}:
+                continue
+            if stripped.startswith("exec") or stripped.startswith("/bin/bash -lc"):
+                continue
+            filtered_lines.append(line)
+            if len(filtered_lines) >= 18:
+                break
+
+        while filtered_lines and filtered_lines[0] == "":
+            filtered_lines.pop(0)
+        while filtered_lines and filtered_lines[-1] == "":
+            filtered_lines.pop()
+
+        summary = "\n".join(filtered_lines).strip()
+        return summary or None
+
+    @staticmethod
+    def _sanitize_operator_summary(summary: str | None) -> str | None:
+        if not summary:
+            return None
+
+        from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
+
+        redactor = SecretRedactor.from_environ(placeholder="[REDACTED]")
+        scrubbed = scrub_github_tokens(redactor.scrub(summary)).strip()
+        if not scrubbed:
+            return None
+        if len(scrubbed) <= 1400:
+            return scrubbed
+        return f"{scrubbed[:1397].rstrip()}..."
 
     @staticmethod
     def _is_generic_process_exit_summary(summary: str | None) -> bool:
@@ -2642,11 +2753,12 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         *,
         target_branch: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """Push the workspace branch to origin.
 
         Returns a dict with ``push_status``, ``push_branch``, and optionally
-        ``push_error`` that the caller merges into result metadata.
+        ``push_error``, ``push_base_ref``, and ``push_commit_count`` that the
+        caller merges into result metadata.
 
         Uses ``asyncio.create_subprocess_exec`` to avoid blocking the event
         loop.
@@ -2769,6 +2881,8 @@ class TemporalAgentRuntimeActivities:
                 return {
                     "push_status": "no_commits",
                     "push_branch": current_branch,
+                    "push_base_ref": base_ref,
+                    "push_commit_count": 0,
                 }
 
             logger.info(
@@ -2779,6 +2893,8 @@ class TemporalAgentRuntimeActivities:
             return {
                 "push_status": "pushed",
                 "push_branch": current_branch,
+                "push_base_ref": base_ref,
+                "push_commit_count": commit_count,
             }
         except Exception as exc:
             logger.warning(
