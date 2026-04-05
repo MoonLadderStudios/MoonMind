@@ -59,7 +59,9 @@ _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.integration,
+    pytest.mark.provider_verification,
+    pytest.mark.jules,
+    pytest.mark.requires_credentials,
     pytest.mark.skipif(not _JULES_API_KEY, reason="JULES_API_KEY not set"),
 ]
 

@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _module_path(module_name: str) -> Path:
+    return REPO_ROOT / Path(*module_name.split(".")).with_suffix(".py")
+
+
+def _marker_names_from_node(node: ast.AST) -> set[str]:
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        marker_names: set[str] = set()
+        for element in node.elts:
+            marker_names.update(_marker_names_from_node(element))
+        return marker_names
+
+    if isinstance(node, ast.Call):
+        return _marker_names_from_node(node.func)
+
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "pytest"
+        and node.value.attr == "mark"
+    ):
+        return {node.attr}
+
+    return set()
+
+
+def _marker_names(module_name: str) -> set[str]:
+    module_ast = ast.parse(_module_path(module_name).read_text(encoding="utf-8"))
+
+    marker_names: set[str] = set()
+    for statement in module_ast.body:
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            targets = [statement.target]
+            value = statement.value
+        else:
+            continue
+
+        if value is None:
+            continue
+
+        if any(
+            isinstance(target, ast.Name) and target.id == "pytestmark"
+            for target in targets
+        ):
+            marker_names.update(_marker_names_from_node(value))
+
+    return marker_names
+
+
+def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
+    registered_markers = {
+        marker.split(":", 1)[0].strip() for marker in pytestconfig.getini("markers")
+    }
+
+    assert "integration_ci" in registered_markers
+    assert "provider_verification" in registered_markers
+    assert "jules" in registered_markers
+    assert "requires_credentials" in registered_markers
+
+
+def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integration_ci() -> None:
+    expected_modules = (
+        "tests.integration.temporal.test_temporal_artifact_local_dev",
+        "tests.integration.temporal.test_temporal_artifact_auth_preview",
+        "tests.integration.temporal.test_temporal_artifact_lifecycle",
+        "tests.integration.temporal.test_activity_worker_topology",
+    )
+
+    for module_name in expected_modules:
+        marker_names = _marker_names(module_name)
+        assert "integration_ci" in marker_names
+        assert "integration" in marker_names
+
+
+def test_live_jules_suite_is_provider_verification_only() -> None:
+    marker_names = _marker_names("tests.integration.test_jules_integration")
+
+    assert "provider_verification" in marker_names
+    assert "jules" in marker_names
+    assert "requires_credentials" in marker_names
+    assert "integration_ci" not in marker_names
+    assert "integration" not in marker_names
+
+
+def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
+    shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
+        encoding="utf-8"
+    )
+    provider_runner = (REPO_ROOT / "tools" / "test_jules_provider.sh").read_text(
+        encoding="utf-8"
+    )
+    powershell_runner = (REPO_ROOT / "tools" / "test-integration.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'integration_ci' in shell_runner
+    assert 'provider_verification and jules' in provider_runner
+    assert 'integration_ci' in powershell_runner
