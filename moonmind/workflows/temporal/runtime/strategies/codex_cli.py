@@ -106,19 +106,19 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         )
 
         model = None
+        resolved_model = self.get_model(profile, request)
         if requested_model:
-            resolved_requested_model = self.get_model(profile, request)
             profile_default_model = (
                 str(getattr(profile, "default_model", None) or "").strip() or None
             )
             if not (
                 suppress_default_model_flag
                 and profile_default_model
-                and resolved_requested_model == profile_default_model
+                and resolved_model == profile_default_model
             ):
-                model = resolved_requested_model
+                model = resolved_model
         elif not suppress_default_model_flag:
-            model = self.get_model(profile, request)
+            model = resolved_model
         if model:
             cmd.extend(["-m", model])
 
