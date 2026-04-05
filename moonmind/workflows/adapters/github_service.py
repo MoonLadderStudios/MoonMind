@@ -57,8 +57,8 @@ class GitHubService:
     """Thin wrapper around the GitHub REST API for pull-request operations.
 
     This service is stateless and safe to share across activity invocations.
-    Authentication is resolved from an explicit token, ``GITHUB_TOKEN`` /
-    ``GH_TOKEN`` env vars, or the configured secret reference.
+    Authentication is resolved from an explicit token, ``GITHUB_TOKEN`` env var,
+    or the configured secret reference.
     """
 
     def __init__(self, *, timeout: float = 30.0) -> None:
@@ -69,7 +69,7 @@ class GitHubService:
     @staticmethod
     def _missing_auth_summary(action: str) -> str:
         return (
-            "GitHub auth is not configured; set GITHUB_TOKEN or GH_TOKEN, "
+            "GitHub auth is not configured; set GITHUB_TOKEN, "
             f"or configure GITHUB_TOKEN_SECRET_REF / WORKFLOW_GITHUB_TOKEN_SECRET_REF to {action}."
         )
 
@@ -77,7 +77,7 @@ class GitHubService:
     def _secret_ref_resolution_summary() -> str:
         return (
             "GitHub token secret reference could not be resolved. "
-            "Ensure GITHUB_TOKEN or GH_TOKEN is set, or configure "
+            "Ensure GITHUB_TOKEN is set, or configure "
             "GITHUB_TOKEN_SECRET_REF / WORKFLOW_GITHUB_TOKEN_SECRET_REF; see logs for details."
         )
 
@@ -100,7 +100,6 @@ class GitHubService:
         token = str(
             explicit_token
             or os.environ.get("GITHUB_TOKEN", "")
-            or os.environ.get("GH_TOKEN", "")
         ).strip()
         if token:
             return token, None

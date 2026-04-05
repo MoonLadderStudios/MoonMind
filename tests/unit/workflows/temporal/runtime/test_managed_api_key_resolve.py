@@ -94,19 +94,6 @@ async def test_resolve_managed_github_token_from_store_first_slug(
     assert session.seen_slugs == ["GITHUB_TOKEN"]
 
 
-async def test_resolve_managed_github_token_from_store_falls_back_slug(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session = _FakeLookupSession(values={"GH_TOKEN": "ghp-fallback-slug"})
-    session_maker = _FakeSessionMaker(session)
-    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
-
-    out = await resolve_managed_github_token_from_store()
-    assert out == "ghp-fallback-slug"
-    assert session_maker.calls == 1
-    assert session.seen_slugs == ["GITHUB_TOKEN", "GH_TOKEN"]
-
-
 async def test_resolve_managed_github_token_from_store_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -116,7 +103,7 @@ async def test_resolve_managed_github_token_from_store_empty(
 
     assert await resolve_managed_github_token_from_store() is None
     assert session_maker.calls == 1
-    assert session.seen_slugs == ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT"]
+    assert session.seen_slugs == ["GITHUB_TOKEN", "GITHUB_PAT"]
 
 
 async def test_resolve_managed_github_token_from_store_stops_after_lookup_failure(

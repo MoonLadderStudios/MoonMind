@@ -125,26 +125,22 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
     assert calls[2][2] is not None
     assert calls[2][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[2][2]
-    assert "GH_TOKEN" not in calls[2][2]
     assert calls[3][0] == ["/usr/bin/gh", "auth", "setup-git"]
     assert calls[3][1] is None
     assert calls[3][2] is not None
     assert calls[3][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[3][2]
-    assert "GH_TOKEN" not in calls[3][2]
     assert calls[4][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
     assert calls[4][1] is None
     assert calls[4][2] is not None
     assert calls[4][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[4][2]
-    assert "GH_TOKEN" not in calls[4][2]
 
     for idx in (2, 3, 4):
         env = calls[idx][2]
         assert env is not None
         assert "PATH" in env
         assert "GITHUB_TOKEN" not in env
-        assert "GH_TOKEN" not in env
 
 
 def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:

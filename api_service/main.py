@@ -213,7 +213,7 @@ async def _sync_env_managed_secrets() -> int:
             return None
         return None
 
-    github_token_slugs = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT")
+    github_token_slugs = ("GITHUB_TOKEN", "GITHUB_PAT")
 
     def _env_value(name: str) -> str | None:
         value = os.environ.get(name)

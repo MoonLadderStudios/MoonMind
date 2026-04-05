@@ -10580,7 +10580,6 @@ class CodexWorker:
 
         if token:
             command_env["GITHUB_TOKEN"] = token
-            command_env["GH_TOKEN"] = token
             command_env["GIT_TERMINAL_PROMPT"] = "0"
             configured = True
 

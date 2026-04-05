@@ -99,7 +99,7 @@ def test_managed_runtime_profile_rejects_github_tokens_in_env_overrides() -> Non
             profileId="gemini_provider_profile",
             runtimeId="gemini_cli",
             commandTemplate=["gemini"],
-            envOverrides={"GH_TOKEN": "ghp-1", "GITHUB_TOKEN": "ghp-2"},
+            envOverrides={"GITHUB_TOKEN": "ghp-2"},
         )
 
 
@@ -134,9 +134,9 @@ def test_managed_runtime_profile_allows_secret_passthrough_key_names() -> None:
         profileId="gemini_provider_profile",
         runtimeId="gemini_cli",
         commandTemplate=["gemini"],
-        passthroughEnvKeys=["gh_token", "GITHUB_TOKEN", "GH_TOKEN"],
+        passthroughEnvKeys=["github_token", "GITHUB_TOKEN"],
     )
-    assert profile.passthrough_env_keys == ["GH_TOKEN", "GITHUB_TOKEN"]
+    assert profile.passthrough_env_keys == ["GITHUB_TOKEN"]
 
 
 def test_managed_runtime_profile_coerces_legacy_file_templates_mapping() -> None:

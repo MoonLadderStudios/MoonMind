@@ -20,7 +20,6 @@ from moonmind.auth.resolvers import (
 # produced a token (matches api_service startup seeding and dashboard hints).
 _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
     "GITHUB_TOKEN",
-    "GH_TOKEN",
     "GITHUB_PAT",
 )
 

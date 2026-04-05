@@ -120,12 +120,10 @@ async def test_shape_environment_for_oauth_without_mount_path():
 async def test_shape_environment_for_oauth_clears_github_cli_tokens():
     base = {
         "HOME": "/home/user",
-        "GH_TOKEN": "ghp-token",
         "GITHUB_TOKEN": "github-token",
         "OPENAI_API_KEY": "secret",
     }
     shaped = shape_environment_for_oauth(base, volume_mount_path=None)
-    assert "GH_TOKEN" not in shaped
     assert "GITHUB_TOKEN" not in shaped
     assert "OPENAI_API_KEY" not in shaped
 
@@ -346,8 +344,7 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
             captured_payload.update(payload)
         return {"status": "launching"}
 
-    monkeypatch.setenv("GH_TOKEN", "ghp-direct")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-direct")
     monkeypatch.setenv("OPENAI_API_KEY", "should-not-leak")
 
     adapter = ManagedAgentAdapter(
@@ -391,8 +388,7 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
         if isinstance(profile_payload.get("passthroughEnvKeys"), list)
         else []
     )
-    assert set(passthrough_env_keys) == {"GH_TOKEN", "GITHUB_TOKEN"}
-    assert "GH_TOKEN" not in env_overrides
+    assert passthrough_env_keys == ["GITHUB_TOKEN"]
     assert "GITHUB_TOKEN" not in env_overrides
     assert "OPENAI_API_KEY" not in env_overrides
 

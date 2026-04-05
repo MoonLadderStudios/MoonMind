@@ -188,8 +188,7 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
 
 @pytest.mark.asyncio
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-runtime")
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
 
     store = ManagedRunStore(tmp_path)
@@ -206,7 +205,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     profile = _make_profile(
         command_template=["echo", "hello"],
         env_overrides={"MM_SAFE": "1"},
-        passthrough_env_keys=["GH_TOKEN", "GITHUB_TOKEN"],
+        passthrough_env_keys=["GITHUB_TOKEN"],
     )
     request = _make_request()
 
@@ -240,8 +239,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     await process.wait()
 
     assert captured_env["MM_SAFE"] == "1"
-    assert captured_env["GH_TOKEN"] == "ghp-runtime"
-    assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
+    assert captured_env["GITHUB_TOKEN"] == "ghp-runtime"
 
 
 @pytest.mark.asyncio
@@ -737,6 +735,9 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
 async def test_launch_emits_workspace_preparation_applied_annotation(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
     class _RecorderLogStreamer:
         def __init__(self) -> None:
             self.emissions: list[dict[str, object]] = []
@@ -797,6 +798,9 @@ async def test_launch_emits_workspace_preparation_applied_annotation(
 async def test_launch_emits_workspace_preparation_skipped_annotation_for_existing_file(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
     class _RecorderLogStreamer:
         def __init__(self) -> None:
             self.emissions: list[dict[str, object]] = []
@@ -993,6 +997,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-drop-me")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
@@ -1057,6 +1062,7 @@ async def test_launch_filters_ambient_jira_credentials_from_child_env(
 ):
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("ATLASSIAN_API_KEY", "atl-secret-token")
     monkeypatch.setenv("ATLASSIAN_API_KEY_SECRET_REF", "atlassian-api-key")
     monkeypatch.setenv("ATLASSIAN_EMAIL", "bot@example.com")
@@ -1227,7 +1233,6 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
         "db://github-pat",
     )
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
         _fake_create_subprocess_exec,
@@ -1249,7 +1254,6 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
     run_root = store.store_root.parent / "workspaces" / "run-github-secret-ref-1"
     assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
     assert "GITHUB_TOKEN" not in captured_env
-    assert "GH_TOKEN" not in captured_env
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     gitconfig = Path(captured_env["GIT_CONFIG_GLOBAL"])
     assert gitconfig.exists()
@@ -1307,7 +1311,6 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
 
     monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
         _fake_create_subprocess_exec,
@@ -1329,7 +1332,6 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
     run_root = store.store_root.parent / "workspaces" / "run-github-managed-store-1"
     assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
     assert "GITHUB_TOKEN" not in captured_env
-    assert "GH_TOKEN" not in captured_env
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
@@ -1384,7 +1386,6 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
 
     monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
         _fake_create_subprocess_exec,
@@ -1406,7 +1407,6 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
     run_root = store.store_root.parent / "workspaces" / "run-github-managed-store-codex-1"
     assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
     assert captured_env["GITHUB_TOKEN"] == "resolved-from-managed-secrets-table"
-    assert captured_env["GH_TOKEN"] == "resolved-from-managed-secrets-table"
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
@@ -1422,7 +1422,6 @@ async def test_resolve_github_token_for_launch_propagates_cancellation_from_secr
 
     monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
         _fake_resolve,
@@ -1443,7 +1442,6 @@ async def test_resolve_github_token_for_launch_propagates_cancellation_from_stor
 
     monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
         _fake_store_token,
