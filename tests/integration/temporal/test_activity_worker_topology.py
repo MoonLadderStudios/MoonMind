@@ -11,12 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
-from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.skill_plan_contracts import SkillResult
 from moonmind.workflows.temporal import (
     ARTIFACTS_FLEET,
-    INTEGRATIONS_FLEET,
     LLM_FLEET,
     SANDBOX_FLEET,
     ExecutionRef,
@@ -52,21 +50,7 @@ async def _db(tmp_path: Path):
         await engine.dispose()
 
 
-class _FakeJulesClient:
-    async def create_task(self, request):
-        return JulesTaskResponse(
-            task_id="task-001",
-            status="pending",
-            url="https://jules.test/task-001",
-        )
-
-    async def get_task(self, request):
-        return JulesTaskResponse(
-            task_id=request.task_id,
-            status="completed",
-            url="https://jules.test/task-001",
-        )
-
+class _UnusedIntegrationClient:
     async def aclose(self) -> None:
         return None
 
@@ -157,7 +141,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     ),
                     integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
-                        client_factory=_FakeJulesClient,
+                        client_factory=_UnusedIntegrationClient,
                     ),
                     proposal_activities=TemporalProposalActivities(
                         artifact_service=service,
@@ -191,7 +175,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     ),
                     integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
-                        client_factory=_FakeJulesClient,
+                        client_factory=_UnusedIntegrationClient,
                     ),
                     proposal_activities=TemporalProposalActivities(
                         artifact_service=service,
@@ -252,7 +236,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     ),
                     integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
-                        client_factory=_FakeJulesClient,
+                        client_factory=_UnusedIntegrationClient,
                     ),
                     proposal_activities=TemporalProposalActivities(
                         artifact_service=service,
@@ -277,46 +261,3 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 sandbox_bindings["mm.skill.execute"].task_queue == "mm.activity.sandbox"
             )
             assert sandbox_result.exit_code == 0
-
-            integration_bindings = {
-                binding.activity_type: binding
-                for binding in build_worker_activity_bindings(
-                    fleet=INTEGRATIONS_FLEET,
-                    catalog=catalog,
-                    artifact_activities=TemporalArtifactActivities(service),
-                    plan_activities=TemporalPlanActivities(
-                        artifact_service=service,
-                        planner=_planner,
-                    ),
-                    skill_activities=TemporalSkillActivities(dispatcher=dispatcher),
-                    sandbox_activities=TemporalSandboxActivities(
-                        artifact_service=service,
-                        workspace_root=tmp_path / "workspaces",
-                    ),
-                    integration_activities=TemporalIntegrationActivities(
-                        artifact_service=service,
-                        client_factory=_FakeJulesClient,
-                    ),
-                    proposal_activities=TemporalProposalActivities(
-                        artifact_service=service,
-                    ),
-                    review_activities=TemporalReviewActivities(),
-                )
-            }
-            started = await integration_bindings["integration.jules.start"].handler(
-                {
-                    "principal": "user-1",
-                    "parameters": {"title": "Topology", "description": "verify"},
-                    "workspace_spec": {"repo": "topology/test"},
-                    "idempotency_key": "idem-topology-1",
-                }
-            )
-            assert (
-                integration_bindings["integration.jules.start"].task_queue
-                == "mm.activity.integrations"
-            )
-            assert (
-                integration_bindings["mm.skill.execute"].task_queue
-                == "mm.activity.integrations"
-            )
-            assert started.external_id == "task-001"

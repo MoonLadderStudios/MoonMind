@@ -89,7 +89,7 @@
 
 **Purpose**: Finish regression coverage, remove obsolete test assumptions, and validate the full runtime diff.
 
-- [X] T013 [P] Update `tests/integration/test_jules_integration.py` to replace or retire the obsolete real-provider multi-step `sendMessage` lifecycle expectation in favor of one-shot bundled execution coverage for `DOC-REQ-006` and `DOC-REQ-009`
+- [X] T013 [P] Update `tests/provider/jules/test_jules_integration.py` to replace or retire the obsolete real-provider multi-step `sendMessage` lifecycle expectation in favor of one-shot bundled execution coverage for `DOC-REQ-006` and `DOC-REQ-009`
 - [X] T014 [P] Run `./tools/test_unit.sh` and fix any workflow/adapter regressions introduced across `moonmind/workflows/temporal/` and `tests/unit/workflows/temporal/` to validate all `DOC-REQ-*`
 - [X] T015 [P] Run `bash ".specify/scripts/bash/validate-implementation-scope.sh" --check diff --mode runtime --base-ref origin/main` and confirm the final diff includes runtime changes under `moonmind/` plus test coverage under `tests/`
 
