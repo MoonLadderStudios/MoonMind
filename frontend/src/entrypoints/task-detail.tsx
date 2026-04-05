@@ -42,6 +42,7 @@ const ExecutionDetailSchema = z
     targetRuntime: z.string().nullable().optional(),
     targetSkill: z.string().nullable().optional(),
     model: z.string().nullable().optional(),
+    profileId: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
@@ -1204,6 +1205,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.model ? (
               <Card label="Model">
                 <code className="text-xs">{execution.model}</code>
+              </Card>
+            ) : null}
+            {execution.profileId ? (
+              <Card label="Provider Profile">
+                <code className="text-xs break-all">{execution.profileId}</code>
               </Card>
             ) : null}
             {execution.effort ? <Card label="Effort">{execution.effort}</Card> : null}
