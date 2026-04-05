@@ -536,3 +536,17 @@ class TestCodexCliPrepareWorkspace:
 
         assert result.status == "failed"
         assert result.failure_class == "execution_error"
+
+def test_codex_classify_result_ignores_intermediate_progress_only_line() -> None:
+    result = CodexCliStrategy().classify_result(
+        exit_code=0,
+        stdout=(
+            "Let me search more specifically for frontend components and "
+            "provider-related code.\n"
+            "Implemented provider profile details in task history and added unit coverage.\n"
+        ),
+        stderr="",
+    )
+
+    assert result.status == "completed"
+    assert result.failure_class is None

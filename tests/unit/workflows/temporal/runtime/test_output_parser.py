@@ -22,11 +22,6 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 )
 
 
-# ---------------------------------------------------------------------------
-# PlainTextOutputParser
-# ---------------------------------------------------------------------------
-
-
 class TestPlainTextOutputParser:
     def test_parse_stream_chunk_returns_empty(self) -> None:
         parser = PlainTextOutputParser()
@@ -46,7 +41,7 @@ class TestPlainTextOutputParser:
             "some output",
             "Error: something went wrong\nWarning: be careful\nFatal: crash",
         )
-        assert len(result.error_messages) == 2  # Error: and Fatal:
+        assert len(result.error_messages) == 2
         assert any("Error:" in m for m in result.error_messages)
         assert any("Fatal:" in m for m in result.error_messages)
 
@@ -54,12 +49,6 @@ class TestPlainTextOutputParser:
         parser = PlainTextOutputParser()
         result = parser.parse("output", "just some debug info")
         assert result.error_messages == []
-
-
-
-# ---------------------------------------------------------------------------
-# Default strategy exit classification (Gemini, Claude, Codex)
-# ---------------------------------------------------------------------------
 
 
 class TestDefaultStrategyClassifyExit:
@@ -118,7 +107,7 @@ class TestCodexCliOutputParser:
         )
         assert result.error_messages == ["Blocked on the workspace tooling constraint."]
 
-    def test_parse_detects_interactive_handoff_message(self) -> None:
+    def test_parse_detects_terminal_interactive_handoff_message(self) -> None:
         parser = CodexCliOutputParser()
         result = parser.parse(
             "Want me to keep going with that, or is there something specific you'd like me to work on?\n",
@@ -128,15 +117,14 @@ class TestCodexCliOutputParser:
             "Want me to keep going with that, or is there something specific you'd like me to work on?"
         ]
 
-    def test_parse_detects_progress_only_exploration_message(self) -> None:
+    def test_parse_ignores_intermediate_progress_message_when_output_finishes_cleanly(self) -> None:
         parser = CodexCliOutputParser()
         result = parser.parse(
-            "Let me search more specifically for frontend components and provider-related code.\n",
+            "Let me search more specifically for frontend components and provider-related code.\n"
+            "Implemented provider profile details in task history and added unit coverage.\n",
             "",
         )
-        assert result.error_messages == [
-            "Let me search more specifically for frontend components and provider-related code."
-        ]
+        assert result.error_messages == []
 
     def test_parse_deduplicates_blocker_lines_case_insensitively(self) -> None:
         parser = CodexCliOutputParser()

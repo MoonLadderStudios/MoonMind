@@ -59,7 +59,14 @@ _LOCAL_FALLBACK_SEARCH_ROOTS: tuple[str, ...] = (
     "api_service",
     "tests",
 )
+_LOCAL_FALLBACK_ALLOWED_SKIP_REASONS: frozenset[str] = frozenset({
+    "collection_unavailable",
+    "qdrant_unavailable",
+    "retrieval_unavailable",
+    "retrieval_gateway_unavailable",
+})
 _LOCAL_FALLBACK_MAX_ITEMS = 8
+_LOCAL_FALLBACK_TERMINATE_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +123,8 @@ class ContextInjectionService:
         if pack is None:
             if retrieval_skip_reason:
                 logger.info("[rag] retrieval skipped: %s", retrieval_skip_reason)
+            if not self._should_use_local_fallback(retrieval_skip_reason):
+                return PromptContextResolution(instruction=instruction_ref)
             fallback_pack = self._build_local_fallback_pack(
                 instruction=instruction_ref,
                 workspace_path=workspace_path,
@@ -142,8 +151,7 @@ class ContextInjectionService:
             context_text=pack.context_text,
             instruction=instruction_ref,
         )
-        
-        # Mutate the request
+
         request.instruction_ref = new_instruction
 
         return PromptContextResolution(
@@ -199,11 +207,11 @@ class ContextInjectionService:
         artifacts_dir = workspace_path / "artifacts"
         context_dir = artifacts_dir / "context"
         context_dir.mkdir(parents=True, exist_ok=True)
-        
+
         job_id = request.correlation_id
         repo = request.parameters.get("repository", "")
         instruction = request.instruction_ref or ""
-        
+
         digest_input = f"{job_id}:{repo}:{instruction}".encode(
             "utf-8", errors="replace"
         )
@@ -283,6 +291,12 @@ class ContextInjectionService:
             default=True,
         )
 
+    @staticmethod
+    def _should_use_local_fallback(retrieval_skip_reason: str | None) -> bool:
+        if retrieval_skip_reason is None:
+            return True
+        return retrieval_skip_reason in _LOCAL_FALLBACK_ALLOWED_SKIP_REASONS
+
     def _build_local_fallback_pack(
         self,
         *,
@@ -294,9 +308,7 @@ class ContextInjectionService:
             return None
 
         search_roots = [
-            str(workspace_path / root)
-            for root in _LOCAL_FALLBACK_SEARCH_ROOTS
-            if (workspace_path / root).exists()
+            root for root in _LOCAL_FALLBACK_SEARCH_ROOTS if (workspace_path / root).exists()
         ]
         if not search_roots:
             return None
@@ -307,36 +319,56 @@ class ContextInjectionService:
             command.extend(["-g", glob])
         command.extend([pattern, *search_roots])
 
+        items: list[ContextItem] = []
+        terminated_early = False
+        returncode: int | None = None
+
         try:
-            completed = subprocess.run(
+            with subprocess.Popen(
                 command,
                 cwd=workspace_path,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                check=False,
-            )
+            ) as process:
+                assert process.stdout is not None
+                for raw_line in process.stdout:
+                    source, line_number, snippet = self._parse_rg_match_line(
+                        raw_line.rstrip("\n"),
+                        workspace_path=workspace_path,
+                    )
+                    if source is None or line_number is None or snippet is None:
+                        continue
+                    items.append(
+                        ContextItem(
+                            score=1.0,
+                            source=source,
+                            text=f"line {line_number}: {snippet}",
+                            trust_class="canonical",
+                            payload={"line": line_number, "mode": "local_fallback"},
+                        )
+                    )
+                    if len(items) >= _LOCAL_FALLBACK_MAX_ITEMS:
+                        terminated_early = True
+                        process.terminate()
+                        break
+
+                if terminated_early:
+                    with suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=_LOCAL_FALLBACK_TERMINATE_TIMEOUT_SECONDS)
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                else:
+                    process.wait()
+                returncode = process.returncode
+                if process.stderr is not None:
+                    process.stderr.read()
         except OSError:
             return None
 
-        if completed.returncode not in {0, 1}:
+        if not terminated_early and returncode not in {0, 1}:
             return None
-
-        items: list[ContextItem] = []
-        for raw_line in completed.stdout.splitlines():
-            if len(items) >= _LOCAL_FALLBACK_MAX_ITEMS:
-                break
-            source, line_number, snippet = self._parse_rg_match_line(raw_line)
-            if source is None or line_number is None or snippet is None:
-                continue
-            items.append(
-                ContextItem(
-                    score=1.0,
-                    source=source,
-                    text=f"line {line_number}: {snippet}",
-                    trust_class="canonical",
-                    payload={"line": line_number, "mode": "local_fallback"},
-                )
-            )
 
         if not items:
             return None
@@ -367,14 +399,39 @@ class ContextInjectionService:
                 break
         return terms
 
-    @staticmethod
-    def _parse_rg_match_line(raw_line: str) -> tuple[str | None, int | None, str | None]:
+    @classmethod
+    def _parse_rg_match_line(
+        cls,
+        raw_line: str,
+        *,
+        workspace_path: Path,
+    ) -> tuple[str | None, int | None, str | None]:
         parts = raw_line.split(":", 2)
         if len(parts) != 3:
             return None, None, None
-        source, line_number_raw, snippet = parts
+        source_raw, line_number_raw, snippet = parts
         try:
             line_number = int(line_number_raw)
         except ValueError:
             return None, None, None
+        source = cls._normalize_local_fallback_source(
+            source_raw.strip(),
+            workspace_path=workspace_path,
+        )
+        if not source:
+            return None, None, None
         return source, line_number, snippet.strip()
+
+    @staticmethod
+    def _normalize_local_fallback_source(
+        source: str,
+        *,
+        workspace_path: Path,
+    ) -> str:
+        if not source:
+            return ""
+        source_path = Path(source)
+        if source_path.is_absolute():
+            with suppress(ValueError):
+                return source_path.relative_to(workspace_path).as_posix()
+        return source_path.as_posix()
