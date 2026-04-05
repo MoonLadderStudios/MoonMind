@@ -740,6 +740,65 @@ def test_orchestrate_ci_failures_after_transient_ci_states_escalates_fix_ci(
     assert sleeps == [15, 30]
 
 
+def test_orchestrate_main_uses_extended_finalize_wait_defaults(
+    pr_resolve_orchestrate_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    main = pr_resolve_orchestrate_module["main"]
+    globals_dict = main.__globals__
+    captured: dict[str, Any] = {}
+
+    def _fake_run_orchestration(**kwargs: Any) -> tuple[dict[str, Any], int]:
+        captured.update(kwargs)
+        return (
+            {
+                "status": "merged",
+                "decision": "merged",
+                "merge_outcome": "merged",
+                "final_reason": "ci_complete",
+                "next_step": "done",
+                "history": [],
+                "escalations": 0,
+                "max_attempts": 7,
+                "finalize_max_retries": kwargs["finalize_max_retries"],
+                "fix_max_iterations": kwargs["fix_max_iterations"],
+                "started_at": "2026-04-04T00:00:00Z",
+                "finished_at": "2026-04-04T00:00:01Z",
+                "tool": "pr_resolve_orchestrate",
+                "schema_version": "v1",
+            },
+            0,
+        )
+
+    monkeypatch.setitem(globals_dict, "run_orchestration", _fake_run_orchestration)
+
+    result_path = tmp_path / "result.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    attempts_dir = tmp_path / "attempts"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_orchestrate.py",
+            "--result-path",
+            str(result_path),
+            "--snapshot-path",
+            str(snapshot_path),
+            "--attempt-artifacts-dir",
+            str(attempts_dir),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+
+    assert int(raised.value.code) == 0
+    assert captured["finalize_max_retries"] == 6
+    assert captured["base_sleep_seconds"] == 30
+    assert captured["max_sleep_seconds"] == 120
+    assert captured["max_elapsed_seconds"] == 1800
+
+
 def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],
 ) -> None:

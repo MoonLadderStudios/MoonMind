@@ -2,7 +2,7 @@
 
 Status: Active
 Owners: MoonMind Engineering
-Last Updated: 2026-03-24
+Last Updated: 2026-04-04
 
 ## 1. Purpose
 
@@ -69,8 +69,11 @@ This matches the standard `AgentTaskWorkflow` capability derivation pattern.
 | `pr`                  | string|null |     null | PR selector: number, URL, or branch (passed to `gh pr view`).                                                        |
 | `branch`              | string|null |     null | Explicit head branch to resolve; if set and `pr` unset, resolve associated PR.                                       |
 | `mergeMethod`         | enum        | `squash` | `merge`|`squash`|`rebase`                                                                                            |
-| `maxIterations`       | int         |        3 | Guardrail to avoid loops (re-evaluate after each fix).                                                               |
-| `failFastIfCiRunning` | bool        |     true | If any CI is in-progress/pending, do not merge and do not attempt CI fixes unless CI is failing (see decision logic) |
+| `maxIterations`             | int         |        3 | Guardrail to avoid loops (re-evaluate after each fix).                                                                            |
+| `finalizeMaxRetries`        | int         |        6 | Total retries allowed for the orchestration process, including both finalize-only waits and full remediation cycles.              |
+| `finalizeBackoffSeconds`    | int         |       30 | Base sleep for finalize-only retries. The orchestrator uses exponential backoff and caps each sleep at `finalizeMaxSleepSeconds`. |
+| `finalizeMaxSleepSeconds`   | int         |      120 | Max sleep between finalize-only retries.                                                                                            |
+| `finalizeMaxElapsedSeconds` | int         |     1800 | Hard wall-clock cap for one orchestration run.                                                                                      |
 
 ### 4.2 Outputs
 
@@ -113,7 +116,8 @@ The resolver always re-evaluates from the top after each applied fix (bounded by
 3. **CI failures:** If `ci.hasFailures == true` → Delegate to `fix-ci` skill (or fallback to manual diagnosis if skill missing).
 4. **Review comments:** If `reviewDecision` requests changes or comments are actionable → Delegate to `fix-comments` skill.
 5. **Merge:** If `mergeable` is clean, `mergeStateStatus` is `CLEAN`, no CI running, and reviews satisfied → Execute `gh pr merge`.
-6. **Blocked:** If CI is running without failures while `mergeable` is clean (not in conflict) and `mergeStateStatus` is `CLEAN` → Exit with `blocked_by_ci_running`.
+6. **Finalize-only retry:** If CI is running without failures while `mergeable` is clean (not in conflict) and `mergeStateStatus` is `CLEAN` → stay in the finalize loop and retry after exponential backoff.
+7. **Blocked:** If the transient finalize-only retry budget is exhausted or a non-retryable blocker is detected → exit with the corresponding blocked or `attempts_exhausted` result.
 
 ---
 
@@ -190,6 +194,7 @@ Include in result:
 * Working tree must be clean at start.
 * Loop guard: `maxIterations` stops repeated "fix → re-evaluate" loops.
 * Merge guard: do not merge if any CI is running.
+* Transient finalize blockers such as `ci_running` use bounded exponential backoff rather than failing immediately.
 
 ---
 
@@ -214,7 +219,10 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
 - inputs.branch (optional)
 - inputs.mergeMethod (merge|squash|rebase)
 - inputs.maxIterations (default 3)
-- inputs.failFastIfCiRunning (default true)
+- inputs.finalizeMaxRetries (default 6)
+- inputs.finalizeBackoffSeconds (default 30)
+- inputs.finalizeMaxSleepSeconds (default 120)
+- inputs.finalizeMaxElapsedSeconds (default 1800)
 
 ## Workflow
 1. Run `bin/pr_resolve_snapshot.py` to generate `artifacts/pr_resolver_snapshot.json`.
@@ -224,7 +232,7 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
    - **Review Comments:** If `reviewDecision` indicates changes requested, read `.agents/skills/fix-comments/SKILL.md` and follow its procedure.
    - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `CLEAN`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
-   - **Blocked:** If CI is running but no failures while `mergeable` is clean and `mergeStateStatus` is exactly `CLEAN`, exit and state the PR is blocked waiting for CI.
+   - **Finalize-only retry:** If CI is running but no failures while `mergeable` is clean and `mergeStateStatus` is exactly `CLEAN`, retry finalize after bounded exponential backoff until the transient retry budget is exhausted.
 4. After applying ANY fix (conflict, CI, or review), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`.
 5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
 
