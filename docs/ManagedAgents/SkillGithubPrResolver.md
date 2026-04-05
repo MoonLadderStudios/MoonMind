@@ -70,7 +70,7 @@ This matches the standard `AgentTaskWorkflow` capability derivation pattern.
 | `branch`              | string|null |     null | Explicit head branch to resolve; if set and `pr` unset, resolve associated PR.                                       |
 | `mergeMethod`         | enum        | `squash` | `merge`|`squash`|`rebase`                                                                                            |
 | `maxIterations`             | int         |        3 | Guardrail to avoid loops (re-evaluate after each fix).                                                                            |
-| `finalizeMaxRetries`        | int         |        6 | Number of finalize-only retries after the initial attempt when the PR is waiting on transient conditions such as running CI.      |
+| `finalizeMaxRetries`        | int         |        6 | Total retries allowed for the orchestration process, including both finalize-only waits and full remediation cycles.              |
 | `finalizeBackoffSeconds`    | int         |       30 | Base sleep for finalize-only retries. The orchestrator uses exponential backoff and caps each sleep at `finalizeMaxSleepSeconds`. |
 | `finalizeMaxSleepSeconds`   | int         |      120 | Max sleep between finalize-only retries.                                                                                            |
 | `finalizeMaxElapsedSeconds` | int         |     1800 | Hard wall-clock cap for one orchestration run.                                                                                      |
@@ -219,7 +219,10 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
 - inputs.branch (optional)
 - inputs.mergeMethod (merge|squash|rebase)
 - inputs.maxIterations (default 3)
-- inputs.failFastIfCiRunning (default true)
+- inputs.finalizeMaxRetries (default 6)
+- inputs.finalizeBackoffSeconds (default 30)
+- inputs.finalizeMaxSleepSeconds (default 120)
+- inputs.finalizeMaxElapsedSeconds (default 1800)
 
 ## Workflow
 1. Run `bin/pr_resolve_snapshot.py` to generate `artifacts/pr_resolver_snapshot.json`.
@@ -229,7 +232,7 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
    - **CI Failures:** If `ci.hasFailures` is true, you MUST read `.agents/skills/fix-ci/SKILL.md` (or similar available skill) and follow its procedure to fix the tests/build.
    - **Review Comments:** If `reviewDecision` indicates changes requested, read `.agents/skills/fix-comments/SKILL.md` and follow its procedure.
    - **Merge:** If all green, `mergeable` is clean, `mergeStateStatus` is `CLEAN`, and NO CI is running, execute `gh pr merge --<mergeMethod>`.
-   - **Blocked:** If CI is running but no failures while `mergeable` is clean and `mergeStateStatus` is exactly `CLEAN`, exit and state the PR is blocked waiting for CI.
+   - **Finalize-only retry:** If CI is running but no failures while `mergeable` is clean and `mergeStateStatus` is exactly `CLEAN`, retry finalize after bounded exponential backoff until the transient retry budget is exhausted.
 4. After applying ANY fix (conflict, CI, or review), you MUST loop back to Step 1 and re-run the snapshot. Stop after `maxIterations`.
 5. Write `artifacts/pr_resolver_result.json` summarizing the actions taken and the final merge outcome.
 
