@@ -101,7 +101,7 @@ class RagQdrantClient:
     ) -> SearchResult:
         start = time.perf_counter()
         filter_obj = self._build_filter(filters)
-        canonical = self._client.search(
+        canonical = self._search_points(
             collection_name=self.collection,
             query_vector=query_vector,
             limit=top_k,
@@ -113,7 +113,7 @@ class RagQdrantClient:
         if overlay_policy == "include" and overlay_collection:
             try:
                 overlay_filter = self._build_filter(filters)
-                overlay_points = self._client.search(
+                overlay_points = self._search_points(
                     collection_name=overlay_collection,
                     query_vector=query_vector,
                     limit=top_k,
@@ -126,6 +126,36 @@ class RagQdrantClient:
         merge = self._merge_results(overlay_points, canonical, trust_overrides)
         latency_ms = (time.perf_counter() - start) * 1000
         return SearchResult(items=merge[:top_k], latency_ms=latency_ms)
+
+    def _search_points(
+        self,
+        *,
+        collection_name: str,
+        query_vector: Sequence[float],
+        limit: int,
+        with_payload: bool,
+        with_vectors: bool,
+        query_filter: qmodels.Filter | None,
+    ) -> list[qmodels.ScoredPoint]:
+        if hasattr(self._client, "search"):
+            return self._client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                with_payload=with_payload,
+                with_vectors=with_vectors,
+                query_filter=query_filter,
+            )
+
+        query_response = self._client.query_points(
+            collection_name=collection_name,
+            query=list(query_vector),
+            limit=limit,
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+            query_filter=query_filter,
+        )
+        return list(query_response.points)
 
     def _merge_results(
         self,

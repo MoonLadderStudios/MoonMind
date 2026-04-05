@@ -92,6 +92,59 @@ def test_search_caps_results_to_top_k_after_overlay_merge():
     assert result.items[1].source == "src/overlay_b.py"
 
 
+def test_search_uses_query_points_when_search_api_is_unavailable():
+    client = _client()
+    calls: list[str] = []
+
+    class QueryResponse:
+        def __init__(self, points):
+            self.points = points
+
+    class FakeQdrant:
+        def query_points(self, *, collection_name, **kwargs):
+            _ = kwargs
+            calls.append(collection_name)
+            if collection_name == "repo-main__overlay__run":
+                return QueryResponse(
+                    [
+                        _point(
+                            score=0.99,
+                            path="src/overlay_a.py",
+                            chunk_hash="ov-a",
+                            text="overlay a",
+                        )
+                    ]
+                )
+            if collection_name == "repo-main":
+                return QueryResponse(
+                    [
+                        _point(
+                            score=0.80,
+                            path="src/canon_a.py",
+                            chunk_hash="ca-a",
+                            text="canon a",
+                        )
+                    ]
+                )
+            raise AssertionError("unexpected collection")
+
+    client._client = FakeQdrant()  # type: ignore[assignment]
+    result = client.search(
+        query_vector=[0.1, 0.2],
+        filters={"repo": "moonmind"},
+        top_k=2,
+        overlay_policy="include",
+        overlay_collection="repo-main__overlay__run",
+        trust_overrides=None,
+    )
+
+    assert calls == ["repo-main", "repo-main__overlay__run"]
+    assert [item.source for item in result.items] == [
+        "src/overlay_a.py",
+        "src/canon_a.py",
+    ]
+
+
 def test_merge_results_skips_expired_overlay_chunks():
     client = _client()
     expired_overlay = _point(

@@ -19,14 +19,20 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "ratelimitexceeded",
     "retrying with backoff",
 )
-_CODEX_BLOCKER_MARKERS: tuple[str, ...] = (
+_CODEX_HARD_BLOCKER_MARKERS: tuple[str, ...] = (
     "blocked on the workspace tooling constraint",
     "apply_patch executable or tool is not available",
     "no actual `apply_patch` tool is available",
     "no actual 'apply_patch' tool is available",
-    "strict compliance with the repo rule, i should stop here",
 )
-
+_CODEX_TERMINAL_BLOCKER_MARKERS: tuple[str, ...] = (
+    "i'll start by exploring the codebase",
+    "let me search more broadly",
+    "let me search more specifically",
+    "strict compliance with the repo rule, i should stop here",
+    "want me to keep going",
+    "is there something specific you'd like me to work on",
+)
 
 @dataclass(frozen=True, slots=True)
 class ParsedOutput:
@@ -99,12 +105,32 @@ def _extract_matching_lines(
     return matches
 
 
+def _last_nonempty_line(text: str) -> str | None:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
 class CodexCliOutputParser(PlainTextOutputParser):
     """Plain-text parser with Codex-specific managed-runtime blocker detection."""
 
     @staticmethod
     def extract_blocker_lines(*texts: str) -> list[str]:
-        return _extract_matching_lines(_CODEX_BLOCKER_MARKERS, *texts)
+        matches = _extract_matching_lines(_CODEX_HARD_BLOCKER_MARKERS, *texts)
+        seen = {line.lower() for line in matches}
+        for text in texts:
+            line = _last_nonempty_line(text)
+            if not line:
+                continue
+            lower = line.lower()
+            if lower in seen:
+                continue
+            if any(marker in lower for marker in _CODEX_TERMINAL_BLOCKER_MARKERS):
+                seen.add(lower)
+                matches.append(line)
+        return matches
 
     def parse(self, stdout: str, stderr: str) -> ParsedOutput:
         base = super().parse(stdout, stderr)
@@ -224,22 +250,17 @@ class NdjsonOutputParser(RuntimeOutputParser):
             events=events,
             error_messages=error_messages,
             rate_limited=rate_limited,
-            has_structured_output=len(events) > 0,
+            has_structured_output=bool(events),
         )
 
     def parse_stream_chunk(self, chunk: str) -> list[dict]:
-        """Extract JSON events from streamed text chunks.
-        Assumes chunk contains whole lines separated by newlines,
-        or is a single line, as buffering handles line splitting.
-        """
         events: list[dict] = []
         for line in chunk.splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
             try:
-                event = json.loads(stripped)
-                events.append(event)
+                events.append(json.loads(stripped))
             except json.JSONDecodeError:
-                logger.debug("Skipping malformed NDJSON line: %s", stripped)
+                continue
         return events
