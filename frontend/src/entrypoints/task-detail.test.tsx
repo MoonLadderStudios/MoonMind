@@ -126,6 +126,86 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it('renders structured run summary details from the summary artifact', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Explained task',
+      summary: "publishMode 'pr' requested but no local changes were produced",
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      closeStatus: 'FAILED',
+      summaryArtifactRef: 'art-summary-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-1/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              finishOutcome: {
+                code: 'FAILED',
+                stage: 'finalizing',
+                reason: "publishMode 'pr' requested, but no publishable diff was produced.",
+              },
+              publish: {
+                mode: 'pr',
+                status: 'failed',
+                reason:
+                  "publishMode 'pr' requested, but no publishable diff was produced. branch 'feature/no-op' has no commits ahead of origin/main.",
+              },
+              operatorSummary:
+                'The requested behavior already existed in the repo.\nFiles edited in this run: none.',
+              publishContext: {
+                branch: 'feature/no-op',
+                baseRef: 'origin/main',
+                commitCount: 0,
+              },
+              lastStep: {
+                summary: 'Files edited in this run: none',
+              },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Explained task')).toBeTruthy();
+      expect(screen.getByText(/The requested behavior already existed in the repo\./)).toBeTruthy();
+      expect(screen.getByText('Run Summary')).toBeTruthy();
+      expect(screen.getByText('feature/no-op')).toBeTruthy();
+      expect(screen.getByText('origin/main')).toBeTruthy();
+      expect(screen.getAllByText(/no publishable diff was produced/).length).toBeGreaterThan(0);
+    });
+  });
+
   it('renders artifact rows from snake_case temporal artifact payloads', async () => {
     const mockExecution = {
       taskId: 'test-123',

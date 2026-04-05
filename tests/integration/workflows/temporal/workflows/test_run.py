@@ -525,9 +525,13 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(
                     exc_info.exception.cause, exceptions.ApplicationError
                 )
-                self.assertEqual(
+                self.assertIn(
+                    "publishMode 'pr' requested, but no publishable diff was produced",
                     exc_info.exception.cause.message,
-                    "publishMode 'pr' requested but no local changes were produced",
+                )
+                self.assertIn(
+                    "feature/no-op",
+                    exc_info.exception.cause.message,
                 )
 
                 handle = env.client.get_workflow_handle("test-workflow-pr-no-changes")

@@ -305,6 +305,8 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "no_commits"
         assert result["push_branch"] == "auto-abc123"
+        assert result["push_base_ref"] == "origin/main"
+        assert result["push_commit_count"] == 0
         assert "push_error" not in result
 
     @pytest.mark.asyncio
@@ -359,6 +361,7 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "auto-abc123"
+        assert "push_commit_count" not in result
 
     @pytest.mark.asyncio
     async def test_push_revlist_nonzero_returncode_falls_through(self):
@@ -387,6 +390,7 @@ class TestPushWorkspaceBranch:
         # Should NOT be no_commits; should fall through to pushed
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "auto-abc123"
+        assert "push_commit_count" not in result
 
     @pytest.mark.asyncio
     async def test_push_revlist_uses_target_branch(self):
@@ -465,6 +469,68 @@ class TestFetchResultPushIntegration:
         mock_push.assert_called_once_with("run-1", target_branch=None)
         assert result.metadata["push_status"] == "pushed"
         assert result.metadata["push_branch"] == "my-branch"
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_adds_operator_summary_from_stdout_artifact(self, tmp_path):
+        store = _make_mock_store()
+        store.load.return_value.stdout_artifact_ref = "art-stdout"
+        stdout_path = tmp_path / "stdout.log"
+        stdout_path.write_text(
+            "noise\n**Final Report**\nThe requested behavior already existed in the repo.\n"
+            "Files edited in this run: none.\n\ncodex\n",
+            encoding="utf-8",
+        )
+        artifact_service = MagicMock()
+        artifact_service.read_path = AsyncMock(
+            return_value=(MagicMock(), stdout_path)
+        )
+        artifact_service.read_chunks = AsyncMock(
+            side_effect=AssertionError("stdout tail should come from the local artifact path")
+        )
+        artifact_service.read_bytes = AsyncMock(
+            side_effect=AssertionError("stdout tail should not require full artifact reads")
+        )
+        activities = TemporalAgentRuntimeActivities(
+            run_store=store,
+            artifact_service=artifact_service,
+        )
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={
+                    "push_status": "no_commits",
+                    "push_branch": "feature/no-op",
+                    "push_base_ref": "origin/main",
+                    "push_commit_count": 0,
+                },
+            ),
+            patch.object(
+                activities, "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            adapter_instance = MockAdapter.return_value
+            adapter_instance.fetch_result = AsyncMock(
+                return_value=AgentRunResult(
+                    summary="Completed with status completed",
+                    failure_class=None,
+                )
+            )
+
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        assert result.metadata["operator_summary"].startswith(
+            "The requested behavior already existed in the repo."
+        )
+        assert "Files edited in this run: none." in result.metadata["operator_summary"]
 
     @pytest.mark.asyncio
     async def test_fetch_result_skips_push_when_publish_mode_none(self):

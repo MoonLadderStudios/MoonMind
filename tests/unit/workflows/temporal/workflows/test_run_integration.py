@@ -544,19 +544,80 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
 def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
-    mock_run_workflow._publish_status = "skipped"
-    mock_run_workflow._publish_reason = "publish skipped: no local changes"
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+            "operator_summary": "Files edited in this run: none.",
+        }
+    }
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result=execution_result,
+    )
 
     status, message, publish_failure = mock_run_workflow._determine_publish_completion(
         parameters={"publishMode": "pr"}
     )
 
     assert status == "failed"
-    assert (
-        message
-        == "publishMode 'pr' requested but no local changes were produced"
-    )
+    assert "no publishable diff was produced" in message
+    assert "feature/no-op" in message
+    assert "origin/main" in message
+    assert "has no commits ahead of origin/main" in message
+    assert "0 commits ahead" not in message
+    assert "Files edited in this run: none." in message
     assert publish_failure is True
+
+
+def test_record_execution_context_resets_last_step_fields_when_current_node_has_no_summary(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "summary": "Completed the substantive step.",
+                "diagnostics_ref": "diag-1",
+            }
+        },
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-2",
+        execution_result={"outputs": {}},
+    )
+
+    assert mock_run_workflow._last_step_id == "step-2"
+    assert mock_run_workflow._last_step_summary is None
+    assert mock_run_workflow._last_diagnostics_ref is None
+
+
+def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_commit_count(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "operator_summary": "Final report token ghp_abcdefghijklmnopqrstuvwxyz123456",
+                "push_branch": "feature/no-op",
+                "push_base_ref": "origin/main",
+                "push_commit_count": -1,
+            }
+        },
+    )
+
+    assert mock_run_workflow._operator_summary is not None
+    assert "[REDACTED]" in mock_run_workflow._operator_summary
+    assert "ghp_" not in mock_run_workflow._operator_summary
+    assert "commitCount" not in mock_run_workflow._publish_context
 
 
 def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(

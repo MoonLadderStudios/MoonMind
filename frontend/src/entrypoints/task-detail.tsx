@@ -50,6 +50,8 @@ const ExecutionDetailSchema = z
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
     publishMode: z.string().nullable().optional(),
+    summaryArtifactRef: z.string().nullable().optional(),
+    summary_artifact_ref: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
     createdAt: z.string(),
     startedAt: z.string().nullable().optional(),
@@ -139,6 +141,46 @@ const ArtifactListSchema = z.object({
     )
     .default([]),
 });
+
+const RunSummaryArtifactSchema = z
+  .object({
+    finishOutcome: z
+      .object({
+        code: z.string().optional(),
+        stage: z.string().optional(),
+        reason: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    publish: z
+      .object({
+        mode: z.string().optional(),
+        status: z.string().optional(),
+        reason: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    operatorSummary: z.string().nullable().optional(),
+    nextAction: z.string().nullable().optional(),
+    lastStep: z
+      .object({
+        id: z.string().nullable().optional(),
+        summary: z.string().nullable().optional(),
+        diagnosticsRef: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
+    publishContext: z
+      .object({
+        branch: z.string().nullable().optional(),
+        baseRef: z.string().nullable().optional(),
+        commitCount: z.union([z.number(), z.string()]).nullable().optional(),
+        pullRequestUrl: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
 
 function readDashboardConfig(payload: BootPayload): DashboardConfig | undefined {
   const raw = payload.initialData as { dashboardConfig?: DashboardConfig } | undefined;
@@ -268,6 +310,23 @@ async function fetchDiagnostics(apiBase: string, taskRunId: string): Promise<str
     throw buildObservabilityRequestError(resp.status);
   }
   return resp.text();
+}
+
+async function fetchRunSummaryArtifact(
+  apiBase: string,
+  artifactId: string,
+): Promise<z.infer<typeof RunSummaryArtifactSchema> | null> {
+  const resp = await fetch(
+    `${apiBase}/artifacts/${encodeURIComponent(artifactId)}/download`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw new Error(`Run summary: ${resp.statusText}`);
+  }
+  const text = await resp.text();
+  if (!text.trim()) return null;
+  return RunSummaryArtifactSchema.parse(JSON.parse(text));
 }
 
 /** Fetch the observability summary for a task run. */
@@ -973,6 +1032,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const workflowId = execution?.workflowId || execution?.taskId || taskId || '';
   const runId = execution?.temporalRunId || execution?.runId || '';
   const namespace = execution?.namespace || '';
+  const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
   const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
   const resolvedTaskRunId = explicitTaskRunId;
   const previousTaskRunIdRef = useRef(resolvedTaskRunId);
@@ -1015,9 +1075,19 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: liveUpdates && namespace && workflowId && runId ? detailPoll : false,
   });
 
+  const runSummaryQuery = useQuery({
+    queryKey: ['task-detail-run-summary', summaryArtifactRef],
+    queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
+    enabled: Boolean(summaryArtifactRef),
+    refetchInterval: liveUpdates && summaryArtifactRef ? detailPoll : false,
+  });
+  const runSummary = runSummaryQuery.data;
+  const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, runId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
   };
 
   const updateMutation = useMutation({
@@ -1263,8 +1333,57 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
           <section>
             <h3>Summary</h3>
-            <p className="whitespace-pre-wrap">{execution.summary || '—'}</p>
+            <p className="whitespace-pre-wrap">{displayedSummary}</p>
+            {runSummary?.finishOutcome?.reason && runSummary.finishOutcome.reason !== displayedSummary ? (
+              <p className="small">Outcome: {runSummary.finishOutcome.reason}</p>
+            ) : null}
           </section>
+
+          {runSummary ? (
+            <section className="stack">
+              <h3>Run Summary</h3>
+              {runSummary.finishOutcome ? (
+                <div className="grid-2">
+                  <Card label="Outcome Code">{runSummary.finishOutcome.code || '—'}</Card>
+                  <Card label="Outcome Stage">{runSummary.finishOutcome.stage || '—'}</Card>
+                </div>
+              ) : null}
+              {runSummary.publish ? (
+                <div className="grid-2">
+                  <Card label="Publish Status">{runSummary.publish.status || '—'}</Card>
+                  <Card label="Publish Mode">{runSummary.publish.mode || '—'}</Card>
+                </div>
+              ) : null}
+              {runSummary.publish?.reason ? (
+                <p className="whitespace-pre-wrap">{runSummary.publish.reason}</p>
+              ) : null}
+              {runSummary.publishContext ? (
+                <div className="grid-2">
+                  {runSummary.publishContext.branch ? (
+                    <Card label="Publish Branch">
+                      <code className="text-xs break-all">{runSummary.publishContext.branch}</code>
+                    </Card>
+                  ) : null}
+                  {runSummary.publishContext.baseRef ? (
+                    <Card label="Base Ref">
+                      <code className="text-xs break-all">{runSummary.publishContext.baseRef}</code>
+                    </Card>
+                  ) : null}
+                  {runSummary.publishContext.commitCount !== undefined &&
+                  runSummary.publishContext.commitCount !== null ? (
+                    <Card label="Commit Count">{String(runSummary.publishContext.commitCount)}</Card>
+                  ) : null}
+                </div>
+              ) : null}
+              {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
+                <div>
+                  <strong>Last Step</strong>
+                  <p className="whitespace-pre-wrap">{runSummary.lastStep.summary}</p>
+                </div>
+              ) : null}
+              {runSummary.nextAction ? <p className="small">{runSummary.nextAction}</p> : null}
+            </section>
+          ) : null}
 
           {execution.waitingReason ? (
             <section>
