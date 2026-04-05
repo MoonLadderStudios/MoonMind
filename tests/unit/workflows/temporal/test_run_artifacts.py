@@ -140,6 +140,8 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         **_kwargs: Any,
     ) -> Any:
         captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
         if activity_type == "artifact.read":
             if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
@@ -225,12 +227,14 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         plan_ref="art_plan_1",
     )
 
-    assert captured[0][0] == "artifact.read"
-    assert captured[0][1]["artifact_ref"] == "art_plan_1"
-    assert captured[1][0] == "artifact.read"
-    assert captured[1][1]["artifact_ref"] == "artifact://registry/1"
-    assert captured[2][0] == "mm.skill.execute"
-    assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"
+    # provider_profile.list calls (3) happen first, then artifact.read for plan,
+    # artifact.read for registry, then mm.skill.execute
+    assert captured[3][0] == "artifact.read"
+    assert captured[3][1]["artifact_ref"] == "art_plan_1"
+    assert captured[4][0] == "artifact.read"
+    assert captured[4][1]["artifact_ref"] == "artifact://registry/1"
+    assert captured[5][0] == "mm.skill.execute"
+    assert captured[5][1]["registry_snapshot_ref"] == "artifact://registry/1"
 
 
 @pytest.mark.asyncio
@@ -324,6 +328,8 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
         **_kwargs: Any,
     ) -> Any:
         captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
         if activity_type == "artifact.read":
             if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
                 return json.dumps(
@@ -413,8 +419,10 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
         plan_ref="art_plan_1",
     )
 
-    assert captured[2][0] == "mm.tool.execute"
-    assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"
+    # provider_profile.list calls (3) happen first, then artifact.read for plan,
+    # artifact.read for registry, then mm.tool.execute
+    assert captured[5][0] == "mm.tool.execute"
+    assert captured[5][1]["registry_snapshot_ref"] == "artifact://registry/1"
 
 
 @pytest.mark.asyncio

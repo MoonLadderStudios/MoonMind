@@ -727,6 +727,24 @@ def _invalid_task_request(message: str) -> HTTPException:
     )
 
 
+def _validation_error_code(message: str) -> str:
+    if message.startswith("Dependency not found:"):
+        return "dependency_not_found"
+    if message.startswith("Dependency unauthorized:"):
+        return "dependency_unauthorized"
+    if message.startswith("Dependency ") and "must use workflowId, not runId." in message:
+        return "dependency_invalid_identifier"
+    if message.startswith("Dependency ") and message.endswith("must be a workflowId."):
+        return "dependency_invalid_identifier"
+    if message.startswith("Dependency ") and "workflow, not a MoonMind.Run workflow." in message:
+        return "dependency_unsupported_workflow_type"
+    if message.startswith("Workflow cannot depend on itself:"):
+        return "dependency_self_reference"
+    if message == "dependsOn can have a maximum of 10 items.":
+        return "dependency_limit_exceeded"
+    return "invalid_execution_request"
+
+
 def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
@@ -1237,11 +1255,12 @@ async def _create_execution_from_task_request(
             scheduled_for=scheduled_for_dt,
         )
     except TemporalExecutionValidationError as exc:
+        message = str(exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
-                "code": "invalid_execution_request",
-                "message": str(exc),
+                "code": _validation_error_code(message),
+                "message": message,
             },
         ) from exc
 
@@ -1292,11 +1311,12 @@ async def _create_execution_from_manifest_request(
             idempotency_key=idempotency_key,
         )
     except TemporalExecutionValidationError as exc:
+        message = str(exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
-                "code": "invalid_execution_request",
-                "message": str(exc),
+                "code": _validation_error_code(message),
+                "message": message,
             },
         ) from exc
 

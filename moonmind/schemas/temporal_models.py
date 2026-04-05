@@ -26,7 +26,14 @@ SUPPORTED_UPDATE_NAMES = (
     "Cancel",
     "Approve",
 )
-SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Pause", "Resume", "Approve", "SendMessage")
+SUPPORTED_SIGNAL_NAMES = (
+    "ExternalEvent",
+    "Pause",
+    "Resume",
+    "Approve",
+    "SendMessage",
+    "DependencyResolved",
+)
 TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
 TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
@@ -46,6 +53,19 @@ def normalize_dependency_ids(raw_value: Any) -> list[str]:
         seen.add(candidate)
         normalized.append(candidate)
     return normalized
+
+
+class DependencyResolvedSignalPayload(BaseModel):
+    """Signal payload emitted when a prerequisite execution reaches a terminal state."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    prerequisite_workflow_id: str = Field(..., alias="prerequisiteWorkflowId")
+    terminal_state: str = Field(..., alias="terminalState")
+    close_status: str | None = Field(None, alias="closeStatus")
+    resolved_at: datetime = Field(..., alias="resolvedAt")
+    failure_category: str | None = Field(None, alias="failureCategory")
+    message: str | None = Field(None, alias="message")
 
 
 from moonmind.schemas.manifest_ingest_models import (

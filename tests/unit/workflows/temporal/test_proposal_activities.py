@@ -32,46 +32,67 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         result = await activities.proposal_generate(None)
         self.assertEqual(result, [])
 
-    async def test_proposal_generate_title_formatting(self) -> None:
+    async def test_proposal_generate_uses_explicit_next_step_title(self) -> None:
         activities = TemporalProposalActivities()
 
-        # Test normal instructions with varying workflow IDs
         req_normal = {
             "workflow_id": "test-wf-12345",
-            "parameters": {"instructions": "Implement feature X"}
+            "parameters": {"instructions": "Implement feature X"},
+            "proposalIdea": "Add regression coverage for feature X",
         }
         res_normal = await activities.proposal_generate(req_normal)
         self.assertEqual(len(res_normal), 1)
         self.assertEqual(
             res_normal[0]["title"],
-            "[run_quality] Follow-up: Implement feature X (12345)"
+            "[run_quality] Add regression coverage for feature X",
         )
+        self.assertIn("Proposed next step", res_normal[0]["summary"])
 
-        req_uuid = {
+    async def test_proposal_generate_reads_next_step_from_result_payload(self) -> None:
+        activities = TemporalProposalActivities()
+
+        req = {
             "workflow_id": "8e3b0e11-4a1d-40c9-94fc-0d3f2a1b9c8e",
-            "parameters": {"instructions": "Fix bug in Y"}
+            "parameters": {"instructions": "Fix bug in Y"},
+            "result": {"next_step": "Audit adjacent error handling paths"},
         }
-        res_uuid = await activities.proposal_generate(req_uuid)
+        res_uuid = await activities.proposal_generate(req)
         self.assertEqual(
             res_uuid[0]["title"],
-            "[run_quality] Follow-up: Fix bug in Y (0d3f2a1b9c8e)"
+            "[run_quality] Audit adjacent error handling paths",
         )
 
-        # Test extremely long instructions (truncation)
-        long_instr = "A" * 300
+    async def test_proposal_generate_reads_top_level_next_step_snake_case(self) -> None:
+        activities = TemporalProposalActivities()
+
+        req = {
+            "workflow_id": "snake-case-next-step",
+            "parameters": {"instructions": "Fix bug in Y"},
+            "next_step": "Audit adjacent error handling paths",
+        }
+
+        result = await activities.proposal_generate(req)
+
+        self.assertEqual(
+            result[0]["title"],
+            "[run_quality] Audit adjacent error handling paths",
+        )
+
+    async def test_proposal_generate_truncates_long_explicit_idea(self) -> None:
+        activities = TemporalProposalActivities()
+
+        long_idea = "A" * 400
         req_long = {
             "workflow_id": "very-long-id-12345678",
-            "parameters": {"instructions": long_instr}
+            "parameters": {"instructions": "Implement feature X"},
+            "proposalIdea": long_idea,
         }
         res_long = await activities.proposal_generate(req_long)
         title = res_long[0]["title"]
-        # Max length of internally generated title is 180 (excluding '[run_quality] ' prefix added later)
-        # So the candidate["title"] should be len("[run_quality] ") + 180 = 14 + 180 = 194
         self.assertLessEqual(len(title), 194)
-        self.assertEqual(title[-10:], "(12345678)")
-        self.assertEqual(title[:28], "[run_quality] Follow-up: AAA")
+        self.assertTrue(title.startswith("[run_quality] AAA"))
 
-    async def test_proposal_generate_uses_first_step_instructions_when_task_level_missing(self) -> None:
+    async def test_proposal_generate_returns_empty_without_distinct_next_step(self) -> None:
         activities = TemporalProposalActivities()
 
         result = await activities.proposal_generate(
@@ -88,11 +109,74 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        self.assertEqual(len(result), 1)
-        self.assertEqual(
-            result[0]["title"],
-            "[run_quality] Follow-up: Investigate failed proposal hooks (1)",
+        self.assertEqual(result, [])
+
+    async def test_proposal_generate_rejects_structured_proposal_text(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-structured",
+                "parameters": {"instructions": "Investigate failed proposal hooks"},
+                "proposalIdea": {"unexpected": "object"},
+            }
         )
+
+        self.assertEqual(result, [])
+
+    async def test_proposal_generate_aligns_promoted_task_instructions(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-follow-up",
+                "parameters": {"instructions": "Implement feature X"},
+                "proposalIdea": "Add regression coverage for feature X",
+            }
+        )
+
+        self.assertEqual(
+            result[0]["taskCreateRequest"]["payload"]["task"]["instructions"],
+            "Add regression coverage for feature X\n\n"
+            "Context from the completed task:\n"
+            "Implement feature X",
+        )
+
+    async def test_proposal_generate_uses_proposal_idea_when_original_instructions_missing(
+        self,
+    ) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-empty-instructions",
+                "parameters": {},
+                "proposalIdea": "Add regression coverage for feature X",
+            }
+        )
+
+        self.assertEqual(
+            result[0]["taskCreateRequest"]["payload"]["task"]["instructions"],
+            "Add regression coverage for feature X",
+        )
+
+    async def test_proposal_generate_rejects_next_step_that_matches_workflow_title(self) -> None:
+        activities = TemporalProposalActivities()
+
+        result = await activities.proposal_generate(
+            {
+                "workflow_id": "test-wf-same-title",
+                "parameters": {
+                    "task": {
+                        "title": "Fix proposal routing",
+                        "instructions": "Fix proposal routing",
+                    }
+                },
+                "proposalIdea": "Fix proposal routing",
+            }
+        )
+
+        self.assertEqual(result, [])
 
 
 

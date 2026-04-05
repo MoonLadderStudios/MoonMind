@@ -21,3 +21,4 @@ if ($test_file) {
 
 docker-compose -f docker-compose.test.yaml build
 docker-compose -f docker-compose.test.yaml up --abort-on-container-exit
+docker-compose -f docker-compose.test.yaml down --remove-orphans

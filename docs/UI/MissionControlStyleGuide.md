@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-28
+Last Updated: 2026-04-04
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlStyleGuide.md`](../tmp/remaining-work/UI-MissionControlStyleGuide.md)
 
@@ -584,6 +584,19 @@ Map status consistently:
 - `failed/cancelled` -> rose/red (`--mm-danger`)
 
 Keep chip fills translucent and borders slightly stronger than fills.
+
+Step-specific additions:
+
+- `pending` / `ready` should use lower-contrast neutral or amber treatments than task-level `running`
+- `awaiting_external` and `reviewing` should stay visually distinct from generic `running`
+- step chips should support a compact inline variant for dense ledger rows
+- checks should use smaller badge treatments than status chips so verdicts read as supporting signals, not competing primaries
+
+Step-row patterns:
+
+- expanded step rows should use a clear expander affordance plus a quieter metadata rail
+- keep Logs & Diagnostics blocks visually denser than Summary and Checks blocks
+- preserve table-first comparison on desktop; use stacked step cards only on narrow mobile layouts
 
 ### 9.6 Live Output Pane
 

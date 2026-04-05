@@ -65,7 +65,7 @@ The FastAPI-based [API service](../api_service/) is MoonMind's central control p
 Mission Control is MoonMind's purpose-built operator dashboard — a thin, server-hosted web app served directly by the API service.
 
 * **Task list** — unified view of workflow executions, with filtering, sorting, and pagination via Temporal Visibility.
-* **Task detail** — execution state, artifact browsing, timeline, and operator actions (pause, resume, cancel, approve, rerun).
+* **Task detail** — execution overview, step ledger, step evidence, timeline, and operator actions (pause, resume, cancel, approve, rerun).
 * **Task submission** — form wizard for creating new tasks with runtime/model selection, template expansion, skill selection, scheduling, and artifact upload.
 * **Proposals** — triage queue for reviewing, promoting, or dismissing agent-generated task proposals.
 
@@ -118,7 +118,13 @@ MoonMind's execution model is built on three domain concepts that Temporal does 
 
 Plans are data, not code. They are validated, stored as artifacts, and interpreted deterministically by the plan executor inside `MoonMind.Run`. Planning itself is "just a tool" — an LLM activity that produces a plan artifact.
 
-See: [Tool and Plan Contracts](Tasks/SkillAndPlanContracts.md) · [Skill and Plan Evolution](Tasks/SkillAndPlanEvolution.md)
+Operator-facing step state is modeled separately from plan structure:
+
+* the **plan artifact** is the canonical planned-step source
+* `MoonMind.Run` maintains a compact **step ledger** for current/latest run state
+* rich per-step evidence remains in artifacts and managed-run observability APIs
+
+See: [Tool and Plan Contracts](Tasks/SkillAndPlanContracts.md) · [Step Ledger and Progress Model](Temporal/StepLedgerAndProgressModel.md) · [Skill and Plan Evolution](Tasks/SkillAndPlanEvolution.md)
 
 ---
 
@@ -231,7 +237,7 @@ MoonMind currently uses complementary product-facing and operational observabili
 
 * **Execution list/query/count** — Temporal Visibility is the source of truth for Temporal-backed execution list and filter behavior.
 * **Managed-run observability APIs** — `/api/task-runs/*` exposes artifact-backed logs, diagnostics, and SSE live follow for active managed runs.
-* **Mission Control detail views** — task detail pages combine execution state, artifacts, and observability refs into the operator-facing "what happened?" surface.
+* **Mission Control detail views** — task detail pages combine execution overview, step ledger state, artifact evidence, and observability refs into the operator-facing "what happened?" surface.
 * **Operational telemetry** — MoonMind now includes dedicated observability transport code and an OpenTelemetry design, but the OpenTelemetry subsystem is still an active draft rather than a fully locked architecture surface.
 
 Operational telemetry should complement, not replace, Temporal Visibility, Mission Control, or artifact-backed run evidence.

@@ -19,7 +19,9 @@ if (!(Test-Path ".env")) {
 
 if ($test_file) {
     docker-compose -f docker-compose.test.yaml run --rm -e TEST_TYPE="integration/$test_file" pytest
+    docker-compose -f docker-compose.test.yaml down --remove-orphans
 } else {
     docker-compose -f docker-compose.test.yaml build pytest
     docker-compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"
+    docker-compose -f docker-compose.test.yaml down --remove-orphans
 }

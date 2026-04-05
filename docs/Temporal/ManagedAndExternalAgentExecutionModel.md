@@ -3,7 +3,7 @@
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md`](../tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md)
 
 Status: **Implemented** (runtime live; contract hardening in progress)
-Last updated: 2026-03-30
+Last updated: 2026-04-04
 Related:
 - [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
@@ -64,6 +64,11 @@ MoonMind explicitly separates long-lived, stateful agent execution from plain on
 ## 2. Core design: `MoonMind.AgentRun`
 
 `MoonMind.Run` remains the root workflow. It represents a **task**: the top-level unit of work. Each task contains a **plan** consisting of one or more ordered **steps**. When a step requires a true agent runtime, `MoonMind.Run` starts a dedicated child workflow: `MoonMind.AgentRun`.
+
+Parent/child ownership rule:
+
+- `MoonMind.Run` owns task-level orchestration, step ordering, compact step status, checks, and refs
+- `MoonMind.AgentRun` owns the true runtime/provider lifecycle, detailed observability, and runtime result artifacts
 
 ```text
 Task (MoonMind.Run workflow)
@@ -341,6 +346,7 @@ Any start-like side effect must be idempotent with respect to a stable key such 
 
 * explicit `idempotency_key`, or
 * a deterministic execution tuple like `(workflow_id, step_id, attempt)`
+* parent-step refs such as `childWorkflowId`, `childRunId`, and `taskRunId`
 
 This is required so activity retries do not create duplicate external jobs or duplicate managed launches.
 
@@ -679,6 +685,7 @@ Specifically:
 * `AgentRunResult.diagnostics_ref` is the final diagnostics artifact for the run
 * live log events, artifact-backed tails, and per-stream retrieval are served through observability APIs, not through workflow payloads or `AgentRunResult`
 * Mission Control uses the observability APIs for task detail live/tailed observation, not the workflow result surface
+* the parent step ledger should carry only bounded refs back to that observability surface, not duplicate managed-run log state
 
 ## 10.2 Observability metadata expectations for managed runs
 

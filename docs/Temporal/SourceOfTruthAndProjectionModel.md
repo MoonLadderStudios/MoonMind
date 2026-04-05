@@ -3,7 +3,7 @@
 **Project:** MoonMind  
 **Doc type:** System architecture / read-model and consistency contract  
 **Status:** Normative steady-state contract  
-**Last updated:** 2026-03-27 (America/Los_Angeles)
+**Last updated:** 2026-04-04 (UTC)
 
 ---
 
@@ -218,6 +218,9 @@ The lifecycle truth behind these fields comes from Temporal, not from a local st
 | `memo.title` / `memo.summary` | workflow / Temporal Memo | cached copy | projection may denormalize for compatibility APIs |
 | `artifact_refs` | workflow + artifact linkage | cached copy | large blobs remain outside workflow history |
 | input/plan/manifest refs | workflow inputs + artifact system | cached copy | safe to mirror for compatibility/detail pages |
+| planned step structure | plan artifact | optional derived cache | authoritative planned list comes from the plan artifact once planning completes |
+| live step ledger | workflow state + workflow query | optional derived cache | authoritative for current/latest run step status, attempts, checks, and refs |
+| step-scoped evidence refs | artifact linkage + managed-run observability | optional derived cache | projection may group by step, but must not invent “latest” semantics locally |
 | ownership filter (`mm_owner_type` + `mm_owner_id`) | MoonMind auth policy mirrored into Temporal | cached copy | MoonMind owns auth; Temporal stores the searchable mirror; projection rows now mirror explicit owner type and owner id values |
 | create/update idempotency behavior | MoonMind API contract | local helper state allowed | dedupe is an API concern, not a Temporal history replacement |
 | page tokens / count semantics for Temporal list APIs | Temporal Visibility read path | local fallback only | avoid baking DB-offset assumptions into final Temporal-backed APIs |
@@ -255,6 +258,22 @@ The primary projection row must **not** become:
 - a substitute for workflow history
 - the audit source for per-run replay or debugging
 - a place to reintroduce legacy queue semantics for Temporal task queues
+- the authoritative store for step truth
+
+### 9.3A Derived step projection
+
+A separate derived read model such as `execution_step_projection` is allowed for:
+
+- fast Mission Control step reads
+- degraded mode
+- compatibility joins
+- future run-history and step-attempt views
+
+Rules:
+
+- it is keyed by `(workflowId, runId, logicalStepId, attempt)`
+- it reconciles from workflow step state, plan artifacts, artifact linkage, and managed-run refs
+- it must not become the authority for step ordering, status, or attempts
 
 ### 9.4 Projection sync metadata
 
