@@ -61,6 +61,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_interval=timedelta(minutes=1),
     maximum_attempts=5,
 )
+DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
@@ -679,17 +680,24 @@ class MoonMindRunWorkflow:
 
         try:
             await self._reconcile_dependencies(dependency_ids)
-            if self._dependency_failure is None and (
+            while self._dependency_failure is None and (
                 self._unresolved_dependency_ids or self._paused
             ):
-                await workflow.wait_condition(
-                    lambda: self._cancel_requested
-                    or self._dependency_failure is not None
-                    or (
-                        not self._paused
-                        and not self._unresolved_dependency_ids
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._cancel_requested
+                        or self._dependency_failure is not None
+                        or (
+                            not self._paused
+                            and not self._unresolved_dependency_ids
+                        ),
+                        timeout=DEPENDENCY_RECONCILE_INTERVAL,
                     )
-                )
+                except asyncio.TimeoutError:
+                    await self._reconcile_dependencies(dependency_ids)
+                    self._update_dependency_wait_duration()
+                    self._update_search_attributes()
+                    self._update_memo()
             self._update_dependency_wait_duration()
             self._raise_for_dependency_failure()
         finally:

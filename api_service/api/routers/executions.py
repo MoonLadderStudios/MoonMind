@@ -40,6 +40,7 @@ from moonmind.schemas.temporal_models import (
     ConfigureIntegrationMonitoringRequest,
     CreateExecutionRequest,
     ExecutionActionCapabilityModel,
+    ExecutionDependencySummaryModel,
     ExecutionDebugFieldsModel,
     ExecutionListResponse,
     ExecutionModel,
@@ -584,14 +585,42 @@ async def _enrich_execution_dependencies(
         return execution
 
     prerequisite_ids = list(execution.depends_on)
-    prerequisites = await service.enrich_dependency_summaries(prerequisite_ids)
+    prerequisites = (
+        await service.enrich_dependency_summaries(prerequisite_ids)
+        if prerequisite_ids
+        else []
+    )
     dependent_edges = await service.list_dependents(execution.workflow_id)
     dependent_ids = [edge.dependent_workflow_id for edge in dependent_edges]
-    dependents = await service.enrich_dependency_summaries(dependent_ids)
+    dependents = (
+        await service.enrich_dependency_summaries(dependent_ids)
+        if dependent_ids
+        else []
+    )
     return execution.model_copy(
         update={
-            "prerequisites": [item.__dict__ for item in prerequisites],
-            "dependents": [item.__dict__ for item in dependents],
+            "prerequisites": [
+                ExecutionDependencySummaryModel(
+                    workflowId=item.workflow_id,
+                    title=item.title,
+                    summary=item.summary,
+                    state=item.state,
+                    closeStatus=item.close_status,
+                    workflowType=item.workflow_type,
+                )
+                for item in prerequisites
+            ],
+            "dependents": [
+                ExecutionDependencySummaryModel(
+                    workflowId=item.workflow_id,
+                    title=item.title,
+                    summary=item.summary,
+                    state=item.state,
+                    closeStatus=item.close_status,
+                    workflowType=item.workflow_type,
+                )
+                for item in dependents
+            ],
         }
     )
 
