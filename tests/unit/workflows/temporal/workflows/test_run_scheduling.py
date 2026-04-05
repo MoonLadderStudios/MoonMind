@@ -188,13 +188,6 @@ async def test_run_workflow_waits_on_dependencies_before_planning(
 ):
     call_order: list[tuple[str, str | tuple[str, ...]]] = []
 
-    class _ImmediateHandle:
-        def __init__(self, workflow_id: str) -> None:
-            self._workflow_id = workflow_id
-
-        async def result(self) -> None:
-            call_order.append(("dependency", self._workflow_id))
-
     async def fake_planning_stage(*args, **kwargs):
         call_order.append(("planning", "started"))
         return "ref-123"
@@ -202,15 +195,25 @@ async def test_run_workflow_waits_on_dependencies_before_planning(
     async def fake_execution_stage(*args, **kwargs):
         call_order.append(("execution", "started"))
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: _ImmediateHandle(workflow_id),
-    )
+    async def fake_reconcile(self, dependency_ids):
+        for workflow_id in dependency_ids:
+            call_order.append(("dependency", workflow_id))
+            self._record_dependency_outcome(
+                prerequisite_workflow_id=workflow_id,
+                terminal_state="completed",
+                close_status="completed",
+                resolved_at="2026-04-05T00:00:00Z",
+                failure_category=None,
+                message=None,
+            )
+
     monkeypatch.setattr(
         workflow,
         "patched",
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
     )
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)
@@ -254,23 +257,29 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
     dependency_released = asyncio.Event()
     planning_started = asyncio.Event()
 
-    class _BlockingHandle:
-        async def result(self) -> None:
-            await dependency_released.wait()
-
     async def fake_planning_stage(*args, **kwargs):
         planning_started.set()
         return "ref-123"
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: _BlockingHandle(),
-    )
+    async def fake_reconcile(self, dependency_ids):
+        await dependency_released.wait()
+        for workflow_id in dependency_ids:
+            self._record_dependency_outcome(
+                prerequisite_workflow_id=workflow_id,
+                terminal_state="completed",
+                close_status="completed",
+                resolved_at="2026-04-05T00:00:00Z",
+                failure_category=None,
+                message=None,
+            )
+
     monkeypatch.setattr(
         workflow,
         "patched",
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
     )
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
 
@@ -326,20 +335,16 @@ async def test_run_workflow_dependency_cancel_interrupts_wait(
     dependency_started = asyncio.Event()
     keep_waiting = asyncio.Event()
 
-    class _BlockingHandle:
-        async def result(self) -> None:
-            dependency_started.set()
-            await keep_waiting.wait()
+    async def fake_reconcile(self, dependency_ids):
+        dependency_started.set()
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: _BlockingHandle(),
-    )
     monkeypatch.setattr(
         workflow,
         "patched",
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -372,14 +377,16 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
     mock_run_environment,
     monkeypatch,
 ):
-    handle_calls: list[str] = []
+    reconcile_called = False
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: handle_calls.append(workflow_id),
-    )
+    async def fake_reconcile(self, dependency_ids):
+        nonlocal reconcile_called
+        reconcile_called = True
+
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
+    )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
@@ -402,7 +409,7 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
             result = await handle.result()
 
     assert result["status"] == "success"
-    assert handle_calls == []
+    assert reconcile_called is False
 
 
 @pytest.mark.asyncio
@@ -412,14 +419,6 @@ async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(
 ):
     call_order: list[tuple[str, str | tuple[str, ...]]] = []
 
-    class _FailingHandle:
-        def __init__(self, workflow_id: str) -> None:
-            self._workflow_id = workflow_id
-
-        async def result(self) -> None:
-            call_order.append(("dependency", self._workflow_id))
-            raise RuntimeError("dependency failed")
-
     async def fake_planning_stage(*args, **kwargs):
         call_order.append(("planning", "started"))
         return "ref-should-not-be-used"
@@ -427,15 +426,25 @@ async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(
     async def fake_execution_stage(*args, **kwargs):
         call_order.append(("execution", "started"))
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: _FailingHandle(workflow_id),
-    )
+    async def fake_reconcile(self, dependency_ids):
+        workflow_id = dependency_ids[0]
+        call_order.append(("dependency", workflow_id))
+        self._record_dependency_outcome(
+            prerequisite_workflow_id=workflow_id,
+            terminal_state="failed",
+            close_status="failed",
+            resolved_at="2026-04-05T00:00:00Z",
+            failure_category="dependency_failed",
+            message="dependency failed",
+        )
+
     monkeypatch.setattr(
         workflow,
         "patched",
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
     )
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage)

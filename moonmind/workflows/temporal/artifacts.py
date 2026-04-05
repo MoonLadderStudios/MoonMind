@@ -2097,6 +2097,44 @@ class TemporalArtifactActivities:
         )
         return build_artifact_ref(artifact)
 
+    async def execution_dependency_status_snapshot(
+        self,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        from api_service.db.base import get_async_session_context
+        from moonmind.schemas.temporal_activity_models import (
+            DependencyStatusSnapshotInput,
+        )
+        from moonmind.workflows.temporal.service import TemporalExecutionService
+
+        workflow_ids: list[str] = []
+        if request is not None:
+            model = DependencyStatusSnapshotInput.model_validate(request)
+            workflow_ids = [
+                str(workflow_id or "").strip()
+                for workflow_id in model.workflow_ids
+                if str(workflow_id or "").strip()
+            ]
+
+        if not workflow_ids:
+            return {}
+
+        async with get_async_session_context() as session:
+            service = TemporalExecutionService(session)
+            snapshot = await service.get_dependency_status_snapshot(workflow_ids)
+
+        return {
+            workflow_id: {
+                "workflowId": item.workflow_id,
+                "title": item.title,
+                "summary": item.summary,
+                "state": item.state,
+                "closeStatus": item.close_status,
+                "workflowType": item.workflow_type,
+            }
+            for workflow_id, item in snapshot.items()
+        }
+
     async def artifact_list_for_execution(
         self,
         *,

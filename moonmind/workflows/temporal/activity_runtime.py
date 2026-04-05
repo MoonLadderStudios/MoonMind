@@ -220,6 +220,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.create": ("artifacts", "artifact_create"),
     "artifact.write_complete": ("artifacts", "artifact_write_complete"),
     "artifact.read": ("artifacts", "artifact_read"),
+    "execution.dependency_status_snapshot": (
+        "artifacts",
+        "execution_dependency_status_snapshot",
+    ),
     "artifact.list_for_execution": ("artifacts", "artifact_list_for_execution"),
     "artifact.compute_preview": ("artifacts", "artifact_compute_preview"),
     "artifact.link": ("artifacts", "artifact_link"),
