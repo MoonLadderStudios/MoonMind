@@ -19,7 +19,6 @@ OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
         "OPENAI_API_KEY",
         "CODEX_API_KEY",
         "GITHUB_TOKEN",
-        "GH_TOKEN",
     }
 )
 _BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (

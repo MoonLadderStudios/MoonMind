@@ -8772,7 +8772,6 @@ async def test_build_command_env_uses_minimal_inherited_environment(
     assert command_env["HOME"] == "/tmp/home"
     assert command_env["LANG"] == "C.UTF-8"
     assert command_env["GITHUB_TOKEN"] == "ghp-example"
-    assert command_env["GH_TOKEN"] == "ghp-example"
     assert command_env["GIT_AUTHOR_NAME"] == "Nate Sticco"
     assert command_env["GIT_AUTHOR_EMAIL"] == "nsticco@gmail.com"
     assert "SECRET_TOKEN" not in command_env

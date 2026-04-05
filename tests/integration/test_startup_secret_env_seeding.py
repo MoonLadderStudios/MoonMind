@@ -25,7 +25,7 @@ def _isolate_secret_env_sources(monkeypatch, tmp_path) -> None:
     empty_dotenv = tmp_path / ".env.empty"
     empty_dotenv.write_text("", encoding="utf-8")
     monkeypatch.setattr("moonmind.config.paths.ENV_FILE", empty_dotenv)
-    for key in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT", "ATLASSIAN_API_KEY"):
+    for key in ("GITHUB_TOKEN", "GITHUB_PAT", "ATLASSIAN_API_KEY"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -104,6 +104,7 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
     monkeypatch, disabled_env_keys, tmp_path
 ):
     await _seed_db(tmp_path)
+    _isolate_secret_env_sources(monkeypatch, tmp_path)
 
     dotenv_path = tmp_path / ".env"
     dotenv_path.write_text(
@@ -141,7 +142,7 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("slug", ["GH_TOKEN", "GITHUB_PAT"])
+@pytest.mark.parametrize("slug", ["GITHUB_PAT"])
 async def test_startup_syncs_github_alias_and_refreshes_canonical_slug(
     monkeypatch, disabled_env_keys, tmp_path, slug
 ):
@@ -189,52 +190,13 @@ async def test_startup_syncs_github_alias_and_refreshes_canonical_slug(
 
 
 @pytest.mark.asyncio
-async def test_startup_syncs_all_present_github_aliases(
-    monkeypatch, disabled_env_keys, tmp_path
-):
-    await _seed_db(tmp_path)
-    _isolate_secret_env_sources(monkeypatch, tmp_path)
-
-    monkeypatch.setenv("GH_TOKEN", "ghp-gh-token")
-    monkeypatch.setenv("GITHUB_PAT", "ghp-pat-token")
-
-    with (
-        patch("api_service.main._initialize_embedding_model"),
-        patch("api_service.main._initialize_vector_store"),
-        patch("api_service.main._initialize_contexts"),
-        patch("api_service.main._load_or_create_vector_index"),
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
-        await startup_event()
-
-    async with db_base.async_session_maker() as session:
-        canonical_secret = (
-            await session.execute(
-                select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN")
-            )
-        ).scalar_one()
-        gh_token_secret = (
-            await session.execute(select(ManagedSecret).where(ManagedSecret.slug == "GH_TOKEN"))
-        ).scalar_one()
-        github_pat_secret = (
-            await session.execute(
-                select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_PAT")
-            )
-        ).scalar_one()
-
-    assert canonical_secret.ciphertext == "ghp-gh-token"
-    assert gh_token_secret.ciphertext == "ghp-gh-token"
-    assert github_pat_secret.ciphertext == "ghp-pat-token"
-
-
-@pytest.mark.asyncio
 async def test_startup_ignores_whitespace_only_env_tokens(
     monkeypatch, disabled_env_keys, tmp_path
 ):
     await _seed_db(tmp_path)
     _isolate_secret_env_sources(monkeypatch, tmp_path)
 
-    monkeypatch.setenv("GH_TOKEN", "   ")
+    monkeypatch.setenv("GITHUB_PAT", "   ")
     monkeypatch.setenv("ATLASSIAN_API_KEY", "\t")
 
     with (
@@ -252,9 +214,6 @@ async def test_startup_ignores_whitespace_only_env_tokens(
                 select(ManagedSecret).where(ManagedSecret.slug == "GITHUB_TOKEN")
             )
         ).scalar_one_or_none()
-        alias_secret = (
-            await session.execute(select(ManagedSecret).where(ManagedSecret.slug == "GH_TOKEN"))
-        ).scalar_one_or_none()
         atlassian_secret = (
             await session.execute(
                 select(ManagedSecret).where(
@@ -264,5 +223,4 @@ async def test_startup_ignores_whitespace_only_env_tokens(
         ).scalar_one_or_none()
 
     assert github_secret is None
-    assert alias_secret is None
     assert atlassian_secret is None

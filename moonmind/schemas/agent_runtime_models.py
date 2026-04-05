@@ -54,7 +54,7 @@ _SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "private_key",
 )
 _ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS: frozenset[str] = frozenset(
-    {"GH_TOKEN", "GITHUB_TOKEN"}
+    {"GITHUB_TOKEN"}
 )
 # Non-secret metadata keys allowed in envOverrides (values are refs / env names, not raw secrets).
 _ALLOWED_MANAGED_LAUNCH_METADATA_KEYS: frozenset[str] = frozenset(

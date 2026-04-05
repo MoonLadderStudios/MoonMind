@@ -10,6 +10,7 @@ import pytest
 from moonmind.workflows.temporal.runtime.github_auth_broker import (
     GitHubAuthBrokerManager,
     request_github_token,
+    run_gh_wrapper,
 )
 
 
@@ -36,3 +37,41 @@ async def test_github_auth_broker_serves_token_and_cleans_socket():
     await manager.stop("run-1")
 
     assert not Path(socket_path).exists()
+
+
+def test_run_gh_wrapper_clears_ambient_gh_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "ambient-gh-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "stale-github-token")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.github_auth_broker.request_github_token",
+        lambda _socket_path: "broker-issued-token",
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.github_auth_broker.sys.argv",
+        ["gh-wrapper", "auth", "status"],
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execvpe(path: str, args: list[str], env: dict[str, str]) -> None:
+        captured["path"] = path
+        captured["args"] = args
+        captured["env"] = env
+        raise SystemExit(0)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.github_auth_broker.os.execvpe",
+        _fake_execvpe,
+    )
+
+    with pytest.raises(SystemExit):
+        run_gh_wrapper(socket_path="/tmp/github-auth.sock", real_gh_path="/usr/bin/gh")
+
+    assert captured["path"] == "/usr/bin/gh"
+    assert captured["args"] == ["/usr/bin/gh", "auth", "status"]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GITHUB_TOKEN"] == "broker-issued-token"
+    assert "GH_TOKEN" not in env

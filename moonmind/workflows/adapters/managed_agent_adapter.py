@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # GitHub CLI authentication is required for workflows like pr-resolver.
 # Only the *key names* are propagated through workflow/activity payloads; the
 # values are injected at launch time by the agent-runtime activity worker.
-_SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
+_SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GITHUB_TOKEN",)
 
 _PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),

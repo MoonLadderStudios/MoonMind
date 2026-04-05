@@ -26,7 +26,7 @@ const PROVIDER_KEY_SLUGS = [
   'MINIMAX_API_KEY',
 ] as const;
 
-const GITHUB_TOKEN_SLUGS = ['GITHUB_PAT', 'GITHUB_TOKEN', 'GH_TOKEN'] as const;
+const GITHUB_TOKEN_SLUGS = ['GITHUB_PAT', 'GITHUB_TOKEN'] as const;
 
 function hasActiveSlug(items: SecretMetadata[], slugs: readonly string[]): boolean {
   return items.some((s) => slugs.includes(s.slug) && s.status === 'active');
@@ -94,8 +94,7 @@ export function DashboardAlerts() {
          )}
          {!hasGithub && (
            <li>
-             A GitHub token in Settings is missing (use slug <code>GITHUB_TOKEN</code>, <code>GH_TOKEN</code>, or{' '}
-             <code>GITHUB_PAT</code> — runtime and docs use <code>GITHUB_TOKEN</code> most often).
+             A GitHub token in Settings is missing (use slug <code>GITHUB_TOKEN</code> or <code>GITHUB_PAT</code>).
            </li>
          )}
       </ul>

@@ -91,6 +91,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
 
     calls: list[tuple[list[str], str | None, dict[str, str] | None]] = []
     monkeypatch.setenv("MOONMIND_TEST_ENV", "preserved")
+    monkeypatch.setenv("GH_TOKEN", "ambient-gh-token")
 
     def fake_verify(name: str) -> str:
         return f"/usr/bin/{name}"
