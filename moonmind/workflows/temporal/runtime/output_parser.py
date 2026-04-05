@@ -22,8 +22,8 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 _CODEX_BLOCKER_MARKERS: tuple[str, ...] = (
     "blocked on the workspace tooling constraint",
     "apply_patch executable or tool is not available",
-    "actual `apply_patch` tool is available",
-    "actual 'apply_patch' tool is available",
+    "no actual `apply_patch` tool is available",
+    "no actual 'apply_patch' tool is available",
     "strict compliance with the repo rule, i should stop here",
 )
 
@@ -93,8 +93,8 @@ def _extract_matching_lines(
             if not stripped:
                 continue
             lower = stripped.lower()
-            if any(marker in lower for marker in markers) and stripped not in seen:
-                seen.add(stripped)
+            if any(marker in lower for marker in markers) and lower not in seen:
+                seen.add(lower)
                 matches.append(stripped)
     return matches
 
@@ -115,10 +115,10 @@ class CodexCliOutputParser(PlainTextOutputParser):
                 error_messages.append(line)
         return ParsedOutput(
             raw_text=base.raw_text,
-            events=[],
+            events=base.events,
             error_messages=error_messages,
-            rate_limited=False,
-            has_structured_output=False,
+            rate_limited=base.rate_limited,
+            has_structured_output=base.has_structured_output,
         )
 
 

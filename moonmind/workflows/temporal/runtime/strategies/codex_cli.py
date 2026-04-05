@@ -36,6 +36,7 @@ _CODEX_MANAGED_RUNTIME_NOTE = (
     "- Prefer targeted reads like `rg` and `sed -n` over dumping whole files "
     "with `cat`, especially for large frontend files.\n"
 )
+_CODEX_MANAGED_RUNTIME_NOTE_HEADER = "Managed Codex CLI note:\n"
 
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
@@ -159,8 +160,8 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             request=request,
             workspace_path=workspace_path,
         )
-        instruction = str(getattr(request, "instruction_ref", "") or "").strip()
-        if instruction and _CODEX_MANAGED_RUNTIME_NOTE.strip() not in instruction:
+        instruction = request.instruction_ref or ""
+        if instruction and _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in instruction:
             request.instruction_ref = instruction + _CODEX_MANAGED_RUNTIME_NOTE
 
     def classify_result(

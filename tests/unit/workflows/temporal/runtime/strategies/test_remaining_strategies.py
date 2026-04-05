@@ -477,6 +477,25 @@ class TestCodexCliPrepareWorkspace:
         assert "`apply_patch` or `read_file`" in request.instruction_ref
         assert "`rg` and `sed -n`" in request.instruction_ref
 
+    @pytest.mark.asyncio
+    @patch("moonmind.rag.context_injection.ContextInjectionService")
+    async def test_prepare_workspace_preserves_instruction_whitespace(
+        self,
+        mock_service_class,
+        tmp_path,
+    ) -> None:
+        mock_service = mock_service_class.return_value
+        mock_service.inject_context = AsyncMock()
+
+        request = _make_request(instruction_ref="  Do work  ")
+        await CodexCliStrategy().prepare_workspace(
+            workspace_path=tmp_path,
+            request=request,
+        )
+
+        assert request.instruction_ref.startswith("  Do work  ")
+        assert "Managed Codex CLI note:" in request.instruction_ref
+
     def test_classify_result_fails_for_managed_runtime_tooling_blocker(self) -> None:
         result = CodexCliStrategy().classify_result(
             exit_code=0,

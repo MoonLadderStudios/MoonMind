@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
 
 from moonmind.workflows.temporal.runtime.output_parser import (
     CodexCliOutputParser,
     GeminiCliOutputParser,
+    ParsedOutput,
     PlainTextOutputParser,
 )
 
@@ -102,7 +104,7 @@ class TestDefaultOutputParser:
         s = ClaudeCodeStrategy()
         assert isinstance(s.create_output_parser(), PlainTextOutputParser)
 
-    def test_codex_returns_plain_text(self) -> None:
+    def test_codex_returns_codex_cli_output_parser(self) -> None:
         s = CodexCliStrategy()
         assert isinstance(s.create_output_parser(), CodexCliOutputParser)
 
@@ -116,6 +118,14 @@ class TestCodexCliOutputParser:
         )
         assert result.error_messages == ["Blocked on the workspace tooling constraint."]
 
+    def test_parse_deduplicates_blocker_lines_case_insensitively(self) -> None:
+        parser = CodexCliOutputParser()
+        result = parser.parse(
+            "Blocked on the workspace tooling constraint.\n",
+            "blocked on the workspace tooling constraint.\n",
+        )
+        assert result.error_messages == ["Blocked on the workspace tooling constraint."]
+
     def test_parse_ignores_non_blocker_stdout(self) -> None:
         parser = CodexCliOutputParser()
         result = parser.parse(
@@ -123,6 +133,27 @@ class TestCodexCliOutputParser:
             "",
         )
         assert result.error_messages == []
+
+    def test_parse_ignores_positive_apply_patch_availability_message(self) -> None:
+        parser = CodexCliOutputParser()
+        result = parser.parse(
+            "The actual `apply_patch` tool is available in this environment.\n",
+            "",
+        )
+        assert result.error_messages == []
+
+    def test_parse_preserves_base_parser_fields(self) -> None:
+        parser = CodexCliOutputParser()
+        base = ParsedOutput(
+            raw_text="stdoutstderr",
+            events=[{"type": "event"}],
+            error_messages=["Error: base"],
+            rate_limited=True,
+            has_structured_output=True,
+        )
+        with patch.object(PlainTextOutputParser, "parse", return_value=base):
+            result = parser.parse("stdout", "stderr")
+        assert result == base
 
 
 class TestGeminiCliOutputParser:
