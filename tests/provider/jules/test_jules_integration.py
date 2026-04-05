@@ -5,7 +5,7 @@ Skipped automatically when the key is absent.
 
 Run manually::
 
-    python -m pytest tests/integration/test_jules_integration.py -v -s
+    python -m pytest tests/provider/jules/test_jules_integration.py -v -s
 
 This test creates one Jules session with a checklist-shaped prompt and
 polls until the session reaches a terminal state (``completed``). It is a

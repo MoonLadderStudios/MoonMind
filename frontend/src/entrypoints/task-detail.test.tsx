@@ -86,6 +86,8 @@ describe('Task Detail Entrypoint', () => {
       entry: 'run',
       targetRuntime: 'gemini_cli',
       profileId: 'profile:gemini-default',
+      providerId: 'google',
+      providerLabel: 'Google',
       title: 'Example task',
       summary: 'Did work',
       status: 'completed',
@@ -120,6 +122,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
       expect(screen.getByText('Gemini CLI')).toBeTruthy();
+      expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
     });
 

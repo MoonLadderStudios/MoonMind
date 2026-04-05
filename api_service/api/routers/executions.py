@@ -23,6 +23,7 @@ from temporalio.service import RPCError
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
@@ -575,7 +576,6 @@ def _serialize_execution(
         refreshed_at=_compatibility_refreshed_at(record),
     )
 
-
 async def _enrich_execution_dependencies(
     execution: ExecutionModel,
     *,
@@ -621,6 +621,33 @@ async def _enrich_execution_dependencies(
                 )
                 for item in dependents
             ],
+        }
+    )
+
+
+async def _hydrate_provider_profile_metadata(
+    execution: ExecutionModel, session: AsyncSession | None
+) -> ExecutionModel:
+    profile_id = str(execution.profile_id or "").strip()
+    if not profile_id or session is None:
+        return execution
+    try:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to hydrate provider profile metadata for execution %s profile %s: %s",
+            execution.workflow_id,
+            profile_id,
+            exc,
+            exc_info=True,
+        )
+        return execution
+    if profile is None:
+        return execution
+    return execution.model_copy(
+        update={
+            "provider_id": str(profile.provider_id or "").strip() or None,
+            "provider_label": str(profile.provider_label or "").strip() or None,
         }
     )
 
@@ -1964,6 +1991,7 @@ async def describe_execution(
         )
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
+    execution = await _hydrate_provider_profile_metadata(execution, session)
     if not execution.task_run_id:
         task_run_id = await asyncio.to_thread(
             _resolve_task_run_id_from_managed_store,

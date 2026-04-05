@@ -442,6 +442,8 @@ class ExecutionModel(BaseModel):
     resolved_model: Optional[str] = Field(None, alias="resolvedModel")
     model_source: Optional[str] = Field(None, alias="modelSource")
     profile_id: Optional[str] = Field(None, alias="profileId")
+    provider_id: Optional[str] = Field(None, alias="providerId")
+    provider_label: Optional[str] = Field(None, alias="providerLabel")
     effort: Optional[str] = Field(None, alias="effort")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")

@@ -1179,6 +1179,36 @@ def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
         assert payload["continueAsNewCause"] == "manual_rerun"
 
 
+def test_describe_execution_hydrates_provider_profile_metadata() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    record.parameters = {"profileId": "profile:gemini-default"}
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                provider_id="google",
+                provider_label="Google",
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["profileId"] == "profile:gemini-default"
+    assert payload["providerId"] == "google"
+    assert payload["providerLabel"] == "Google"
+    app.dependency_overrides.clear()
+
+
 def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

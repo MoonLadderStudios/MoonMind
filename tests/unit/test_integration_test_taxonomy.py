@@ -85,13 +85,28 @@ def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integrati
 
 
 def test_live_jules_suite_is_provider_verification_only() -> None:
-    marker_names = _marker_names("tests.integration.test_jules_integration")
+    marker_names = _marker_names("tests.provider.jules.test_jules_integration")
 
     assert "provider_verification" in marker_names
     assert "jules" in marker_names
     assert "requires_credentials" in marker_names
     assert "integration_ci" not in marker_names
     assert "integration" not in marker_names
+
+
+def test_provider_verification_suite_lives_outside_tests_integration() -> None:
+    assert not (REPO_ROOT / "tests" / "integration" / "test_jules_integration.py").exists()
+    assert (REPO_ROOT / "tests" / "provider" / "jules" / "test_jules_integration.py").exists()
+
+
+def test_temporal_topology_integration_suite_stays_jules_free() -> None:
+    topology_module = (
+        REPO_ROOT / "tests" / "integration" / "temporal" / "test_activity_worker_topology.py"
+    ).read_text(encoding="utf-8")
+
+    assert "integration.jules." not in topology_module
+    assert "JulesTaskResponse" not in topology_module
+    assert "_FakeJulesClient" not in topology_module
 
 
 def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
@@ -107,4 +122,5 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
 
     assert 'integration_ci' in shell_runner
     assert 'provider_verification and jules' in provider_runner
+    assert 'pytest tests/provider/jules' in provider_runner
     assert 'integration_ci' in powershell_runner
