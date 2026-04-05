@@ -461,25 +461,25 @@ def main() -> None:
     parser.add_argument(
         "--finalize-max-retries",
         type=int,
-        default=2,
+        default=6,
         help="Number of finalize retries after the initial attempt.",
     )
     parser.add_argument(
         "--base-sleep-seconds",
         type=int,
-        default=15,
+        default=30,
         help="Base sleep for finalize-only retries (exponential backoff).",
     )
     parser.add_argument(
         "--max-sleep-seconds",
         type=int,
-        default=60,
+        default=120,
         help="Max sleep for finalize-only retries.",
     )
     parser.add_argument(
         "--max-elapsed-seconds",
         type=int,
-        default=900,
+        default=1800,
         help="Hard wall-clock cap for orchestration execution.",
     )
     parser.add_argument(

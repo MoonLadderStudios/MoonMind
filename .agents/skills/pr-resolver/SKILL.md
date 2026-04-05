@@ -14,10 +14,10 @@ You are the master orchestrator for finishing Pull Requests. Use bounded retries
 - inputs.branch (optional)
 - inputs.mergeMethod (merge|squash|rebase)
 - inputs.maxIterations (default 3, full remediation cap per cycle)
-- inputs.finalizeMaxRetries (default 2)
-- inputs.finalizeBackoffSeconds (default 15)
-- inputs.finalizeMaxSleepSeconds (default 60)
-- inputs.finalizeMaxElapsedSeconds (default 900)
+- inputs.finalizeMaxRetries (default 6)
+- inputs.finalizeBackoffSeconds (default 30)
+- inputs.finalizeMaxSleepSeconds (default 120)
+- inputs.finalizeMaxElapsedSeconds (default 1800)
 
 ## Primary Command (use first)
 Run the orchestration entrypoint. **You MUST provide the `--pr` argument** (using either the PR number or the branch name) to ensure the script targets the correct PR, even if you are on a different branch or detached HEAD:
