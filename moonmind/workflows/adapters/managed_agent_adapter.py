@@ -61,6 +61,7 @@ _PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),
     Path("artifacts/pr_resolver_result.json"),
 )
+_PR_RESOLVER_ATTEMPTS_DIR = Path("var/pr_resolver/attempts")
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
     {"failed", "blocked", "attempts_exhausted"}
 )
@@ -69,22 +70,79 @@ _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
 )
 
 
+def _load_json_dict(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _parse_payload_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _payload_sort_timestamp(path: Path, payload: dict[str, Any]) -> datetime:
+    for key in ("timestamp", "finished_at", "finishedAt", "updated_at", "updatedAt"):
+        parsed = _parse_payload_timestamp(payload.get(key))
+        if parsed is not None:
+            return parsed
+    for key in ("started_at", "startedAt"):
+        parsed = _parse_payload_timestamp(payload.get(key))
+        if parsed is not None:
+            return parsed
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return datetime.min.replace(tzinfo=UTC)
+
+
 def _load_pr_resolver_result(workspace_path: str | None) -> dict[str, Any] | None:
-    """Load a pr-resolver result payload from known workspace locations."""
+    """Load the most recent pr-resolver payload from result/attempt artifacts."""
 
     workspace = str(workspace_path or "").strip()
     if not workspace:
         return None
 
+    workspace_root = Path(workspace)
+    candidates: list[tuple[datetime, Path, dict[str, Any]]] = []
+
     for rel_path in _PR_RESOLVER_RESULT_PATHS:
-        result_path = Path(workspace) / rel_path
-        try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict):
-            return payload
-    return None
+        result_path = workspace_root / rel_path
+        payload = _load_json_dict(result_path)
+        if payload is not None:
+            candidates.append(
+                (_payload_sort_timestamp(result_path, payload), result_path, payload)
+            )
+
+    attempts_dir = workspace_root / _PR_RESOLVER_ATTEMPTS_DIR
+    try:
+        attempt_paths = sorted(attempts_dir.glob("*.json"))
+    except OSError:
+        attempt_paths = []
+    for attempt_path in attempt_paths:
+        payload = _load_json_dict(attempt_path)
+        if payload is not None:
+            candidates.append(
+                (_payload_sort_timestamp(attempt_path, payload), attempt_path, payload)
+            )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], str(item[1])))
+    return candidates[-1][2]
 
 # Type aliases for async signal callables injected by the caller/workflow.
 ProfileFetcherFunc = Callable[..., Awaitable[dict[str, Any]]]
