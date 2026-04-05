@@ -85,8 +85,8 @@ tests/unit/workflows/temporal/workflows/
 ├── test_run_artifacts.py
 └── test_run_integration.py
 
-tests/integration/
-└── test_jules_integration.py                # Real Jules sendMessage lifecycle test to update or retire
+tests/provider/jules/
+└── test_jules_integration.py                # Real Jules provider-verification lifecycle test to update or retire
 ```
 
 **Structure Decision**: Keep the implementation inside existing Temporal workflow and Jules adapter/activity modules. Add a dedicated bundle contract artifact under `specs/105-jules-provider-adapter/contracts/` rather than creating a new top-level runtime package.
@@ -167,7 +167,7 @@ Document two contracts:
 
 #### Change 5: Boundary-Level Regression Coverage
 
-**Primary files**: `tests/unit/workflows/temporal/workflows/test_run_integration.py`, `tests/unit/workflows/temporal/test_jules_merge_pr.py`, `tests/unit/workflows/temporal/test_jules_activities.py`, `tests/integration/test_jules_integration.py`
+**Primary files**: `tests/unit/workflows/temporal/workflows/test_run_integration.py`, `tests/unit/workflows/temporal/test_jules_merge_pr.py`, `tests/unit/workflows/temporal/test_jules_activities.py`, `tests/provider/jules/test_jules_integration.py`
 
 - Replace current multi-step send-message workflow expectations with one-shot bundle expectations.
 - Add failure-path coverage for branch publication truthfulness and clarification-only `sendMessage` exception behavior.

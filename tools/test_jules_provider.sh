@@ -34,4 +34,4 @@ fi
   -e JULES_API_KEY \
   -e JULES_API_URL \
   pytest bash -lc \
-  "pytest tests/integration -m 'provider_verification and jules' -q --tb=short -s"
+  "pytest tests/provider/jules -m 'provider_verification and jules' -q --tb=short -s"
