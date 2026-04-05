@@ -24,7 +24,12 @@ _CODEX_BLOCKER_MARKERS: tuple[str, ...] = (
     "apply_patch executable or tool is not available",
     "no actual `apply_patch` tool is available",
     "no actual 'apply_patch' tool is available",
+    "i'll start by exploring the codebase",
+    "let me search more broadly",
+    "let me search more specifically",
     "strict compliance with the repo rule, i should stop here",
+    "want me to keep going",
+    "is there something specific you'd like me to work on",
 )
 
 

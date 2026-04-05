@@ -6,18 +6,60 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
+import subprocess
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from moonmind.rag.context_pack import ContextPack
+from moonmind.rag.context_pack import ContextItem, ContextPack, build_context_pack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.env_bool import env_to_bool
 
 logger = logging.getLogger(__name__)
+
+_LOCAL_FALLBACK_STOPWORDS: frozenset[str] = frozenset({
+    "about",
+    "above",
+    "after",
+    "agent",
+    "allow",
+    "automatic",
+    "change",
+    "changes",
+    "commit",
+    "complete",
+    "create",
+    "handled",
+    "requested",
+    "should",
+    "show",
+    "showing",
+    "their",
+    "using",
+    "work",
+})
+_LOCAL_FALLBACK_GLOBS: tuple[str, ...] = (
+    "*.md",
+    "*.py",
+    "*.ts",
+    "*.tsx",
+    "*.js",
+    "*.jsx",
+    "*.svelte",
+)
+_LOCAL_FALLBACK_SEARCH_ROOTS: tuple[str, ...] = (
+    "specs",
+    "docs",
+    "frontend",
+    "moonmind",
+    "api_service",
+    "tests",
+)
+_LOCAL_FALLBACK_MAX_ITEMS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +104,25 @@ class ContextInjectionService:
                 retrieval_skip_reason = None
         except Exception as exc:
             logger.info("[rag] retrieval skipped: %s", exc)
-            return PromptContextResolution(instruction=instruction_ref)
+            fallback_pack = self._build_local_fallback_pack(
+                instruction=instruction_ref,
+                workspace_path=workspace_path,
+            )
+            if fallback_pack is None:
+                return PromptContextResolution(instruction=instruction_ref)
+            pack = fallback_pack
+            retrieval_skip_reason = "local_fallback_after_retrieval_error"
 
         if pack is None:
             if retrieval_skip_reason:
                 logger.info("[rag] retrieval skipped: %s", retrieval_skip_reason)
-            return PromptContextResolution(instruction=instruction_ref)
+            fallback_pack = self._build_local_fallback_pack(
+                instruction=instruction_ref,
+                workspace_path=workspace_path,
+            )
+            if fallback_pack is None:
+                return PromptContextResolution(instruction=instruction_ref)
+            pack = fallback_pack
 
         artifact_path = self._persist_context_pack(
             request=request,
@@ -227,3 +282,99 @@ class ContextInjectionService:
             self._env.get("MOONMIND_RAG_AUTO_CONTEXT", "true"),
             default=True,
         )
+
+    def _build_local_fallback_pack(
+        self,
+        *,
+        instruction: str,
+        workspace_path: Path,
+    ) -> ContextPack | None:
+        query_terms = self._extract_query_terms(instruction)
+        if not query_terms:
+            return None
+
+        search_roots = [
+            str(workspace_path / root)
+            for root in _LOCAL_FALLBACK_SEARCH_ROOTS
+            if (workspace_path / root).exists()
+        ]
+        if not search_roots:
+            return None
+
+        pattern = "|".join(re.escape(term) for term in query_terms)
+        command = ["rg", "-n", "-i", "-m", "1"]
+        for glob in _LOCAL_FALLBACK_GLOBS:
+            command.extend(["-g", glob])
+        command.extend([pattern, *search_roots])
+
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=workspace_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+
+        if completed.returncode not in {0, 1}:
+            return None
+
+        items: list[ContextItem] = []
+        for raw_line in completed.stdout.splitlines():
+            if len(items) >= _LOCAL_FALLBACK_MAX_ITEMS:
+                break
+            source, line_number, snippet = self._parse_rg_match_line(raw_line)
+            if source is None or line_number is None or snippet is None:
+                continue
+            items.append(
+                ContextItem(
+                    score=1.0,
+                    source=source,
+                    text=f"line {line_number}: {snippet}",
+                    trust_class="canonical",
+                    payload={"line": line_number, "mode": "local_fallback"},
+                )
+            )
+
+        if not items:
+            return None
+
+        return build_context_pack(
+            items=items,
+            filters={"mode": "local_fallback"},
+            budgets={},
+            usage={"matches": len(items)},
+            transport="local_fallback",
+            telemetry_id="local-fallback",
+            max_chars=2400,
+        )
+
+    @staticmethod
+    def _extract_query_terms(instruction: str) -> list[str]:
+        terms: list[str] = []
+        seen: set[str] = set()
+        for raw in re.findall(r"[A-Za-z0-9_/-]+", instruction.lower()):
+            term = raw.strip("-_/")
+            if len(term) < 4 or term in _LOCAL_FALLBACK_STOPWORDS:
+                continue
+            if term in seen:
+                continue
+            seen.add(term)
+            terms.append(term)
+            if len(terms) >= 6:
+                break
+        return terms
+
+    @staticmethod
+    def _parse_rg_match_line(raw_line: str) -> tuple[str | None, int | None, str | None]:
+        parts = raw_line.split(":", 2)
+        if len(parts) != 3:
+            return None, None, None
+        source, line_number_raw, snippet = parts
+        try:
+            line_number = int(line_number_raw)
+        except ValueError:
+            return None, None, None
+        return source, line_number, snippet.strip()

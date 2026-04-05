@@ -1,5 +1,6 @@
 """Unit tests for RAG ContextInjectionService."""
 
+import subprocess
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -91,3 +92,53 @@ async def test_inject_context_no_items(mock_retrieve, mock_request, tmp_path):
     assert result.items_count == 0
     assert result.instruction == "Original instruction"
     assert mock_request.instruction_ref == "Original instruction"
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+@patch("moonmind.rag.context_injection.subprocess.run")
+async def test_inject_context_uses_local_fallback_when_retrieval_fails(
+    mock_run,
+    mock_retrieve,
+    mock_request,
+    tmp_path,
+):
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    mock_request.instruction_ref = (
+        "Task details should show the provider profile selected for the workflow run"
+    )
+    (tmp_path / "docs").mkdir()
+
+    mock_retrieve.side_effect = RuntimeError("qdrant unavailable")
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=["rg"],
+        returncode=0,
+        stdout=(
+            f"{tmp_path / 'docs' / 'TaskDetails.md'}:12:Task details view shows workflow metadata\n"
+            f"{tmp_path / 'frontend' / 'TaskView.tsx'}:8:providerProfile is rendered in the details panel\n"
+        ),
+        stderr="",
+    )
+
+    result = await service.inject_context(
+        request=mock_request,
+        workspace_path=tmp_path,
+    )
+
+    assert result.items_count == 2
+    assert "BEGIN_RETRIEVED_CONTEXT" in result.instruction
+    assert "TaskDetails.md" in result.instruction
+    assert "providerProfile is rendered in the details panel" in result.instruction
+    assert mock_request.instruction_ref == result.instruction
+
+
+def test_extract_query_terms_keeps_domain_words():
+    terms = ContextInjectionService._extract_query_terms(
+        "Task details should show the provider profile selected for the workflow run"
+    )
+
+    assert "task" in terms
+    assert "details" in terms
+    assert "provider" in terms
+    assert "profile" in terms
+    assert "workflow" in terms

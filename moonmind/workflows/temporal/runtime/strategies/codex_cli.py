@@ -33,6 +33,17 @@ _CODEX_MANAGED_RUNTIME_NOTE = (
     "- If repo instructions mention `apply_patch`, follow the intent using the "
     "shell and editor commands available in this CLI environment instead of "
     "stopping.\n"
+    "- This run is non-interactive. Do not ask whether to continue, do not ask "
+    "follow-up questions, and do not stop after exploration.\n"
+    "- Do not end the run with a progress-only message such as 'I'll inspect "
+    "the codebase' or 'Let me search more specifically'. Keep working until "
+    "you either make the change and verify it, or you hit a concrete blocker.\n"
+    "- Continue autonomously until you either finish the requested work, run "
+    "relevant verification, and make the requested commit, or you hit a "
+    "concrete blocker you cannot resolve locally.\n"
+    "- For repo search, use `rg -n PATTERN <path>` for content search or "
+    "`rg --files <path> | rg NAME` for filename filtering. Do not combine a "
+    "content pattern with `rg --files`.\n"
     "- Prefer targeted reads like `rg` and `sed -n` over dumping whole files "
     "with `cat`, especially for large frontend files.\n"
 )
@@ -96,7 +107,16 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
 
         model = None
         if requested_model:
-            model = self.get_model(profile, request)
+            resolved_requested_model = self.get_model(profile, request)
+            profile_default_model = (
+                str(getattr(profile, "default_model", None) or "").strip() or None
+            )
+            if not (
+                suppress_default_model_flag
+                and profile_default_model
+                and resolved_requested_model == profile_default_model
+            ):
+                model = resolved_requested_model
         elif not suppress_default_model_flag:
             model = self.get_model(profile, request)
         if model:

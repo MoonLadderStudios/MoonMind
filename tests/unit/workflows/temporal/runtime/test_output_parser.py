@@ -118,6 +118,26 @@ class TestCodexCliOutputParser:
         )
         assert result.error_messages == ["Blocked on the workspace tooling constraint."]
 
+    def test_parse_detects_interactive_handoff_message(self) -> None:
+        parser = CodexCliOutputParser()
+        result = parser.parse(
+            "Want me to keep going with that, or is there something specific you'd like me to work on?\n",
+            "",
+        )
+        assert result.error_messages == [
+            "Want me to keep going with that, or is there something specific you'd like me to work on?"
+        ]
+
+    def test_parse_detects_progress_only_exploration_message(self) -> None:
+        parser = CodexCliOutputParser()
+        result = parser.parse(
+            "Let me search more specifically for frontend components and provider-related code.\n",
+            "",
+        )
+        assert result.error_messages == [
+            "Let me search more specifically for frontend components and provider-related code."
+        ]
+
     def test_parse_deduplicates_blocker_lines_case_insensitively(self) -> None:
         parser = CodexCliOutputParser()
         result = parser.parse(
@@ -129,7 +149,7 @@ class TestCodexCliOutputParser:
     def test_parse_ignores_non_blocker_stdout(self) -> None:
         parser = CodexCliOutputParser()
         result = parser.parse(
-            "Let me search more broadly for provider profiles in the backend API.\n",
+            "Implemented provider profile details in task history and added unit coverage.\n",
             "",
         )
         assert result.error_messages == []

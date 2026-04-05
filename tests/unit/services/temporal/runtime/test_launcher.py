@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -316,6 +317,78 @@ async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monk
     support_dir = support_dirs[0]
     assert support_dir.exists()
     assert str(support_dir / "codex-home" / "config.toml") in cleanup_path_set
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService")
+async def test_launch_builds_codex_command_after_workspace_preparation(
+    mock_service_class,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    mock_service = mock_service_class.return_value
+    mock_service.inject_context = AsyncMock()
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 889) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        default_model="qwen/qwen3.6-plus:free",
+    )
+    request = _make_request(instruction_ref="Do work")
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-codex-note",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    assert captured_args[:2] == ("codex", "exec")
+    assert any(
+        isinstance(arg, str) and "Managed Codex CLI note:" in arg
+        for arg in captured_args
+    )
 
 
 @pytest.mark.asyncio

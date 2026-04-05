@@ -395,7 +395,7 @@ class TestCodexCliBuildCommand:
         cmd = s.build_command(profile, request)
         assert cmd == ["codex", "exec", "Go"]
 
-    def test_suppress_default_model_flag_keeps_explicit_request_model(self) -> None:
+    def test_suppress_default_model_flag_omits_redundant_explicit_default_model(self) -> None:
         s = CodexCliStrategy()
         profile = _make_profile(
             command_template=["codex", "exec"],
@@ -407,7 +407,21 @@ class TestCodexCliBuildCommand:
             parameters={"model": "qwen/qwen3.6-plus:free"},
         )
         cmd = s.build_command(profile, request)
-        assert cmd == ["codex", "exec", "-m", "qwen/qwen3.6-plus:free", "Go"]
+        assert cmd == ["codex", "exec", "Go"]
+
+    def test_suppress_default_model_flag_keeps_explicit_non_default_model(self) -> None:
+        s = CodexCliStrategy()
+        profile = _make_profile(
+            command_template=["codex", "exec"],
+            default_model="qwen/qwen3.6-plus:free",
+        )
+        profile.command_behavior = {"suppress_default_model_flag": True}
+        request = _make_request(
+            instruction_ref="Go",
+            parameters={"model": "qwen/qwen3-coder-plus:free"},
+        )
+        cmd = s.build_command(profile, request)
+        assert cmd == ["codex", "exec", "-m", "qwen/qwen3-coder-plus:free", "Go"]
 
 
 class TestCodexCliShapeEnvironment:
@@ -475,6 +489,10 @@ class TestCodexCliPrepareWorkspace:
 
         assert "Managed Codex CLI note:" in request.instruction_ref
         assert "`apply_patch` or `read_file`" in request.instruction_ref
+        assert "This run is non-interactive." in request.instruction_ref
+        assert "Do not ask whether to continue" in request.instruction_ref
+        assert "Do not end the run with a progress-only message" in request.instruction_ref
+        assert "Do not combine a content pattern with `rg --files`" in request.instruction_ref
         assert "`rg` and `sed -n`" in request.instruction_ref
 
     @pytest.mark.asyncio
@@ -500,6 +518,19 @@ class TestCodexCliPrepareWorkspace:
         result = CodexCliStrategy().classify_result(
             exit_code=0,
             stdout="Blocked on the workspace tooling constraint.\n",
+            stderr="",
+        )
+
+        assert result.status == "failed"
+        assert result.failure_class == "execution_error"
+
+    def test_classify_result_fails_for_progress_only_exit(self) -> None:
+        result = CodexCliStrategy().classify_result(
+            exit_code=0,
+            stdout=(
+                "Let me search more specifically for frontend components and "
+                "provider-related code.\n"
+            ),
             stderr="",
         )
 

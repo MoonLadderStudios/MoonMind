@@ -722,9 +722,6 @@ class ManagedRuntimeLauncher:
         # Update profile with the materialized command template so build_command uses it
         profile.command_template = mat_cmd
 
-        cmd = self.build_command(profile, request, strategy=strategy)
-        self._reset_live_log_spool(resolved_workspace_path)
-
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex).
         if resolved_workspace_path is not None and strategy is not None:
@@ -773,6 +770,9 @@ class ManagedRuntimeLauncher:
                     profile.runtime_id,
                     exc_info=True,
                 )
+
+        cmd = self.build_command(profile, request, strategy=strategy)
+        self._reset_live_log_spool(resolved_workspace_path)
 
         # Expose active skills projection if present
         run_root: Path | None = None
