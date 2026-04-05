@@ -514,6 +514,25 @@ def test_runtime_planner_publish_pr_propagates_commit_message_override():
     )
 
 
+def test_runtime_planner_publish_pr_falls_back_to_top_level_commit_message():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "gemini_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={"publishMode": "pr", "commitMessage": "Top-level commit text"},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][-1]["inputs"]["commitMessage"] == "Top-level commit text"
+
+
 def test_enforce_codex_config_skips_non_managed_fleet() -> None:
     with patch("api_service.scripts.ensure_codex_config.ensure_codex_config") as mock_ensure:
         _enforce_codex_config_for_managed_fleet(WORKFLOW_FLEET)
