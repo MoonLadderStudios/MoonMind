@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 from moonmind.workflows.temporal.runtime.output_parser import (
+    CodexCliOutputParser,
     GeminiCliOutputParser,
     PlainTextOutputParser,
 )
@@ -103,7 +104,25 @@ class TestDefaultOutputParser:
 
     def test_codex_returns_plain_text(self) -> None:
         s = CodexCliStrategy()
-        assert isinstance(s.create_output_parser(), PlainTextOutputParser)
+        assert isinstance(s.create_output_parser(), CodexCliOutputParser)
+
+
+class TestCodexCliOutputParser:
+    def test_parse_detects_managed_runtime_blocker_message(self) -> None:
+        parser = CodexCliOutputParser()
+        result = parser.parse(
+            "Blocked on the workspace tooling constraint.\n",
+            "",
+        )
+        assert result.error_messages == ["Blocked on the workspace tooling constraint."]
+
+    def test_parse_ignores_non_blocker_stdout(self) -> None:
+        parser = CodexCliOutputParser()
+        result = parser.parse(
+            "Let me search more broadly for provider profiles in the backend API.\n",
+            "",
+        )
+        assert result.error_messages == []
 
 
 class TestGeminiCliOutputParser:

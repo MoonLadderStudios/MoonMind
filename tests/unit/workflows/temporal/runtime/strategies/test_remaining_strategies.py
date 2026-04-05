@@ -456,3 +456,33 @@ class TestCodexCliPrepareWorkspace:
             request=request,
             workspace_path=tmp_path,
         )
+
+    @pytest.mark.asyncio
+    @patch("moonmind.rag.context_injection.ContextInjectionService")
+    async def test_prepare_workspace_appends_managed_runtime_note(
+        self,
+        mock_service_class,
+        tmp_path,
+    ) -> None:
+        mock_service = mock_service_class.return_value
+        mock_service.inject_context = AsyncMock()
+
+        request = _make_request(instruction_ref="Do work")
+        await CodexCliStrategy().prepare_workspace(
+            workspace_path=tmp_path,
+            request=request,
+        )
+
+        assert "Managed Codex CLI note:" in request.instruction_ref
+        assert "`apply_patch` or `read_file`" in request.instruction_ref
+        assert "`rg` and `sed -n`" in request.instruction_ref
+
+    def test_classify_result_fails_for_managed_runtime_tooling_blocker(self) -> None:
+        result = CodexCliStrategy().classify_result(
+            exit_code=0,
+            stdout="Blocked on the workspace tooling constraint.\n",
+            stderr="",
+        )
+
+        assert result.status == "failed"
+        assert result.failure_class == "execution_error"
