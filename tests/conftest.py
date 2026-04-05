@@ -34,35 +34,6 @@ def disabled_env_keys(monkeypatch):
 def keycloak_mode(monkeypatch):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     yield
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers",
-        "asyncio: mark a test as requiring an asyncio event loop",
-    )
-    config.addinivalue_line(
-        "markers",
-        "integration: mark an integration test",
-    )
-    config.addinivalue_line(
-        "markers",
-        "integration_ci: mark a hermetic integration test that is safe for CI",
-    )
-    config.addinivalue_line(
-        "markers",
-        "provider_verification: mark a live external-provider verification test",
-    )
-    config.addinivalue_line(
-        "markers",
-        "jules: mark a Jules-specific test",
-    )
-    config.addinivalue_line(
-        "markers",
-        "requires_credentials: mark a test that needs real provider credentials",
-    )
-
-
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
     """Execute `@pytest.mark.asyncio` tests without requiring pytest-asyncio."""

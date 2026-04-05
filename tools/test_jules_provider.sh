@@ -1,15 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -x ".venv/bin/python" ]]; then
-  PYTHON_BIN=".venv/bin/python"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_BIN="python"
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON_BIN="python3"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
+
+if [[ -z "${JULES_API_KEY:-}" ]]; then
+  echo "Error: JULES_API_KEY must be set to run live Jules provider verification." >&2
+  exit 1
+fi
+
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker-compose)
 else
-  echo "Error: neither '.venv/bin/python', 'python', nor 'python3' is available." >&2
+  echo "Error: docker compose CLI is not available." >&2
   exit 127
 fi
 
-"$PYTHON_BIN" -m pytest tests/integration -m "provider_verification and jules" -q --tb=short -s
+if [[ ! -f "$REPO_ROOT/.env" ]]; then
+  if [[ -f "$REPO_ROOT/.env-template" ]]; then
+    cp "$REPO_ROOT/.env-template" "$REPO_ROOT/.env"
+    echo "Created $REPO_ROOT/.env from .env-template for docker compose tests."
+  else
+    echo "Error: missing $REPO_ROOT/.env and $REPO_ROOT/.env-template." >&2
+    exit 1
+  fi
+fi
+
+"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
+"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
+  -e JULES_API_KEY \
+  -e JULES_API_URL \
+  pytest bash -lc \
+  "pytest tests/integration -m 'provider_verification and jules' -q --tb=short -s"

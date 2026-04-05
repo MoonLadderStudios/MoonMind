@@ -1,27 +1,73 @@
 from __future__ import annotations
 
-import importlib
+import ast
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _module_path(module_name: str) -> Path:
+    return REPO_ROOT / Path(*module_name.split(".")).with_suffix(".py")
+
+
+def _marker_names_from_node(node: ast.AST) -> set[str]:
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        marker_names: set[str] = set()
+        for element in node.elts:
+            marker_names.update(_marker_names_from_node(element))
+        return marker_names
+
+    if isinstance(node, ast.Call):
+        return _marker_names_from_node(node.func)
+
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "pytest"
+        and node.value.attr == "mark"
+    ):
+        return {node.attr}
+
+    return set()
+
+
 def _marker_names(module_name: str) -> set[str]:
-    module = importlib.import_module(module_name)
-    pytestmark = getattr(module, "pytestmark", [])
-    if not isinstance(pytestmark, list):
-        pytestmark = [pytestmark]
-    return {mark.name for mark in pytestmark}
+    module_ast = ast.parse(_module_path(module_name).read_text(encoding="utf-8"))
+
+    marker_names: set[str] = set()
+    for statement in module_ast.body:
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            targets = [statement.target]
+            value = statement.value
+        else:
+            continue
+
+        if value is None:
+            continue
+
+        if any(
+            isinstance(target, ast.Name) and target.id == "pytestmark"
+            for target in targets
+        ):
+            marker_names.update(_marker_names_from_node(value))
+
+    return marker_names
 
 
-def test_pytest_registers_phase1_taxonomy_markers() -> None:
-    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
+    registered_markers = {
+        marker.split(":", 1)[0].strip() for marker in pytestconfig.getini("markers")
+    }
 
-    assert "integration_ci:" in pyproject
-    assert "provider_verification:" in pyproject
-    assert "jules:" in pyproject
-    assert "requires_credentials:" in pyproject
+    assert "integration_ci" in registered_markers
+    assert "provider_verification" in registered_markers
+    assert "jules" in registered_markers
+    assert "requires_credentials" in registered_markers
 
 
 def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integration_ci() -> None:
