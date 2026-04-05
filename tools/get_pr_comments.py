@@ -87,6 +87,7 @@ def api_get_json(url: str, token: str | None) -> Any:
         try:
             error_body = exc.read().decode("utf-8", "replace")
         except Exception:
+            # Leave the response body empty when decoding the error payload fails.
             pass
         raise RuntimeError(
             f"GitHub API request failed ({exc.code} {exc.reason}) for {url}\n{error_body}"
