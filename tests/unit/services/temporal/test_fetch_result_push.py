@@ -361,6 +361,7 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "auto-abc123"
+        assert "push_commit_count" not in result
 
     @pytest.mark.asyncio
     async def test_push_revlist_nonzero_returncode_falls_through(self):
@@ -389,6 +390,7 @@ class TestPushWorkspaceBranch:
         # Should NOT be no_commits; should fall through to pushed
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "auto-abc123"
+        assert "push_commit_count" not in result
 
     @pytest.mark.asyncio
     async def test_push_revlist_uses_target_branch(self):
@@ -469,18 +471,24 @@ class TestFetchResultPushIntegration:
         assert result.metadata["push_branch"] == "my-branch"
 
     @pytest.mark.asyncio
-    async def test_fetch_result_adds_operator_summary_from_stdout_artifact(self):
+    async def test_fetch_result_adds_operator_summary_from_stdout_artifact(self, tmp_path):
         store = _make_mock_store()
         store.load.return_value.stdout_artifact_ref = "art-stdout"
+        stdout_path = tmp_path / "stdout.log"
+        stdout_path.write_text(
+            "noise\n**Final Report**\nThe requested behavior already existed in the repo.\n"
+            "Files edited in this run: none.\n\ncodex\n",
+            encoding="utf-8",
+        )
         artifact_service = MagicMock()
+        artifact_service.read_path = AsyncMock(
+            return_value=(MagicMock(), stdout_path)
+        )
+        artifact_service.read_chunks = AsyncMock(
+            side_effect=AssertionError("stdout tail should come from the local artifact path")
+        )
         artifact_service.read_bytes = AsyncMock(
-            return_value=(
-                MagicMock(),
-                (
-                    b"noise\n**Final Report**\nThe requested behavior already existed in the repo.\n"
-                    b"Files edited in this run: none.\n\ncodex\n"
-                ),
-            )
+            side_effect=AssertionError("stdout tail should not require full artifact reads")
         )
         activities = TemporalAgentRuntimeActivities(
             run_store=store,

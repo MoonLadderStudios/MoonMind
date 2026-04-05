@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.tasks.routing import _coerce_bool
     from moonmind.config.settings import settings
+    from moonmind.utils.logging import scrub_github_tokens
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
@@ -1476,7 +1477,6 @@ class MoonMindRunWorkflow:
             self._publish_status = "skipped"
             self._publish_reason = self._compose_no_change_publish_reason(
                 publish_mode=publish_mode,
-                outputs=outputs,
             )
             return
 
@@ -1513,28 +1513,28 @@ class MoonMindRunWorkflow:
             return
 
         self._last_step_id = node_id
-        operator_summary = self._coerce_text(
-            outputs.get("operator_summary") or outputs.get("operatorSummary"),
-            max_chars=1600,
+        operator_summary = self._sanitize_operator_summary(
+            self._coerce_text(
+                outputs.get("operator_summary") or outputs.get("operatorSummary"),
+                max_chars=1600,
+            )
         )
         if operator_summary:
             self._operator_summary = operator_summary
 
-        last_step_summary = self._coerce_text(
-            operator_summary
-            or outputs.get("summary")
-            or outputs.get("message"),
-            max_chars=1600,
+        self._last_step_summary = self._sanitize_operator_summary(
+            self._coerce_text(
+                operator_summary
+                or outputs.get("summary")
+                or outputs.get("message"),
+                max_chars=1600,
+            )
         )
-        if last_step_summary:
-            self._last_step_summary = last_step_summary
 
-        diagnostics_ref = self._coerce_text(
+        self._last_diagnostics_ref = self._coerce_text(
             outputs.get("diagnostics_ref") or outputs.get("diagnosticsRef"),
             max_chars=200,
         )
-        if diagnostics_ref:
-            self._last_diagnostics_ref = diagnostics_ref
 
         publish_branch = self._coerce_text(
             outputs.get("push_branch") or outputs.get("branch"),
@@ -1553,42 +1553,47 @@ class MoonMindRunWorkflow:
         push_commit_count = outputs.get("push_commit_count")
         if push_commit_count is None:
             push_commit_count = outputs.get("pushCommitCount")
+        normalized_commit_count: int | None = None
         if isinstance(push_commit_count, bool):
             push_commit_count = None
         if isinstance(push_commit_count, (int, float)):
-            self._publish_context["commitCount"] = int(push_commit_count)
+            normalized_commit_count = int(push_commit_count)
         elif isinstance(push_commit_count, str) and push_commit_count.strip().isdigit():
-            self._publish_context["commitCount"] = int(push_commit_count.strip())
+            normalized_commit_count = int(push_commit_count.strip())
+
+        if normalized_commit_count is not None:
+            if normalized_commit_count >= 0:
+                self._publish_context["commitCount"] = normalized_commit_count
+            else:
+                self._publish_context.pop("commitCount", None)
 
         pull_request_url = self._extract_pull_request_url(execution_result)
         if pull_request_url:
             self._publish_context["pullRequestUrl"] = pull_request_url
 
+    @staticmethod
+    def _sanitize_operator_summary(summary: str | None) -> str | None:
+        if not summary:
+            return None
+        scrubbed = scrub_github_tokens(summary).strip()
+        return scrubbed or None
+
     def _compose_no_change_publish_reason(
         self,
         *,
         publish_mode: str,
-        outputs: Mapping[str, Any],
     ) -> str:
-        branch = self._coerce_text(
-            outputs.get("push_branch") or outputs.get("branch"),
-            max_chars=120,
-        )
-        base_ref = self._coerce_text(
-            outputs.get("push_base_ref") or outputs.get("pushBaseRef"),
-            max_chars=120,
-        )
+        branch = self._coerce_text(self._publish_context.get("branch"), max_chars=120)
+        base_ref = self._coerce_text(self._publish_context.get("baseRef"), max_chars=120)
         operator_summary = self._coerce_text(
-            outputs.get("operator_summary") or outputs.get("operatorSummary"),
+            self._operator_summary,
             max_chars=700,
         )
-        commit_count_value = outputs.get("push_commit_count")
-        if commit_count_value is None:
-            commit_count_value = outputs.get("pushCommitCount")
         commit_count: int | None = None
+        commit_count_value = self._publish_context.get("commitCount")
         if isinstance(commit_count_value, bool):
             commit_count_value = None
-        if isinstance(commit_count_value, (int, float)):
+        if isinstance(commit_count_value, (int, float)) and int(commit_count_value) >= 0:
             commit_count = int(commit_count_value)
         elif isinstance(commit_count_value, str) and commit_count_value.strip().isdigit():
             commit_count = int(commit_count_value.strip())
@@ -1601,7 +1606,7 @@ class MoonMindRunWorkflow:
         else:
             parts.append("publish skipped because no local changes were produced")
 
-        if branch and base_ref and commit_count is not None:
+        if branch and base_ref and commit_count and commit_count > 0:
             parts.append(
                 f"branch '{branch}' has {commit_count} commits ahead of {base_ref}"
             )

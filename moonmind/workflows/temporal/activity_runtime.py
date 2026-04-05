@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Sequence, get_type_hints
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence, get_type_hints
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
@@ -126,6 +126,7 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     " 429",
     "code: 429",
 )
+_OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
 
 
 def _managed_runtime_artifact_root() -> Path:
@@ -2472,22 +2473,98 @@ class TemporalAgentRuntimeActivities:
         if self._artifact_service is None or not record.stdout_artifact_ref:
             return None
 
+        text = await self._read_stdout_artifact_tail(
+            artifact_id=record.stdout_artifact_ref,
+            run_id=record.run_id,
+            max_bytes=_OPERATOR_SUMMARY_TAIL_BYTES,
+        )
+        if text is None:
+            return None
+
+        extracted = self._extract_operator_summary_from_text(text)
+        return self._sanitize_operator_summary(extracted)
+
+    async def _read_stdout_artifact_tail(
+        self,
+        *,
+        artifact_id: str,
+        run_id: str,
+        max_bytes: int,
+    ) -> str | None:
+        if self._artifact_service is None:
+            return None
+
+        try:
+            _, path = await self._artifact_service.read_path(
+                artifact_id=artifact_id,
+                principal="system:agent_runtime",
+            )
+        except Exception:
+            logger.debug(
+                "Failed to read stdout artifact path for managed run %s",
+                run_id,
+                exc_info=True,
+            )
+        else:
+            try:
+                return self._read_path_tail_text(path, max_bytes=max_bytes)
+            except Exception:
+                logger.debug(
+                    "Failed to read stdout artifact tail from path for managed run %s",
+                    run_id,
+                    exc_info=True,
+                )
+
+        try:
+            _, chunks = await self._artifact_service.read_chunks(
+                artifact_id=artifact_id,
+                principal="system:agent_runtime",
+                chunk_size=max_bytes,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to stream stdout artifact for managed run %s",
+                run_id,
+                exc_info=True,
+            )
+        else:
+            payload = self._tail_bytes_from_chunks(chunks, max_bytes=max_bytes)
+            return payload.decode("utf-8", errors="replace")
+
         try:
             _, payload = await self._artifact_service.read_bytes(
-                artifact_id=record.stdout_artifact_ref,
+                artifact_id=artifact_id,
                 principal="system:agent_runtime",
             )
         except Exception:
             logger.debug(
                 "Failed to read stdout artifact for managed run %s",
-                record.run_id,
+                run_id,
                 exc_info=True,
             )
             return None
 
-        text = payload.decode("utf-8", errors="replace")
-        extracted = self._extract_operator_summary_from_text(text)
-        return self._sanitize_operator_summary(extracted)
+        return payload[-max_bytes:].decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _read_path_tail_text(path: Path, *, max_bytes: int) -> str:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            tail_start = max(handle.tell() - max_bytes, 0)
+            handle.seek(tail_start)
+            payload = handle.read()
+        return payload.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _tail_bytes_from_chunks(chunks: Iterable[bytes], *, max_bytes: int) -> bytes:
+        tail = bytearray()
+        for chunk in chunks:
+            if not chunk:
+                continue
+            tail.extend(chunk)
+            if len(tail) > max_bytes:
+                del tail[:-max_bytes]
+        return bytes(tail)
 
     @staticmethod
     def _extract_operator_summary_from_text(text: str) -> str | None:
@@ -2890,12 +2967,14 @@ class TemporalAgentRuntimeActivities:
                 run_id,
                 current_branch,
             )
-            return {
+            result: dict[str, Any] = {
                 "push_status": "pushed",
                 "push_branch": current_branch,
                 "push_base_ref": base_ref,
-                "push_commit_count": commit_count,
             }
+            if commit_count >= 0:
+                result["push_commit_count"] = commit_count
+            return result
         except Exception as exc:
             logger.warning(
                 "Post-agent git push failed for run %s",
