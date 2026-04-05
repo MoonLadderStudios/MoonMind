@@ -83,6 +83,13 @@ if [[ ${#FORWARD_ARGS[@]} -gt 0 ]]; then
     INNER_ARGS="$(printf '%q ' "${FORWARD_ARGS[@]}")"
 fi
 
+# Ensure compose stack is torn down after tests, including dependency containers (e.g. MinIO).
+cleanup() {
+    echo "Tearing down test compose stack..."
+    "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans || true
+}
+trap cleanup EXIT
+
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm \
     -e MOONMIND_FORCE_LOCAL_TESTS=1 \
     "$TEST_SERVICE" \
