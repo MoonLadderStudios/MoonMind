@@ -43,6 +43,8 @@ const ExecutionDetailSchema = z
     targetSkill: z.string().nullable().optional(),
     model: z.string().nullable().optional(),
     profileId: z.string().nullable().optional(),
+    providerId: z.string().nullable().optional(),
+    providerLabel: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
@@ -214,6 +216,32 @@ function Card({
     <div className="card">
       <strong>{label}:</strong> <span className="break-words">{children}</span>
     </div>
+  );
+}
+
+function renderProviderProfileSummary(
+  execution: z.infer<typeof ExecutionDetailSchema>,
+): ReactNode {
+  const providerLabel = execution.providerLabel?.trim();
+  const providerId = execution.providerId?.trim();
+  const profileId = execution.profileId?.trim();
+  const primary = providerLabel || providerId || profileId;
+  if (!primary) return '—';
+
+  return (
+    <span className="stack gap-1">
+      <code className="text-xs break-all">{primary}</code>
+      {profileId && profileId !== primary ? (
+        <span className="small">
+          Profile ID: <code className="text-xs break-all">{profileId}</code>
+        </span>
+      ) : null}
+      {providerId && providerId !== primary ? (
+        <span className="small">
+          Provider ID: <code className="text-xs break-all">{providerId}</code>
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -1278,9 +1306,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               </Card>
             ) : null}
             {execution.profileId ? (
-              <Card label="Provider Profile">
-                <code className="text-xs break-all">{execution.profileId}</code>
-              </Card>
+              <Card label="Provider Profile">{renderProviderProfileSummary(execution)}</Card>
             ) : null}
             {execution.effort ? <Card label="Effort">{execution.effort}</Card> : null}
             {execution.startingBranch ? (
