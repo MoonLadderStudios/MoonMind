@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.temporal.runtime.output_parser import (
+    CodexCliOutputParser,
+    ParsedOutput,
+)
 from moonmind.workflows.temporal.runtime.strategies.base import (
+    ManagedRuntimeExitResult,
     ManagedRuntimeStrategy,
 )
 
@@ -21,6 +26,17 @@ _CODEX_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
 })
 _CODEX_PROGRESS_TIMEOUT_SECONDS = 300
 _CODEX_PROGRESS_MTIME_PADDING_SECONDS = 5.0
+_CODEX_MANAGED_RUNTIME_NOTE = (
+    "\n\nManaged Codex CLI note:\n"
+    "- This managed runtime does not expose Codex API developer tools such as "
+    "`apply_patch` or `read_file`.\n"
+    "- If repo instructions mention `apply_patch`, follow the intent using the "
+    "shell and editor commands available in this CLI environment instead of "
+    "stopping.\n"
+    "- Prefer targeted reads like `rg` and `sed -n` over dumping whole files "
+    "with `cat`, especially for large frontend files.\n"
+)
+_CODEX_MANAGED_RUNTIME_NOTE_HEADER = "Managed Codex CLI note:\n"
 
 
 class CodexCliStrategy(ManagedRuntimeStrategy):
@@ -144,6 +160,34 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             request=request,
             workspace_path=workspace_path,
         )
+        instruction = request.instruction_ref or ""
+        if instruction and _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in instruction:
+            request.instruction_ref = instruction + _CODEX_MANAGED_RUNTIME_NOTE
+
+    def classify_result(
+        self,
+        *,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        parsed_output: ParsedOutput | None = None,
+    ) -> ManagedRuntimeExitResult:
+        parsed = parsed_output or self.create_output_parser().parse(stdout, stderr)
+        blocker_lines = CodexCliOutputParser.extract_blocker_lines(stdout, stderr)
+        if exit_code == 0 and blocker_lines:
+            return ManagedRuntimeExitResult(
+                status="failed",
+                failure_class="execution_error",
+            )
+        return super().classify_result(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            parsed_output=parsed,
+        )
+
+    def create_output_parser(self) -> CodexCliOutputParser:
+        return CodexCliOutputParser()
 
     def probe_progress_at(
         self,

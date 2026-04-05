@@ -19,6 +19,13 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "ratelimitexceeded",
     "retrying with backoff",
 )
+_CODEX_BLOCKER_MARKERS: tuple[str, ...] = (
+    "blocked on the workspace tooling constraint",
+    "apply_patch executable or tool is not available",
+    "no actual `apply_patch` tool is available",
+    "no actual 'apply_patch' tool is available",
+    "strict compliance with the repo rule, i should stop here",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +79,47 @@ class PlainTextOutputParser(RuntimeOutputParser):
 
     def parse_stream_chunk(self, chunk: str) -> list[dict]:
         return []
+
+
+def _extract_matching_lines(
+    markers: tuple[str, ...],
+    *texts: str,
+) -> list[str]:
+    matches: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lower = stripped.lower()
+            if any(marker in lower for marker in markers) and lower not in seen:
+                seen.add(lower)
+                matches.append(stripped)
+    return matches
+
+
+class CodexCliOutputParser(PlainTextOutputParser):
+    """Plain-text parser with Codex-specific managed-runtime blocker detection."""
+
+    @staticmethod
+    def extract_blocker_lines(*texts: str) -> list[str]:
+        return _extract_matching_lines(_CODEX_BLOCKER_MARKERS, *texts)
+
+    def parse(self, stdout: str, stderr: str) -> ParsedOutput:
+        base = super().parse(stdout, stderr)
+        blocker_lines = self.extract_blocker_lines(stdout, stderr)
+        error_messages = list(base.error_messages)
+        for line in blocker_lines:
+            if line not in error_messages:
+                error_messages.append(line)
+        return ParsedOutput(
+            raw_text=base.raw_text,
+            events=base.events,
+            error_messages=error_messages,
+            rate_limited=base.rate_limited,
+            has_structured_output=base.has_structured_output,
+        )
 
 
 class GeminiCliOutputParser(PlainTextOutputParser):
