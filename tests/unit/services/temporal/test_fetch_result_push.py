@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -182,7 +183,10 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"feature/delete-spec-048\n", b""))
                 proc.returncode = 0
-            elif call_count == 2:  # push
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -202,18 +206,23 @@ class TestPushWorkspaceBranch:
         activities = TemporalAgentRuntimeActivities(run_store=store)
         recorded_calls: list[tuple[object, ...]] = []
         workspace = "/work/agent_jobs/run-1/repo"
+        call_count = 0
 
         async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
             recorded_calls.append(args)
             proc = AsyncMock()
-            command = list(args)
-            if "rev-parse" in command:
+            if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"feature/safe-branch\n", b""))
                 proc.returncode = 0
-            elif "push" in command:
+            elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            else:
+            elif call_count == 3:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"1\n", b""))
                 proc.returncode = 0
             return proc
@@ -222,7 +231,7 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
 
         assert result["push_status"] == "pushed"
-        assert len(recorded_calls) == 3
+        assert len(recorded_calls) == 4
         for call in recorded_calls:
             command = list(call)
             assert command[:5] == [
@@ -245,6 +254,9 @@ class TestPushWorkspaceBranch:
             proc = AsyncMock()
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"feature/delete-spec-048\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b"remote: Permission denied"))
@@ -293,7 +305,10 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
                 proc.returncode = 0
-            elif call_count == 2:  # push
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -323,7 +338,10 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
                 proc.returncode = 0
-            elif call_count == 2:  # push
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -335,6 +353,193 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "auto-abc123"
+
+    @pytest.mark.asyncio
+    async def test_push_commits_dirty_workspace_before_push(self):
+        """Dirty managed workspaces are committed before publish push."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-dirty123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(
+                    return_value=(b" M api_service/main.py\n?? tests/new_test.py\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 3:  # git add -A with runtime exclusions
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # staged diff check
+                proc.communicate = AsyncMock(
+                    return_value=(b"api_service/main.py\ntests/new_test.py\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 5:  # commit
+                proc.communicate = AsyncMock(return_value=(b"[auto-dirty123 abc123] msg\n", b""))
+                proc.returncode = 0
+            elif call_count == 6:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                commit_message="Ship dirty workspace",
+            )
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "auto-dirty123"
+        assert result["push_commit_count"] == 1
+        assert result["push_commit_message"] == "Ship dirty workspace"
+        add_call = recorded_calls[2]
+        assert list(add_call[-5:]) == [
+            "--",
+            ".",
+            ":(exclude)CLAUDE.md",
+            ":(exclude)live_streams.spool",
+            ":(exclude).agents/skills/active",
+        ]
+        commit_call = next(call for call in recorded_calls if "commit" in call)
+        assert list(commit_call[-3:]) == ["commit", "-m", "Ship dirty workspace"]
+
+    @pytest.mark.asyncio
+    async def test_push_dirty_workspace_commit_failure_returns_failed(self):
+        """Commit failures surface as publish failures instead of false no-ops."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-dirty123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b" M api_service/main.py\n", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # git add -A
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # staged diff check
+                proc.communicate = AsyncMock(return_value=(b"api_service/main.py\n", b""))
+                proc.returncode = 0
+            else:  # commit
+                proc.communicate = AsyncMock(
+                    return_value=(b"", b"Author identity unknown")
+                )
+                proc.returncode = 128
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "failed"
+        assert "could not commit workspace changes" in result["push_error"]
+        assert "Author identity unknown" in result["push_error"]
+
+    @pytest.mark.asyncio
+    async def test_push_ignores_runtime_scaffolding_only_changes(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-claude123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"?? CLAUDE.md\n", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # git add -A with exclusions
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # staged diff check
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"0\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "no_commits"
+        assert result["push_branch"] == "auto-claude123"
+        assert result["push_commit_count"] == 0
+
+    def test_workspace_command_env_includes_support_gitconfig_and_git_identity(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        support_root = workspace.parent / ".moonmind"
+        support_bin = support_root / "bin"
+        support_bin.mkdir(parents=True)
+        gitconfig = support_root / "gitconfig"
+        gitconfig.write_text("[safe]\n", encoding="utf-8")
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setattr(settings.workflow, "git_user_name", "MoonMind Bot")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "moonmind@example.com"
+        )
+
+        env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        assert env["PATH"].startswith(str(support_bin))
+        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+        assert env["GIT_AUTHOR_NAME"] == "MoonMind Bot"
+        assert env["GIT_COMMITTER_NAME"] == "MoonMind Bot"
+        assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
+        assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
+
+    def test_workspace_command_env_overrides_preexisting_git_identity(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        support_root = workspace.parent / ".moonmind"
+        support_bin = support_root / "bin"
+        support_bin.mkdir(parents=True)
+        gitconfig = support_root / "gitconfig"
+        gitconfig.write_text("[safe]\n", encoding="utf-8")
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/tmp/external.gitconfig")
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "External Author")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "External Committer")
+        monkeypatch.setenv("GIT_AUTHOR_EMAIL", "external@example.com")
+        monkeypatch.setenv("GIT_COMMITTER_EMAIL", "external@example.com")
+        monkeypatch.setattr(settings.workflow, "git_user_name", "MoonMind Bot")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "moonmind@example.com"
+        )
+
+        env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+        assert env["GIT_AUTHOR_NAME"] == "MoonMind Bot"
+        assert env["GIT_COMMITTER_NAME"] == "MoonMind Bot"
+        assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
+        assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
 
     @pytest.mark.asyncio
     async def test_push_revlist_failure_falls_through(self):
@@ -350,7 +555,10 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
                 proc.returncode = 0
-            elif call_count == 2:  # push
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count — simulate failure
@@ -377,7 +585,10 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
                 proc.returncode = 0
-            elif call_count == 2:  # push
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count — non-zero exit with empty stdout
@@ -407,7 +618,10 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
                 proc.returncode = 0
-            elif call_count == 2:  # push
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -632,6 +846,47 @@ class TestFetchResultPushIntegration:
 
         assert result.metadata["push_status"] == "failed"
         assert result.metadata["push_error"] == "remote: Permission denied"
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_passes_commit_message_override_to_push(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={"push_status": "pushed", "push_branch": "my-branch"},
+            ) as mock_push,
+            patch.object(
+                activities, "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            adapter_instance = MockAdapter.return_value
+            adapter_instance.fetch_result = AsyncMock(return_value=AgentRunResult(
+                summary="done",
+                failure_class=None,
+            ))
+
+            await activities.agent_runtime_fetch_result(
+                {
+                    "run_id": "run-1",
+                    "agent_id": "claude",
+                    "publish_mode": "pr",
+                    "commit_message": "Use explicit publish commit",
+                },
+            )
+
+        mock_push.assert_called_once_with(
+            "run-1",
+            target_branch=None,
+            commit_message="Use explicit publish commit",
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_result_defaults_publish_mode_none(self):

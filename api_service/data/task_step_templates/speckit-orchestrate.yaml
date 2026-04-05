@@ -190,8 +190,9 @@ steps:
   - title: Return final report and defer publish actions
     instructions: |-
       If all gates pass (no NO DETERMINATION and no unresolved CRITICAL/HIGH blockers):
-      1. Do NOT create commits, push branches, or open pull requests from runtime execution.
-      2. Return a final report so MoonMind publish stage can handle commit/PR behavior when enabled.
+      1. If publish mode is enabled, commit your completed work once and do not push branches or open pull requests from runtime execution.
+      2. If publish mode is disabled, do not create commits, push branches, or open pull requests from runtime execution.
+      3. Return a final report so MoonMind publish stage can handle push/PR behavior when enabled.
       Return final report including:
       - Feature path and branch
       - Files edited
@@ -200,7 +201,7 @@ steps:
       - Checklist gate outcome
       - Scope validation outcomes (tasks + diff)
       - DOC-REQ coverage status
-      - Publish handoff status (commit/PR handled by wrapper publish stage)
+      - Publish handoff status (push/PR handled by wrapper publish stage)
     skill:
       id: auto
       args: {}

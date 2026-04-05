@@ -302,6 +302,11 @@ def _build_runtime_planner():
         )
         if isinstance(publish_mode, str) and publish_mode.strip():
             node_inputs["publishMode"] = publish_mode.strip()
+        commit_message = publish_payload.get(
+            "commitMessage", parameter_payload.get("commitMessage")
+        )
+        if isinstance(commit_message, str) and commit_message.strip():
+            node_inputs["commitMessage"] = commit_message.strip()
 
         repository = (
             task_payload.get("repository")

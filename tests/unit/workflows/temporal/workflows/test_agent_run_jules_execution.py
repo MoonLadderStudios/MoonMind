@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunHandle
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -159,3 +159,102 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "branch_publish_failed"
     assert result.metadata["publishOutcome"] == "publish_failed"
+
+
+async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            return AgentRunHandle(
+                runId="managed-run-1",
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="running",
+                startedAt=agent_run_module.workflow.now(),
+            )
+
+    async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
+        run.completion_event.set()
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        run.slot_assigned_event.set()
+        run._assigned_profile_id = execution_profile_ref or "default-managed"
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        return 1
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.fetch_result":
+            return {"summary": "Managed success", "metadata": {}}
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "ManagedAgentAdapter",
+        _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        run,
+        "_ensure_manager_and_signal",
+        fake_ensure_manager_and_signal,
+    )
+    monkeypatch.setattr(
+        run,
+        "_sync_manager_profiles",
+        fake_sync_manager_profiles,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="corr-managed-1",
+            idempotencyKey="idem-managed-1",
+            parameters={
+                "publishMode": "pr",
+                "commitMessage": "Use producer commit text",
+            },
+            workspaceSpec={"startingBranch": "main"},
+        )
+    )
+
+    assert result.summary == "Managed success"
+    fetch_payload = next(
+        payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
+    )
+    assert fetch_payload["publish_mode"] == "pr"
+    assert fetch_payload["commit_message"] == "Use producer commit text"
