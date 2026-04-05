@@ -3,12 +3,12 @@ import json
 import logging
 import re
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
+from temporalio.common import RetryPolicy, SearchAttributeKey, SearchAttributePair
 from temporalio.workflow import ActivityCancellationType
-from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
@@ -17,6 +17,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_activity_models import (
         ArtifactReadInput,
         ArtifactWriteCompleteInput,
+        DependencyStatusSnapshotInput,
         PlanGenerateInput,
     )
     from moonmind.workflows.temporal.jules_bundle import (
@@ -31,7 +32,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
-    from moonmind.schemas.temporal_models import normalize_dependency_ids
+    from moonmind.schemas.temporal_models import (
+        DependencyResolvedSignalPayload,
+        normalize_dependency_ids,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
@@ -43,12 +47,21 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
 )
 
+
+class DependencyFailureError(ValueError):
+    """Structured dependency gate failure."""
+
+    def __init__(self, message: str, *, detail: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.detail = detail
+
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=1),
     maximum_attempts=5,
 )
+DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
@@ -90,6 +103,13 @@ STATE_FAILED = "failed"
 CLOSE_STATUS_COMPLETED = "completed"
 CLOSE_STATUS_CANCELED = "canceled"
 CLOSE_STATUS_FAILED = "failed"
+DEPENDENCY_RESOLUTION_NOT_APPLICABLE = "not_applicable"
+DEPENDENCY_RESOLUTION_SATISFIED = "satisfied"
+DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
+DEPENDENCY_STATE_NONE = "none"
+DEPENDENCY_STATE_BLOCKED = "blocked"
+DEPENDENCY_STATE_SATISFIED = "satisfied"
+DEPENDENCY_STATE_FAILED = "dependency_failed"
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -185,9 +205,13 @@ class MoonMindRunWorkflow:
         self._last_diagnostics_ref: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
-        self._dependency_wait_duration_ms: int | None = None
-        self._dependency_resolution: str | None = None
+        self._dependency_wait_duration_ms: int = 0
+        self._dependency_resolution: str = DEPENDENCY_RESOLUTION_NOT_APPLICABLE
         self._failed_dependency_id: str | None = None
+        self._dependency_outcomes_by_id: dict[str, dict[str, Any]] = {}
+        self._unresolved_dependency_ids: set[str] = set()
+        self._dependency_wait_started_at: datetime | None = None
+        self._dependency_failure: dict[str, Any] | None = None
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -200,7 +224,6 @@ class MoonMindRunWorkflow:
         self._awaiting_external: bool = False
         self._waiting_reason: Optional[str] = None
         self._attention_required: bool = False
-        self._dependency_workflow_ids: list[str] = []
 
         # Action flags
         self._cancel_requested = False
@@ -432,54 +455,253 @@ class MoonMindRunWorkflow:
                 normalized.append(candidate)
         return normalized
 
-    async def _await_dependency_result(self, dependency_id: str) -> None:
-        handle = workflow.get_external_workflow_handle(dependency_id)
-        try:
-            await handle.result()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            raise ValueError(
-                f"Dependency '{dependency_id}' did not complete successfully: {exc}"
-            ) from exc
+    def _dependency_failure_category(
+        self,
+        *,
+        terminal_state: str | None,
+        close_status: str | None,
+    ) -> str:
+        normalized_close_status = str(close_status or "").strip().lower()
+        if normalized_close_status == "canceled":
+            return "dependency_canceled"
+        if normalized_close_status == "terminated":
+            return "dependency_terminated"
+        if normalized_close_status == "timed_out":
+            return "dependency_timed_out"
+        if normalized_close_status == "failed":
+            return "dependency_failed"
+        normalized_state = str(terminal_state or "").strip().lower()
+        if normalized_state == STATE_CANCELED:
+            return "dependency_canceled"
+        if normalized_state == "terminated":
+            return "dependency_terminated"
+        if normalized_state == "timed_out":
+            return "dependency_timed_out"
+        return "dependency_failed"
 
-    async def _await_dependency_results(self, dependency_ids: list[str]) -> None:
-        await asyncio.gather(
-            *(self._await_dependency_result(dep_id) for dep_id in dependency_ids)
+    def _dependency_state_marker(self) -> str:
+        if not self._declared_dependencies:
+            return DEPENDENCY_STATE_NONE
+        if self._dependency_failure is not None:
+            return DEPENDENCY_STATE_FAILED
+        if self._dependency_resolution == DEPENDENCY_RESOLUTION_SATISFIED:
+            return DEPENDENCY_STATE_SATISFIED
+        return DEPENDENCY_STATE_BLOCKED
+
+    def _update_dependency_wait_duration(self) -> None:
+        if self._dependency_wait_started_at is None:
+            return
+        elapsed = workflow.now() - self._dependency_wait_started_at
+        self._dependency_wait_duration_ms = max(
+            0, int(elapsed.total_seconds() * 1000)
         )
+
+    def _dependency_outcomes(self) -> list[dict[str, Any]]:
+        return [
+            dict(self._dependency_outcomes_by_id[workflow_id])
+            for workflow_id in self._declared_dependencies
+            if workflow_id in self._dependency_outcomes_by_id
+        ]
+
+    def _record_dependency_outcome(
+        self,
+        *,
+        prerequisite_workflow_id: str,
+        terminal_state: str,
+        close_status: str | None,
+        resolved_at: str,
+        failure_category: str | None,
+        message: str | None,
+    ) -> None:
+        if prerequisite_workflow_id not in self._declared_dependencies:
+            return
+        if prerequisite_workflow_id in self._dependency_outcomes_by_id:
+            return
+
+        outcome = {
+            "workflowId": prerequisite_workflow_id,
+            "terminalState": terminal_state,
+            "closeStatus": close_status,
+            "resolvedAt": resolved_at,
+            "failureCategory": failure_category,
+            "message": message,
+        }
+        self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
+
+        if terminal_state == STATE_COMPLETED:
+            self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
+            if not self._unresolved_dependency_ids and self._dependency_failure is None:
+                self._dependency_resolution = DEPENDENCY_RESOLUTION_SATISFIED
+            return
+
+        self._failed_dependency_id = prerequisite_workflow_id
+        self._dependency_resolution = DEPENDENCY_RESOLUTION_FAILED
+        self._dependency_failure = {
+            "failedDependencyId": prerequisite_workflow_id,
+            "terminalState": terminal_state,
+            "closeStatus": close_status,
+            "failureCategory": failure_category,
+            "message": message,
+        }
+        self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
+
+    def _record_missing_dependency(self, prerequisite_workflow_id: str) -> None:
+        self._record_dependency_outcome(
+            prerequisite_workflow_id=prerequisite_workflow_id,
+            terminal_state="unknown",
+            close_status=None,
+            resolved_at=workflow.now().isoformat(),
+            failure_category="dependency_unresolved",
+            message=(
+                f"Prerequisite execution '{prerequisite_workflow_id}' could not be "
+                "reconciled from durable execution state."
+            ),
+        )
+
+    def _record_dependency_signal(self, payload: dict[str, Any]) -> None:
+        try:
+            signal = DependencyResolvedSignalPayload.model_validate(payload)
+        except Exception:
+            self._get_logger().warning(
+                "Ignoring invalid DependencyResolved payload: %r",
+                payload,
+            )
+            return
+
+        prerequisite_workflow_id = signal.prerequisite_workflow_id
+        if prerequisite_workflow_id not in self._declared_dependencies:
+            return
+
+        self._record_dependency_outcome(
+            prerequisite_workflow_id=prerequisite_workflow_id,
+            terminal_state=signal.terminal_state,
+            close_status=signal.close_status,
+            resolved_at=signal.resolved_at.isoformat(),
+            failure_category=signal.failure_category,
+            message=signal.message,
+        )
+        self._update_search_attributes()
+        self._update_memo()
+
+    async def _reconcile_dependencies(self, dependency_ids: list[str]) -> None:
+        if not dependency_ids:
+            return
+
+        dependency_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "execution.dependency_status_snapshot"
+        )
+        snapshot = await execute_typed_activity(
+            "execution.dependency_status_snapshot",
+            DependencyStatusSnapshotInput(workflowIds=dependency_ids),
+            **self._execute_kwargs_for_route(dependency_route),
+        )
+        if not isinstance(snapshot, Mapping):
+            raise ValueError(
+                "execution.dependency_status_snapshot must return a JSON object"
+            )
+
+        for dependency_id in dependency_ids:
+            raw_entry = snapshot.get(dependency_id)
+            if not isinstance(raw_entry, Mapping):
+                self._record_missing_dependency(dependency_id)
+                continue
+
+            state = str(raw_entry.get("state") or "").strip()
+            close_status = str(raw_entry.get("closeStatus") or "").strip() or None
+            workflow_type = str(raw_entry.get("workflowType") or "").strip() or None
+            message = str(raw_entry.get("summary") or "").strip() or None
+
+            if workflow_type and workflow_type != WORKFLOW_NAME:
+                self._record_dependency_outcome(
+                    prerequisite_workflow_id=dependency_id,
+                    terminal_state="failed",
+                    close_status=close_status,
+                    resolved_at=workflow.now().isoformat(),
+                    failure_category="dependency_unsupported_workflow_type",
+                    message=(
+                        f"Prerequisite execution '{dependency_id}' resolved to "
+                        f"unsupported workflow type '{workflow_type}'."
+                    ),
+                )
+                continue
+
+            if state == STATE_COMPLETED:
+                self._record_dependency_outcome(
+                    prerequisite_workflow_id=dependency_id,
+                    terminal_state=state,
+                    close_status=close_status or CLOSE_STATUS_COMPLETED,
+                    resolved_at=workflow.now().isoformat(),
+                    failure_category=None,
+                    message=message,
+                )
+                continue
+
+            if state in {STATE_FAILED, STATE_CANCELED, "terminated", "timed_out"}:
+                self._record_dependency_outcome(
+                    prerequisite_workflow_id=dependency_id,
+                    terminal_state=state,
+                    close_status=close_status,
+                    resolved_at=workflow.now().isoformat(),
+                    failure_category=self._dependency_failure_category(
+                        terminal_state=state,
+                        close_status=close_status,
+                    ),
+                    message=message,
+                )
+
+    def _raise_for_dependency_failure(self) -> None:
+        if self._dependency_failure is None:
+            return
+        detail = dict(self._dependency_failure)
+        message = str(detail.get("message") or "").strip() or (
+            f"Prerequisite execution '{detail.get('failedDependencyId')}' "
+            "did not complete successfully."
+        )
+        raise DependencyFailureError(message, detail=detail)
 
     async def _wait_for_dependencies(self, dependency_ids: list[str]) -> None:
         if not dependency_ids:
             return
 
-        self._dependency_workflow_ids = list(dependency_ids)
+        self._declared_dependencies = list(dependency_ids)
+        self._dependency_wait_occurred = True
+        self._dependency_wait_started_at = workflow.now()
+        self._dependency_wait_duration_ms = 0
+        self._dependency_resolution = DEPENDENCY_RESOLUTION_NOT_APPLICABLE
+        self._failed_dependency_id = None
+        self._dependency_failure = None
+        self._dependency_outcomes_by_id = {}
+        self._unresolved_dependency_ids = set(dependency_ids)
         self._waiting_reason = "dependency_wait"
         self._set_state(
             STATE_WAITING_ON_DEPENDENCIES,
             summary=f"Waiting on {len(dependency_ids)} prerequisite execution(s).",
         )
 
-        dependency_task = asyncio.create_task(
-            self._await_dependency_results(dependency_ids)
-        )
-        cancel_task = asyncio.create_task(
-            workflow.wait_condition(lambda: self._cancel_requested)
-        )
-
         try:
-            done, pending = await asyncio.wait(
-                {dependency_task, cancel_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if cancel_task in done:
-                dependency_task.cancel()
-                await asyncio.gather(dependency_task, return_exceptions=True)
-                return
-
-            cancel_task.cancel()
-            await asyncio.gather(cancel_task, return_exceptions=True)
-            await dependency_task
+            await self._reconcile_dependencies(dependency_ids)
+            while (
+                not self._cancel_requested
+                and self._dependency_failure is None
+                and (self._unresolved_dependency_ids or self._paused)
+            ):
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._cancel_requested
+                        or self._dependency_failure is not None
+                        or (
+                            not self._paused
+                            and not self._unresolved_dependency_ids
+                        ),
+                        timeout=DEPENDENCY_RECONCILE_INTERVAL,
+                    )
+                except asyncio.TimeoutError:
+                    await self._reconcile_dependencies(dependency_ids)
+                    self._update_dependency_wait_duration()
+                    self._update_search_attributes()
+                    self._update_memo()
+            self._update_dependency_wait_duration()
+            self._raise_for_dependency_failure()
         finally:
             self._waiting_reason = None
             self._update_search_attributes()
@@ -2435,11 +2657,13 @@ class MoonMindRunWorkflow:
                     "errors": self._proposals_errors,
                 },
                 "dependencies": {
-                    "declared": list(self._declared_dependencies),
+                    "declaredIds": list(self._declared_dependencies),
                     "waited": self._dependency_wait_occurred,
-                    "waitDurationMs": self._dependency_wait_duration_ms,
-                    "resolution": self._dependency_resolution,
+                    "waitDurationMs": int(self._dependency_wait_duration_ms or 0),
+                    "resolution": self._dependency_resolution
+                    or DEPENDENCY_RESOLUTION_NOT_APPLICABLE,
                     "failedDependencyId": self._failed_dependency_id,
+                    "outcomes": self._dependency_outcomes(),
                 },
             }
             if self._operator_summary:
@@ -2592,24 +2816,22 @@ class MoonMindRunWorkflow:
         return normalized or None
 
     def _dependency_metadata(self) -> dict[str, Any]:
-        has_dependencies = bool(self._declared_dependencies)
         metadata: dict[str, Any] = {
-            "dependency_wait_occurred": self._dependency_wait_occurred,
-            "depends_on": list(self._declared_dependencies) if has_dependencies else [],
-            "has_dependencies": has_dependencies,
-            "dependency_wait_duration_ms": self._dependency_wait_duration_ms,
-            "dependency_resolution": self._dependency_resolution,
-            "failed_dependency_id": self._failed_dependency_id,
+            "dependencies": {
+                "declaredIds": list(self._declared_dependencies),
+                "waited": self._dependency_wait_occurred,
+                "waitDurationMs": int(self._dependency_wait_duration_ms or 0),
+                "resolution": self._dependency_resolution
+                or DEPENDENCY_RESOLUTION_NOT_APPLICABLE,
+                "failedDependencyId": self._failed_dependency_id,
+                "outcomes": self._dependency_outcomes(),
+            },
         }
+        if self._dependency_failure is not None:
+            metadata["dependency_failure"] = dict(self._dependency_failure)
         return metadata
 
     def _update_search_attributes(self) -> None:
-        attributes: dict[str, Any] = {
-            "mm_state": self._state,
-            "mm_entry": self._entry,
-            "mm_updated_at": workflow.now(),
-        }
-
         memo: dict[str, Any] = {
             "waiting_reason": self._waiting_reason,
             "attention_required": self._attention_required,
@@ -2622,33 +2844,77 @@ class MoonMindRunWorkflow:
                 extra={"error": str(exc)},
             )
 
+        pairs = [
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_state"),
+                self._state,
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_entry"),
+                self._entry or "run",
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_datetime("mm_updated_at"),
+                workflow.now(),
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_bool("mm_has_dependencies"),
+                bool(self._declared_dependencies),
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_dependency_state"),
+                self._dependency_state_marker(),
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_int("mm_dependency_count"),
+                len(self._declared_dependencies),
+            ),
+        ]
         if self._owner_type:
-            attributes["mm_owner_type"] = self._owner_type
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword("mm_owner_type"),
+                    self._owner_type,
+                )
+            )
         if self._owner_id:
-            attributes["mm_owner_id"] = self._owner_id
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword("mm_owner_id"),
+                    self._owner_id,
+                )
+            )
         if self._repo:
-            attributes["mm_repo"] = self._repo
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword("mm_repo"),
+                    self._repo,
+                )
+            )
         if self._integration:
-            attributes["mm_integration"] = self._integration
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword("mm_integration"),
+                    self._integration,
+                )
+            )
         if self._scheduled_for:
             try:
-                from datetime import datetime
-
-                attributes["mm_scheduled_for"] = datetime.fromisoformat(
-                    self._scheduled_for.replace("Z", "+00:00")
+                pairs.append(
+                    SearchAttributePair(
+                        SearchAttributeKey.for_datetime("mm_scheduled_for"),
+                        datetime.fromisoformat(
+                            self._scheduled_for.replace("Z", "+00:00")
+                        ),
+                    )
                 )
             except ValueError:
                 self._get_logger().warning(
                     "Could not parse scheduled_for for search attribute: %s",
                     self._scheduled_for,
                 )
-
-        formatted_attributes = {
-            k: v if isinstance(v, list) else [v] for k, v in attributes.items()
-        }
-
         try:
-            workflow.upsert_search_attributes(formatted_attributes)
+            workflow.upsert_search_attributes(pairs)
         except Exception as exc:
             # During basic tests search attributes might not be registered
             self._get_logger().warning(
@@ -2670,8 +2936,6 @@ class MoonMindRunWorkflow:
         if self._summary_ref:
             memo_dict["summary_artifact_ref"] = self._summary_ref
         memo_dict.update(self._dependency_metadata())
-        if self._dependency_workflow_ids:
-            memo_dict["dependency_workflow_ids"] = list(self._dependency_workflow_ids)
 
         try:
             workflow.upsert_memo(memo_dict)
@@ -2712,6 +2976,10 @@ class MoonMindRunWorkflow:
             self._assigned_child_workflow_id,
             self._assigned_profile_id,
         )
+
+    @workflow.signal(name="DependencyResolved")
+    def dependency_resolved(self, payload: dict[str, Any]) -> None:
+        self._record_dependency_signal(payload)
 
     def _release_slot_defensive(self) -> None:
         """Release the auth profile slot defensively when a child exits.

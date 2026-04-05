@@ -74,9 +74,9 @@ def test_initialize_from_payload_tracks_declared_dependencies(
     workflow._update_memo()
 
     assert workflow._declared_dependencies == ["mm:dep-1", "mm:dep-2"]
-    assert captured_memo[-1]["depends_on"] == ["mm:dep-1", "mm:dep-2"]
-    assert captured_memo[-1]["has_dependencies"] is True
-    assert captured_memo[-1]["dependency_wait_occurred"] is False
+    dependencies = captured_memo[-1]["dependencies"]
+    assert dependencies["declaredIds"] == ["mm:dep-1", "mm:dep-2"]
+    assert dependencies["waited"] is False
 
 
 @pytest.mark.asyncio
@@ -247,7 +247,7 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     workflow._declared_dependencies = ["mm:dep-1", "mm:dep-2"]
     workflow._dependency_wait_occurred = True
     workflow._dependency_wait_duration_ms = 4200
-    workflow._dependency_resolution = "dependency_failure"
+    workflow._dependency_resolution = "dependency_failed"
     workflow._failed_dependency_id = "mm:dep-2"
 
     written_payloads: list[dict[str, Any]] = []
@@ -306,11 +306,12 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     assert written_payloads
     dependencies = written_payloads[-1]["dependencies"]
     assert dependencies == {
-        "declared": ["mm:dep-1", "mm:dep-2"],
+        "declaredIds": ["mm:dep-1", "mm:dep-2"],
         "waited": True,
         "waitDurationMs": 4200,
-        "resolution": "dependency_failure",
+        "resolution": "dependency_failed",
         "failedDependencyId": "mm:dep-2",
+        "outcomes": [],
     }
 
 

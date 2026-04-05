@@ -22,6 +22,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.config.settings import settings
+from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
@@ -1304,6 +1305,63 @@ def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
         assert payload["executionPolicy"]["maxConcurrency"] == 3
         assert payload["counts"]["ready"] == 1
         assert payload["counts"]["running"] == 1
+
+
+def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record()
+        record.parameters = {"task": {"dependsOn": ["mm:dep-1"]}}
+        service.describe_execution.return_value = record
+        service.enrich_dependency_summaries.side_effect = [
+            [
+                ExecutionDependencySummary(
+                    workflow_id="mm:dep-1",
+                    title="Dependency",
+                    summary="done",
+                    state="completed",
+                    close_status="completed",
+                    workflow_type="MoonMind.Run",
+                )
+            ],
+            [
+                ExecutionDependencySummary(
+                    workflow_id="mm:dep-2",
+                    title="Dependent",
+                    summary="waiting",
+                    state="executing",
+                    close_status=None,
+                    workflow_type="MoonMind.Run",
+                )
+            ],
+        ]
+        service.list_dependents.return_value = [
+            SimpleNamespace(dependent_workflow_id="mm:dep-2")
+        ]
+
+        response = test_client.get("/api/executions/mm:wf-1")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["prerequisites"] == [
+            {
+                "workflowId": "mm:dep-1",
+                "title": "Dependency",
+                "summary": "done",
+                "state": "completed",
+                "closeStatus": "completed",
+                "workflowType": "MoonMind.Run",
+            }
+        ]
+        assert payload["dependents"] == [
+            {
+                "workflowId": "mm:dep-2",
+                "title": "Dependent",
+                "summary": "waiting",
+                "state": "executing",
+                "closeStatus": None,
+                "workflowType": "MoonMind.Run",
+            }
+        ]
 
 
 def test_manifest_update_route_passes_manifest_specific_fields() -> None:

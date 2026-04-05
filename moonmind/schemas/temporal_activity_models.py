@@ -154,3 +154,11 @@ class PlanGenerateOutput(BaseModel):
         ...,
         description="The artifact reference to the generated plan.",
     )
+
+
+class DependencyStatusSnapshotInput(BaseModel):
+    """Input parameters for execution.dependency_status_snapshot."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_ids: list[str] = Field(default_factory=list, alias="workflowIds")

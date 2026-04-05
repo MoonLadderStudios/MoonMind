@@ -9,6 +9,7 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import (
+    DEPENDENCY_RECONCILE_INTERVAL,
     STATE_WAITING_ON_DEPENDENCIES,
     MoonMindRunWorkflow,
 )
@@ -366,19 +367,22 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
     workflow_instance._owner_type = "user"
     memo_updates: list[dict[str, object]] = []
 
-    class _Handle:
-        async def result(self) -> None:
-            return None
-
     async def fake_wait_condition(predicate, timeout=None):
         while not predicate():
             await asyncio.sleep(0)
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: _Handle(),
-    )
+    async def fake_reconcile(dependency_ids):
+        for workflow_id in dependency_ids:
+            workflow_instance._record_dependency_outcome(
+                prerequisite_workflow_id=workflow_id,
+                terminal_state="completed",
+                close_status="completed",
+                resolved_at="2026-04-05T00:00:00Z",
+                failure_category=None,
+                message=None,
+            )
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
@@ -398,13 +402,12 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
     await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
 
     assert workflow_instance._state == STATE_WAITING_ON_DEPENDENCIES
-    assert workflow_instance._dependency_workflow_ids == ["dep-1", "dep-2"]
     assert workflow_instance._waiting_reason is None
     assert any(
         memo.get("waiting_reason") == "dependency_wait" for memo in memo_updates
     )
     assert any(
-        memo.get("dependency_workflow_ids") == ["dep-1", "dep-2"]
+        (memo.get("dependencies") or {}).get("declaredIds") == ["dep-1", "dep-2"]
         for memo in memo_updates
     )
 
@@ -415,19 +418,22 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
     workflow_instance._owner_id = "owner-1"
     workflow_instance._owner_type = "user"
 
-    class _Handle:
-        async def result(self) -> None:
-            raise RuntimeError("prerequisite failed")
-
     async def fake_wait_condition(predicate, timeout=None):
         while not predicate():
             await asyncio.sleep(0)
 
-    monkeypatch.setattr(
-        workflow,
-        "get_external_workflow_handle",
-        lambda workflow_id: _Handle(),
-    )
+    async def fake_reconcile(dependency_ids):
+        workflow_id = dependency_ids[0]
+        workflow_instance._record_dependency_outcome(
+            prerequisite_workflow_id=workflow_id,
+            terminal_state="failed",
+            close_status="failed",
+            resolved_at="2026-04-05T00:00:00Z",
+            failure_category="dependency_failed",
+            message="prerequisite failed",
+        )
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
     monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
@@ -444,5 +450,55 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
         type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
     )
 
-    with pytest.raises(ValueError, match="dep-1"):
+    with pytest.raises(ValueError, match="prerequisite failed"):
         await workflow_instance._wait_for_dependencies(["dep-1"])
+
+
+@pytest.mark.asyncio
+async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    reconcile_calls: list[list[str]] = []
+    wait_timeouts: list[object] = []
+
+    async def fake_reconcile(dependency_ids):
+        reconcile_calls.append(list(dependency_ids))
+        if len(reconcile_calls) == 2:
+            workflow_instance._record_dependency_outcome(
+                prerequisite_workflow_id=dependency_ids[0],
+                terminal_state="completed",
+                close_status="completed",
+                resolved_at="2026-04-05T00:00:00Z",
+                failure_category=None,
+                message=None,
+            )
+
+    async def fake_wait_condition(predicate, timeout=None):
+        wait_timeouts.append(timeout)
+        if len(wait_timeouts) == 1:
+            raise asyncio.TimeoutError()
+        while not predicate():
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1"])
+
+    assert reconcile_calls == [["dep-1"], ["dep-1"]]
+    assert wait_timeouts == [DEPENDENCY_RECONCILE_INTERVAL]

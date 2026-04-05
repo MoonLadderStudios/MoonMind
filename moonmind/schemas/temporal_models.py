@@ -357,6 +357,32 @@ class ExecutionDebugFieldsModel(BaseModel):
     attention_required: bool = Field(False, alias="attentionRequired")
 
 
+class ExecutionDependencyOutcomeModel(BaseModel):
+    """One resolved prerequisite outcome surfaced on execution detail."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    terminal_state: Optional[str] = Field(None, alias="terminalState")
+    close_status: Optional[str] = Field(None, alias="closeStatus")
+    resolved_at: Optional[datetime] = Field(None, alias="resolvedAt")
+    failure_category: Optional[str] = Field(None, alias="failureCategory")
+    message: Optional[str] = Field(None, alias="message")
+
+
+class ExecutionDependencySummaryModel(BaseModel):
+    """Compact linked execution metadata for prerequisites or dependents."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    title: Optional[str] = Field(None, alias="title")
+    summary: Optional[str] = Field(None, alias="summary")
+    state: Optional[str] = Field(None, alias="state")
+    close_status: Optional[str] = Field(None, alias="closeStatus")
+    workflow_type: Optional[str] = Field(None, alias="workflowType")
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -458,6 +484,16 @@ class ExecutionModel(BaseModel):
     )
     dependency_resolution: Optional[str] = Field(None, alias="dependencyResolution")
     failed_dependency_id: Optional[str] = Field(None, alias="failedDependencyId")
+    blocked_on_dependencies: bool = Field(False, alias="blockedOnDependencies")
+    dependency_outcomes: list[ExecutionDependencyOutcomeModel] = Field(
+        default_factory=list, alias="dependencyOutcomes"
+    )
+    prerequisites: list[ExecutionDependencySummaryModel] = Field(
+        default_factory=list, alias="prerequisites"
+    )
+    dependents: list[ExecutionDependencySummaryModel] = Field(
+        default_factory=list, alias="dependents"
+    )
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")

@@ -41,6 +41,7 @@ from moonmind.schemas.temporal_models import (
     ConfigureIntegrationMonitoringRequest,
     CreateExecutionRequest,
     ExecutionActionCapabilityModel,
+    ExecutionDependencySummaryModel,
     ExecutionDebugFieldsModel,
     ExecutionListResponse,
     ExecutionModel,
@@ -372,12 +373,29 @@ def _serialize_execution(
     task_payload = params.get("task")
     if not isinstance(task_payload, dict):
         task_payload = {}
+    dependencies_block = (
+        memo.get("dependencies") if isinstance(memo.get("dependencies"), dict) else {}
+    )
     depends_on = normalize_dependency_ids(task_payload.get("dependsOn"))
     if not depends_on:
-        depends_on = normalize_dependency_ids(memo.get("depends_on"))
-    has_dependencies = bool(memo.get("has_dependencies") or depends_on)
-    dependency_wait_occurred = bool(memo.get("dependency_wait_occurred") or False)
-    raw_dependency_wait_duration = memo.get("dependency_wait_duration_ms")
+        depends_on = normalize_dependency_ids(
+            dependencies_block.get("declaredIds") or memo.get("depends_on")
+        )
+    has_dependencies = bool(
+        dependencies_block.get("declaredIds")
+        or memo.get("has_dependencies")
+        or depends_on
+    )
+    dependency_wait_occurred = bool(
+        dependencies_block.get("waited")
+        if "waited" in dependencies_block
+        else memo.get("dependency_wait_occurred") or False
+    )
+    raw_dependency_wait_duration = (
+        dependencies_block.get("waitDurationMs")
+        if "waitDurationMs" in dependencies_block
+        else memo.get("dependency_wait_duration_ms")
+    )
     dependency_wait_duration_ms = None
     if raw_dependency_wait_duration is not None:
         try:
@@ -385,9 +403,25 @@ def _serialize_execution(
         except (TypeError, ValueError):
             dependency_wait_duration_ms = None
     dependency_resolution = (
-        str(memo.get("dependency_resolution") or "").strip() or None
+        str(
+            dependencies_block.get("resolution")
+            if "resolution" in dependencies_block
+            else memo.get("dependency_resolution")
+            or ""
+        ).strip()
+        or None
     )
-    failed_dependency_id = str(memo.get("failed_dependency_id") or "").strip() or None
+    failed_dependency_id = str(
+        dependencies_block.get("failedDependencyId")
+        if "failedDependencyId" in dependencies_block
+        else memo.get("failed_dependency_id")
+        or ""
+    ).strip() or None
+    dependency_outcomes = (
+        list(dependencies_block.get("outcomes"))
+        if isinstance(dependencies_block.get("outcomes"), list)
+        else []
+    )
 
     resolved_skillset_ref = str(params.get("resolvedSkillsetRef") or params.get("resolved_skillset_ref") or "").strip() or None
     
@@ -531,6 +565,8 @@ def _serialize_execution(
         dependency_wait_duration_ms=dependency_wait_duration_ms,
         dependency_resolution=dependency_resolution,
         failed_dependency_id=failed_dependency_id,
+        blocked_on_dependencies=raw_state == "waiting_on_dependencies",
+        dependency_outcomes=dependency_outcomes,
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,
@@ -538,6 +574,54 @@ def _serialize_execution(
         ui_query_model="compatibility_adapter",
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
+    )
+
+async def _enrich_execution_dependencies(
+    execution: ExecutionModel,
+    *,
+    service: TemporalExecutionService,
+) -> ExecutionModel:
+    if execution.entry != "run":
+        return execution
+
+    prerequisite_ids = list(execution.depends_on)
+    prerequisites = (
+        await service.enrich_dependency_summaries(prerequisite_ids)
+        if prerequisite_ids
+        else []
+    )
+    dependent_edges = await service.list_dependents(execution.workflow_id)
+    dependent_ids = [edge.dependent_workflow_id for edge in dependent_edges]
+    dependents = (
+        await service.enrich_dependency_summaries(dependent_ids)
+        if dependent_ids
+        else []
+    )
+    return execution.model_copy(
+        update={
+            "prerequisites": [
+                ExecutionDependencySummaryModel(
+                    workflowId=item.workflow_id,
+                    title=item.title,
+                    summary=item.summary,
+                    state=item.state,
+                    closeStatus=item.close_status,
+                    workflowType=item.workflow_type,
+                )
+                for item in prerequisites
+            ],
+            "dependents": [
+                ExecutionDependencySummaryModel(
+                    workflowId=item.workflow_id,
+                    title=item.title,
+                    summary=item.summary,
+                    state=item.state,
+                    closeStatus=item.close_status,
+                    workflowType=item.workflow_type,
+                )
+                for item in dependents
+            ],
+        }
     )
 
 
@@ -1906,6 +1990,7 @@ async def describe_execution(
             canonical_identifier=canonical_workflow_id,
         )
     execution = _serialize_execution(record, user=user)
+    execution = await _enrich_execution_dependencies(execution, service=service)
     execution = await _hydrate_provider_profile_metadata(execution, session)
     if not execution.task_run_id:
         task_run_id = await asyncio.to_thread(
