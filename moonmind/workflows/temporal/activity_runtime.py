@@ -2505,8 +2505,23 @@ class TemporalAgentRuntimeActivities:
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
             if result.failure_class is None and publish_mode != "none":
+                raw_commit_message = None
+                if isinstance(request, Mapping):
+                    raw_commit_message = (
+                        request.get("commit_message")
+                        or request.get("commitMessage")
+                    )
+                push_kwargs: dict[str, Any] = {
+                    "target_branch": target_branch,
+                }
+                if (
+                    isinstance(raw_commit_message, str)
+                    and raw_commit_message.strip()
+                ):
+                    push_kwargs["commit_message"] = raw_commit_message.strip()
                 push_info = await self._push_workspace_branch(
-                    run_id, target_branch=target_branch
+                    run_id,
+                    **push_kwargs,
                 )
                 meta.update(push_info)
 
@@ -2864,7 +2879,9 @@ class TemporalAgentRuntimeActivities:
     def _workspace_command_env(workspace: str) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
-        support_bin = Path(workspace).resolve().parent / ".moonmind" / "bin"
+        support_root = Path(workspace).resolve().parent / ".moonmind"
+        support_bin = support_root / "bin"
+        support_gitconfig = support_root / "gitconfig"
         if support_bin.exists():
             existing_path = str(env.get("PATH") or "").strip()
             env["PATH"] = (
@@ -2872,8 +2889,129 @@ class TemporalAgentRuntimeActivities:
                 if existing_path
                 else str(support_bin)
             )
+        if support_gitconfig.exists():
+            env.setdefault("GIT_CONFIG_GLOBAL", str(support_gitconfig))
+        git_name = str(settings.workflow.git_user_name or "").strip()
+        git_email = str(settings.workflow.git_user_email or "").strip()
+        if git_name:
+            env.setdefault("GIT_AUTHOR_NAME", git_name)
+            env.setdefault("GIT_COMMITTER_NAME", git_name)
+        if git_email:
+            env.setdefault("GIT_AUTHOR_EMAIL", git_email)
+            env.setdefault("GIT_COMMITTER_EMAIL", git_email)
         env.setdefault("GIT_TERMINAL_PROMPT", "0")
         return env
+
+    async def _commit_workspace_changes_if_needed(
+        self,
+        workspace: str,
+        *,
+        run_id: str,
+        commit_message: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Create one deterministic commit when the workspace is dirty."""
+        import asyncio as _asyncio
+
+        command_env = dict(env) if env is not None else self._workspace_command_env(workspace)
+
+        status_proc = await _asyncio.create_subprocess_exec(
+            *self._workspace_git_command(
+                workspace, "status", "--porcelain", "--untracked-files=all",
+            ),
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+            env=command_env,
+        )
+        status_stdout, status_stderr = await _asyncio.wait_for(
+            status_proc.communicate(), timeout=15,
+        )
+        if status_proc.returncode != 0:
+            detail = status_stderr.decode("utf-8", errors="replace").strip() or (
+                status_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+            )
+            return {
+                "push_status": "failed",
+                "push_error": f"could not inspect workspace changes: {detail}",
+            }
+
+        if not status_stdout.decode("utf-8", errors="replace").strip():
+            return {}
+
+        add_proc = await _asyncio.create_subprocess_exec(
+            *self._workspace_git_command(workspace, "add", "-A"),
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+            env=command_env,
+        )
+        add_stdout, add_stderr = await _asyncio.wait_for(
+            add_proc.communicate(), timeout=30,
+        )
+        if add_proc.returncode != 0:
+            detail = add_stderr.decode("utf-8", errors="replace").strip() or (
+                add_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+            )
+            return {
+                "push_status": "failed",
+                "push_error": f"could not stage workspace changes: {detail}",
+            }
+
+        staged_proc = await _asyncio.create_subprocess_exec(
+            *self._workspace_git_command(
+                workspace, "diff", "--cached", "--name-only",
+            ),
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+            env=command_env,
+        )
+        staged_stdout, staged_stderr = await _asyncio.wait_for(
+            staged_proc.communicate(), timeout=15,
+        )
+        if staged_proc.returncode != 0:
+            detail = staged_stderr.decode("utf-8", errors="replace").strip() or (
+                staged_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+            )
+            return {
+                "push_status": "failed",
+                "push_error": f"could not inspect staged workspace changes: {detail}",
+            }
+
+        if not staged_stdout.decode("utf-8", errors="replace").strip():
+            return {}
+
+        normalized_message = (
+            str(commit_message).strip()
+            if isinstance(commit_message, str) and commit_message.strip()
+            else f"MoonMind task result for run {run_id}"
+        )
+        commit_proc = await _asyncio.create_subprocess_exec(
+            *self._workspace_git_command(
+                workspace, "commit", "-m", normalized_message,
+            ),
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+            env=command_env,
+        )
+        commit_stdout, commit_stderr = await _asyncio.wait_for(
+            commit_proc.communicate(), timeout=60,
+        )
+        if commit_proc.returncode != 0:
+            detail = commit_stderr.decode("utf-8", errors="replace").strip() or (
+                commit_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+            )
+            lowered_detail = detail.lower()
+            if "nothing to commit" in lowered_detail:
+                return {}
+            return {
+                "push_status": "failed",
+                "push_error": f"could not commit workspace changes: {detail}",
+            }
+
+        logger.info(
+            "Created deterministic publish commit for run %s before push.",
+            run_id,
+        )
+        return {"push_commit_message": normalized_message}
 
     @staticmethod
     def _report_matches_record(path: Path, record: ManagedRunRecord) -> bool:
@@ -2903,6 +3041,7 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         *,
         target_branch: str | None = None,
+        commit_message: str | None = None,
     ) -> dict[str, Any]:
         """Push the workspace branch to origin.
 
@@ -2924,12 +3063,14 @@ class TemporalAgentRuntimeActivities:
 
         workspace = record.workspace_path
         try:
+            command_env = self._workspace_command_env(workspace)
             branch_proc = await _asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
                     workspace, "rev-parse", "--abbrev-ref", "HEAD",
                 ),
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
+                env=command_env,
             )
             stdout_bytes, stderr_bytes = await _asyncio.wait_for(
                 branch_proc.communicate(), timeout=10,
@@ -2956,12 +3097,23 @@ class TemporalAgentRuntimeActivities:
                     "push_branch": current_branch or "(unknown)",
                 }
 
+            commit_info = await self._commit_workspace_changes_if_needed(
+                workspace,
+                run_id=run_id,
+                commit_message=commit_message,
+                env=command_env,
+            )
+            if commit_info.get("push_status") == "failed":
+                commit_info.setdefault("push_branch", current_branch)
+                return commit_info
+
             push_proc = await _asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
                     workspace, "push", "-u", "origin", current_branch,
                 ),
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
+                env=command_env,
             )
             push_stdout, push_stderr = await _asyncio.wait_for(
                 push_proc.communicate(), timeout=120,
@@ -2997,6 +3149,7 @@ class TemporalAgentRuntimeActivities:
                     ),
                     stdout=_asyncio.subprocess.PIPE,
                     stderr=_asyncio.subprocess.PIPE,
+                    env=command_env,
                 )
                 count_stdout, _ = await _asyncio.wait_for(
                     count_proc.communicate(), timeout=10,
@@ -3045,6 +3198,7 @@ class TemporalAgentRuntimeActivities:
                 "push_branch": current_branch,
                 "push_base_ref": base_ref,
             }
+            result.update(commit_info)
             if commit_count >= 0:
                 result["push_commit_count"] = commit_count
             return result

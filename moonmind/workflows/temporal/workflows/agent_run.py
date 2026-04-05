@@ -1152,6 +1152,16 @@ class MoonMindAgentRun:
                             }
                             if publish_mode != "none":
                                 activity_input["publish_mode"] = publish_mode
+                            raw_commit_message = (request.parameters or {}).get(
+                                "commitMessage"
+                            )
+                            if (
+                                isinstance(raw_commit_message, str)
+                                and raw_commit_message.strip()
+                            ):
+                                activity_input["commit_message"] = (
+                                    raw_commit_message.strip()
+                                )
                             if target_branch:
                                 activity_input["target_branch"] = target_branch
                             if _request_selected_skill(request) == "pr-resolver":

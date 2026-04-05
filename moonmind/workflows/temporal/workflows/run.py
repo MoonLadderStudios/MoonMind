@@ -1743,6 +1743,7 @@ class MoonMindRunWorkflow:
             "model",
             "effort",
             "publishMode",
+            "commitMessage",
             "allowed_tools",
             "stepCount",
             "maxAttempts",
