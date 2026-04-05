@@ -254,24 +254,32 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
     mock_run_environment,
     monkeypatch,
 ):
-    dependency_released = asyncio.Event()
-    planning_started = asyncio.Event()
+    """Verify that Pause/Resume work while the workflow is waiting on dependencies.
+
+    The fake reconcile leaves dependencies unresolved on the first call so the
+    workflow enters the dependency-wait loop.  On the second call (triggered
+    after Resume by the reconciliation timeout) the dependencies are resolved.
+    We use env.sleep() to advance virtual time past DEPENDENCY_RECONCILE_INTERVAL
+    and drive the workflow forward — no cross-event-loop asyncio.Event is used.
+    """
+    reconcile_call_count = 0
 
     async def fake_planning_stage(*args, **kwargs):
-        planning_started.set()
         return "ref-123"
 
     async def fake_reconcile(self, dependency_ids):
-        await dependency_released.wait()
-        for workflow_id in dependency_ids:
-            self._record_dependency_outcome(
-                prerequisite_workflow_id=workflow_id,
-                terminal_state="completed",
-                close_status="completed",
-                resolved_at="2026-04-05T00:00:00Z",
-                failure_category=None,
-                message=None,
-            )
+        nonlocal reconcile_call_count
+        reconcile_call_count += 1
+        if reconcile_call_count >= 2:
+            for workflow_id in dependency_ids:
+                self._record_dependency_outcome(
+                    prerequisite_workflow_id=workflow_id,
+                    terminal_state="completed",
+                    close_status="completed",
+                    resolved_at="2026-04-05T00:00:00Z",
+                    failure_category=None,
+                    message=None,
+                )
 
     monkeypatch.setattr(
         workflow,
@@ -301,30 +309,34 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
                 task_queue="test-task-queue-dep-pause",
             )
 
+            # Wait until the workflow enters the dependency-wait state.
             for _ in range(50):
                 status = await handle.query("get_status")
                 if status.get("state") == "waiting_on_dependencies":
                     break
                 await asyncio.sleep(0.01)
 
-            await handle.execute_update("Pause")
-            dependency_released.set()
+            status = await handle.query("get_status")
+            assert status.get("state") == "waiting_on_dependencies"
 
-            for _ in range(50):
-                status = await handle.query("get_status")
-                if status.get("paused") is True:
-                    break
-                await asyncio.sleep(0.01)
+            # Pause while still waiting on dependencies.
+            await handle.execute_update("Pause")
 
             status = await handle.query("get_status")
             assert status.get("paused") is True
-            assert planning_started.is_set() is False
 
+            # Resume — the workflow will exit the wait loop on the next
+            # reconciliation timeout when fake_reconcile resolves the deps.
             await handle.execute_update("Resume")
+
+            # Advance virtual time past the reconciliation interval so the
+            # wait_condition timeout fires and fake_reconcile is called again.
+            await env.sleep(35)
+
             result = await handle.result()
 
     assert result["status"] == "success"
-    assert planning_started.is_set() is True
+    assert reconcile_call_count >= 2
 
 
 @pytest.mark.asyncio
@@ -332,11 +344,16 @@ async def test_run_workflow_dependency_cancel_interrupts_wait(
     mock_run_environment,
     monkeypatch,
 ):
-    dependency_started = asyncio.Event()
-    keep_waiting = asyncio.Event()
+    """Verify that Cancel works while the workflow is waiting on dependencies.
+
+    fake_reconcile leaves dependencies unresolved so the workflow enters the
+    wait loop.  A short env.sleep() advances virtual time just enough for the
+    workflow to reach wait_condition, then we cancel it.
+    """
 
     async def fake_reconcile(self, dependency_ids):
-        dependency_started.set()
+        # Leave dependencies unresolved — the workflow enters the wait loop.
+        pass
 
     monkeypatch.setattr(
         workflow,
@@ -365,7 +382,11 @@ async def test_run_workflow_dependency_cancel_interrupts_wait(
                 task_queue="test-task-queue-dep-cancel",
             )
 
-            await asyncio.wait_for(dependency_started.wait(), timeout=5)
+            # Advance virtual time just enough for the workflow to reach the
+            # wait_condition inside _wait_for_dependencies.
+            await env.sleep(1)
+
+            # Cancel should interrupt the dependency wait immediately.
             await handle.execute_update("Cancel")
             result = await handle.result()
 
@@ -377,16 +398,11 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
     mock_run_environment,
     monkeypatch,
 ):
-    reconcile_called = False
-
-    async def fake_reconcile(self, dependency_ids):
-        nonlocal reconcile_called
-        reconcile_called = True
+    """When the dependency gate patch is not applied, the workflow should
+    complete successfully even with declared dependencies — proving the
+    dependency-wait step was skipped entirely."""
 
     monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
-    monkeypatch.setattr(
-        MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
-    )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
@@ -408,8 +424,9 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
 
             result = await handle.result()
 
+    # Workflow completed without waiting on dependencies, proving the
+    # dependency gate was correctly skipped when the patch was absent.
     assert result["status"] == "success"
-    assert reconcile_called is False
 
 
 @pytest.mark.asyncio

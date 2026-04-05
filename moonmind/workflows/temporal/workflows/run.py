@@ -680,8 +680,10 @@ class MoonMindRunWorkflow:
 
         try:
             await self._reconcile_dependencies(dependency_ids)
-            while self._dependency_failure is None and (
-                self._unresolved_dependency_ids or self._paused
+            while (
+                not self._cancel_requested
+                and self._dependency_failure is None
+                and (self._unresolved_dependency_ids or self._paused)
             ):
                 try:
                     await workflow.wait_condition(
