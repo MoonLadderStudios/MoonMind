@@ -52,6 +52,22 @@ CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] =
     "terminate_session",
 )
 
+CodexManagedSessionWorkflowStatus = Literal[
+    "initializing",
+    "active",
+    "clearing",
+    "terminating",
+    "terminated",
+]
+
+
+def canonical_codex_managed_runtime_id(runtime_id: str) -> str | None:
+    """Return the canonical managed-session runtime ID for Codex."""
+
+    normalized = str(runtime_id or "").strip().lower().replace("-", "_")
+    if normalized in {"codex", "codex_cli"}:
+        return "codex_cli"
+    return None
 
 class CodexManagedSessionPlaneContract(BaseModel):
     """Frozen Phase 1 MVP contract for the Codex managed session plane."""
@@ -273,18 +289,141 @@ class CodexManagedSessionArtifactsPublication(_CodexManagedSessionRemoteContract
         None, alias="latestControlEventRef"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+class CodexManagedSessionBinding(BaseModel):
+    """Bounded task-scoped session binding passed across workflow boundaries."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    workflow_id: NonBlankStr = Field(..., alias="workflowId")
+    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
+    runtime_id: NonBlankStr = Field(..., alias="runtimeId")
+    execution_profile_ref: str | None = Field(None, alias="executionProfileRef")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionBinding":
+        self.workflow_id = require_non_blank(self.workflow_id, field_name="workflowId")
+        self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
+        self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        runtime_id = canonical_codex_managed_runtime_id(self.runtime_id)
+        if runtime_id is None:
+            raise ValueError("runtimeId must identify a managed Codex runtime")
+        self.runtime_id = runtime_id
+        if self.execution_profile_ref is not None:
+            self.execution_profile_ref = require_non_blank(
+                self.execution_profile_ref,
+                field_name="executionProfileRef",
+            )
+        return self
+
+    @classmethod
+    def from_input(
+        cls,
+        *,
+        workflow_id: str,
+        session_input: "CodexManagedSessionWorkflowInput",
+    ) -> "CodexManagedSessionBinding":
+        runtime_id = session_input.runtime_id
+        session_id = session_input.session_id or f"sess:{session_input.task_run_id}:{runtime_id}"
+        return cls(
+            workflowId=workflow_id,
+            taskRunId=session_input.task_run_id,
+            sessionId=session_id,
+            sessionEpoch=session_input.session_epoch,
+            runtimeId=runtime_id,
+            executionProfileRef=session_input.execution_profile_ref,
+        )
+
+
+class CodexManagedSessionWorkflowInput(BaseModel):
+    """Workflow input for one task-scoped Codex managed session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    runtime_id: NonBlankStr = Field(..., alias="runtimeId")
+    execution_profile_ref: str | None = Field(None, alias="executionProfileRef")
+    session_id: str | None = Field(None, alias="sessionId")
+    session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionWorkflowInput":
+        self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
+        runtime_id = canonical_codex_managed_runtime_id(self.runtime_id)
+        if runtime_id is None:
+            raise ValueError("runtimeId must identify a managed Codex runtime")
+        self.runtime_id = runtime_id
+        if self.execution_profile_ref is not None:
+            self.execution_profile_ref = require_non_blank(
+                self.execution_profile_ref,
+                field_name="executionProfileRef",
+            )
+        if self.session_id is not None:
+            self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        return self
+
+
+class CodexManagedSessionControlRequest(BaseModel):
+    """Control payload applied to the task-scoped Codex session workflow."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    action: ManagedSessionControlAction = Field(..., alias="action")
+    reason: str | None = Field(None, alias="reason")
+    container_id: str | None = Field(None, alias="containerId")
+    thread_id: str | None = Field(None, alias="threadId")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionControlRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
+        if self.container_id is not None:
+            self.container_id = require_non_blank(
+                self.container_id, field_name="containerId"
+            )
+        if self.thread_id is not None:
+            self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
+        if self.active_turn_id is not None:
+            self.active_turn_id = require_non_blank(
+                self.active_turn_id, field_name="activeTurnId"
+            )
+        return self
+
+
+class CodexManagedSessionSnapshot(BaseModel):
+    """Workflow-owned snapshot of one task-scoped Codex session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    binding: CodexManagedSessionBinding = Field(..., alias="binding")
+    status: CodexManagedSessionWorkflowStatus = Field(..., alias="status")
+    container_id: str | None = Field(None, alias="containerId")
+    thread_id: str | None = Field(None, alias="threadId")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
+    last_control_action: ManagedSessionControlAction | None = Field(
+        None, alias="lastControlAction"
+    )
+    last_control_reason: str | None = Field(None, alias="lastControlReason")
+    termination_requested: bool = Field(False, alias="terminationRequested")
 
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
     "CodexManagedSessionArtifactsPublication",
+    "CodexManagedSessionBinding",
     "CodexManagedSessionClearRequest",
+    "CodexManagedSessionControlRequest",
     "CodexManagedSessionHandle",
     "CodexManagedSessionLocator",
     "CodexManagedSessionPlaneContract",
+    "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
     "CodexManagedSessionSummary",
     "CodexManagedSessionTurnResponse",
+    "CodexManagedSessionWorkflowInput",
+    "CodexManagedSessionWorkflowStatus",
     "FetchCodexManagedSessionSummaryRequest",
     "InterruptCodexManagedSessionTurnRequest",
     "LaunchCodexManagedSessionRequest",
@@ -298,4 +437,5 @@ __all__ = [
     "SendCodexManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",
     "TerminateCodexManagedSessionRequest",
+    "canonical_codex_managed_runtime_id",
 ]

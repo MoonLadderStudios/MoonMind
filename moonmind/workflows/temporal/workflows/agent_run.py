@@ -301,6 +301,21 @@ class MoonMindAgentRun:
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
         )
 
+    @staticmethod
+    def _merge_managed_session_metadata(
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult | None,
+    ) -> AgentRunResult | None:
+        if result is None or request.managed_session is None:
+            return result
+        metadata = dict(result.metadata or {})
+        metadata["managedSession"] = request.managed_session.model_dump(
+            mode="json",
+            by_alias=True,
+        )
+        return result.model_copy(update={"metadata": metadata})
+
     async def _ensure_manager_and_signal(
         self,
         manager_id: str,
@@ -1329,6 +1344,11 @@ class MoonMindAgentRun:
                 # Not a 429 or external agent
                 if manager_handle and request.execution_profile_ref:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+
+                self.final_result = self._merge_managed_session_metadata(
+                    request=request,
+                    result=self.final_result,
+                )
 
                 # Post-run artifact publishing via the agent_runtime activity fleet.
                 enriched_result = await self._execute_routed_activity(

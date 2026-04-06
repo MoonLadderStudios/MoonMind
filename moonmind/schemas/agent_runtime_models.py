@@ -8,6 +8,10 @@ from typing import Any, Literal, NoReturn, get_args
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.schemas._validation import require_non_blank
+from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionBinding,
+    canonical_codex_managed_runtime_id,
+)
 
 AgentKind = Literal["external", "managed"]
 ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
@@ -144,6 +148,9 @@ class AgentExecutionRequest(BaseModel):
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    managed_session: CodexManagedSessionBinding | None = Field(
+        None, alias="managedSession"
+    )
     input_refs: list[str] = Field(default_factory=list, alias="inputRefs")
     expected_output_schema: dict[str, Any] = Field(
         default_factory=dict, alias="expectedOutputSchema"
@@ -188,6 +195,16 @@ class AgentExecutionRequest(BaseModel):
             self.resolved_skillset_ref = require_non_blank(
                 resolved_skillset_ref, field_name="resolvedSkillsetRef"
             )
+        if self.managed_session is not None:
+            canonical_runtime_id = canonical_codex_managed_runtime_id(self.agent_id)
+            if self.agent_kind != "managed" or canonical_runtime_id is None:
+                raise ValueError(
+                    "managedSession is only supported for managed Codex runtimes"
+                )
+            if self.managed_session.runtime_id != canonical_runtime_id:
+                raise ValueError(
+                    "managedSession.runtimeId must match the managed Codex runtime"
+                )
         self.input_refs = [
             require_non_blank(item, field_name="inputRefs[]")
             for item in self.input_refs

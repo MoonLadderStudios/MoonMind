@@ -11,6 +11,16 @@ from moonmind.workflows.temporal.workers import (
     build_worker_activity_bindings,
     describe_configured_worker,
 )
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.agent_session import (
+    MoonMindAgentSessionWorkflow,
+)
+from moonmind.workflows.temporal.workflows.oauth_session import (
+    MoonMindOAuthSessionWorkflow,
+)
+from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    MoonMindProviderProfileManagerWorkflow,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -27,7 +37,15 @@ async def main():
 
     workflows = []
     if topology.fleet == WORKFLOW_FLEET:
-        workflows.append(MoonMindRunWorkflow)
+        workflows.extend(
+            [
+                MoonMindRunWorkflow,
+                MoonMindProviderProfileManagerWorkflow,
+                MoonMindAgentSessionWorkflow,
+                MoonMindAgentRun,
+                MoonMindOAuthSessionWorkflow,
+            ]
+        )
         # Import ManifestIngest workflow if it exists
         try:
             from moonmind.workflows.temporal.workflows.manifest_ingest import (
