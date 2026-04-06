@@ -124,3 +124,13 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     assert 'provider_verification and jules' in provider_runner
     assert 'pytest tests/provider/jules' in provider_runner
     assert 'integration_ci' in powershell_runner
+
+
+def test_shell_integration_runner_ensures_shared_docker_network_exists() -> None:
+    shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'MOONMIND_DOCKER_NETWORK' in shell_runner
+    assert 'docker network inspect "$NETWORK_NAME"' in shell_runner
+    assert 'docker network create "$NETWORK_NAME"' in shell_runner
