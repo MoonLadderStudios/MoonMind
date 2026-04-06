@@ -1,0 +1,57 @@
+name: Run Pytest Integration CI
+
+"on":
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pytest-integration-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-integration-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+
+    - name: Verify docker compose availability
+      run: docker compose version
+
+    - name: Run hermetic integration CI suite
+      env:
+        MOONMIND_FORCE_LOCAL_TESTS: "1"
+      run: |
+        set -euo pipefail
+        ./tools/test_integration.sh
+
+    - name: Capture docker compose diagnostics
+      if: failure()
+      run: |
+        set -euo pipefail
+        mkdir -p /tmp/pytest-integration-ci
+        docker compose -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt
+        docker compose -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt
+        docker compose -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt
+        if [[ -d var/artifacts ]]; then
+          cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts
+        fi
+
+    - name: Upload integration diagnostics
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: pytest-integration-ci-diagnostics
+        path: /tmp/pytest-integration-ci
+        if-no-files-found: error
