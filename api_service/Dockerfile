@@ -250,7 +250,7 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled CLIs rely on.
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         bubblewrap \
         libffi-dev \
         ripgrep \
@@ -258,7 +258,6 @@ RUN apt-get update && \
         tesseract-ocr-eng \
         git \
         gh \
-        ripgrep \
         curl \
         ca-certificates \
         openssh-client \
@@ -312,8 +311,8 @@ RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 
 # Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
 RUN pip install --no-cache-dir -e .
+# Keep test runners available in all worker images (codex/gemini/claude).
 RUN pip install --no-cache-dir readmeai~=0.6.3 --no-deps && \
-    # Keep test runners available in all worker images (codex/gemini/claude).
     pip install --no-cache-dir pytest pytest-xdist
 
 # Install test extras when requested so compose-driven test runs have pytest and
