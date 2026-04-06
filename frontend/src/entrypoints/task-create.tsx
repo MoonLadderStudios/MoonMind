@@ -14,6 +14,7 @@ const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
+const DEPENDENCY_LIMIT = 10;
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
   try {
@@ -52,6 +53,7 @@ interface DashboardConfig {
     temporal?: {
       create?: string;
       artifactCreate?: string;
+      list?: string;
     };
   };
   system?: {
@@ -95,6 +97,18 @@ interface SkillsResponse {
   items?: {
     worker?: string[];
   };
+}
+
+interface DependencyPickerExecution {
+  taskId: string;
+  workflowType?: string | null;
+  entry?: string | null;
+  title: string;
+  state?: string | null;
+}
+
+interface DependencyPickerListResponse {
+  items?: DependencyPickerExecution[];
 }
 
 interface ExecutionCreateResponse {
@@ -923,6 +937,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
   );
+  const temporalListEndpoint = String(
+    dashboardConfig.sources?.temporal?.list || "/api/executions",
+  );
   const artifactCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.artifactCreate || "/api/artifacts",
   );
@@ -1026,6 +1043,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [scheduleTimezone, setScheduleTimezone] = useState("UTC");
   const [scheduleName, setScheduleName] = useState("");
   const [templateFeatureRequest, setTemplateFeatureRequest] = useState("");
+  const [selectedDependencyWorkflowId, setSelectedDependencyWorkflowId] = useState("");
+  const [selectedDependencies, setSelectedDependencies] = useState<string[]>([]);
+  const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
   const [appliedTemplates, setAppliedTemplates] = useState<
@@ -1137,6 +1157,32 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     writeProposeTasksPreference(proposeTasks);
   }, [proposeTasks]);
 
+  const dependencyOptionsQuery = useQuery({
+    queryKey: ["task-create", "dependency-options", temporalListEndpoint],
+    queryFn: async (): Promise<DependencyPickerExecution[]> => {
+      const response = await fetch(
+        `${temporalListEndpoint}?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run`,
+        {
+          headers: { Accept: "application/json" },
+        },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load dependency options.",
+          ),
+        );
+      }
+      const data = (await response.json()) as DependencyPickerListResponse;
+      return (data.items || []).filter(
+        (item) =>
+          String(item.workflowType || "MoonMind.Run") === "MoonMind.Run" &&
+          String(item.entry || "run") === "run",
+      );
+    },
+  });
+
   const skillsQuery = useQuery({
     queryKey: ["task-create", "skills"],
     queryFn: async (): Promise<string[]> => {
@@ -1218,6 +1264,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+
+  const availableDependencyOptions = useMemo(
+    () =>
+      (dependencyOptionsQuery.data || []).filter(
+        (item) => !selectedDependencies.includes(item.taskId),
+      ),
+    [dependencyOptionsQuery.data, selectedDependencies],
+  );
+
+  function addDependency(workflowId: string) {
+    const normalizedId = workflowId.trim();
+    if (!normalizedId) {
+      setDependencyMessage("Choose a prerequisite run before adding it.");
+      return;
+    }
+    if (selectedDependencies.includes(normalizedId)) {
+      setDependencyMessage("That prerequisite is already selected.");
+      return;
+    }
+    if (selectedDependencies.length >= DEPENDENCY_LIMIT) {
+      setDependencyMessage(
+        `You can add at most ${DEPENDENCY_LIMIT} direct dependencies.`,
+      );
+      return;
+    }
+    setSelectedDependencies((current) => [...current, normalizedId]);
+    setSelectedDependencyWorkflowId("");
+    setDependencyMessage(null);
+  }
+
+  function removeDependency(workflowId: string) {
+    setSelectedDependencies((current) =>
+      current.filter((item) => item !== workflowId),
+    );
+    setDependencyMessage(null);
+  }
 
   const providerOptions = (providerProfilesQuery.data || []).map((profile) => ({
     id: profile.profile_id,
@@ -2019,6 +2101,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ...(appliedTemplates.length > 0
         ? { appliedStepTemplates: appliedTemplates }
         : {}),
+      ...(selectedDependencies.length > 0
+        ? { dependsOn: selectedDependencies }
+        : {}),
     };
 
     const requestBody: Record<string, unknown> = {
@@ -2126,9 +2211,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         body: JSON.stringify(requestBody),
       });
       if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(response, "Failed to create task."),
-        );
+        const detail = await responseErrorDetail(response, "Failed to create task.");
+        if (detail.code?.startsWith("dependency_")) {
+          setDependencyMessage(detail.message);
+        }
+        throw new Error(detail.message);
       }
       const created = (await response.json()) as ExecutionCreateResponse;
       if (inputArtifactRef) {
@@ -2425,6 +2512,82 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </p>
           </div>
         ) : null}
+
+        <section className="card stack">
+          <div>
+            <strong>Dependencies</strong>
+            <p className="small">
+              Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.Run</code> prerequisites. The new run stays blocked until each prerequisite finishes in <code>completed</code> state.
+            </p>
+          </div>
+          <div className="grid-2">
+            <label>
+              Existing run
+              <select
+                id="queue-dependency-picker"
+                value={selectedDependencyWorkflowId}
+                onChange={(event) => {
+                  setSelectedDependencyWorkflowId(event.target.value);
+                  setDependencyMessage(null);
+                }}
+              >
+                <option value="">Select prerequisite...</option>
+                {availableDependencyOptions.map((item) => (
+                  <option key={item.taskId} value={item.taskId}>
+                    {`${item.title} (${item.taskId})`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="actions" style={{ alignItems: "end" }}>
+              <button
+                type="button"
+                id="queue-dependency-add"
+                onClick={() => addDependency(selectedDependencyWorkflowId)}
+              >
+                Add dependency
+              </button>
+            </div>
+          </div>
+          <p className="small">
+            {dependencyOptionsQuery.isLoading
+              ? "Loading recent runs..."
+              : dependencyOptionsQuery.isError
+                ? "Failed to load recent runs. You can still create the task after the list loads successfully."
+                : availableDependencyOptions.length > 0
+                  ? `${availableDependencyOptions.length} recent runs available.`
+                  : "No recent prerequisite runs available."}
+          </p>
+          {selectedDependencies.length > 0 ? (
+            <ul className="list" id="queue-dependency-list">
+              {selectedDependencies.map((workflowId) => {
+                const match = (dependencyOptionsQuery.data || []).find(
+                  (item) => item.taskId === workflowId,
+                );
+                return (
+                  <li key={workflowId}>
+                    <span>
+                      <strong>{match?.title || workflowId}</strong>{" "}
+                      <code>{workflowId}</code>
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary small"
+                      onClick={() => removeDependency(workflowId)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="small">No prerequisites selected.</p>
+          )}
+          <p className={dependencyMessage ? "notice error" : "small"}>
+            {dependencyMessage || "Direct dependencies only. Dependency failures propagate immediately to the dependent run."}
+          </p>
+        </section>
 
         <label>
           Runtime

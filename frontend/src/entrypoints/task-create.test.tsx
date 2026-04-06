@@ -265,6 +265,29 @@ describe("Task Create Entrypoint", () => {
             json: async () => items,
           } as Response);
         }
+        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  taskId: "mm:dep-1",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Build shared schema",
+                  state: "completed",
+                },
+                {
+                  taskId: "mm:dep-2",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Prepare fixture data",
+                  state: "executing",
+                },
+              ],
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -409,6 +432,37 @@ describe("Task Create Entrypoint", () => {
         "/tasks/mm:workflow-123?source=temporal",
       );
     });
+  });
+
+  it("submits selected task dependencies from the picker", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run the dependent stage." },
+    });
+    fireEvent.change(screen.getByLabelText("Existing run"), {
+      target: { value: "mm:dep-1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Build shared schema/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.dependsOn).toEqual(["mm:dep-1"]);
   });
 
   it("defaults publish mode to none when selecting pr-resolver skills", async () => {
@@ -626,6 +680,29 @@ describe("Task Create Entrypoint", () => {
             json: async () => providerProfileItems,
           } as Response);
         }
+        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  taskId: "mm:dep-1",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Build shared schema",
+                  state: "completed",
+                },
+                {
+                  taskId: "mm:dep-2",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Prepare fixture data",
+                  state: "executing",
+                },
+              ],
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           return Promise.resolve({
             ok: true,
@@ -803,7 +880,30 @@ describe("Task Create Entrypoint", () => {
                 json: async () => ({ artifact_id: "art-001" }),
               } as Response);
             }
-            if (url === "/api/executions") {
+            if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  taskId: "mm:dep-1",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Build shared schema",
+                  state: "completed",
+                },
+                {
+                  taskId: "mm:dep-2",
+                  workflowType: "MoonMind.Run",
+                  entry: "run",
+                  title: "Prepare fixture data",
+                  state: "executing",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions") {
               return Promise.resolve({
                 ok: true,
                 json: async () => ({

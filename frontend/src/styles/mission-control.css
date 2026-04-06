@@ -560,6 +560,12 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-accent) / 0.55);
 }
 
+.status-waiting {
+  color: rgb(var(--mm-warning-ink, var(--mm-warn)));
+  background: rgb(var(--mm-warn) / 0.18);
+  border-color: rgb(var(--mm-warn) / 0.7);
+}
+
 .status-succeeded,
 .status-completed {
   color: rgb(var(--mm-ok));
