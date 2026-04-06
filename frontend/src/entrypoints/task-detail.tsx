@@ -20,6 +20,30 @@ type DashboardConfig = {
   };
 };
 
+const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
+
+function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') {
+      return null;
+    }
+
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+    if (!GITHUB_PULL_REQUEST_PATH_PATTERN.test(normalizedPath)) {
+      return null;
+    }
+
+    return `https://github.com${normalizedPath}`;
+  } catch {
+    return null;
+  }
+}
+
 const DependencyOutcomeSchema = z
   .object({
     workflowId: z.string(),
@@ -1167,7 +1191,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
   const runSummary = runSummaryQuery.data;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
-  const prUrl = execution?.prUrl || runSummary?.publishContext?.pullRequestUrl || null;
+  const prUrl =
+    normalizeGitHubPullRequestUrl(execution?.prUrl) ||
+    normalizeGitHubPullRequestUrl(runSummary?.publishContext?.pullRequestUrl);
   const dependencyOutcomesById = useMemo(() => {
     const entries = (execution?.dependencyOutcomes || []).map((item) => [item.workflowId, item] as const);
     return new Map(entries);

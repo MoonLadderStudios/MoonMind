@@ -1728,7 +1728,7 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     assert "trigger_repo" in captured_origin
 
 
-def test_update_memo_persists_pull_request_url(
+def test_update_memo_persists_pull_request_url_under_canonical_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -1746,4 +1746,4 @@ def test_update_memo_persists_pull_request_url(
     workflow._update_memo()
 
     assert captured_memo[-1]["pull_request_url"] == "https://github.com/MoonLadderStudios/MoonMind/pull/321"
-    assert captured_memo[-1]["pullRequestUrl"] == "https://github.com/MoonLadderStudios/MoonMind/pull/321"
+    assert "pullRequestUrl" not in captured_memo[-1]

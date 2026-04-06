@@ -2937,7 +2937,6 @@ class MoonMindRunWorkflow:
             memo_dict["summary_artifact_ref"] = self._summary_ref
         if self._pull_request_url:
             memo_dict["pull_request_url"] = self._pull_request_url
-            memo_dict["pullRequestUrl"] = self._pull_request_url
         memo_dict.update(self._dependency_metadata())
 
         try:

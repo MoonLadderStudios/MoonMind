@@ -213,6 +213,67 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Unsafe task',
+      summary: 'Ignore unsafe PR links',
+      status: 'completed',
+      state: 'succeeded',
+      prUrl: 'javascript:alert(1)',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      summaryArtifactRef: 'art-summary-unsafe',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-unsafe/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              publishContext: {
+                pullRequestUrl: 'javascript:alert(2)',
+              },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unsafe task')).toBeTruthy();
+    });
+
+    expect(screen.queryByText('PR Link')).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
   it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
     const mockExecution = {
       taskId: 'mm:dependent-1',
