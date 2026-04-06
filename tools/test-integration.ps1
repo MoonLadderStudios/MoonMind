@@ -12,9 +12,16 @@ Write-Host ""
 
 # Run integration tests
 $test_file = $args[0]
+$networkName = "local-network"
 
 if (!(Test-Path ".env")) {
     Copy-Item ".env-template" ".env"
+}
+
+docker network inspect $networkName *> $null
+if ($LASTEXITCODE -ne 0) {
+    docker network create $networkName | Out-Null
+    Write-Host "Created Docker network: $networkName" -ForegroundColor Cyan
 }
 
 if ($test_file) {
