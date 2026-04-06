@@ -6,6 +6,25 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "services/temporal/scripts/bootstrap-namespace.sh"
+REQUIRED_SEARCH_ATTRIBUTES = {
+    "mm_entry": "Keyword",
+    "mm_owner_id": "Keyword",
+    "mm_owner_type": "Keyword",
+    "mm_state": "Keyword",
+    "mm_updated_at": "Datetime",
+    "mm_repo": "Keyword",
+    "mm_integration": "Keyword",
+    "mm_continue_as_new_cause": "Keyword",
+    "mm_scheduled_for": "Datetime",
+    "mm_has_dependencies": "Bool",
+    "mm_dependency_state": "Keyword",
+    "mm_dependency_count": "Int",
+}
+LEGACY_SEARCH_ATTRIBUTES = {
+    key: value
+    for key, value in REQUIRED_SEARCH_ATTRIBUTES.items()
+    if not key.startswith("mm_dependency_") and key != "mm_has_dependencies"
+}
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -13,17 +32,31 @@ def _write_executable(path: Path, contents: str) -> None:
     path.chmod(0o755)
 
 
-def test_namespace_bootstrap_is_idempotent_and_storage_cap_aware(tmp_path: Path):
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
+def _write_search_attributes(state_dir: Path, search_attributes: dict[str, str]) -> None:
+    if not search_attributes:
+        return
+    lines = [f"{name} {attr_type}" for name, attr_type in search_attributes.items()]
+    (state_dir / "search-attributes.txt").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
-    temporal_stub = """#!/usr/bin/env sh
+
+TEMPORAL_STUB = """#!/usr/bin/env sh
 set -eu
 state_dir="${FAKE_TEMPORAL_STATE_DIR:?}"
 cmd="$*"
 printf '%s\\n' "$cmd" >> "${state_dir}/calls.log"
+
+append_search_attribute() {
+  name="$1"
+  attr_type="$2"
+  file="${state_dir}/search-attributes.txt"
+  touch "$file"
+  if ! grep -Eq "^${name} ${attr_type}$" "$file"; then
+    printf '%s %s\\n' "$name" "$attr_type" >> "$file"
+  fi
+}
+
 case "$cmd" in
   *"cluster health"*)
     exit 0
@@ -41,10 +74,43 @@ case "$cmd" in
   *"namespace update"*)
     exit 0
     ;;
+  *"search-attribute list"*)
+    printf 'Name Type\\n'
+    if [ -f "${state_dir}/search-attributes.txt" ]; then
+      cat "${state_dir}/search-attributes.txt"
+    fi
+    exit 0
+    ;;
+  *"search-attribute create"*)
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --name)
+          name="$2"
+          shift 2
+          if [ "$#" -gt 1 ] && [ "$1" = "--type" ]; then
+            append_search_attribute "$name" "$2"
+            shift 2
+          fi
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    exit 0
+    ;;
 esac
 exit 0
 """
-    _write_executable(fake_bin / "temporal", temporal_stub)
+
+
+def test_namespace_bootstrap_is_idempotent_and_storage_cap_aware(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
 
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
@@ -86,6 +152,7 @@ exit 0
     assert "--retention 96h" in calls
     assert "namespace create" in calls
     assert "namespace update" in calls
+    assert calls.count("search-attribute create") == len(REQUIRED_SEARCH_ATTRIBUTES)
 
 
 def test_namespace_bootstrap_skips_create_for_default_namespace(tmp_path: Path):
@@ -94,34 +161,7 @@ def test_namespace_bootstrap_skips_create_for_default_namespace(tmp_path: Path):
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    temporal_stub = """#!/usr/bin/env sh
-set -eu
-state_dir="${FAKE_TEMPORAL_STATE_DIR:?}"
-cmd="$*"
-printf '%s\\n' "$cmd" >> "${state_dir}/calls.log"
-case "$cmd" in
-  *"cluster health"*)
-    echo "health"
-    ;;
-  *"namespace describe"*)
-    echo "describe"
-    ;;
-  *"namespace create"*)
-    echo "create"
-    ;;
-  *"namespace update"*)
-    echo "update"
-    ;;
-  *"search-attribute list"*)
-    echo "search list"
-    ;;
-  *"search-attribute create"*)
-    touch "${state_dir}/search.exists"
-    echo "search create"
-    ;;
-esac
-"""
-    _write_executable(fake_bin / "temporal", temporal_stub)
+    _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
 
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
@@ -146,3 +186,43 @@ esac
     assert "namespace create" not in calls
     assert "namespace update" not in calls
     assert "search-attribute create" in calls
+
+
+def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
+    tmp_path: Path,
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "namespace.exists").touch()
+    _write_search_attributes(state_dir, LEGACY_SEARCH_ATTRIBUTES)
+    _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
+    env["TEMPORAL_ADDRESS"] = "temporal:7233"
+    env["TEMPORAL_NAMESPACE"] = "default"
+    env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
+
+    result = subprocess.run(
+        ["sh", str(BOOTSTRAP_SCRIPT)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Registered missing search attributes:" in result.stdout
+    assert "mm_has_dependencies" in result.stdout
+    assert "mm_dependency_state" in result.stdout
+    assert "mm_dependency_count" in result.stdout
+
+    calls = (state_dir / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("search-attribute create") == 3
+
+    registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
+    for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
+        assert f"{name} {attr_type}" in registered

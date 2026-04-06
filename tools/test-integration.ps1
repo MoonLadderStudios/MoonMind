@@ -12,7 +12,7 @@ Write-Host ""
 
 # Run integration tests
 $test_file = $args[0]
-$networkName = "local-network"
+$networkName = if ($env:MOONMIND_DOCKER_NETWORK) { $env:MOONMIND_DOCKER_NETWORK } else { "local-network" }
 
 if (!(Test-Path ".env")) {
     Copy-Item ".env-template" ".env"

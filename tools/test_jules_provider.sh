@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
-NETWORK_NAME="local-network"
+NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 
 if [[ -z "${JULES_API_KEY:-}" ]]; then
   echo "Error: JULES_API_KEY must be set to run live Jules provider verification." >&2
