@@ -1585,11 +1585,10 @@ class MoonMindRunWorkflow:
         try:
             if handle is not None and binding is not None:
                 await handle.signal(
-                    "terminate_session",
+                    "control_action",
                     {
+                        "action": "terminate_session",
                         "reason": reason,
-                        "sessionId": binding.session_id,
-                        "sessionEpoch": binding.session_epoch,
                     },
                 )
         finally:

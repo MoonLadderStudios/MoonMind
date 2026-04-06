@@ -142,11 +142,10 @@ async def test_run_terminates_active_task_scoped_codex_session(
 
     assert signal_calls == [
         (
-            "terminate_session",
+            "control_action",
             {
+                "action": "terminate_session",
                 "reason": "success",
-                "sessionId": "sess:wf-run-1:codex_cli",
-                "sessionEpoch": 1,
             },
         )
     ]

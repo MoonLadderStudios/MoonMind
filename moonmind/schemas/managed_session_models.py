@@ -146,9 +146,7 @@ class CodexManagedSessionBinding(BaseModel):
         workflow_id: str,
         session_input: "CodexManagedSessionWorkflowInput",
     ) -> "CodexManagedSessionBinding":
-        runtime_id = canonical_codex_managed_runtime_id(session_input.runtime_id)
-        if runtime_id is None:
-            raise ValueError("runtimeId must identify a managed Codex runtime")
+        runtime_id = session_input.runtime_id
         session_id = session_input.session_id or f"sess:{session_input.task_run_id}:{runtime_id}"
         return cls(
             workflowId=workflow_id,
