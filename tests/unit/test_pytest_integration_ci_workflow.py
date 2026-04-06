@@ -46,13 +46,15 @@ def test_required_pytest_integration_ci_workflow_runs_hermetic_runner_and_upload
 
     assert any("./tools/test_integration.sh" in step["run"] for step in run_steps)
     assert any(
-        "docker compose -f docker-compose.test.yaml" in step["run"]
+        "diagnostics-status.txt" in step["run"]
+        and "docker-compose" in step["run"]
         and "logs --no-color" in step["run"]
         for step in run_steps
     )
+    assert all(step["name"] != "Verify docker compose availability" for step in steps)
     assert any(step.get("if") == "failure()" for step in run_steps)
     assert any(
-        step["uses"] == "actions/upload-artifact@v7"
+        step["uses"] == "actions/upload-artifact@v4"
         and step.get("if") == "failure()"
         for step in uses_steps
     )

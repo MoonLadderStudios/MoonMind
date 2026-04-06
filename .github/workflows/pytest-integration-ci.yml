@@ -26,9 +26,6 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 1
 
-    - name: Verify docker compose availability
-      run: docker compose version
-
     - name: Run hermetic integration CI suite
       env:
         MOONMIND_FORCE_LOCAL_TESTS: "1"
@@ -39,18 +36,35 @@ jobs:
     - name: Capture docker compose diagnostics
       if: failure()
       run: |
-        set -euo pipefail
+        set -uo pipefail
         mkdir -p /tmp/pytest-integration-ci
-        docker compose -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt
-        docker compose -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt
-        docker compose -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt
+        printf 'Collecting docker compose diagnostics\n' > /tmp/pytest-integration-ci/diagnostics-status.txt
+        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD=(docker compose)
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD=(docker-compose)
+        else
+          COMPOSE_CMD=()
+          printf 'docker compose CLI is unavailable\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+        fi
+        if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt 2>&1; then
+            printf 'docker compose config failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt 2>&1; then
+            printf 'docker compose ps -a failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt 2>&1; then
+            printf 'docker compose logs failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+        fi
         if [[ -d var/artifacts ]]; then
-          cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts
+          cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts || printf 'copying var/artifacts failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
         fi
 
     - name: Upload integration diagnostics
       if: failure()
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       with:
         name: pytest-integration-ci-diagnostics
         path: /tmp/pytest-integration-ci
