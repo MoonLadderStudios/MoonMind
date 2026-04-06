@@ -66,6 +66,9 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
+from moonmind.workflows.temporal.workflows.agent_session import (
+    MoonMindAgentSessionWorkflow as MoonMindAgentSession,
+)
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     resolve_adapter_metadata,
@@ -719,7 +722,14 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindProviderProfileManager, MoonMindAgentRun, MoonMindOAuthSession]
+        workflows = [
+            MoonMindRun,
+            MoonMindManifestIngest,
+            MoonMindProviderProfileManager,
+            MoonMindAgentSession,
+            MoonMindAgentRun,
+            MoonMindOAuthSession,
+        ]
         activities = [
             resolve_adapter_metadata,
             get_activity_route,

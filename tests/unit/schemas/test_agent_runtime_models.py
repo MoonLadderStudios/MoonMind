@@ -41,6 +41,46 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
         )
 
 
+def test_agent_execution_request_accepts_codex_managed_session_binding() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        managedSession={
+            "workflowId": "wf-run-1:session:codex_cli",
+            "taskRunId": "wf-run-1",
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "runtimeId": "codex_cli",
+        },
+    )
+
+    assert request.managed_session is not None
+    assert request.managed_session.runtime_id == "codex_cli"
+    assert request.managed_session.session_id == "sess:wf-run-1:codex_cli"
+
+
+def test_agent_execution_request_rejects_managed_session_for_non_codex_runtime() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="managedSession is only supported for managed Codex runtimes",
+    ):
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            managedSession={
+                "workflowId": "wf-run-1:session:codex_cli",
+                "taskRunId": "wf-run-1",
+                "sessionId": "sess:wf-run-1:codex_cli",
+                "sessionEpoch": 1,
+                "runtimeId": "codex_cli",
+            },
+        )
+
+
 def test_agent_run_status_terminal_helpers() -> None:
     status = AgentRunStatus(
         runId="run-1",

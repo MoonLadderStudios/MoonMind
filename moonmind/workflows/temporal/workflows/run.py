@@ -14,6 +14,11 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from moonmind.schemas.managed_session_models import (
+        CodexManagedSessionBinding,
+        CodexManagedSessionWorkflowInput,
+        canonical_codex_managed_runtime_id,
+    )
     from moonmind.schemas.temporal_activity_models import (
         ArtifactReadInput,
         ArtifactWriteCompleteInput,
@@ -255,6 +260,8 @@ class MoonMindRunWorkflow:
         self._assigned_runtime_id: Optional[str] = None
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
+        self._codex_session_handle: Any | None = None
+        self._codex_session_binding: CodexManagedSessionBinding | None = None
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -1151,6 +1158,7 @@ class MoonMindRunWorkflow:
                             tool_name=tool_name,
                             resolved_skillset_ref=registry_snapshot_ref,
                         )
+                        request = await self._maybe_bind_task_scoped_session(request)
                         child_workflow_id = (
                             f"{workflow.info().workflow_id}:agent:{node_id}"
                         )
@@ -1525,6 +1533,67 @@ class MoonMindRunWorkflow:
             return ""
         normalized = value.strip().lower()
         return normalized if normalized in {"none", "branch", "pr"} else ""
+
+    def _managed_session_runtime_id(
+        self, request: AgentExecutionRequest
+    ) -> str | None:
+        if request.agent_kind != "managed":
+            return None
+        return canonical_codex_managed_runtime_id(request.agent_id)
+
+    def _task_scoped_session_workflow_id(self, runtime_id: str) -> str:
+        return f"{workflow.info().workflow_id}:session:{runtime_id}"
+
+    async def _ensure_task_scoped_codex_session(
+        self, request: AgentExecutionRequest
+    ) -> CodexManagedSessionBinding | None:
+        runtime_id = self._managed_session_runtime_id(request)
+        if runtime_id is None:
+            return None
+        if self._codex_session_binding is not None:
+            return self._codex_session_binding
+
+        session_input = CodexManagedSessionWorkflowInput(
+            taskRunId=workflow.info().workflow_id,
+            runtimeId=runtime_id,
+            executionProfileRef=request.execution_profile_ref,
+        )
+        session_workflow_id = self._task_scoped_session_workflow_id(runtime_id)
+        self._codex_session_handle = await workflow.start_child_workflow(
+            "MoonMind.AgentSession",
+            session_input,
+            id=session_workflow_id,
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        self._codex_session_binding = CodexManagedSessionBinding.from_input(
+            workflow_id=session_workflow_id,
+            session_input=session_input,
+        )
+        return self._codex_session_binding
+
+    async def _maybe_bind_task_scoped_session(
+        self, request: AgentExecutionRequest
+    ) -> AgentExecutionRequest:
+        binding = await self._ensure_task_scoped_codex_session(request)
+        if binding is None:
+            return request
+        return request.model_copy(update={"managed_session": binding})
+
+    async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
+        handle = self._codex_session_handle
+        binding = self._codex_session_binding
+        try:
+            if handle is not None and binding is not None:
+                await handle.signal(
+                    "control_action",
+                    {
+                        "action": "terminate_session",
+                        "reason": reason,
+                    },
+                )
+        finally:
+            self._codex_session_handle = None
+            self._codex_session_binding = None
 
     def _coerce_text(
         self, value: Any, max_chars: int | None = None, *, flatten: bool = True
@@ -2567,6 +2636,12 @@ class MoonMindRunWorkflow:
     async def _run_finalizing_stage(
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
+        try:
+            await self._terminate_task_scoped_sessions(reason=status)
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to terminate task-scoped agent sessions: %s", exc
+            )
         try:
             self._get_logger().info("Generating finish summary.")
 
