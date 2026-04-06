@@ -7,8 +7,16 @@ from pydantic import ValidationError
 
 from moonmind.schemas.managed_session_models import (
     CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
+    CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionClearRequest,
+    CodexManagedSessionHandle,
+    CodexManagedSessionLocator,
     CodexManagedSessionPlaneContract,
     CodexManagedSessionState,
+    CodexManagedSessionSummary,
+    CodexManagedSessionTurnResponse,
+    LaunchCodexManagedSessionRequest,
+    SendCodexManagedSessionTurnRequest,
 )
 
 
@@ -138,3 +146,149 @@ def test_codex_managed_session_state_requires_epoch_at_least_one() -> None:
             containerId="ctr-123",
             threadId="thread-1",
         )
+
+
+def test_launch_codex_managed_session_request_freezes_remote_container_defaults() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/codex-home",
+        imageRef="moonmind:latest",
+    )
+
+    assert request.runtime_family == "codex"
+    assert request.container_backend == "docker"
+    assert request.control_mode == "remote_container"
+    assert request.protocol == "codex_app_server"
+    assert request.session_epoch == 1
+
+
+def test_launch_codex_managed_session_request_rejects_local_control_mode() -> None:
+    with pytest.raises(ValidationError, match="Input should be 'remote_container'"):
+        LaunchCodexManagedSessionRequest(
+            taskRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="/work/task/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/codex-home",
+            imageRef="moonmind:latest",
+            controlMode="local_process",
+        )
+
+
+def test_codex_managed_session_clear_request_requires_new_thread() -> None:
+    with pytest.raises(ValidationError, match="must differ from threadId"):
+        CodexManagedSessionClearRequest(
+            sessionId="sess-123",
+            sessionEpoch=1,
+            containerId="ctr-123",
+            threadId="thread-1",
+            newThreadId="thread-1",
+        )
+
+
+def test_codex_managed_session_locator_requires_bounded_identity() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="sess-123",
+        sessionEpoch=1,
+        containerId="ctr-123",
+        threadId="thread-1",
+    )
+
+    assert locator.session_id == "sess-123"
+    assert locator.session_epoch == 1
+    assert locator.container_id == "ctr-123"
+    assert locator.thread_id == "thread-1"
+
+
+@pytest.mark.parametrize("missing_field", ["sessionEpoch", "containerId", "threadId"])
+def test_send_turn_request_requires_full_session_locator(
+    missing_field: str,
+) -> None:
+    payload = {
+        "sessionId": "sess-123",
+        "sessionEpoch": 1,
+        "containerId": "ctr-123",
+        "threadId": "thread-1",
+        "instructions": "Investigate the failing test",
+    }
+    payload.pop(missing_field)
+
+    with pytest.raises(ValidationError, match=missing_field):
+        SendCodexManagedSessionTurnRequest(**payload)
+
+
+def test_codex_managed_session_handle_exposes_remote_container_contract() -> None:
+    handle = CodexManagedSessionHandle(
+        sessionState={
+            "sessionId": "sess-123",
+            "sessionEpoch": 1,
+            "containerId": "ctr-123",
+            "threadId": "thread-1",
+        },
+        status="ready",
+        imageRef="moonmind:latest",
+    )
+
+    assert handle.control_mode == "remote_container"
+    assert handle.container_backend == "docker"
+    assert handle.session_state.container_id == "ctr-123"
+
+
+def test_codex_managed_session_turn_response_requires_remote_session_state() -> None:
+    response = CodexManagedSessionTurnResponse(
+        sessionState={
+            "sessionId": "sess-123",
+            "sessionEpoch": 1,
+            "containerId": "ctr-123",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        },
+        turnId="turn-1",
+        status="running",
+    )
+
+    assert response.turn_id == "turn-1"
+    assert response.session_state.active_turn_id == "turn-1"
+
+
+def test_codex_managed_session_summary_and_publication_allow_artifact_refs() -> None:
+    summary = CodexManagedSessionSummary(
+        sessionState={
+            "sessionId": "sess-123",
+            "sessionEpoch": 2,
+            "containerId": "ctr-123",
+            "threadId": "thread-2",
+        },
+        latestSummaryRef="art-summary",
+        latestCheckpointRef="art-checkpoint",
+        latestControlEventRef="art-control",
+    )
+    publication = CodexManagedSessionArtifactsPublication(
+        sessionState=summary.session_state,
+        publishedArtifactRefs=("art-summary", "art-checkpoint"),
+        latestSummaryRef="art-summary",
+    )
+
+    assert summary.latest_summary_ref == "art-summary"
+    assert publication.published_artifact_refs == ("art-summary", "art-checkpoint")
+
+
+def test_send_codex_managed_session_turn_request_trims_instruction_and_refs() -> None:
+    request = SendCodexManagedSessionTurnRequest(
+        sessionId="sess-123",
+        sessionEpoch=1,
+        containerId="ctr-123",
+        threadId="thread-1",
+        instructions="  Investigate the failing test  ",
+        inputRefs=["art-1", "art-2"],
+    )
+
+    assert request.instructions == "Investigate the failing test"
+    assert request.input_refs == ("art-1", "art-2")

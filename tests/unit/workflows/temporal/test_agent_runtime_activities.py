@@ -12,11 +12,18 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
     ManagedRunRecord,
+)
+from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionHandle,
+    CodexManagedSessionSummary,
+    CodexManagedSessionTurnResponse,
 )
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
@@ -206,6 +213,343 @@ async def test_publish_artifacts_none_input_returns_none() -> None:
     activities = TemporalAgentRuntimeActivities()
     result = await activities.agent_runtime_publish_artifacts(None)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# T4: session-oriented agent_runtime activities — typed managed-session returns
+# ---------------------------------------------------------------------------
+
+
+async def test_launch_session_requires_session_controller() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="session_controller is required for agent_runtime.launch_session",
+    ):
+        await activities.agent_runtime_launch_session(
+            {
+                "taskRunId": "task-1",
+                "sessionId": "sess-1",
+                "threadId": "thread-1",
+                "workspacePath": "/work/task/repo",
+                "sessionWorkspacePath": "/work/task/session",
+                "artifactSpoolPath": "/work/task/artifacts",
+                "codexHomePath": "/work/task/codex-home",
+                "imageRef": "moonmind:latest",
+            }
+        )
+
+
+async def test_launch_session_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionHandle)
+    assert result.session_state.container_id == "ctr-1"
+    controller.launch_session.assert_awaited_once()
+
+
+async def test_session_status_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.session_status = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="busy",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_session_status(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionHandle)
+    assert result.status == "busy"
+
+
+async def test_send_turn_accepts_base_model_payloads_and_preserves_concrete_type() -> None:
+    class _SendTurnEnvelope(BaseModel):
+        session_id: str
+        session_epoch: int
+        container_id: str
+        thread_id: str
+        instructions: str
+
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            },
+            turnId="turn-1",
+            status="running",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_send_turn(
+        _SendTurnEnvelope(
+            session_id="sess-1",
+            session_epoch=1,
+            container_id="ctr-1",
+            thread_id="thread-1",
+            instructions="Inspect the workspace",
+        )
+    )
+
+    assert isinstance(result, CodexManagedSessionTurnResponse)
+    validated_request = controller.send_turn.await_args.args[0]
+    assert validated_request.__class__.__name__ == "SendCodexManagedSessionTurnRequest"
+    assert validated_request.instructions == "Inspect the workspace"
+    assert result.turn_id == "turn-1"
+
+
+async def test_send_turn_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            },
+            turnId="turn-1",
+            status="running",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_send_turn(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+            "instructions": "Inspect the workspace",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionTurnResponse)
+    assert result.turn_id == "turn-1"
+
+
+async def test_steer_turn_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.steer_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            },
+            turnId="turn-1",
+            status="running",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_steer_turn(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "instructions": "Focus on the failing test",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionTurnResponse)
+    assert result.status == "running"
+
+
+async def test_interrupt_turn_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.interrupt_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            turnId="turn-1",
+            status="interrupted",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_interrupt_turn(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionTurnResponse)
+    assert result.status == "interrupted"
+
+
+async def test_clear_session_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.clear_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 2,
+                "containerId": "ctr-1",
+                "threadId": "thread-2",
+            },
+            status="ready",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_clear_session(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+            "newThreadId": "thread-2",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionHandle)
+    assert result.session_state.session_epoch == 2
+
+
+async def test_terminate_session_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.terminate_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 2,
+                "containerId": "ctr-1",
+                "threadId": "thread-2",
+            },
+            status="terminated",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_terminate_session(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "containerId": "ctr-1",
+            "threadId": "thread-2",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionHandle)
+    assert result.status == "terminated"
+
+
+async def test_fetch_session_summary_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.fetch_session_summary = AsyncMock(
+        return_value=CodexManagedSessionSummary(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 2,
+                "containerId": "ctr-1",
+                "threadId": "thread-2",
+            },
+            latestSummaryRef="art-summary",
+            latestCheckpointRef="art-checkpoint",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_fetch_session_summary(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "containerId": "ctr-1",
+            "threadId": "thread-2",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionSummary)
+    assert result.latest_summary_ref == "art-summary"
+
+
+async def test_publish_session_artifacts_delegates_to_remote_session_controller() -> None:
+    controller = AsyncMock()
+    controller.publish_session_artifacts = AsyncMock(
+        return_value=CodexManagedSessionArtifactsPublication(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 2,
+                "containerId": "ctr-1",
+                "threadId": "thread-2",
+            },
+            publishedArtifactRefs=("art-summary", "art-checkpoint"),
+            latestSummaryRef="art-summary",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_publish_session_artifacts(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "containerId": "ctr-1",
+            "threadId": "thread-2",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionArtifactsPublication)
+    assert result.published_artifact_refs == ("art-summary", "art-checkpoint")
 
 
 # ---------------------------------------------------------------------------
@@ -508,3 +852,129 @@ async def test_agent_runtime_publish_temporal_boundary() -> None:
             )
 
             assert result is None
+
+
+@workflow.defn(name="AgentRuntimeLaunchSessionBoundaryTest")
+class AgentRuntimeLaunchSessionBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> CodexManagedSessionHandle:
+        return await workflow.execute_activity(
+            "agent_runtime.launch_session",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+
+@workflow.defn(name="AgentRuntimeSendTurnBoundaryTest")
+class AgentRuntimeSendTurnBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> CodexManagedSessionTurnResponse:
+        return await workflow.execute_activity(
+            "agent_runtime.send_turn",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_launch_session_temporal_boundary() -> None:
+    from temporalio import activity
+
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-boundary",
+                "sessionEpoch": 1,
+                "containerId": "ctr-boundary",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities_impl = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    @activity.defn(name="agent_runtime.launch_session")
+    async def _agent_runtime_launch_session_wrapper(
+        request: dict,
+    ) -> CodexManagedSessionHandle:
+        return await activities_impl.agent_runtime_launch_session(request)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-launch-session",
+            workflows=[AgentRuntimeLaunchSessionBoundaryTest],
+            activities=[_agent_runtime_launch_session_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimeLaunchSessionBoundaryTest.run,
+                {
+                    "taskRunId": "task-1",
+                    "sessionId": "sess-boundary",
+                    "threadId": "thread-1",
+                    "workspacePath": "/work/task/repo",
+                    "sessionWorkspacePath": "/work/task/session",
+                    "artifactSpoolPath": "/work/task/artifacts",
+                    "codexHomePath": "/work/task/codex-home",
+                    "imageRef": "moonmind:latest",
+                },
+                id="boundary-test-launch-session",
+                task_queue="boundary-test-queue-launch-session",
+            )
+
+            assert isinstance(result, CodexManagedSessionHandle)
+            assert result.session_state.container_id == "ctr-boundary"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_send_turn_temporal_boundary() -> None:
+    from temporalio import activity
+
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-boundary",
+                "sessionEpoch": 1,
+                "containerId": "ctr-boundary",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            },
+            turnId="turn-1",
+            status="running",
+        )
+    )
+    activities_impl = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    @activity.defn(name="agent_runtime.send_turn")
+    async def _agent_runtime_send_turn_wrapper(
+        request: dict,
+    ) -> CodexManagedSessionTurnResponse:
+        return await activities_impl.agent_runtime_send_turn(request)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-send-turn",
+            workflows=[AgentRuntimeSendTurnBoundaryTest],
+            activities=[_agent_runtime_send_turn_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimeSendTurnBoundaryTest.run,
+                {
+                    "sessionId": "sess-boundary",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-boundary",
+                    "threadId": "thread-1",
+                    "instructions": "Inspect the repo state",
+                },
+                id="boundary-test-send-turn",
+                task_queue="boundary-test-queue-send-turn",
+            )
+
+            assert isinstance(result, CodexManagedSessionTurnResponse)
+            assert result.turn_id == "turn-1"
