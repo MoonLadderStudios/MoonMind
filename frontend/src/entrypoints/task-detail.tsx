@@ -20,6 +20,30 @@ type DashboardConfig = {
   };
 };
 
+const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
+
+function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') {
+      return null;
+    }
+
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+    if (!GITHUB_PULL_REQUEST_PATH_PATTERN.test(normalizedPath)) {
+      return null;
+    }
+
+    return `https://github.com${normalizedPath}`;
+  } catch {
+    return null;
+  }
+}
+
 const DependencyOutcomeSchema = z
   .object({
     workflowId: z.string(),
@@ -81,6 +105,7 @@ const ExecutionDetailSchema = z
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
+    prUrl: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
     publishMode: z.string().nullable().optional(),
@@ -1166,6 +1191,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
   const runSummary = runSummaryQuery.data;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
+  const prUrl =
+    normalizeGitHubPullRequestUrl(execution?.prUrl) ||
+    normalizeGitHubPullRequestUrl(runSummary?.publishContext?.pullRequestUrl);
   const dependencyOutcomesById = useMemo(() => {
     const entries = (execution?.dependencyOutcomes || []).map((item) => [item.workflowId, item] as const);
     return new Map(entries);
@@ -1410,6 +1438,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.publishMode ? (
               <Card label="Publish Mode">
                 <code className="text-xs">{execution.publishMode}</code>
+              </Card>
+            ) : null}
+            {prUrl ? (
+              <Card label="PR Link">
+                <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
+                  {prUrl}
+                </a>
               </Card>
             ) : null}
             <Card label="Temporal Status">{execution.temporalStatus || '—'}</Card>
