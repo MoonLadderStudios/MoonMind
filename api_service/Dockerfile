@@ -46,13 +46,6 @@ ARG INSTALL_CLAUDE_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
-# Keep complex platform-vendor installation logic out of the Dockerfile body.
-COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local/bin/install_codex_platform_vendor.sh
-
-# Ensure vendor directory exists so CLIs (like Codex) that might install
-# binaries there can detect it during the npm install process.
-RUN mkdir -p /usr/local/vendor
-
 # Install Codex, Gemini, and Claude CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # If the packages are unavailable (for example, when the registry is private or
@@ -106,7 +99,9 @@ else
         echo "Warning: Failed to install @openai/codex; installing stub" >&2
         stub_codex
     else
-        /usr/local/bin/install_codex_platform_vendor.sh
+        # Keep the launcher anchored in node_modules after the multi-stage COPY.
+        # The upstream package already installs the platform-specific optional
+        # dependency, so do not duplicate its vendor payload elsewhere.
         # Resolve the symlink target created by npm install -g so we can replace it
         # with a durable wrapper script. Docker COPY can dereference symlinks
         # across stages, which would move this launcher away from node_modules and
@@ -173,14 +168,9 @@ fi
 npm cache clean --force || true
 BASH
 
-# Fail the build early if the Codex CLI binary is missing or
-# broken. Pre-create ~/.gemini so `gemini --version` can persist registry state.
+# Fail the build early if the bundled CLIs are missing or broken. Pre-create
+# ~/.gemini so `gemini --version` can persist registry state.
 RUN mkdir -p "${HOME}/.gemini" \
-    && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
-        if [ -d /usr/local/lib/node_modules/@openai/codex/vendor ]; then \
-            cp -r /usr/local/lib/node_modules/@openai/codex/vendor/* /usr/local/vendor/; \
-        fi; \
-    fi \
     && codex --version \
     && gemini --version \
     && claude --version
@@ -237,7 +227,6 @@ COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
 # Docker COPY dereferences the npm/npx symlinks from the Node image. Install
 # stable wrappers that keep npm's relative module resolution anchored in the
@@ -277,8 +266,7 @@ RUN apt-get update && \
         ca-certificates \
         openssh-client \
         procps \
-        gnupg \
-        nodejs && \
+        gnupg && \
     install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
     chmod a+r /etc/apt/keyrings/docker.gpg && \

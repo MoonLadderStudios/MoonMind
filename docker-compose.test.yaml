@@ -11,10 +11,9 @@ services:
     networks:
       local-network:
         aliases:
-          # Keep test MinIO off the production artifact hostname. This compose
-          # file shares an external network with the main stack, so reusing the
-          # production alias causes Docker DNS to round-robin across unrelated
-          # MinIO containers and produces intermittent NoSuchKey failures.
+          # Keep test MinIO off the production artifact hostname. The test
+          # compose stack uses its own isolated network, so this alias stays
+          # scoped to the test environment and avoids cross-stack DNS bleed.
           - moonmind-test-temporal-artifacts-s3
 
   pytest:
@@ -65,4 +64,3 @@ services:
 
 networks:
   local-network:
-    external: true
