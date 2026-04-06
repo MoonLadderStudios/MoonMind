@@ -2902,6 +2902,42 @@ export interface components {
             attentionRequired: boolean;
         };
         /**
+         * ExecutionDependencyOutcomeModel
+         * @description One resolved prerequisite outcome surfaced on execution detail.
+         */
+        ExecutionDependencyOutcomeModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Terminalstate */
+            terminalState?: string | null;
+            /** Closestatus */
+            closeStatus?: string | null;
+            /** Resolvedat */
+            resolvedAt?: string | null;
+            /** Failurecategory */
+            failureCategory?: string | null;
+            /** Message */
+            message?: string | null;
+        };
+        /**
+         * ExecutionDependencySummaryModel
+         * @description Compact linked execution metadata for prerequisites or dependents.
+         */
+        ExecutionDependencySummaryModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Title */
+            title?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** State */
+            state?: string | null;
+            /** Closestatus */
+            closeStatus?: string | null;
+            /** Workflowtype */
+            workflowType?: string | null;
+        };
+        /**
          * ExecutionInterventionAuditEntryModel
          * @description One explicit operator intervention record shown outside stdout/stderr logs.
          */
@@ -3051,6 +3087,10 @@ export interface components {
             modelSource?: string | null;
             /** Profileid */
             profileId?: string | null;
+            /** Providerid */
+            providerId?: string | null;
+            /** Providerlabel */
+            providerLabel?: string | null;
             /** Effort */
             effort?: string | null;
             /** Startingbranch */
@@ -3126,6 +3166,17 @@ export interface components {
             dependencyResolution?: string | null;
             /** Faileddependencyid */
             failedDependencyId?: string | null;
+            /**
+             * Blockedondependencies
+             * @default false
+             */
+            blockedOnDependencies: boolean;
+            /** Dependencyoutcomes */
+            dependencyOutcomes?: components["schemas"]["ExecutionDependencyOutcomeModel"][];
+            /** Prerequisites */
+            prerequisites?: components["schemas"]["ExecutionDependencySummaryModel"][];
+            /** Dependents */
+            dependents?: components["schemas"]["ExecutionDependencySummaryModel"][];
             /** Startedat */
             startedAt?: string | null;
             /**
