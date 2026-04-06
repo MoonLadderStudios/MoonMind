@@ -252,9 +252,6 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 RUN apt-get update && \
     apt-get install -y \
         bubblewrap \
-        build-essential \
-        pkg-config \
-        libcairo2-dev \
         libffi-dev \
         ripgrep \
         tesseract-ocr \
@@ -303,7 +300,7 @@ RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
 RUN install -d -o root -g app -m 0750 /etc/codex
 COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/config.toml
 
-RUN pip install watchfiles
+RUN pip install --no-cache-dir watchfiles
 
 # Copy pyproject.toml and README.md first for better Docker layer caching
 COPY pyproject.toml /app/pyproject.toml
@@ -314,15 +311,15 @@ RUN mkdir -p /app/moonmind /app/api_service
 RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 
 # Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
-RUN pip install -e .
-RUN pip install readmeai~=0.6.3 --no-deps && \
+RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir readmeai~=0.6.3 --no-deps && \
     # Keep test runners available in all worker images (codex/gemini/claude).
-    pip install pytest pytest-xdist
+    pip install --no-cache-dir pytest pytest-xdist
 
 # Install test extras when requested so compose-driven test runs have pytest and
 # related dependencies baked into the image, avoiding runtime network installs.
 RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
-        pip install -e .[tests]; \
+        pip install --no-cache-dir -e .[tests]; \
     fi
 
 # Copy source code AFTER installing dependencies
