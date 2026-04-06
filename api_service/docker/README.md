@@ -2,19 +2,23 @@
 
 ## Multi-stage Tooling Builder
 
-The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooling-builder` to install workflow and Codex CLIs. The stage accepts two build arguments:
+The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooling-builder` to install the packaged CLIs used by the shared runtime image.
 
-- `CODEX_CLI_VERSION` (default `0.104.0`)
-- `AGENT_KIT_VERSION` (default `0.4.0`)
+Relevant build args include:
+
+- `CODEX_CLI_VERSION`
+- `GEMINI_CLI_VERSION`
+- `CLAUDE_CLI_VERSION`
 
 During the build the stage:
 
 1. Installs minimal Debian packages required for global npm installs.
 2. Disables npm analytics prompts for deterministic builds.
-3. Runs `npm install -g @openai/codex@${CODEX_CLI_VERSION}` and `npm install -g @githubnext/spec-kit@${AGENT_KIT_VERSION}`.
-4. Cleans the npm cache before handing control back to the Python runtime stage.
+3. Runs `npm install -g` for the requested CLI packages.
+4. Replaces npm-created launcher symlinks with stable wrapper scripts so multi-stage `COPY` keeps each CLI anchored in the copied `node_modules` tree.
+5. Cleans the npm cache before handing control back to the Python runtime stage.
 
-The final runtime image copies only the produced binaries, supporting node modules, and licenses from the builder. Python remains the only runtime dependency while both CLIs are available on the default `PATH` for Temporal workers and FastAPI.
+The final runtime image copies the produced launchers, the Node runtime, supporting `node_modules`, and license files from the builder. It intentionally relies on the platform-specific optional dependency already installed under `@openai/codex` rather than copying an extra Codex vendor tree into the image.
 
 The runtime stage also includes additional shell tooling required by bootstrap and diagnostics workflows, including `rg` (`ripgrep`) so Codex preflight and maintenance shells can perform reliable search checks without ad-hoc runtime installs.
 
@@ -25,7 +29,8 @@ Override the defaults when building an image:
 ```bash
 docker build \
   --build-arg CODEX_CLI_VERSION=0.104.0 \
-  --build-arg AGENT_KIT_VERSION=0.4.1 \
+  --build-arg GEMINI_CLI_VERSION=latest \
+  --build-arg CLAUDE_CLI_VERSION=latest \
   -f api_service/Dockerfile .
 ```
 
