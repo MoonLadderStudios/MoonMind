@@ -17,7 +17,7 @@ This note covers the operator-facing readiness items for task dependencies rollo
 
 ## Failure and remediation
 
-- If a prerequisite fails, cancelation or timeout on the prerequisite propagates to the dependent as a dependency failure.
+- If a prerequisite fails, cancellation or timeout on the prerequisite propagates to the dependent as a dependency failure.
 - Remediate the prerequisite first, then rerun or recreate the downstream run after the upstream dependency finishes in `completed`.
 - Canceling a dependent run does not cancel any prerequisite runs.
 - Pausing a dependent run does not stop dependency signal intake; prerequisite failures still terminate the dependent gate.

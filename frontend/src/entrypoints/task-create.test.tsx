@@ -881,29 +881,29 @@ describe("Task Create Entrypoint", () => {
               } as Response);
             }
             if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              items: [
-                {
-                  taskId: "mm:dep-1",
-                  workflowType: "MoonMind.Run",
-                  entry: "run",
-                  title: "Build shared schema",
-                  state: "completed",
-                },
-                {
-                  taskId: "mm:dep-2",
-                  workflowType: "MoonMind.Run",
-                  entry: "run",
-                  title: "Prepare fixture data",
-                  state: "executing",
-                },
-              ],
-            }),
-          } as Response);
-        }
-        if (url === "/api/executions") {
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({
+                  items: [
+                    {
+                      taskId: "mm:dep-1",
+                      workflowType: "MoonMind.Run",
+                      entry: "run",
+                      title: "Build shared schema",
+                      state: "completed",
+                    },
+                    {
+                      taskId: "mm:dep-2",
+                      workflowType: "MoonMind.Run",
+                      entry: "run",
+                      title: "Prepare fixture data",
+                      state: "executing",
+                    },
+                  ],
+                }),
+              } as Response);
+            }
+            if (url === "/api/executions") {
               return Promise.resolve({
                 ok: true,
                 json: async () => ({

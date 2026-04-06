@@ -482,7 +482,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedItems.map((row) => (
+                    {sortedItems.map((row) => {
+                      const depsSummary = dependencyListSummary(row);
+                      return (
                       <tr key={row.taskId}>
                         <td>
                           <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
@@ -499,20 +501,23 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         </td>
                         <td>
                           <div>{row.title}</div>
-                          {dependencyListSummary(row) ? (
-                            <div className="small">{dependencyListSummary(row)}</div>
+                          {depsSummary ? (
+                            <div className="small">{depsSummary}</div>
                           ) : null}
                         </td>
                         <td>{formatWhen(row.createdAt)}</td>
                         <td>{formatWhen(row.startedAt)}</td>
                         <td>{formatWhen(row.closedAt)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
               <ul className="queue-card-list" data-layout="card" role="list">
-                {sortedItems.map((row) => (
+                {sortedItems.map((row) => {
+                      const depsSummary = dependencyListSummary(row);
+                      return (
                   <li key={row.taskId} className="queue-card">
                     <div className="queue-card-header">
                       <div>
@@ -568,10 +573,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         <dt>Finished</dt>
                         <dd>{formatWhen(row.closedAt)}</dd>
                       </div>
-                      {dependencyListSummary(row) ? (
+                      {depsSummary ? (
                         <div>
                           <dt>Dependencies</dt>
-                          <dd>{dependencyListSummary(row)}</dd>
+                          <dd>{depsSummary}</dd>
                         </div>
                       ) : null}
                     </dl>
@@ -585,7 +590,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </a>
                     </div>
                   </li>
-                ))}
+                      );
+                    })}
               </ul>
             </>
           )}

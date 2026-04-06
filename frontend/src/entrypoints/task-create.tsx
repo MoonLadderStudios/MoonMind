@@ -1161,7 +1161,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     queryKey: ["task-create", "dependency-options", temporalListEndpoint],
     queryFn: async (): Promise<DependencyPickerExecution[]> => {
       const response = await fetch(
-        `${temporalListEndpoint}?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run`,
+        withQueryParams(temporalListEndpoint, {
+          source: "temporal",
+          pageSize: "50",
+          workflowType: "MoonMind.Run",
+          entry: "run",
+        }),
         {
           headers: { Accept: "application/json" },
         },
@@ -2214,6 +2219,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         const detail = await responseErrorDetail(response, "Failed to create task.");
         if (detail.code?.startsWith("dependency_")) {
           setDependencyMessage(detail.message);
+          return;
         }
         throw new Error(detail.message);
       }
@@ -2539,7 +2545,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 ))}
               </select>
             </label>
-            <div className="actions" style={{ alignItems: "end" }}>
+            <div className="actions" style={{ alignItems: "flex-end" }}>
               <button
                 type="button"
                 id="queue-dependency-add"
@@ -2553,7 +2559,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             {dependencyOptionsQuery.isLoading
               ? "Loading recent runs..."
               : dependencyOptionsQuery.isError
-                ? "Failed to load recent runs. You can still create the task after the list loads successfully."
+                ? "Failed to load recent runs. You can still create the task without dependencies, or try refreshing."
                 : availableDependencyOptions.length > 0
                   ? `${availableDependencyOptions.length} recent runs available.`
                   : "No recent prerequisite runs available."}

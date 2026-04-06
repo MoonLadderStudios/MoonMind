@@ -280,10 +280,13 @@ function renderProviderProfileSummary(
 function formatDurationMs(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—';
   if (value < 1000) return `${value} ms`;
-  const seconds = value / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
+  const totalSeconds = Math.round(value / 1000);
+  if (totalSeconds < 60) {
+    const seconds = value / 1000;
+    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
   return `${minutes}m ${remainingSeconds}s`;
 }
 
