@@ -485,6 +485,14 @@ def _serialize_execution(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+    pr_url = (
+        _coerce_temporal_scalar(memo.get("pull_request_url"))
+        or _coerce_temporal_scalar(memo.get("pullRequestUrl"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_pull_request_url"))
+        or _coerce_temporal_scalar(search_attributes.get("pullRequestUrl"))
+        or _coerce_temporal_scalar(params.get("prUrl"))
+        or _coerce_temporal_scalar(params.get("pullRequestUrl"))
+    ) or None
     is_admin = _is_execution_admin(user)
 
     return ExecutionModel(
@@ -524,6 +532,7 @@ def _serialize_execution(
         starting_branch=starting_branch,
         target_branch=target_branch,
         repository=repository,
+        pr_url=pr_url,
         publish_mode=publish_mode,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,

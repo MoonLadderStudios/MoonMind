@@ -1726,3 +1726,24 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     assert "workflow_id" in captured_origin
     assert "temporal_run_id" in captured_origin
     assert "trigger_repo" in captured_origin
+
+
+def test_update_memo_persists_pull_request_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._title = "Temporal task"
+    workflow._summary = "Waiting on review."
+    workflow._pull_request_url = "https://github.com/MoonLadderStudios/MoonMind/pull/321"
+    captured_memo: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda memo: captured_memo.append(dict(memo)),
+    )
+
+    workflow._update_memo()
+
+    assert captured_memo[-1]["pull_request_url"] == "https://github.com/MoonLadderStudios/MoonMind/pull/321"
+    assert captured_memo[-1]["pullRequestUrl"] == "https://github.com/MoonLadderStudios/MoonMind/pull/321"

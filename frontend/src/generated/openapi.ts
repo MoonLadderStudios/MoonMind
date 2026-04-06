@@ -3099,6 +3099,8 @@ export interface components {
             targetBranch?: string | null;
             /** Repository */
             repository?: string | null;
+            /** Prurl */
+            prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
             /** Resolvedskillsetref */

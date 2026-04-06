@@ -92,6 +92,7 @@ describe('Task Detail Entrypoint', () => {
       summary: 'Did work',
       status: 'completed',
       state: 'succeeded',
+      prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/123',
       rawState: 'succeeded',
       temporalStatus: 'completed',
       closeStatus: 'COMPLETED',
@@ -124,6 +125,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Gemini CLI')).toBeTruthy();
       expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
@@ -178,6 +180,7 @@ describe('Task Detail Entrypoint', () => {
                 branch: 'feature/no-op',
                 baseRef: 'origin/main',
                 commitCount: 0,
+                pullRequestUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/456',
               },
               lastStep: {
                 summary: 'Files edited in this run: none',
@@ -205,6 +208,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Run Summary')).toBeTruthy();
       expect(screen.getByText('feature/no-op')).toBeTruthy();
       expect(screen.getByText('origin/main')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/456' })).toBeTruthy();
       expect(screen.getAllByText(/no publishable diff was produced/).length).toBeGreaterThan(0);
     });
   });

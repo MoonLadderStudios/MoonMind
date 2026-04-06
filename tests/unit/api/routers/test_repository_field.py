@@ -89,3 +89,34 @@ def test_serialize_execution_includes_repository():
     record.search_attributes = {"mm_entry": "run"}
     result = _serialize_execution(record)
     assert result.repository is None
+
+
+def test_serialize_execution_includes_pr_url_from_memo():
+    record = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:wf-1",
+        run_id="run-1",
+        workflow_type=TemporalWorkflowType.RUN,
+        state=MoonMindWorkflowState.EXECUTING,
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={
+            "title": "Test Task",
+            "pull_request_url": "https://github.com/MoonLadderStudios/MoonMind/pull/789",
+        },
+        artifact_refs=[],
+        manifest_ref=None,
+        plan_ref=None,
+        scheduled_for=None,
+        created_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        closed_at=None,
+        entry="run",
+        parameters={},
+        owner_id="system",
+    )
+
+    result = _serialize_execution(record)
+
+    assert result.pr_url == "https://github.com/MoonLadderStudios/MoonMind/pull/789"

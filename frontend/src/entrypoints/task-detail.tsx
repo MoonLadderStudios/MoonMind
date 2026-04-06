@@ -81,6 +81,7 @@ const ExecutionDetailSchema = z
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
+    prUrl: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
     publishMode: z.string().nullable().optional(),
@@ -1166,6 +1167,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
   const runSummary = runSummaryQuery.data;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
+  const prUrl = execution?.prUrl || runSummary?.publishContext?.pullRequestUrl || null;
   const dependencyOutcomesById = useMemo(() => {
     const entries = (execution?.dependencyOutcomes || []).map((item) => [item.workflowId, item] as const);
     return new Map(entries);
@@ -1410,6 +1412,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.publishMode ? (
               <Card label="Publish Mode">
                 <code className="text-xs">{execution.publishMode}</code>
+              </Card>
+            ) : null}
+            {prUrl ? (
+              <Card label="PR Link">
+                <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
+                  {prUrl}
+                </a>
               </Card>
             ) : null}
             <Card label="Temporal Status">{execution.temporalStatus || '—'}</Card>
