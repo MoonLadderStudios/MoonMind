@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.schemas._validation import NonBlankStr, require_non_blank
+
 
 ManagedSessionControlAction = Literal[
     "start_session",
@@ -28,15 +30,6 @@ CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] =
     "cancel_session",
     "terminate_session",
 )
-
-
-def _require_non_blank(value: str, *, field_name: str) -> str:
-    normalized = str(value).strip()
-    if not normalized:
-        raise ValueError(f"{field_name} must not be blank")
-    return normalized
-
-
 class CodexManagedSessionPlaneContract(BaseModel):
     """Frozen Phase 1 MVP contract for the Codex managed session plane."""
 
@@ -49,7 +42,7 @@ class CodexManagedSessionPlaneContract(BaseModel):
     session_container_policy: Literal["one_container_per_task"] = (
         "one_container_per_task"
     )
-    cross_task_reuse: bool = False
+    cross_task_reuse: Literal[False] = False
     log_authority: Literal["artifact_first"] = "artifact_first"
     continuity_authority: Literal["artifact_first"] = "artifact_first"
     durable_state_rule: Literal[
@@ -62,36 +55,30 @@ class CodexManagedSessionPlaneContract(BaseModel):
         CODEX_MANAGED_SESSION_CONTROL_ACTIONS
     )
 
+    @model_validator(mode="after")
+    def _freeze_phase1_values(self) -> "CodexManagedSessionPlaneContract":
+        if self.control_actions != CODEX_MANAGED_SESSION_CONTROL_ACTIONS:
+            raise ValueError(
+                "control_actions must match the canonical Phase 1 action set"
+            )
+        return self
+
 
 class CodexManagedSessionState(BaseModel):
     """Identity and continuity state for one task-scoped Codex session."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    session_id: str = Field(..., alias="sessionId", min_length=1)
+    session_id: NonBlankStr = Field(..., alias="sessionId")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
-    container_id: str = Field(..., alias="containerId", min_length=1)
-    thread_id: str = Field(..., alias="threadId", min_length=1)
-    active_turn_id: str | None = Field(None, alias="activeTurnId")
-
-    @model_validator(mode="after")
-    def _normalize(self) -> "CodexManagedSessionState":
-        self.session_id = _require_non_blank(self.session_id, field_name="sessionId")
-        self.container_id = _require_non_blank(
-            self.container_id, field_name="containerId"
-        )
-        self.thread_id = _require_non_blank(self.thread_id, field_name="threadId")
-        active_turn_id = self.active_turn_id
-        if active_turn_id is not None:
-            self.active_turn_id = _require_non_blank(
-                active_turn_id, field_name="activeTurnId"
-            )
-        return self
+    container_id: NonBlankStr = Field(..., alias="containerId")
+    thread_id: NonBlankStr = Field(..., alias="threadId")
+    active_turn_id: NonBlankStr | None = Field(None, alias="activeTurnId")
 
     def clear_session(self, *, new_thread_id: str) -> "CodexManagedSessionState":
         """Advance to a new session epoch inside the existing container."""
 
-        normalized_thread_id = _require_non_blank(
+        normalized_thread_id = require_non_blank(
             new_thread_id, field_name="threadId"
         )
         if normalized_thread_id == self.thread_id:

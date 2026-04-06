@@ -7,6 +7,8 @@ from typing import Any, Literal, NoReturn, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.schemas._validation import require_non_blank
+
 AgentKind = Literal["external", "managed"]
 ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
 AgentRunState = Literal[
@@ -117,14 +119,6 @@ def _contains_sensitive_key(
         )
     return False
 
-
-def _require_non_blank(value: str, *, field_name: str) -> str:
-    normalized = str(value).strip()
-    if not normalized:
-        raise ValueError(f"{field_name} must not be blank")
-    return normalized
-
-
 class ProfileSelector(BaseModel):
     """Dynamic routing criteria for ProviderProfileManager."""
 
@@ -170,32 +164,33 @@ class AgentExecutionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_contract(self) -> "AgentExecutionRequest":
-        self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
+        self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
         if self.execution_profile_ref is not None:
             if self.execution_profile_ref.strip().lower() == "auto":
                 self.execution_profile_ref = None
             else:
-                self.execution_profile_ref = _require_non_blank(
+                self.execution_profile_ref = require_non_blank(
                     self.execution_profile_ref, field_name="executionProfileRef"
                 )
-        self.correlation_id = _require_non_blank(
+        self.correlation_id = require_non_blank(
             self.correlation_id, field_name="correlationId"
         )
-        self.idempotency_key = _require_non_blank(
+        self.idempotency_key = require_non_blank(
             self.idempotency_key, field_name="idempotencyKey"
         )
         instruction_ref = self.instruction_ref
         if instruction_ref is not None:
-            self.instruction_ref = _require_non_blank(
+            self.instruction_ref = require_non_blank(
                 instruction_ref, field_name="instructionRef"
             )
         resolved_skillset_ref = self.resolved_skillset_ref
         if resolved_skillset_ref is not None:
-            self.resolved_skillset_ref = _require_non_blank(
+            self.resolved_skillset_ref = require_non_blank(
                 resolved_skillset_ref, field_name="resolvedSkillsetRef"
             )
         self.input_refs = [
-            _require_non_blank(item, field_name="inputRefs[]") for item in self.input_refs
+            require_non_blank(item, field_name="inputRefs[]")
+            for item in self.input_refs
         ]
 
         if _contains_sensitive_key(self.parameters):
@@ -220,8 +215,8 @@ class AgentRunHandle(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "AgentRunHandle":
-        self.run_id = _require_non_blank(self.run_id, field_name="runId")
-        self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
+        self.run_id = require_non_blank(self.run_id, field_name="runId")
+        self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
         if self.started_at.tzinfo is None:
             self.started_at = self.started_at.replace(tzinfo=UTC)
         return self
@@ -248,8 +243,8 @@ class AgentRunStatus(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "AgentRunStatus":
-        self.run_id = _require_non_blank(self.run_id, field_name="runId")
-        self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
+        self.run_id = require_non_blank(self.run_id, field_name="runId")
+        self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
         if self.observed_at.tzinfo is None:
             self.observed_at = self.observed_at.replace(tzinfo=UTC)
         return self
@@ -272,11 +267,12 @@ class AgentRunResult(BaseModel):
     @model_validator(mode="after")
     def _validate_payload(self) -> "AgentRunResult":
         self.output_refs = [
-            _require_non_blank(item, field_name="outputRefs[]") for item in self.output_refs
+            require_non_blank(item, field_name="outputRefs[]")
+            for item in self.output_refs
         ]
         diagnostics_ref = self.diagnostics_ref
         if diagnostics_ref is not None:
-            self.diagnostics_ref = _require_non_blank(
+            self.diagnostics_ref = require_non_blank(
                 diagnostics_ref, field_name="diagnosticsRef"
             )
         summary = self.summary
@@ -357,20 +353,20 @@ class ManagedAgentProviderProfile(BaseModel):
 
     @model_validator(mode="after")
     def _validate_policy(self) -> "ManagedAgentProviderProfile":
-        self.profile_id = _require_non_blank(self.profile_id, field_name="profileId")
-        self.runtime_id = _require_non_blank(self.runtime_id, field_name="runtimeId")
-        self.credential_source = _require_non_blank(
+        self.profile_id = require_non_blank(self.profile_id, field_name="profileId")
+        self.runtime_id = require_non_blank(self.runtime_id, field_name="runtimeId")
+        self.credential_source = require_non_blank(
             self.credential_source, field_name="credentialSource"
         )
-        self.runtime_materialization_mode = _require_non_blank(
+        self.runtime_materialization_mode = require_non_blank(
             self.runtime_materialization_mode, field_name="runtimeMaterializationMode"
         )
         volume_ref = self.volume_ref
         if volume_ref is not None:
-            self.volume_ref = _require_non_blank(volume_ref, field_name="volumeRef")
+            self.volume_ref = require_non_blank(volume_ref, field_name="volumeRef")
         account_label = self.account_label
         if account_label is not None:
-            self.account_label = _require_non_blank(
+            self.account_label = require_non_blank(
                 account_label, field_name="accountLabel"
             )
         if _contains_sensitive_key(self.rate_limit_policy):
@@ -409,7 +405,7 @@ class RuntimeFileTemplate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_template(self) -> "RuntimeFileTemplate":
-        self.path = _require_non_blank(self.path, field_name="path")
+        self.path = require_non_blank(self.path, field_name="path")
         normalized_format = str(self.format or "text").strip().lower()
         if normalized_format not in {"text", "toml", "json"}:
             raise ValueError(
@@ -487,7 +483,7 @@ class ManagedRuntimeProfile(BaseModel):
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":
-        self.runtime_id = _require_non_blank(
+        self.runtime_id = require_non_blank(
             self.runtime_id, field_name="runtimeId"
         )
         if _contains_sensitive_key(
@@ -499,7 +495,7 @@ class ManagedRuntimeProfile(BaseModel):
         normalized_passthrough: list[str] = []
         seen: set[str] = set()
         for key in self.passthrough_env_keys:
-            normalized_key = _require_non_blank(
+            normalized_key = require_non_blank(
                 str(key), field_name="passthroughEnvKeys[]"
             ).upper()
             if normalized_key not in _ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS:
@@ -548,13 +544,13 @@ class ManagedRunRecord(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedRunRecord":
-        self.run_id = _require_non_blank(self.run_id, field_name="runId")
+        self.run_id = require_non_blank(self.run_id, field_name="runId")
         if self.workflow_id is not None:
-            self.workflow_id = _require_non_blank(
+            self.workflow_id = require_non_blank(
                 self.workflow_id, field_name="workflowId"
             )
-        self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
-        self.runtime_id = _require_non_blank(
+        self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
+        self.runtime_id = require_non_blank(
             self.runtime_id, field_name="runtimeId"
         )
         if self.started_at.tzinfo is None:

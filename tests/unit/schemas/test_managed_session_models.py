@@ -46,6 +46,18 @@ def test_codex_managed_session_plane_contract_exposes_canonical_control_actions(
     )
 
 
+def test_codex_managed_session_plane_contract_rejects_non_canonical_overrides() -> None:
+    with pytest.raises(ValidationError, match="Input should be False"):
+        CodexManagedSessionPlaneContract(cross_task_reuse=True)
+
+    with pytest.raises(
+        ValidationError, match="control_actions must match the canonical"
+    ):
+        CodexManagedSessionPlaneContract(
+            control_actions=("start_session", "send_turn")
+        )
+
+
 def test_codex_managed_session_state_clear_session_bumps_epoch_and_rotates_thread() -> None:
     state = CodexManagedSessionState(
         sessionId="sess-123",
@@ -64,6 +76,21 @@ def test_codex_managed_session_state_clear_session_bumps_epoch_and_rotates_threa
     assert cleared.active_turn_id is None
 
 
+def test_codex_managed_session_state_normalizes_identifier_whitespace() -> None:
+    state = CodexManagedSessionState(
+        sessionId="  sess-123  ",
+        sessionEpoch=1,
+        containerId="  ctr-123  ",
+        threadId="  thread-1  ",
+        activeTurnId="  turn-1  ",
+    )
+
+    assert state.session_id == "sess-123"
+    assert state.container_id == "ctr-123"
+    assert state.thread_id == "thread-1"
+    assert state.active_turn_id == "turn-1"
+
+
 def test_codex_managed_session_state_clear_session_requires_a_new_non_blank_thread() -> None:
     state = CodexManagedSessionState(
         sessionId="sess-123",
@@ -77,6 +104,30 @@ def test_codex_managed_session_state_clear_session_requires_a_new_non_blank_thre
 
     with pytest.raises(ValueError, match="threadId must not be blank"):
         state.clear_session(new_thread_id="   ")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("sessionId", "   "),
+        ("containerId", "   "),
+        ("threadId", "   "),
+        ("activeTurnId", "   "),
+    ],
+)
+def test_codex_managed_session_state_rejects_blank_identifiers(
+    field_name: str, field_value: str
+) -> None:
+    kwargs = {
+        "sessionId": "sess-123",
+        "sessionEpoch": 1,
+        "containerId": "ctr-123",
+        "threadId": "thread-1",
+        field_name: field_value,
+    }
+
+    with pytest.raises(ValidationError):
+        CodexManagedSessionState(**kwargs)
 
 
 def test_codex_managed_session_state_requires_epoch_at_least_one() -> None:
