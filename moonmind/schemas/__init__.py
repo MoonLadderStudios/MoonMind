@@ -18,8 +18,13 @@ from .agent_skill_models import (
 )
 from .managed_session_models import (
     CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
+    CodexManagedSessionBinding,
+    CodexManagedSessionControlRequest,
     CodexManagedSessionPlaneContract,
+    CodexManagedSessionSnapshot,
     CodexManagedSessionState,
+    CodexManagedSessionWorkflowInput,
+    canonical_codex_managed_runtime_id,
 )
 from .manifest_models import (
     AuthItem,
@@ -146,6 +151,11 @@ __all__ = [
     "SkillSelector",
     "SkillSelectorEntry",
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CodexManagedSessionBinding",
+    "CodexManagedSessionControlRequest",
     "CodexManagedSessionPlaneContract",
+    "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
+    "CodexManagedSessionWorkflowInput",
+    "canonical_codex_managed_runtime_id",
 ]
