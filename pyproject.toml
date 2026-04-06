@@ -39,7 +39,7 @@ anthropic = "~=0.87.0"
 llama-index-llms-anthropic = "~=0.11.2"
 httpx = "~=0.28.1"
 atlassian-python-api = "~=4.0.7"
-requests = "~=2.33.0"
+requests = "~=2.33.1"
 boto3 = "~=1.42.78"
 # Temporary pin until a patched NLTK release is published for CVE/Zip Slip in downloader.
 PyYAML = ">=6.0.2"
