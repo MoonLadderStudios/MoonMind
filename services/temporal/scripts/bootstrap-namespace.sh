@@ -174,56 +174,92 @@ else
 fi
 
 log "Registering custom search attributes..."
+REQUIRED_SEARCH_ATTRIBUTES=$(cat <<'EOF'
+mm_entry:Keyword
+mm_owner_id:Keyword
+mm_owner_type:Keyword
+mm_state:Keyword
+mm_updated_at:Datetime
+mm_repo:Keyword
+mm_integration:Keyword
+mm_continue_as_new_cause:Keyword
+mm_scheduled_for:Datetime
+mm_has_dependencies:Bool
+mm_dependency_state:Keyword
+mm_dependency_count:Int
+EOF
+)
+
+list_search_attributes() {
+  if [ "$CLI_KIND" = "temporal" ]; then
+    run_temporal_cli operator search-attribute list \
+      --address "$TEMPORAL_ADDRESS" \
+      --namespace "$TEMPORAL_NAMESPACE"
+  else
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 cluster get-search-attributes
+  fi
+}
+
+create_search_attribute() {
+  name="$1"
+  attr_type="$2"
+  if [ "$CLI_KIND" = "temporal" ]; then
+    run_temporal_cli operator search-attribute create \
+      --address "$TEMPORAL_ADDRESS" \
+      --namespace "$TEMPORAL_NAMESPACE" \
+      --name "$name" --type "$attr_type" >/dev/null 2>&1
+  else
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 admin cluster add-search-attributes \
+      --name "$name" --type "$attr_type" >/dev/null 2>&1
+  fi
+}
+
+search_attribute_registered() {
+  name="$1"
+  output="$2"
+  printf '%s\n' "$output" | grep -Eq "(^|[[:space:]])${name}([[:space:]]|$)"
+}
+
 MAX_ATTEMPTS=30
 attempt=0
 while :; do
   attempt=$((attempt + 1))
   success=0
-  if [ "$CLI_KIND" = "temporal" ]; then
-    if run_temporal_cli operator search-attribute create \
-      --address "$TEMPORAL_ADDRESS" \
-      --namespace "$TEMPORAL_NAMESPACE" \
-      --name "mm_entry" --type "Keyword" \
-      --name "mm_owner_id" --type "Keyword" \
-      --name "mm_owner_type" --type "Keyword" \
-      --name "mm_state" --type "Keyword" \
-      --name "mm_updated_at" --type "Datetime" \
-      --name "mm_repo" --type "Keyword" \
-      --name "mm_integration" --type "Keyword" \
-      --name "mm_continue_as_new_cause" --type "Keyword" \
-      --name "mm_scheduled_for" --type "Datetime" \
-      --name "mm_has_dependencies" --type "Bool" \
-      --name "mm_dependency_state" --type "Keyword" \
-      --name "mm_dependency_count" --type "Int" >/dev/null 2>&1; then
-      success=1
-    elif run_temporal_cli operator search-attribute list --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" | grep -q "mm_owner_id"; then
-      log "Search attributes already exist."
-      success=1
+  all_registered=0
+  registered_missing=""
+  list_output="$(list_search_attributes 2>/dev/null || true)"
+  if [ -n "$list_output" ]; then
+    success=1
+    all_registered=1
+    old_ifs=$IFS
+    IFS='
+'
+    for spec in $REQUIRED_SEARCH_ATTRIBUTES; do
+      [ -n "$spec" ] || continue
+      name=${spec%%:*}
+      attr_type=${spec#*:}
+      if search_attribute_registered "$name" "$list_output"; then
+        continue
+      fi
+      all_registered=0
+      if create_search_attribute "$name" "$attr_type"; then
+        if [ -n "$registered_missing" ]; then
+          registered_missing="${registered_missing}, "
+        fi
+        registered_missing="${registered_missing}${name}"
+      else
+        success=0
+        break
+      fi
+    done
+    IFS=$old_ifs
+    if [ "$success" -eq 1 ] && [ "$all_registered" -eq 1 ]; then
+      log "Search attributes registered successfully."
+      break
     fi
-  else
-    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 admin cluster add-search-attributes \
-      --name mm_entry --type Keyword \
-      --name mm_owner_id --type Keyword \
-      --name mm_owner_type --type Keyword \
-      --name mm_state --type Keyword \
-      --name mm_updated_at --type Datetime \
-      --name mm_repo --type Keyword \
-      --name mm_integration --type Keyword \
-      --name mm_continue_as_new_cause --type Keyword \
-      --name mm_scheduled_for --type Datetime \
-      --name mm_has_dependencies --type Bool \
-      --name mm_dependency_state --type Keyword \
-      --name mm_dependency_count --type Int >/dev/null 2>&1; then
-      success=1
-    elif tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 cluster get-search-attributes | grep -q "mm_owner_id"; then
-      log "Search attributes already exist."
-      success=1
+    if [ "$success" -eq 1 ] && [ -n "$registered_missing" ]; then
+      log "Registered missing search attributes: ${registered_missing}. Verifying..."
     fi
-  fi
-
-  if [ "$success" -eq 1 ]; then
-    log "Search attributes registered successfully."
-    break
   fi
 
   if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
