@@ -125,12 +125,23 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     assert 'pytest tests/provider/jules' in provider_runner
     assert 'integration_ci' in powershell_runner
 
-
-def test_shell_integration_runner_ensures_shared_docker_network_exists() -> None:
+def test_docker_compose_test_runners_provision_the_shared_network() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
+        encoding="utf-8"
+    )
+    provider_runner = (REPO_ROOT / "tools" / "test_jules_provider.sh").read_text(
+        encoding="utf-8"
+    )
+    powershell_runner = (REPO_ROOT / "tools" / "test-integration.ps1").read_text(
         encoding="utf-8"
     )
 
     assert 'MOONMIND_DOCKER_NETWORK' in shell_runner
     assert 'docker network inspect "$NETWORK_NAME"' in shell_runner
     assert 'docker network create "$NETWORK_NAME"' in shell_runner
+    assert 'MOONMIND_DOCKER_NETWORK' in provider_runner
+    assert 'docker network inspect "$NETWORK_NAME"' in provider_runner
+    assert 'docker network create "$NETWORK_NAME"' in provider_runner
+    assert '$env:MOONMIND_DOCKER_NETWORK' in powershell_runner
+    assert 'docker network inspect $networkName' in powershell_runner
+    assert 'docker network create $networkName' in powershell_runner

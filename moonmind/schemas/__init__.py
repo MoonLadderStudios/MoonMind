@@ -16,6 +16,11 @@ from .agent_skill_models import (
     SkillSelector,
     SkillSelectorEntry,
 )
+from .managed_session_models import (
+    CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
+    CodexManagedSessionPlaneContract,
+    CodexManagedSessionState,
+)
 from .manifest_models import (
     AuthItem,
     Defaults,
@@ -140,4 +145,7 @@ __all__ = [
     "RuntimeMaterializationMode",
     "SkillSelector",
     "SkillSelectorEntry",
+    "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CodexManagedSessionPlaneContract",
+    "CodexManagedSessionState",
 ]
