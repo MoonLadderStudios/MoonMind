@@ -191,7 +191,10 @@ while :; do
       --name "mm_repo" --type "Keyword" \
       --name "mm_integration" --type "Keyword" \
       --name "mm_continue_as_new_cause" --type "Keyword" \
-      --name "mm_scheduled_for" --type "Datetime" >/dev/null 2>&1; then
+      --name "mm_scheduled_for" --type "Datetime" \
+      --name "mm_has_dependencies" --type "Bool" \
+      --name "mm_dependency_state" --type "Keyword" \
+      --name "mm_dependency_count" --type "Int" >/dev/null 2>&1; then
       success=1
     elif run_temporal_cli operator search-attribute list --address "$TEMPORAL_ADDRESS" --namespace "$TEMPORAL_NAMESPACE" | grep -q "mm_owner_id"; then
       log "Search attributes already exist."
@@ -207,7 +210,10 @@ while :; do
       --name mm_repo --type Keyword \
       --name mm_integration --type Keyword \
       --name mm_continue_as_new_cause --type Keyword \
-      --name mm_scheduled_for --type Datetime >/dev/null 2>&1; then
+      --name mm_scheduled_for --type Datetime \
+      --name mm_has_dependencies --type Bool \
+      --name mm_dependency_state --type Keyword \
+      --name mm_dependency_count --type Int >/dev/null 2>&1; then
       success=1
     elif tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 cluster get-search-attributes | grep -q "mm_owner_id"; then
       log "Search attributes already exist."
