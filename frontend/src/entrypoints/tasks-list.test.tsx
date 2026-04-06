@@ -153,6 +153,31 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.getByRole('button', { name: 'Previous page' }).getAttribute('disabled')).toBeNull();
   });
 
+  it('shows blocked dependency summaries for waiting dependency rows', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-blocked',
+            source: 'temporal',
+            title: 'Blocked task',
+            status: 'waiting',
+            state: 'waiting_on_dependencies',
+            rawState: 'waiting_on_dependencies',
+            dependsOn: ['mm:dep-1', 'mm:dep-2'],
+            blockedOnDependencies: true,
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    expect((await screen.findAllByText('Blocked by 2 prerequisites'))[0]).toBeTruthy();
+  });
+
   it('renders human-readable runtime labels in list rows', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,

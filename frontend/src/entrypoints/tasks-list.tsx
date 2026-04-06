@@ -24,6 +24,7 @@ const TEMPORAL_STATES = [
   'planning',
   'executing',
   'awaiting_external',
+  'waiting_on_dependencies',
   'finalizing',
   'succeeded',
   'failed',
@@ -65,6 +66,8 @@ const ExecutionRowSchema = z
     closedAt: z.string().nullable().optional(),
     createdAt: z.string(),
     entry: z.string().optional(),
+    dependsOn: z.array(z.string()).optional(),
+    blockedOnDependencies: z.boolean().optional(),
   })
   .passthrough();
 
@@ -97,6 +100,17 @@ function formatWhen(iso: string | null | undefined): string {
 function summarizeRuntime(runtime: string | null | undefined): string {
   const label = formatRuntimeLabel(runtime);
   return label === '—' ? '' : label;
+}
+
+function dependencyListSummary(row: ExecutionRow): string {
+  const blocked = Boolean(
+    row.blockedOnDependencies ||
+      String(row.rawState || row.state || '').toLowerCase() === 'waiting_on_dependencies',
+  );
+  if (!blocked) return '';
+  const count = row.dependsOn?.length || 0;
+  if (count <= 0) return 'Blocked on dependencies';
+  return `Blocked by ${count} prerequisite${count === 1 ? '' : 's'}`;
 }
 
 function displayTemporalCount(count: number | null | undefined, countMode: string | undefined): string {
@@ -468,7 +482,9 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedItems.map((row) => (
+                    {sortedItems.map((row) => {
+                      const depsSummary = dependencyListSummary(row);
+                      return (
                       <tr key={row.taskId}>
                         <td>
                           <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
@@ -483,17 +499,25 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                             {row.rawState || row.state || row.status || '—'}
                           </span>
                         </td>
-                        <td>{row.title}</td>
+                        <td>
+                          <div>{row.title}</div>
+                          {depsSummary ? (
+                            <div className="small">{depsSummary}</div>
+                          ) : null}
+                        </td>
                         <td>{formatWhen(row.createdAt)}</td>
                         <td>{formatWhen(row.startedAt)}</td>
                         <td>{formatWhen(row.closedAt)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
               <ul className="queue-card-list" data-layout="card" role="list">
-                {sortedItems.map((row) => (
+                {sortedItems.map((row) => {
+                      const depsSummary = dependencyListSummary(row);
+                      return (
                   <li key={row.taskId} className="queue-card">
                     <div className="queue-card-header">
                       <div>
@@ -549,6 +573,12 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                         <dt>Finished</dt>
                         <dd>{formatWhen(row.closedAt)}</dd>
                       </div>
+                      {depsSummary ? (
+                        <div>
+                          <dt>Dependencies</dt>
+                          <dd>{depsSummary}</dd>
+                        </div>
+                      ) : null}
                     </dl>
                     <div className="queue-card-actions">
                       <a
@@ -560,7 +590,8 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       </a>
                     </div>
                   </li>
-                ))}
+                      );
+                    })}
               </ul>
             </>
           )}
