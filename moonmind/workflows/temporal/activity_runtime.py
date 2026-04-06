@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, get_type_hints
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel
 
@@ -123,6 +123,7 @@ JulesClientFactory = Callable[[], JulesClient]
 JulesAgentAdapterFactory = Callable[[], JulesAgentAdapter]
 CodexCloudClientFactory = Callable[[], CodexCloudHttpClient]
 CodexCloudAdapterFactory = Callable[[], CodexCloudAgentAdapter]
+SessionContractT = TypeVar("SessionContractT", bound=BaseModel)
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
@@ -156,39 +157,48 @@ class ManagedSessionController(Protocol):
 
     async def launch_session(
         self, request: LaunchCodexManagedSessionRequest, /
-    ) -> CodexManagedSessionHandle | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
 
     async def session_status(
         self, request: CodexManagedSessionLocator, /
-    ) -> CodexManagedSessionHandle | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
 
     async def send_turn(
         self, request: SendCodexManagedSessionTurnRequest, /
-    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
+        pass
 
     async def steer_turn(
         self, request: SteerCodexManagedSessionTurnRequest, /
-    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
+        pass
 
     async def interrupt_turn(
         self, request: InterruptCodexManagedSessionTurnRequest, /
-    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
+        pass
 
     async def clear_session(
         self, request: CodexManagedSessionClearRequest, /
-    ) -> CodexManagedSessionHandle | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
 
     async def terminate_session(
         self, request: TerminateCodexManagedSessionRequest, /
-    ) -> CodexManagedSessionHandle | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
 
     async def fetch_session_summary(
         self, request: FetchCodexManagedSessionSummaryRequest, /
-    ) -> CodexManagedSessionSummary | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionSummary | Mapping[str, Any]:
+        pass
 
     async def publish_session_artifacts(
         self, request: PublishCodexManagedSessionArtifactsRequest, /
-    ) -> CodexManagedSessionArtifactsPublication | Mapping[str, Any]: ...
+    ) -> CodexManagedSessionArtifactsPublication | Mapping[str, Any]:
+        pass
 
 
 def _managed_runtime_artifact_root() -> Path:
@@ -2420,11 +2430,16 @@ class TemporalAgentRuntimeActivities:
         request: Mapping[str, Any] | BaseModel | None,
         *,
         activity_type: str,
-        model_type: type[BaseModel],
-    ) -> BaseModel:
+        model_type: type[SessionContractT],
+    ) -> SessionContractT:
         if isinstance(request, model_type):
             return request
-        payload = _coerce_activity_request(request, activity_type=activity_type)
+        raw_payload: Mapping[str, Any] | None
+        if isinstance(request, BaseModel):
+            raw_payload = request.model_dump(mode="json", by_alias=True)
+        else:
+            raw_payload = request
+        payload = _coerce_activity_request(raw_payload, activity_type=activity_type)
         return model_type.model_validate(payload)
 
     @staticmethod
@@ -2432,8 +2447,8 @@ class TemporalAgentRuntimeActivities:
         response: Any,
         *,
         activity_type: str,
-        model_type: type[BaseModel],
-    ) -> BaseModel:
+        model_type: type[SessionContractT],
+    ) -> SessionContractT:
         try:
             return model_type.model_validate(response)
         except Exception as exc:

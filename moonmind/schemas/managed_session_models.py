@@ -133,12 +133,12 @@ class _CodexManagedSessionRemoteContract(BaseModel):
 
 
 class CodexManagedSessionLocator(_CodexManagedSessionRemoteContract):
-    """Minimal identifier set for addressing one managed session remotely."""
+    """Canonical bounded identity for addressing one managed session remotely."""
 
     session_id: NonBlankStr = Field(..., alias="sessionId")
-    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
-    container_id: NonBlankStr | None = Field(None, alias="containerId")
-    thread_id: NonBlankStr | None = Field(None, alias="threadId")
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    container_id: NonBlankStr = Field(..., alias="containerId")
+    thread_id: NonBlankStr = Field(..., alias="threadId")
 
 
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
@@ -199,7 +199,7 @@ class CodexManagedSessionClearRequest(CodexManagedSessionLocator):
 
     @model_validator(mode="after")
     def _require_new_thread(self) -> "CodexManagedSessionClearRequest":
-        if self.thread_id is not None and self.new_thread_id == self.thread_id:
+        if self.new_thread_id == self.thread_id:
             raise ValueError("newThreadId must differ from threadId")
         return self
 

@@ -10,6 +10,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
+    CodexManagedSessionLocator,
     CodexManagedSessionPlaneContract,
     CodexManagedSessionState,
     CodexManagedSessionSummary,
@@ -190,6 +191,37 @@ def test_codex_managed_session_clear_request_requires_new_thread() -> None:
             threadId="thread-1",
             newThreadId="thread-1",
         )
+
+
+def test_codex_managed_session_locator_requires_bounded_identity() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="sess-123",
+        sessionEpoch=1,
+        containerId="ctr-123",
+        threadId="thread-1",
+    )
+
+    assert locator.session_id == "sess-123"
+    assert locator.session_epoch == 1
+    assert locator.container_id == "ctr-123"
+    assert locator.thread_id == "thread-1"
+
+
+@pytest.mark.parametrize("missing_field", ["sessionEpoch", "containerId", "threadId"])
+def test_send_turn_request_requires_full_session_locator(
+    missing_field: str,
+) -> None:
+    payload = {
+        "sessionId": "sess-123",
+        "sessionEpoch": 1,
+        "containerId": "ctr-123",
+        "threadId": "thread-1",
+        "instructions": "Investigate the failing test",
+    }
+    payload.pop(missing_field)
+
+    with pytest.raises(ValidationError, match=missing_field):
+        SendCodexManagedSessionTurnRequest(**payload)
 
 
 def test_codex_managed_session_handle_exposes_remote_container_contract() -> None:

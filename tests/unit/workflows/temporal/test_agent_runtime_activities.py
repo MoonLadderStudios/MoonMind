@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
@@ -290,11 +291,57 @@ async def test_session_status_delegates_to_remote_session_controller() -> None:
     activities = TemporalAgentRuntimeActivities(session_controller=controller)
 
     result = await activities.agent_runtime_session_status(
-        {"sessionId": "sess-1", "sessionEpoch": 1, "containerId": "ctr-1"}
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+        }
     )
 
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.status == "busy"
+
+
+async def test_send_turn_accepts_base_model_payloads_and_preserves_concrete_type() -> None:
+    class _SendTurnEnvelope(BaseModel):
+        session_id: str
+        session_epoch: int
+        container_id: str
+        thread_id: str
+        instructions: str
+
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(
+        return_value=CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            },
+            turnId="turn-1",
+            status="running",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_send_turn(
+        _SendTurnEnvelope(
+            session_id="sess-1",
+            session_epoch=1,
+            container_id="ctr-1",
+            thread_id="thread-1",
+            instructions="Inspect the workspace",
+        )
+    )
+
+    assert isinstance(result, CodexManagedSessionTurnResponse)
+    validated_request = controller.send_turn.await_args.args[0]
+    assert validated_request.__class__.__name__ == "SendCodexManagedSessionTurnRequest"
+    assert validated_request.instructions == "Inspect the workspace"
+    assert result.turn_id == "turn-1"
 
 
 async def test_send_turn_delegates_to_remote_session_controller() -> None:
@@ -435,7 +482,12 @@ async def test_terminate_session_delegates_to_remote_session_controller() -> Non
     activities = TemporalAgentRuntimeActivities(session_controller=controller)
 
     result = await activities.agent_runtime_terminate_session(
-        {"sessionId": "sess-1", "sessionEpoch": 2, "containerId": "ctr-1"}
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "containerId": "ctr-1",
+            "threadId": "thread-2",
+        }
     )
 
     assert isinstance(result, CodexManagedSessionHandle)
@@ -459,7 +511,12 @@ async def test_fetch_session_summary_delegates_to_remote_session_controller() ->
     activities = TemporalAgentRuntimeActivities(session_controller=controller)
 
     result = await activities.agent_runtime_fetch_session_summary(
-        {"sessionId": "sess-1", "sessionEpoch": 2, "containerId": "ctr-1"}
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "containerId": "ctr-1",
+            "threadId": "thread-2",
+        }
     )
 
     assert isinstance(result, CodexManagedSessionSummary)
@@ -483,7 +540,12 @@ async def test_publish_session_artifacts_delegates_to_remote_session_controller(
     activities = TemporalAgentRuntimeActivities(session_controller=controller)
 
     result = await activities.agent_runtime_publish_session_artifacts(
-        {"sessionId": "sess-1", "sessionEpoch": 2, "containerId": "ctr-1"}
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "containerId": "ctr-1",
+            "threadId": "thread-2",
+        }
     )
 
     assert isinstance(result, CodexManagedSessionArtifactsPublication)

@@ -1299,3 +1299,15 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_skill.resolve" in bound_types
             assert "agent_skill.materialize" in bound_types
             assert "agent_skill.build_prompt_index" in bound_types
+
+
+async def test_agent_runtime_send_turn_disables_catalog_retries(
+    tmp_path: Path,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker():
+            catalog = build_default_activity_catalog()
+
+            send_turn = catalog.resolve_activity("agent_runtime.send_turn")
+
+            assert send_turn.retries.max_attempts == 1
