@@ -328,6 +328,14 @@ class CodexManagedSessionRuntime:
         self._artifact_spool_path.mkdir(parents=True, exist_ok=True)
         self._codex_home_path.mkdir(parents=True, exist_ok=True)
 
+    def _append_spool(self, stream_name: str, text: str) -> None:
+        if stream_name not in {"stdout", "stderr"}:
+            raise ValueError(f"unsupported stream for session spool: {stream_name}")
+        self._ensure_directories()
+        target = self._artifact_spool_path / f"{stream_name}.log"
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(text)
+
     def _app_server_client(self) -> CodexAppServerRpcClient:
         if self._client is None:
             self._client = CodexAppServerRpcClient(
@@ -454,6 +462,10 @@ class CodexManagedSessionRuntime:
             lastControlAt=time.time(),
         )
         self._save_state(state)
+        self._append_spool(
+            "stdout",
+            f"session started: {request.session_id} thread={request.thread_id}\n",
+        )
         return self._handle(
             state,
             status="ready",
@@ -499,6 +511,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "send_turn"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
 
         try:
             client.wait_for_notification(
@@ -520,6 +533,8 @@ class CodexManagedSessionRuntime:
         state.active_turn_id = None
         state.last_assistant_text = assistant_text or None
         self._save_state(state)
+        if assistant_text:
+            self._append_spool("stdout", f"assistant: {assistant_text}\n")
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
             turnId=vendor_turn_id,
@@ -532,6 +547,7 @@ class CodexManagedSessionRuntime:
         request: SteerCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
         state = self._validate_locator(request)
+        self._append_spool("stderr", f"steer not supported for turn {request.turn_id}\n")
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
             turnId=request.turn_id,
@@ -573,6 +589,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "interrupt_turn"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._append_spool("stderr", f"interrupt requested: {request.turn_id}\n")
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
             turnId=request.turn_id,
@@ -602,6 +619,10 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "clear_session"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._append_spool(
+            "stdout",
+            f"session cleared: epoch={state.session_epoch} thread={state.logical_thread_id}\n",
+        )
         return self._handle(state, status="ready")
 
     def terminate_session(
@@ -613,6 +634,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "terminate_session"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._append_spool("stdout", f"session terminated: {request.session_id}\n")
         return self._handle(state, status="terminated")
 
     def fetch_session_summary(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -38,6 +39,15 @@ ManagedSessionTurnStatus = Literal[
     "running",
     "completed",
     "interrupted",
+    "failed",
+]
+ManagedSessionRecordStatus = Literal[
+    "launching",
+    "ready",
+    "busy",
+    "terminating",
+    "terminated",
+    "degraded",
     "failed",
 ]
 
@@ -289,6 +299,120 @@ class CodexManagedSessionArtifactsPublication(_CodexManagedSessionRemoteContract
         None, alias="latestControlEventRef"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+
+
+class CodexManagedSessionRecord(BaseModel):
+    """Durable session-level supervision record for one managed session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    container_id: NonBlankStr = Field(..., alias="containerId")
+    thread_id: NonBlankStr = Field(..., alias="threadId")
+    runtime_id: NonBlankStr = Field(..., alias="runtimeId")
+    image_ref: NonBlankStr = Field(..., alias="imageRef")
+    control_url: NonBlankStr = Field(..., alias="controlUrl")
+    status: ManagedSessionRecordStatus = Field(..., alias="status")
+    workspace_path: NonBlankStr = Field(..., alias="workspacePath")
+    session_workspace_path: NonBlankStr = Field(..., alias="sessionWorkspacePath")
+    artifact_spool_path: NonBlankStr = Field(..., alias="artifactSpoolPath")
+    stdout_artifact_ref: str | None = Field(None, alias="stdoutArtifactRef")
+    stderr_artifact_ref: str | None = Field(None, alias="stderrArtifactRef")
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    latest_summary_ref: str | None = Field(None, alias="latestSummaryRef")
+    latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
+    latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
+    last_log_offset: int | None = Field(None, alias="lastLogOffset", ge=0)
+    last_log_at: datetime | None = Field(None, alias="lastLogAt")
+    error_message: str | None = Field(None, alias="errorMessage")
+    started_at: datetime = Field(..., alias="startedAt")
+    updated_at: datetime | None = Field(None, alias="updatedAt")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionRecord":
+        self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        self.task_run_id = require_non_blank(self.task_run_id, field_name="taskRunId")
+        self.container_id = require_non_blank(self.container_id, field_name="containerId")
+        self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
+        runtime_id = canonical_codex_managed_runtime_id(self.runtime_id)
+        if runtime_id is None:
+            raise ValueError("runtimeId must identify a managed Codex runtime")
+        self.runtime_id = runtime_id
+        self.image_ref = require_non_blank(self.image_ref, field_name="imageRef")
+        self.control_url = require_non_blank(self.control_url, field_name="controlUrl")
+        self.workspace_path = require_non_blank(self.workspace_path, field_name="workspacePath")
+        self.session_workspace_path = require_non_blank(
+            self.session_workspace_path,
+            field_name="sessionWorkspacePath",
+        )
+        self.artifact_spool_path = require_non_blank(
+            self.artifact_spool_path,
+            field_name="artifactSpoolPath",
+        )
+        if self.stdout_artifact_ref is not None:
+            self.stdout_artifact_ref = require_non_blank(
+                self.stdout_artifact_ref,
+                field_name="stdoutArtifactRef",
+            )
+        if self.stderr_artifact_ref is not None:
+            self.stderr_artifact_ref = require_non_blank(
+                self.stderr_artifact_ref,
+                field_name="stderrArtifactRef",
+            )
+        if self.diagnostics_ref is not None:
+            self.diagnostics_ref = require_non_blank(
+                self.diagnostics_ref,
+                field_name="diagnosticsRef",
+            )
+        if self.latest_summary_ref is not None:
+            self.latest_summary_ref = require_non_blank(
+                self.latest_summary_ref,
+                field_name="latestSummaryRef",
+            )
+        if self.latest_checkpoint_ref is not None:
+            self.latest_checkpoint_ref = require_non_blank(
+                self.latest_checkpoint_ref,
+                field_name="latestCheckpointRef",
+            )
+        if self.latest_control_event_ref is not None:
+            self.latest_control_event_ref = require_non_blank(
+                self.latest_control_event_ref,
+                field_name="latestControlEventRef",
+            )
+        if self.error_message is not None:
+            self.error_message = require_non_blank(
+                self.error_message,
+                field_name="errorMessage",
+            )
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.last_log_at is not None and self.last_log_at.tzinfo is None:
+            self.last_log_at = self.last_log_at.replace(tzinfo=UTC)
+        if self.updated_at is not None and self.updated_at.tzinfo is None:
+            self.updated_at = self.updated_at.replace(tzinfo=UTC)
+        return self
+
+    def session_state(self) -> CodexManagedSessionState:
+        return CodexManagedSessionState(
+            sessionId=self.session_id,
+            sessionEpoch=self.session_epoch,
+            containerId=self.container_id,
+            threadId=self.thread_id,
+            activeTurnId=None,
+        )
+
+    def published_artifact_refs(self) -> tuple[str, ...]:
+        return tuple(
+            ref
+            for ref in (
+                self.stdout_artifact_ref,
+                self.stderr_artifact_ref,
+                self.diagnostics_ref,
+            )
+            if ref
+        )
 class CodexManagedSessionBinding(BaseModel):
     """Bounded task-scoped session binding passed across workflow boundaries."""
 
@@ -418,6 +542,7 @@ __all__ = [
     "CodexManagedSessionHandle",
     "CodexManagedSessionLocator",
     "CodexManagedSessionPlaneContract",
+    "CodexManagedSessionRecord",
     "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
     "CodexManagedSessionSummary",
@@ -432,6 +557,7 @@ __all__ = [
     "ManagedSessionControlMode",
     "ManagedSessionHandleStatus",
     "ManagedSessionProtocol",
+    "ManagedSessionRecordStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
     "SendCodexManagedSessionTurnRequest",

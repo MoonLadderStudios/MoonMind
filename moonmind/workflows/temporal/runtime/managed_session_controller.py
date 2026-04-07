@@ -7,6 +7,7 @@ import json
 import os
 import posixpath
 import re
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -15,16 +16,21 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
+    CodexManagedSessionRecord,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionRecordStatus,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
+
+from .managed_session_store import ManagedSessionStore
+from .managed_session_supervisor import ManagedSessionSupervisor
 
 
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
@@ -82,6 +88,8 @@ class DockerCodexManagedSessionController:
         workspace_volume_name: str,
         codex_volume_name: str,
         workspace_root: str,
+        session_store: ManagedSessionStore | None = None,
+        session_supervisor: ManagedSessionSupervisor | Any | None = None,
         docker_binary: str = "docker",
         docker_host: str | None = None,
         ready_poll_interval_seconds: float = 1.0,
@@ -91,6 +99,8 @@ class DockerCodexManagedSessionController:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
         self._workspace_root = workspace_root
+        self._session_store = session_store
+        self._session_supervisor = session_supervisor
         self._docker_binary = docker_binary
         self._docker_host = docker_host
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
@@ -146,6 +156,95 @@ class DockerCodexManagedSessionController:
                 "launch_session environment cannot override reserved session keys: "
                 + ", ".join(reserved_keys)
             )
+
+    @staticmethod
+    def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"launching", "ready", "busy", "terminating", "terminated", "failed"}:
+            return normalized
+        if normalized in {"clearing", "interrupted"}:
+            return "ready"
+        return "ready"
+
+    @staticmethod
+    def _record_status_from_turn_status(status: str) -> ManagedSessionRecordStatus:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"accepted", "running"}:
+            return "busy"
+        if normalized in {"completed", "interrupted"}:
+            return "ready"
+        if normalized == "failed":
+            return "failed"
+        return "busy"
+
+    @staticmethod
+    def _turn_error_message(response: CodexManagedSessionTurnResponse) -> str | None:
+        if response.status != "failed":
+            return None
+        for key in ("errorMessage", "reason", "error"):
+            value = response.metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _locator_from_session_state(
+        session_state,
+    ) -> CodexManagedSessionLocator:
+        return CodexManagedSessionLocator(
+            sessionId=session_state.session_id,
+            sessionEpoch=session_state.session_epoch,
+            containerId=session_state.container_id,
+            threadId=session_state.thread_id,
+        )
+
+    def _record_from_launch(
+        self,
+        *,
+        request: LaunchCodexManagedSessionRequest,
+        handle: CodexManagedSessionHandle,
+    ) -> CodexManagedSessionRecord:
+        now = datetime.now(tz=UTC)
+        return CodexManagedSessionRecord(
+            sessionId=request.session_id,
+            sessionEpoch=handle.session_state.session_epoch,
+            taskRunId=request.task_run_id,
+            containerId=handle.session_state.container_id,
+            threadId=handle.session_state.thread_id,
+            runtimeId="codex_cli",
+            imageRef=handle.image_ref or request.image_ref,
+            controlUrl=handle.control_url or f"docker-exec://{handle.session_state.container_id}",
+            status=self._record_status_from_handle_status(handle.status),
+            workspacePath=request.workspace_path,
+            sessionWorkspacePath=request.session_workspace_path,
+            artifactSpoolPath=request.artifact_spool_path,
+            startedAt=now,
+            updatedAt=now,
+        )
+
+    @staticmethod
+    def _matches_locator(
+        record: CodexManagedSessionRecord,
+        locator: CodexManagedSessionLocator,
+    ) -> None:
+        if record.session_epoch != locator.session_epoch:
+            raise RuntimeError("sessionEpoch does not match the durable managed session record")
+        if record.container_id != locator.container_id:
+            raise RuntimeError("containerId does not match the durable managed session record")
+        if record.thread_id != locator.thread_id:
+            raise RuntimeError("threadId does not match the durable managed session record")
+
+    def _require_record(
+        self,
+        locator: CodexManagedSessionLocator,
+    ) -> CodexManagedSessionRecord | None:
+        if self._session_store is None:
+            return None
+        record = self._session_store.load(locator.session_id)
+        if record is None:
+            raise RuntimeError(f"managed session record not found: {locator.session_id}")
+        self._matches_locator(record, locator)
+        return record
 
     async def _remove_container(
         self,
@@ -223,7 +322,7 @@ class DockerCodexManagedSessionController:
             "ready",
         )
         last_error: Exception | None = None
-        for attempt in range(self._ready_poll_attempts):
+        for _attempt in range(self._ready_poll_attempts):
             try:
                 stdout, _stderr = await self._run(command)
                 payload = json.loads(stdout.strip() or "{}")
@@ -237,6 +336,47 @@ class DockerCodexManagedSessionController:
         details = f": {last_error}" if last_error is not None else ""
         raise RuntimeError(
             f"managed session container {container_id} did not become ready{details}"
+        )
+
+    async def _persist_handle_transition(
+        self,
+        *,
+        locator: CodexManagedSessionLocator,
+        status: str,
+    ) -> None:
+        if self._session_store is None:
+            return
+        if self._session_store.load(locator.session_id) is None:
+            return
+        await self._session_store.update(
+            locator.session_id,
+            session_epoch=locator.session_epoch,
+            container_id=locator.container_id,
+            thread_id=locator.thread_id,
+            status=self._record_status_from_handle_status(status),
+            updated_at=datetime.now(tz=UTC),
+            error_message=None,
+        )
+
+    async def _container_exists(self, container_id: str) -> bool:
+        returncode, stdout, stderr = await self._command_runner(
+            (
+                self._docker_binary,
+                "inspect",
+                "-f",
+                "{{.Id}}",
+                container_id,
+            ),
+            env=self._docker_env(),
+        )
+        if returncode == 0:
+            return True
+        error_output = f"{stdout}\n{stderr}".lower()
+        if "no such object" in error_output or "no such container" in error_output:
+            return False
+        details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+        raise RuntimeError(
+            f"failed to inspect managed session container {container_id}: {details}"
         )
 
     async def launch_session(
@@ -295,7 +435,13 @@ class DockerCodexManagedSessionController:
         except Exception:
             await self._remove_container(container_id, ignore_failure=True)
             raise
-        return CodexManagedSessionHandle.model_validate(payload)
+        handle = CodexManagedSessionHandle.model_validate(payload)
+        if self._session_store is not None:
+            record = self._record_from_launch(request=request, handle=handle)
+            self._session_store.save(record)
+            if self._session_supervisor is not None:
+                await self._session_supervisor.start(record)
+        return handle
 
     async def session_status(
         self,
@@ -306,7 +452,12 @@ class DockerCodexManagedSessionController:
             action="session_status",
             payload=request.model_dump(by_alias=True),
         )
-        return CodexManagedSessionHandle.model_validate(payload)
+        handle = CodexManagedSessionHandle.model_validate(payload)
+        await self._persist_handle_transition(
+            locator=self._locator_from_session_state(handle.session_state),
+            status=handle.status,
+        )
+        return handle
 
     async def send_turn(
         self,
@@ -317,7 +468,21 @@ class DockerCodexManagedSessionController:
             action="send_turn",
             payload=request.model_dump(by_alias=True),
         )
-        return CodexManagedSessionTurnResponse.model_validate(payload)
+        response = CodexManagedSessionTurnResponse.model_validate(payload)
+        if (
+            self._session_store is not None
+            and self._session_store.load(request.session_id) is not None
+        ):
+            await self._session_store.update(
+                request.session_id,
+                session_epoch=response.session_state.session_epoch,
+                container_id=response.session_state.container_id,
+                thread_id=response.session_state.thread_id,
+                status=self._record_status_from_turn_status(response.status),
+                updated_at=datetime.now(tz=UTC),
+                error_message=self._turn_error_message(response),
+            )
+        return response
 
     async def steer_turn(
         self,
@@ -339,7 +504,21 @@ class DockerCodexManagedSessionController:
             action="interrupt_turn",
             payload=request.model_dump(by_alias=True),
         )
-        return CodexManagedSessionTurnResponse.model_validate(payload)
+        response = CodexManagedSessionTurnResponse.model_validate(payload)
+        if (
+            self._session_store is not None
+            and self._session_store.load(request.session_id) is not None
+        ):
+            await self._session_store.update(
+                request.session_id,
+                session_epoch=response.session_state.session_epoch,
+                container_id=response.session_state.container_id,
+                thread_id=response.session_state.thread_id,
+                status=self._record_status_from_turn_status(response.status),
+                updated_at=datetime.now(tz=UTC),
+                error_message=self._turn_error_message(response),
+            )
+        return response
 
     async def clear_session(
         self,
@@ -350,14 +529,19 @@ class DockerCodexManagedSessionController:
             action="clear_session",
             payload=request.model_dump(by_alias=True),
         )
-        return CodexManagedSessionHandle.model_validate(payload)
+        handle = CodexManagedSessionHandle.model_validate(payload)
+        await self._persist_handle_transition(
+            locator=self._locator_from_session_state(handle.session_state),
+            status=handle.status,
+        )
+        return handle
 
     async def terminate_session(
         self,
         request: TerminateCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         await self._remove_container(request.container_id, ignore_failure=True)
-        return CodexManagedSessionHandle(
+        handle = CodexManagedSessionHandle(
             sessionState={
                 "sessionId": request.session_id,
                 "sessionEpoch": request.session_epoch,
@@ -367,25 +551,93 @@ class DockerCodexManagedSessionController:
             },
             status="terminated",
         )
+        if self._session_store is not None:
+            if self._session_supervisor is not None:
+                await self._session_supervisor.finalize(
+                    request.session_id,
+                    status="terminated",
+                )
+            elif self._session_store.load(request.session_id) is not None:
+                await self._session_store.update(
+                    request.session_id,
+                    status="terminated",
+                    updated_at=datetime.now(tz=UTC),
+                )
+        return handle
 
     async def fetch_session_summary(
         self,
         request: FetchCodexManagedSessionSummaryRequest,
     ) -> CodexManagedSessionSummary:
-        payload = await self._invoke_json(
-            container_id=request.container_id,
-            action="fetch_session_summary",
-            payload=request.model_dump(by_alias=True),
+        record = self._require_record(request)
+        if record is None:
+            payload = await self._invoke_json(
+                container_id=request.container_id,
+                action="fetch_session_summary",
+                payload=request.model_dump(by_alias=True),
+            )
+            return CodexManagedSessionSummary.model_validate(payload)
+        return CodexManagedSessionSummary(
+            sessionState=record.session_state(),
+            latestSummaryRef=record.latest_summary_ref,
+            latestCheckpointRef=record.latest_checkpoint_ref,
+            latestControlEventRef=record.latest_control_event_ref,
+            metadata={
+                "status": record.status,
+                "stdoutArtifactRef": record.stdout_artifact_ref,
+                "stderrArtifactRef": record.stderr_artifact_ref,
+                "diagnosticsRef": record.diagnostics_ref,
+                "errorMessage": record.error_message,
+            },
         )
-        return CodexManagedSessionSummary.model_validate(payload)
 
     async def publish_session_artifacts(
         self,
         request: PublishCodexManagedSessionArtifactsRequest,
     ) -> CodexManagedSessionArtifactsPublication:
-        payload = await self._invoke_json(
-            container_id=request.container_id,
-            action="publish_session_artifacts",
-            payload=request.model_dump(by_alias=True),
+        record = self._require_record(request)
+        if record is None:
+            payload = await self._invoke_json(
+                container_id=request.container_id,
+                action="publish_session_artifacts",
+                payload=request.model_dump(by_alias=True),
+            )
+            return CodexManagedSessionArtifactsPublication.model_validate(payload)
+        if (
+            self._session_supervisor is not None
+            and not record.published_artifact_refs()
+        ):
+            record = await self._session_supervisor.publish_snapshot(request.session_id)
+        return CodexManagedSessionArtifactsPublication(
+            sessionState=record.session_state(),
+            publishedArtifactRefs=record.published_artifact_refs(),
+            latestSummaryRef=record.latest_summary_ref,
+            latestCheckpointRef=record.latest_checkpoint_ref,
+            latestControlEventRef=record.latest_control_event_ref,
+            metadata={
+                **dict(request.metadata),
+                "status": record.status,
+                "stdoutArtifactRef": record.stdout_artifact_ref,
+                "stderrArtifactRef": record.stderr_artifact_ref,
+                "diagnosticsRef": record.diagnostics_ref,
+            },
         )
-        return CodexManagedSessionArtifactsPublication.model_validate(payload)
+
+    async def reconcile(self) -> list[CodexManagedSessionRecord]:
+        if self._session_store is None:
+            return []
+        reconciled: list[CodexManagedSessionRecord] = []
+        for record in self._session_store.list_active():
+            if await self._container_exists(record.container_id):
+                if self._session_supervisor is not None:
+                    await self._session_supervisor.start(record)
+                reconciled.append(record)
+                continue
+            updated = await self._session_store.update(
+                record.session_id,
+                status="degraded",
+                error_message="managed session container is missing during reconcile",
+                updated_at=datetime.now(tz=UTC),
+            )
+            reconciled.append(updated)
+        return reconciled
