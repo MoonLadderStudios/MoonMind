@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -637,6 +638,11 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pyt
             captured_payload.update(payload)
         return {"status": "launching"}
 
+    activity_runtime = TemporalAgentRuntimeActivities()
+
+    async def _launch_context_builder(**kwargs: Any):
+        return await activity_runtime.agent_runtime_build_launch_context(kwargs)
+
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles(profiles),
         slot_requester=_async_noop,
@@ -645,6 +651,7 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pyt
         workflow_id="wf-proxy",
         runtime_id="claude_code",
         run_launcher=_run_launcher,
+        launch_context_builder=_launch_context_builder,
     )
 
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest

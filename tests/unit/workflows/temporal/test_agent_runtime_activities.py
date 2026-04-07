@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -690,6 +691,17 @@ class AgentRuntimeFetchResultBoundaryTest:
             start_to_close_timeout=timedelta(minutes=1),
         )
 
+
+@workflow.defn(name="AgentRuntimeBuildLaunchContextBoundaryTest")
+class AgentRuntimeBuildLaunchContextBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> dict[str, Any]:
+        return await workflow.execute_activity(
+            "agent_runtime.build_launch_context",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
 @workflow.defn(name="AgentRuntimeCancelBoundaryTest")
 class AgentRuntimeCancelBoundaryTest:
     @workflow.run
@@ -743,6 +755,52 @@ async def test_agent_runtime_status_temporal_boundary(tmp_path: Path) -> None:
 
             assert isinstance(result, AgentRunStatus)
             assert result.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_build_launch_context_temporal_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_token")
+    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
+    activities_impl = TemporalAgentRuntimeActivities()
+    from temporalio import activity
+
+    @activity.defn(name="agent_runtime.build_launch_context")
+    async def _agent_runtime_build_launch_context_wrapper(
+        request: dict,
+    ) -> dict[str, Any]:
+        return await activities_impl.agent_runtime_build_launch_context(request)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-build-launch-context",
+            workflows=[AgentRuntimeBuildLaunchContextBoundaryTest],
+            activities=[_agent_runtime_build_launch_context_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimeBuildLaunchContextBoundaryTest.run,
+                {
+                    "profile": {
+                        "profile_id": "proxy-prof",
+                        "credential_source": "secret_ref",
+                        "tags": ["proxy-first"],
+                        "provider_id": "anthropic",
+                        "secret_refs": {"anthropic_api_key": "db://123"},
+                    },
+                    "runtime_for_profile": "claude_code",
+                    "workflow_id": "wf-boundary",
+                    "default_credential_source": "secret_ref",
+                },
+                id="boundary-test-build-launch-context",
+                task_queue="boundary-test-queue-build-launch-context",
+            )
+
+            assert result["profile_id"] == "proxy-prof"
+            assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
+            assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
 
 
 @pytest.mark.asyncio

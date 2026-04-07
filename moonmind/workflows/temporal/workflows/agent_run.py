@@ -21,6 +21,9 @@ with workflow.unsafe.imports_passed_through():
         ManagedAgentAdapter,
         ProfileResolutionError,
     )
+    from moonmind.workflows.adapters.codex_session_adapter import (
+        CodexSessionAdapter,
+    )
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
     )
@@ -103,6 +106,14 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
+    "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+)
+_MANAGED_RUN_STORE_ROOT = os.path.join(_MANAGED_RUNTIME_STORE_ROOT, "managed_runs")
+_DEFAULT_SESSION_IMAGE_REF = os.environ.get(
+    "WORKFLOW_JOB_IMAGE",
+    "ghcr.io/moonladderstudios/moonmind:latest",
+)
 
 
 def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
@@ -315,6 +326,10 @@ class MoonMindAgentRun:
             by_alias=True,
         )
         return result.model_copy(update={"metadata": metadata})
+
+    @staticmethod
+    def _uses_codex_session_adapter(request: AgentExecutionRequest) -> bool:
+        return request.agent_kind == "managed" and request.managed_session is not None
 
     async def _ensure_manager_and_signal(
         self,
@@ -681,6 +696,7 @@ class MoonMindAgentRun:
         try:
             while True:
                 skip_poll_and_fetch = False
+                uses_codex_session_adapter = self._uses_codex_session_adapter(request)
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = RunStatus.timed_out
@@ -877,22 +893,128 @@ class MoonMindAgentRun:
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
-                    store_root = os.path.join(
-                        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
-                        "managed_runs",
-                    )
-                    run_store = ManagedRunStore(store_root)
+                    async def _launch_context_builder(**kw):
+                        return await self._execute_routed_activity(
+                            "agent_runtime.build_launch_context",
+                            kw,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
 
-                    adapter: AgentAdapter = ManagedAgentAdapter(
-                        profile_fetcher=_profile_fetcher,
-                        slot_requester=_slot_requester,
-                        slot_releaser=_slot_releaser,
-                        cooldown_reporter=_cooldown_reporter,
-                        workflow_id=wf_id,
-                        runtime_id=runtime_id,
-                        run_store=run_store,
-                        run_launcher=_run_launcher,
-                    )
+                    run_store = ManagedRunStore(_MANAGED_RUN_STORE_ROOT)
+
+                    if uses_codex_session_adapter:
+                        if request.managed_session is None:
+                            raise ApplicationError(
+                                "managedSession is required for Codex session-backed runs",
+                                type="MissingManagedSession",
+                                non_retryable=True,
+                            )
+                        session_workflow_id = request.managed_session.workflow_id
+                        session_handle = workflow.get_external_workflow_handle(
+                            session_workflow_id
+                        )
+
+                        async def _load_session_snapshot(workflow_id: str) -> dict[str, Any]:
+                            handle = workflow.get_external_workflow_handle(workflow_id)
+                            return await handle.query("get_status")
+
+                        async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
+                            await session_handle.signal("attach_runtime_handles", payload)
+
+                        async def _apply_session_control_action(payload: dict[str, Any]) -> None:
+                            await session_handle.signal("control_action", payload)
+
+                        async def _launch_session(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.launch_session",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _session_status(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.session_status",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _send_turn(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.send_turn",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _interrupt_turn(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.interrupt_turn",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _clear_session(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.clear_session",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _terminate_session(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.terminate_session",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _fetch_session_summary(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.fetch_session_summary",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _publish_session_artifacts(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.publish_session_artifacts",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        adapter = CodexSessionAdapter(
+                            profile_fetcher=_profile_fetcher,
+                            slot_requester=_slot_requester,
+                            slot_releaser=_slot_releaser,
+                            cooldown_reporter=_cooldown_reporter,
+                            workflow_id=wf_id,
+                            runtime_id=runtime_id,
+                            run_store=run_store,
+                            load_session_snapshot=_load_session_snapshot,
+                            launch_session=_launch_session,
+                            session_status=_session_status,
+                            send_turn=_send_turn,
+                            interrupt_turn=_interrupt_turn,
+                            clear_remote_session=_clear_session,
+                            terminate_remote_session=_terminate_session,
+                            fetch_remote_summary=_fetch_session_summary,
+                            publish_remote_artifacts=_publish_session_artifacts,
+                            attach_runtime_handles=_attach_runtime_handles,
+                            apply_session_control_action=_apply_session_control_action,
+                            workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
+                            session_image_ref=_DEFAULT_SESSION_IMAGE_REF,
+                            launch_context_builder=_launch_context_builder,
+                        )
+                    else:
+                        adapter = ManagedAgentAdapter(
+                            profile_fetcher=_profile_fetcher,
+                            slot_requester=_slot_requester,
+                            slot_releaser=_slot_releaser,
+                            cooldown_reporter=_cooldown_reporter,
+                            workflow_id=wf_id,
+                            runtime_id=runtime_id,
+                            run_store=run_store,
+                            run_launcher=_run_launcher,
+                            launch_context_builder=_launch_context_builder,
+                        )
 
                     # --- Managed agent: launch via adapter ---
                     try:
@@ -906,6 +1028,12 @@ class MoonMindAgentRun:
                     self.run_id = handle.run_id
                     self.run_status = handle.status
                     poll_interval = handle.poll_hint_seconds or 10
+                    if (
+                        uses_codex_session_adapter
+                        and handle.status in _TERMINAL_RUN_STATUSES
+                    ):
+                        self.final_result = await adapter.fetch_result(handle.run_id)
+                        skip_poll_and_fetch = True
 
                 elif request.agent_kind == "external":
                     # Validate adapter availability and resolve execution style.
@@ -1030,7 +1158,9 @@ class MoonMindAgentRun:
                                     fallback_agent_id=request.agent_id,
                                 )
                             else:
-                                if use_managed_status_activity:
+                                if uses_codex_session_adapter:
+                                    status_obj = await adapter.status(self.run_id)
+                                elif use_managed_status_activity:
                                     status_payload = await self._execute_routed_activity(
                                         "agent_runtime.status",
                                         {
@@ -1155,7 +1285,9 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
-                        if use_managed_status_activity:
+                        if uses_codex_session_adapter:
+                            self.final_result = await adapter.fetch_result(self.run_id)
+                        elif use_managed_status_activity:
                             raw_publish_mode = (request.parameters or {}).get("publishMode")
                             publish_mode = str(raw_publish_mode).strip().lower() if isinstance(raw_publish_mode, str) and raw_publish_mode.strip() else "none"
                             params = request.parameters or {}

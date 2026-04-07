@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunHandle
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunHandle,
+    AgentRunResult,
+    AgentRunStatus,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -269,16 +274,31 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
 
     class _FakeManagedAgentAdapter:
         def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("ManagedAgentAdapter should not be used for managedSession requests")
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
             pass
 
         async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
             return AgentRunHandle(
-                runId="managed-run-1",
+                runId="managed-session-run-2",
                 agentKind="managed",
                 agentId=request.agent_id,
-                status="running",
+                status="completed",
                 startedAt=agent_run_module.workflow.now(),
             )
+
+        async def status(self, run_id: str) -> AgentRunStatus:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId="codex_cli",
+                status="completed",
+            )
+
+        async def fetch_result(self, run_id: str) -> AgentRunResult:
+            return AgentRunResult(summary="Managed success", metadata={})
 
     async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
         run.completion_event.set()
@@ -286,6 +306,27 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
     class _FakeManagerHandle:
         async def signal(self, signal_name: str, payload: Any) -> None:
             return None
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+        async def query(self, query_name: str) -> dict[str, Any]:
+            return {
+                "binding": {
+                    "workflowId": "wf-run-1:session:codex_cli",
+                    "taskRunId": "wf-run-1",
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex-default",
+                },
+                "status": "active",
+                "containerId": None,
+                "threadId": None,
+                "activeTurnId": None,
+                "terminationRequested": False,
+            }
 
     async def fake_ensure_manager_and_signal(
         manager_id: str,
@@ -311,8 +352,6 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
-        if activity_name == "agent_runtime.fetch_result":
-            return {"summary": "Managed success", "metadata": {}}
         if activity_name == "agent_runtime.publish_artifacts":
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
@@ -321,6 +360,11 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
         agent_run_module,
         "ManagedAgentAdapter",
         _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "CodexSessionAdapter",
+        _FakeCodexSessionAdapter,
     )
     monkeypatch.setattr(
         run,
@@ -333,6 +377,11 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
         fake_sync_manager_profiles,
     )
     monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
     monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
 
     result = await run.run(
