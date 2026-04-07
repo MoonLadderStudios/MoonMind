@@ -76,6 +76,8 @@ def _is_safe_reason_transition(previous: str, current: str) -> bool:
         return True
     if prev in FULL_REMEDIATION_REASONS and curr in FINALIZE_ONLY_RETRY_REASONS:
         return True
+    if prev in FINALIZE_ONLY_RETRY_REASONS and curr in FULL_REMEDIATION_REASONS:
+        return True
     if prev in FINALIZE_ONLY_RETRY_REASONS and curr in FINALIZE_ONLY_RETRY_REASONS:
         return True
     if curr == "merge_not_ready" and prev in FINALIZE_ONLY_RETRY_REASONS:
@@ -241,45 +243,21 @@ def run_orchestration(
             and normalize_text(reason) != normalize_text(blocked_reason_previous)
             and not _is_safe_reason_transition(blocked_reason_previous, reason)
         ):
-            if normalize_text(reason) == "ci_failures":
-                retry_action = classify_retry_action(
-                    reason,
-                    merge_not_ready_grace_remaining=grace_remaining,
-                )
-                if retry_action == "full_remediation":
-                    blocked_reason_previous = reason
-                else:
-                    result = _build_result(
-                        status="blocked",
-                        decision="reason changed across retries; manual review required",
-                        merge_outcome="blocked",
-                        final_reason=reason,
-                        next_step="manual_review",
-                        max_attempts=max_attempts,
-                        finalize_max_retries=finalize_max_retries,
-                        fix_max_iterations=fix_max_iterations,
-                        history=history,
-                        escalations=escalations,
-                        started_at=started_at,
-                        finished_at=now_utc_iso(),
-                    )
-                    return result, EXIT_CODE_BLOCKED
-            else:
-                result = _build_result(
-                    status="blocked",
-                    decision="reason changed across retries; manual review required",
-                    merge_outcome="blocked",
-                    final_reason=reason,
-                    next_step="manual_review",
-                    max_attempts=max_attempts,
-                    finalize_max_retries=finalize_max_retries,
-                    fix_max_iterations=fix_max_iterations,
-                    history=history,
-                    escalations=escalations,
-                    started_at=started_at,
-                    finished_at=now_utc_iso(),
-                )
-                return result, EXIT_CODE_BLOCKED
+            result = _build_result(
+                status="blocked",
+                decision="reason changed across retries; manual review required",
+                merge_outcome="blocked",
+                final_reason=reason,
+                next_step="manual_review",
+                max_attempts=max_attempts,
+                finalize_max_retries=finalize_max_retries,
+                fix_max_iterations=fix_max_iterations,
+                history=history,
+                escalations=escalations,
+                started_at=started_at,
+                finished_at=now_utc_iso(),
+            )
+            return result, EXIT_CODE_BLOCKED
         if reason:
             blocked_reason_previous = reason
 
