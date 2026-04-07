@@ -1,0 +1,72 @@
+name: Run Provider Verification
+
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  provider-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: provider-verification
+    env:
+      JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+      JULES_API_URL: ${{ vars.JULES_API_URL }}
+      MOONMIND_FORCE_LOCAL_TESTS: "1"
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+
+    - name: Run Jules provider verification suite
+      run: |
+        set -euo pipefail
+        ./tools/test_jules_provider.sh
+
+    - name: Capture docker compose diagnostics
+      if: failure()
+      run: |
+        set -uo pipefail
+        mkdir -p /tmp/provider-verification
+        printf 'Collecting docker compose diagnostics\n' > /tmp/provider-verification/diagnostics-status.txt
+        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD=(docker compose)
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD=(docker-compose)
+        else
+          COMPOSE_CMD=()
+          printf 'docker compose CLI is unavailable\n' >> /tmp/provider-verification/diagnostics-status.txt
+        fi
+        if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > /tmp/provider-verification/docker-compose-config.txt 2>&1; then
+            printf 'docker compose config failed\n' >> /tmp/provider-verification/diagnostics-status.txt
+          fi
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > /tmp/provider-verification/docker-compose-ps.txt 2>&1; then
+            printf 'docker compose ps -a failed\n' >> /tmp/provider-verification/diagnostics-status.txt
+          fi
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > /tmp/provider-verification/docker-compose-logs.txt 2>&1; then
+            printf 'docker compose logs failed\n' >> /tmp/provider-verification/diagnostics-status.txt
+          fi
+        fi
+        if [[ -d var/artifacts ]]; then
+          cp -R var/artifacts /tmp/provider-verification/var-artifacts || printf 'copying var/artifacts failed\n' >> /tmp/provider-verification/diagnostics-status.txt
+        fi
+
+    - name: Upload provider verification diagnostics
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: provider-verification-diagnostics
+        path: /tmp/provider-verification
+        if-no-files-found: error
