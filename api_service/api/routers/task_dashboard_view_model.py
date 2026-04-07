@@ -22,6 +22,7 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "gemini_cli", "claude_code", "jules", "universal")
+_HOSTNAME = socket.gethostname()
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
@@ -117,6 +118,18 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
     }
 
 
+def _build_dashboard_system_metadata() -> dict[str, str | None]:
+    """Return operator-facing build metadata for the dashboard shell and runtime config."""
+
+    build_id = str(os.environ.get("MOONMIND_BUILD_ID", "")).strip() or None
+    codex_cli_version = str(os.environ.get("CODEX_CLI_VERSION", "")).strip() or None
+    return {
+        "buildId": build_id,
+        "codexCliVersion": codex_cli_version,
+        "hostname": _HOSTNAME,
+    }
+
+
 def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
 
@@ -154,8 +167,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         str(settings.workflow.default_publish_mode or "").strip().lower() or "pr"
     )
 
-    docker_image_tag = os.environ.get("CODEX_CLI_VERSION", "").strip() or "latest"
-    hostname = socket.gethostname()
+    system_metadata = _build_dashboard_system_metadata()
 
     return {
         "initialPath": initial_path,
@@ -213,8 +225,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             ),
         },
         "system": {
-            "dockerImageTag": docker_image_tag,
-            "hostname": hostname,
+            **system_metadata,
             "defaultRepository": default_repository,
             "defaultTaskRuntime": default_task_runtime,
             "defaultTaskModel": default_task_model,
