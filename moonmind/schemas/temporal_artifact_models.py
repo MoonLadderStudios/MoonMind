@@ -196,6 +196,31 @@ class ArtifactListResponse(BaseModel):
     artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
 
 
+class ArtifactSessionGroupModel(BaseModel):
+    """Server-defined grouping of task-scoped session artifacts."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    group_key: str
+    title: str
+    artifacts: list[ArtifactMetadataModel] = Field(default_factory=list)
+
+
+class ArtifactSessionProjectionModel(BaseModel):
+    """Minimal task-scoped session continuity projection."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_run_id: str
+    session_id: str
+    session_epoch: int
+    grouped_artifacts: list[ArtifactSessionGroupModel] = Field(default_factory=list)
+    latest_summary_ref: Optional[ArtifactRefModel] = None
+    latest_checkpoint_ref: Optional[ArtifactRefModel] = None
+    latest_control_event_ref: Optional[ArtifactRefModel] = None
+    latest_reset_boundary_ref: Optional[ArtifactRefModel] = None
+
+
 class PresignDownloadResponse(BaseModel):
     """Presigned-download response payload."""
 
