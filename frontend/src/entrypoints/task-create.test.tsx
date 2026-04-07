@@ -1209,7 +1209,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
 
     await waitFor(() => {
-      expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(2);
     });
   });
 
