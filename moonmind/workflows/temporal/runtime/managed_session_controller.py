@@ -524,48 +524,42 @@ class DockerCodexManagedSessionController:
         self,
         request: CodexManagedSessionClearRequest,
     ) -> CodexManagedSessionHandle:
-        previous_record = (
-            self._session_store.load(request.session_id)
-            if self._session_store is not None
-            else None
-        )
-        if previous_record is not None:
-            self._matches_locator(previous_record, request)
+        session_store = self._session_store
+        previous_record = None
+        if session_store is not None:
+            previous_record = session_store.load(request.session_id)
+            if previous_record is not None:
+                self._matches_locator(previous_record, request)
         payload = await self._invoke_json(
             container_id=request.container_id,
             action="clear_session",
             payload=request.model_dump(by_alias=True),
         )
         handle = CodexManagedSessionHandle.model_validate(payload)
-        await self._persist_handle_transition(
-            locator=self._locator_from_session_state(handle.session_state),
-            status=handle.status,
-        )
-        if self._session_supervisor is not None and previous_record is not None:
-            cleared_at = datetime.now(tz=UTC).isoformat()
-            await self._session_supervisor.publish_reset_artifacts(
+        if previous_record is not None:
+            assert session_store is not None
+            updated_record = await session_store.update(
                 request.session_id,
-                control_event={
-                    "action": "clear_session",
-                    "sessionId": request.session_id,
-                    "containerId": request.container_id,
-                    "oldSessionEpoch": previous_record.session_epoch,
-                    "newSessionEpoch": handle.session_state.session_epoch,
-                    "oldThreadId": previous_record.thread_id,
-                    "newThreadId": handle.session_state.thread_id,
-                    "reason": request.reason,
-                    "clearedAt": cleared_at,
-                },
-                reset_boundary={
-                    "sessionId": request.session_id,
-                    "containerId": request.container_id,
-                    "oldSessionEpoch": previous_record.session_epoch,
-                    "newSessionEpoch": handle.session_state.session_epoch,
-                    "oldThreadId": previous_record.thread_id,
-                    "newThreadId": handle.session_state.thread_id,
-                    "reason": request.reason,
-                    "clearedAt": cleared_at,
-                },
+                session_epoch=handle.session_state.session_epoch,
+                container_id=handle.session_state.container_id,
+                thread_id=handle.session_state.thread_id,
+                image_ref=handle.image_ref or previous_record.image_ref,
+                control_url=handle.control_url or previous_record.control_url,
+                status=self._record_status_from_handle_status(handle.status),
+                updated_at=datetime.now(tz=UTC),
+                error_message=None,
+            )
+            if self._session_supervisor is not None:
+                await self._session_supervisor.publish_reset_artifacts(
+                    previous_record=previous_record,
+                    record=updated_record,
+                    action="clear_session",
+                    reason=request.reason,
+                )
+        else:
+            await self._persist_handle_transition(
+                locator=self._locator_from_session_state(handle.session_state),
+                status=handle.status,
             )
         return handle
 

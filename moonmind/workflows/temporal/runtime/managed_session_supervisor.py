@@ -201,6 +201,73 @@ class ManagedSessionSupervisor:
             error_message=record.error_message,
         )
 
+    async def publish_reset_artifacts(
+        self,
+        *,
+        previous_record: CodexManagedSessionRecord,
+        record: CodexManagedSessionRecord,
+        action: str,
+        reason: str | None,
+    ) -> CodexManagedSessionRecord:
+        if record.session_id != previous_record.session_id:
+            raise ValueError("reset artifact publication requires one session_id")
+
+        epoch = record.session_epoch
+        recorded_at = datetime.now(tz=UTC)
+        control_ref = self._artifact_storage.write_artifact(
+            job_id=record.session_id,
+            artifact_name=f"session.control_event.epoch-{epoch}.json",
+            data=(
+                json.dumps(
+                    {
+                        "linkType": "session.control_event",
+                        "action": action,
+                        "sessionId": record.session_id,
+                        "taskRunId": record.task_run_id,
+                        "containerId": record.container_id,
+                        "previousSessionEpoch": previous_record.session_epoch,
+                        "newSessionEpoch": record.session_epoch,
+                        "previousThreadId": previous_record.thread_id,
+                        "newThreadId": record.thread_id,
+                        "reason": reason,
+                        "recordedAt": recorded_at.isoformat(),
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )[1]
+        boundary_ref = self._artifact_storage.write_artifact(
+            job_id=record.session_id,
+            artifact_name=f"session.reset_boundary.epoch-{epoch}.json",
+            data=(
+                json.dumps(
+                    {
+                        "linkType": "session.reset_boundary",
+                        "boundaryKind": action,
+                        "sessionId": record.session_id,
+                        "taskRunId": record.task_run_id,
+                        "containerId": record.container_id,
+                        "sessionEpoch": record.session_epoch,
+                        "threadId": record.thread_id,
+                        "previousSessionEpoch": previous_record.session_epoch,
+                        "previousThreadId": previous_record.thread_id,
+                        "recordedAt": recorded_at.isoformat(),
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )[1]
+        return await self._store.update(
+            record.session_id,
+            latest_control_event_ref=control_ref,
+            latest_reset_boundary_ref=boundary_ref,
+            updated_at=recorded_at,
+        )
+
     async def finalize(
         self,
         session_id: str,
@@ -222,31 +289,4 @@ class ManagedSessionSupervisor:
             record,
             status=status,
             error_message=error_message,
-        )
-
-    async def publish_reset_artifacts(
-        self,
-        session_id: str,
-        *,
-        control_event: dict[str, object],
-        reset_boundary: dict[str, object],
-    ) -> CodexManagedSessionRecord:
-        record = self._store.load(session_id)
-        if record is None:
-            raise ValueError(f"managed session record not found: {session_id}")
-        control_ref = self._write_json_artifact(
-            job_id=session_id,
-            artifact_name="session.control_event.json",
-            payload=control_event,
-        )
-        reset_ref = self._write_json_artifact(
-            job_id=session_id,
-            artifact_name="session.reset_boundary.json",
-            payload=reset_boundary,
-        )
-        return await self._store.update(
-            session_id,
-            latest_control_event_ref=control_ref,
-            latest_reset_boundary_ref=reset_ref,
-            updated_at=datetime.now(tz=UTC),
         )
