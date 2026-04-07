@@ -127,7 +127,7 @@ async def _require_task_run_access(task_run_id: str, user: User) -> None:
     if owner_type != "user" or owner_id != str(user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access observability for this run.",
+            detail="You do not have permission to access this task run or its session projection.",
         )
 
 
@@ -175,7 +175,10 @@ async def _build_task_run_artifact_session_projection(
     service: TemporalArtifactService,
 ) -> ArtifactSessionProjectionModel | None:
     store = ManagedSessionStore(_get_managed_session_store_root())
-    record = await asyncio.to_thread(store.load, session_id)
+    try:
+        record = await asyncio.to_thread(store.load, session_id)
+    except ValueError:
+        return None
     if record is None or record.task_run_id != task_run_id:
         return None
 
@@ -238,7 +241,7 @@ async def _build_task_run_artifact_session_projection(
         metadata = await _cached_metadata(artifact_id)
         if metadata is None:
             return None
-        return ArtifactRefModel(**metadata.artifact_ref.model_dump())
+        return metadata.artifact_ref
 
     return ArtifactSessionProjectionModel(
         task_run_id=record.task_run_id,

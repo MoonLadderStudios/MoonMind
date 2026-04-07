@@ -882,6 +882,21 @@ def test_get_task_run_artifact_session_projection_returns_404_when_missing(
     assert response.json()["detail"]["code"] == "session_projection_not_found"
 
 
+def test_get_task_run_artifact_session_projection_returns_404_for_invalid_session_id(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _artifact_service = client
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedSessionStore.load",
+        side_effect=ValueError("session_id resolves outside store root"),
+    ):
+        response = test_client.get("/api/task-runs/wf-task-1/artifact-sessions/%2E%2E")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "session_projection_not_found"
+
+
 def test_get_task_run_artifact_session_projection_returns_404_for_task_mismatch(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -968,3 +983,7 @@ def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -
                 )
 
     assert response.status_code == 403
+    assert (
+        response.json()["detail"]
+        == "You do not have permission to access this task run or its session projection."
+    )
