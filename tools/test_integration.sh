@@ -30,6 +30,21 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   echo "Created Docker network: $NETWORK_NAME"
 fi
 
+# Build pytest service
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
-"${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm pytest \
-  bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"
+
+# Run integration tests (always cleaned up via trap)
+# --timeout 60: kill any single test that runs longer than 60 seconds
+# --timeout-method=thread: use thread-based timeout (works with async tests)
+run_tests() {
+  "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm pytest \
+    bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short --timeout 60 --timeout-method=thread"
+}
+
+# Ensure compose stack is always torn down, even on failure or interrupt
+cleanup() {
+  "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" down --remove-orphans >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+run_tests
