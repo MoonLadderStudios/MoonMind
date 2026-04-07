@@ -313,7 +313,7 @@ RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 RUN pip install --no-cache-dir -e .
 # Keep test runners available in all worker images (codex/gemini/claude).
 RUN pip install --no-cache-dir readmeai~=0.6.3 --no-deps && \
-    pip install --no-cache-dir pytest pytest-xdist
+    pip install --no-cache-dir pytest pytest-xdist pytest-timeout
 
 # Install test extras when requested so compose-driven test runs have pytest and
 # related dependencies baked into the image, avoiding runtime network installs.
