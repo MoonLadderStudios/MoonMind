@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -152,6 +153,76 @@ class ManagedSessionSupervisor:
             status=record.status,
             error_message=record.error_message,
         )
+
+    async def publish_reset_artifacts(
+        self,
+        *,
+        previous_record: CodexManagedSessionRecord,
+        record: CodexManagedSessionRecord,
+        action: str,
+        reason: str | None,
+    ) -> CodexManagedSessionRecord:
+        if record.session_id != previous_record.session_id:
+            raise ValueError("reset artifact publication requires one session_id")
+
+        epoch = record.session_epoch
+        recorded_at = datetime.now(tz=UTC)
+        control_ref = self._artifact_storage.write_artifact(
+            job_id=record.session_id,
+            artifact_name=f"session.control_event.epoch-{epoch}.json",
+            data=(
+                json.dumps(
+                    {
+                        "linkType": "session.control_event",
+                        "action": action,
+                        "sessionId": record.session_id,
+                        "taskRunId": record.task_run_id,
+                        "containerId": record.container_id,
+                        "previousSessionEpoch": previous_record.session_epoch,
+                        "newSessionEpoch": record.session_epoch,
+                        "previousThreadId": previous_record.thread_id,
+                        "newThreadId": record.thread_id,
+                        "reason": reason,
+                        "recordedAt": recorded_at.isoformat(),
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )[1]
+        boundary_ref = self._artifact_storage.write_artifact(
+            job_id=record.session_id,
+            artifact_name=f"session.reset_boundary.epoch-{epoch}.json",
+            data=(
+                json.dumps(
+                    {
+                        "linkType": "session.reset_boundary",
+                        "boundaryKind": action,
+                        "sessionId": record.session_id,
+                        "taskRunId": record.task_run_id,
+                        "containerId": record.container_id,
+                        "sessionEpoch": record.session_epoch,
+                        "threadId": record.thread_id,
+                        "previousSessionEpoch": previous_record.session_epoch,
+                        "previousThreadId": previous_record.thread_id,
+                        "recordedAt": recorded_at.isoformat(),
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )[1]
+        updated = record.model_copy(
+            update={
+                "latest_control_event_ref": control_ref,
+                "latest_checkpoint_ref": boundary_ref,
+                "updated_at": recorded_at,
+            }
+        )
+        self._store.save(updated)
+        return updated
 
     async def finalize(
         self,
