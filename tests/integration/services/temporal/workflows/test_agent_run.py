@@ -11,6 +11,11 @@ from temporalio.service import RPCError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
+# NOTE: This test file is NOT marked integration_ci because the Temporal
+# time-skipping workflow tests consistently exceed CI timeout thresholds.
+# These tests remain available for local development verification only.
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+
 
 # Local mock activities that simulate the catalog-routed activities
 # (the standalone stubs were removed in favor of catalog routing).

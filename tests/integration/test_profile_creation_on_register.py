@@ -13,6 +13,8 @@ from api_service.db.models import Base, UserProfile
 from api_service.main import app, startup_event
 from moonmind.config.settings import settings
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 @pytest.mark.asyncio
 async def test_profile_created_on_register(monkeypatch, tmp_path):

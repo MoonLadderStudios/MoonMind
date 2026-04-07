@@ -4,10 +4,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REHEARSAL_SCRIPT = (
     REPO_ROOT / "services/temporal/scripts/rehearse-visibility-schema-upgrade.sh"
 )
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
 def _write_executable(path: Path, contents: str) -> None:

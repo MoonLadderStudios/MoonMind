@@ -18,6 +18,8 @@ from moonmind.services.observability.publisher import ObservabilityPublisher
 from moonmind.services.observability.models import LogStreamEvent, LogStreamType
 from moonmind.services.observability.subscriber import log_stream_generator
 
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -11,6 +11,8 @@ from api_service.db import base as db_base
 from api_service.db.models import Base, UserProfile
 from api_service.main import startup_event
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 @pytest.mark.asyncio
 async def test_startup_profile_seeding(disabled_env_keys, tmp_path):

@@ -4,8 +4,12 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "services/temporal/scripts/bootstrap-namespace.sh"
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_entry": "Keyword",
     "mm_owner_id": "Keyword",

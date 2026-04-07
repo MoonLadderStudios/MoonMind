@@ -67,7 +67,7 @@ opentelemetry-api = "^1.25.0"
 opentelemetry-sdk = "^1.25.0"
 
 [tool.poetry.extras]
-tests = ["pytest", "pytest-mock", "pytest-asyncio", "pytest-xdist"]
+tests = ["pytest", "pytest-mock", "pytest-asyncio", "pytest-xdist", "pytest-timeout"]
 
 [tool.poetry.scripts]
 moonmind = "moonmind.cli:main"
