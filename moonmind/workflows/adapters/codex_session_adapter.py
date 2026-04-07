@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,7 +15,6 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunState,
     AgentRunStatus,
-    ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -40,9 +35,12 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
+    ManagedProfileLaunchContext,
+    _current_time,
+    _generate_run_id,
     build_managed_profile_launch_context,
+    default_credential_source_for_runtime,
 )
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 
 SessionSnapshotLoader = Callable[
@@ -135,8 +133,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._apply_session_control_action = apply_session_control_action
         self._workspace_root = Path(workspace_root).resolve()
         self._session_image_ref = str(session_image_ref).strip()
-        if self._run_store is None:
-            raise ValueError("CodexSessionAdapter requires run_store")
+        self._run_states: dict[str, CodexSessionExecutionState] = {}
 
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         binding = self._require_binding(request)
@@ -152,17 +149,30 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 else None
             ),
         )
-        default_credential_source = "oauth_volume"
-        launch_context = build_managed_profile_launch_context(
-            profile=profile,
-            runtime_for_profile=runtime_id,
-            workflow_id=self._workflow_id,
-            default_credential_source=default_credential_source,
-        )
+        default_credential_source = default_credential_source_for_runtime(runtime_id)
+        if self._launch_context_builder is not None:
+            built_context = await self._launch_context_builder(
+                profile=profile,
+                runtime_for_profile=runtime_id,
+                workflow_id=self._workflow_id,
+                default_credential_source=default_credential_source,
+            )
+            launch_context = (
+                built_context
+                if isinstance(built_context, ManagedProfileLaunchContext)
+                else ManagedProfileLaunchContext(**built_context)
+            )
+        else:
+            launch_context = build_managed_profile_launch_context(
+                profile=profile,
+                runtime_for_profile=runtime_id,
+                workflow_id=self._workflow_id,
+                default_credential_source=default_credential_source,
+            )
         self._active_profile_id = launch_context.profile_id or None
 
-        run_id = str(uuid4())
-        started_at = datetime.now(tz=UTC)
+        run_id = _generate_run_id()
+        started_at = _current_time()
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -197,7 +207,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             reason=None,
             container_id=turn_response.session_state.container_id,
             thread_id=turn_response.session_state.thread_id,
-            active_turn_id=turn_response.turn_id,
         )
 
         current_locator = self._locator_from_state(
@@ -236,7 +245,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "turnId": turn_response.turn_id,
             },
         )
-        finished_at = datetime.now(tz=UTC)
+        finished_at = _current_time()
         self._save_run_state(
             run_id=run_id,
             agent_id=request.agent_id,
@@ -248,22 +257,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             finished_at=finished_at,
             profile_id=launch_context.profile_id or None,
         )
-        self._run_store.save(
-            ManagedRunRecord(
-                runId=run_id,
-                workflowId=self._workflow_id,
-                agentId=request.agent_id,
-                runtimeId=runtime_id,
-                status="completed",
-                startedAt=started_at,
-                finishedAt=finished_at,
-                workspacePath=self._workspace_path_for_request(
-                    binding=binding,
-                    request=request,
-                ),
-                errorMessage=assistant_text,
-            )
-        )
         return AgentRunHandle(
             runId=run_id,
             agentKind="managed",
@@ -273,7 +266,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             metadata={
                 "profile_id": launch_context.profile_id,
                 "credential_source": launch_context.credential_source,
-                "env_keys_count": len(launch_context.shaped_env),
+                "env_keys_count": launch_context.env_keys_count,
                 "sessionId": current_locator.session_id,
                 "sessionEpoch": current_locator.session_epoch,
                 "containerId": current_locator.container_id,
@@ -293,15 +286,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     "sessionId": state.locator.session_id,
                     "containerId": state.locator.container_id,
                 },
-            )
-        record = self._run_store.load(run_id)
-        if record is not None:
-            return AgentRunStatus(
-                runId=run_id,
-                agentKind="managed",
-                agentId=record.agent_id,
-                status=record.status,
-                metadata={"runtimeId": record.runtime_id},
             )
         return AgentRunStatus(
             runId=run_id,
@@ -360,7 +344,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             failureClass="user_error",
             metadata=state.result.metadata,
         )
-        finished_at = datetime.now(tz=UTC)
+        finished_at = _current_time()
         self._save_run_state(
             run_id=state.run_id,
             agent_id=state.agent_id,
@@ -372,29 +356,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             finished_at=finished_at,
             profile_id=state.profile_id,
         )
-        record = self._run_store.load(run_id)
-        if record is None:
-            self._run_store.save(
-                ManagedRunRecord(
-                    runId=run_id,
-                    workflowId=self._workflow_id,
-                    agentId=state.agent_id,
-                    runtimeId=state.runtime_id,
-                    status="canceled",
-                    startedAt=state.started_at,
-                    finishedAt=finished_at,
-                    errorMessage=canceled_result.summary,
-                    failureClass=canceled_result.failure_class,
-                )
-            )
-        else:
-            self._run_store.update_status(
-                run_id,
-                "canceled",
-                finished_at=finished_at,
-                error_message=canceled_result.summary,
-                failure_class=canceled_result.failure_class,
-            )
         return AgentRunStatus(
             runId=run_id,
             agentKind="managed",
@@ -558,12 +519,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 )
             )
 
+        active_binding = snapshot.binding
         launch_request = LaunchCodexManagedSessionRequest(
-            taskRunId=binding.task_run_id,
+            taskRunId=active_binding.task_run_id,
             workflowId=self._workflow_id,
-            sessionId=binding.session_id,
-            sessionEpoch=binding.session_epoch,
-            threadId=self._default_thread_id(binding),
+            sessionId=active_binding.session_id,
+            sessionEpoch=active_binding.session_epoch,
+            threadId=self._default_thread_id(active_binding),
             workspacePath=self._workspace_path_for_request(binding=binding, request=request),
             sessionWorkspacePath=str(self._session_root(binding) / "session"),
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
@@ -638,31 +600,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     def _default_thread_id(self, binding: CodexManagedSessionBinding) -> str:
         return f"thread:{binding.session_id}:{binding.session_epoch}"
 
-    def _state_path(self, run_id: str) -> Path:
-        suffix_id = f"{run_id}.codex-session"
-        return self._run_store._resolve_path(suffix_id)  # type: ignore[attr-defined]
-
     def _load_run_state(self, run_id: str) -> CodexSessionExecutionState | None:
-        path = self._state_path(run_id)
-        if not path.exists():
-            return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return CodexSessionExecutionState.model_validate(payload)
-
-    def _persist_state(self, state: CodexSessionExecutionState) -> None:
-        path = self._state_path(state.run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(state.model_dump(mode="json", by_alias=True), handle)
-            os.replace(tmp_path, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        return self._run_states.get(run_id)
 
     def _save_run_state(
         self,
@@ -677,20 +616,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         finished_at: datetime | None = None,
         profile_id: str | None = None,
     ) -> None:
-        self._persist_state(
-            CodexSessionExecutionState(
-                runId=run_id,
-                workflowId=self._workflow_id,
-                agentId=agent_id,
-                runtimeId=self._runtime_id or "codex_cli",
-                status=status,
-                startedAt=started_at,
-                finishedAt=finished_at,
-                locator=locator,
-                activeTurnId=active_turn_id,
-                profileId=profile_id,
-                result=result,
-            )
+        self._run_states[run_id] = CodexSessionExecutionState(
+            runId=run_id,
+            workflowId=self._workflow_id,
+            agentId=agent_id,
+            runtimeId=self._runtime_id or "codex_cli",
+            status=status,
+            startedAt=started_at,
+            finishedAt=finished_at,
+            locator=locator,
+            activeTurnId=active_turn_id,
+            profileId=profile_id,
+            result=result,
         )
 
     def _merge_output_refs(self, *groups: Any) -> list[str]:

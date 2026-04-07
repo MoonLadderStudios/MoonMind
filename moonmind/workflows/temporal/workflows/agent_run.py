@@ -106,6 +106,14 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
+    "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+)
+_MANAGED_RUN_STORE_ROOT = os.path.join(_MANAGED_RUNTIME_STORE_ROOT, "managed_runs")
+_DEFAULT_SESSION_IMAGE_REF = os.environ.get(
+    "WORKFLOW_JOB_IMAGE",
+    "ghcr.io/moonladderstudios/moonmind:latest",
+)
 
 
 def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
@@ -885,11 +893,14 @@ class MoonMindAgentRun:
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
-                    store_root = os.path.join(
-                        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
-                        "managed_runs",
-                    )
-                    run_store = ManagedRunStore(store_root)
+                    async def _launch_context_builder(**kw):
+                        return await self._execute_routed_activity(
+                            "agent_runtime.build_launch_context",
+                            kw,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
+
+                    run_store = ManagedRunStore(_MANAGED_RUN_STORE_ROOT)
 
                     if uses_codex_session_adapter:
                         if request.managed_session is None:
@@ -988,14 +999,9 @@ class MoonMindAgentRun:
                             publish_remote_artifacts=_publish_session_artifacts,
                             attach_runtime_handles=_attach_runtime_handles,
                             apply_session_control_action=_apply_session_control_action,
-                            workspace_root=os.environ.get(
-                                "MOONMIND_AGENT_RUNTIME_STORE",
-                                "/work/agent_jobs",
-                            ),
-                            session_image_ref=os.environ.get(
-                                "WORKFLOW_JOB_IMAGE",
-                                "ghcr.io/moonladderstudios/moonmind:latest",
-                            ),
+                            workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
+                            session_image_ref=_DEFAULT_SESSION_IMAGE_REF,
+                            launch_context_builder=_launch_context_builder,
                         )
                     else:
                         adapter = ManagedAgentAdapter(
@@ -1007,6 +1013,7 @@ class MoonMindAgentRun:
                             runtime_id=runtime_id,
                             run_store=run_store,
                             run_launcher=_run_launcher,
+                            launch_context_builder=_launch_context_builder,
                         )
 
                     # --- Managed agent: launch via adapter ---
@@ -1021,6 +1028,12 @@ class MoonMindAgentRun:
                     self.run_id = handle.run_id
                     self.run_status = handle.status
                     poll_interval = handle.poll_hint_seconds or 10
+                    if (
+                        uses_codex_session_adapter
+                        and handle.status in _TERMINAL_RUN_STATUSES
+                    ):
+                        self.final_result = await adapter.fetch_result(handle.run_id)
+                        skip_poll_and_fetch = True
 
                 elif request.agent_kind == "external":
                     # Validate adapter availability and resolve execution style.

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,6 +34,8 @@ from typing import Any
 from uuid import uuid4
 
 from moonmind.schemas.agent_runtime_models import (
+    _ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
+    _contains_sensitive_key,
     AgentExecutionRequest,
     AgentRunHandle,
     AgentRunResult,
@@ -44,10 +45,7 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.auth.env_shaping import (
-    OAUTH_CLEARED_VARS,
-    _should_filter_base_env_var,
-)
+from moonmind.auth.env_shaping import OAUTH_CLEARED_VARS
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 
 logger = logging.getLogger(__name__)
@@ -78,8 +76,18 @@ class ManagedProfileLaunchContext:
     profile_id: str
     credential_source: str
     delta_env_overrides: dict[str, str]
-    shaped_env: dict[str, str]
     passthrough_env_keys: list[str]
+    env_keys_count: int
+
+
+def default_credential_source_for_runtime(runtime_id: str) -> str:
+    """Return the deterministic default credential source for one runtime."""
+
+    from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+    strategy = get_strategy(runtime_id)
+    default_auth = strategy.default_auth_mode if strategy is not None else "api_key"
+    return "oauth_volume" if default_auth == "oauth" else "secret_ref"
 
 
 def build_managed_profile_launch_context(
@@ -89,61 +97,21 @@ def build_managed_profile_launch_context(
     workflow_id: str,
     default_credential_source: str,
 ) -> ManagedProfileLaunchContext:
-    """Build the shared launch-time environment context for one profile."""
+    """Build deterministic launch metadata safe to compute in workflow code."""
 
-    del runtime_for_profile  # Reserved for future profile-strategy shaping.
-    credential_source: str = profile.get(
-        "credential_source", default_credential_source
-    )
-
-    base_env = {
-        k: v for k, v in os.environ.items()
-        if not _should_filter_base_env_var(k)
-    }
-    tags = profile.get("tags") or []
-    is_proxy_first = "proxy-first" in tags
-
+    del runtime_for_profile, workflow_id  # Reserved for activity-side shaping.
+    credential_source = str(
+        profile.get("credential_source") or default_credential_source
+    ).strip() or default_credential_source
     delta_env_overrides: dict[str, str] = {}
-
-    if is_proxy_first:
-        import time
-        from cryptography.fernet import Fernet
-        from api_service.core.encryption import get_encryption_key
-
-        provider = str(profile.get("provider_id") or "anthropic").strip().lower()
-        payload_bytes = json.dumps(
-            {
-                "provider": provider,
-                "workflow_id": workflow_id,
-                "secret_refs": profile.get("secret_refs", {}),
-                "exp": time.time() + 3600,
-            }
-        ).encode("utf-8")
-
-        fernet = Fernet(get_encryption_key().encode("utf-8"))
-        proxy_token = "mm-proxy-token:" + fernet.encrypt(payload_bytes).decode("utf-8")
-        api_url = os.environ.get(
-            "MOONMIND_PROXY_URL",
-            "http://moonmind-api:8000/api/v1/proxy",
-        )
-
-        delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
-
-        if provider in {"anthropic", "minimax"}:
-            delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/{provider}"
-            delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
-            delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
-        elif provider == "openai":
-            delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
-            delta_env_overrides["OPENAI_API_KEY"] = proxy_token
 
     volume_mount_path = profile.get("volume_mount_path")
     if volume_mount_path:
-        delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
+        delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = str(volume_mount_path)
 
     account_label = profile.get("account_label")
     if account_label:
-        delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
+        delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = str(account_label)
 
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
@@ -151,26 +119,48 @@ def build_managed_profile_launch_context(
             ks = str(key).strip()
             if not ks:
                 continue
-            is_safe_proxy_var = is_proxy_first and (
-                ks == "MOONMIND_PROXY_TOKEN" or ks.endswith("_BASE_URL")
-            )
-            if not _should_filter_base_env_var(ks) or is_safe_proxy_var:
-                delta_env_overrides[ks] = str(value) if value is not None else ""
+            if _contains_sensitive_key(
+                {ks: value},
+                allowed_sensitive_keys=_ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
+            ):
+                continue
+            delta_env_overrides[ks] = str(value) if value is not None else ""
 
-    shaped_env = base_env.copy()
-    shaped_env.update(delta_env_overrides)
-    passthrough_env_keys = [
-        key
-        for key in _SECRET_ENV_PASSTHROUGH_KEYS
-        if str(os.environ.get(key, "")).strip()
-    ]
+    passthrough_env_keys = list(_SECRET_ENV_PASSTHROUGH_KEYS)
     return ManagedProfileLaunchContext(
         profile_id=str(profile.get("profile_id") or "").strip(),
         credential_source=credential_source,
         delta_env_overrides=delta_env_overrides,
-        shaped_env=shaped_env,
         passthrough_env_keys=passthrough_env_keys,
+        env_keys_count=len(delta_env_overrides) + len(passthrough_env_keys),
     )
+
+
+def _in_workflow_context() -> bool:
+    try:
+        from temporalio import workflow
+    except ImportError:
+        return False
+    try:
+        return workflow.in_workflow()
+    except RuntimeError:
+        return False
+
+
+def _generate_run_id() -> str:
+    if _in_workflow_context():
+        from temporalio import workflow
+
+        return str(workflow.uuid4())
+    return str(uuid4())
+
+
+def _current_time() -> datetime:
+    if _in_workflow_context():
+        from temporalio import workflow
+
+        return workflow.now()
+    return datetime.now(tz=UTC)
 
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
@@ -253,6 +243,7 @@ SlotRequestFunc = Callable[..., Awaitable[Any]]
 SlotReleaseFunc = Callable[..., Awaitable[Any]]
 CooldownReportFunc = Callable[..., Awaitable[Any]]
 RunLauncherFunc = Callable[..., Awaitable[Any]]
+LaunchContextBuilderFunc = Callable[..., Awaitable[ManagedProfileLaunchContext | dict[str, Any]]]
 
 
 
@@ -329,6 +320,7 @@ class ManagedAgentAdapter:
         runtime_id: str | None = None,
         run_store: ManagedRunStore | None = None,
         run_launcher: RunLauncherFunc | None = None,
+        launch_context_builder: LaunchContextBuilderFunc | None = None,
     ) -> None:
         self._fetch_profiles = profile_fetcher
         self._request_slot = slot_requester
@@ -338,6 +330,7 @@ class ManagedAgentAdapter:
         self._runtime_id = runtime_id
         self._run_store = run_store
         self._run_launcher = run_launcher
+        self._launch_context_builder = launch_context_builder
         self._active_profile_id: str | None = None
 
     # ------------------------------------------------------------------
@@ -364,39 +357,38 @@ class ManagedAgentAdapter:
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
 
         _strategy = get_strategy(runtime_for_profile)
-
-        default_auth = (
-            _strategy.default_auth_mode
-            if _strategy is not None
-            else "api_key"
+        default_credential_source = default_credential_source_for_runtime(
+            runtime_for_profile
         )
-        # Map legacy strategy auth_mode values to credential_source equivalents.
-        default_credential_source = (
-            "oauth_volume" if default_auth == "oauth" else "secret_ref"
-        )
-        launch_context = build_managed_profile_launch_context(
-            profile=profile,
-            runtime_for_profile=runtime_for_profile,
-            workflow_id=self._workflow_id,
-            default_credential_source=default_credential_source,
-        )
+        if self._launch_context_builder is not None:
+            built_context = await self._launch_context_builder(
+                profile=profile,
+                runtime_for_profile=runtime_for_profile,
+                workflow_id=self._workflow_id,
+                default_credential_source=default_credential_source,
+            )
+            launch_context = (
+                built_context
+                if isinstance(built_context, ManagedProfileLaunchContext)
+                else ManagedProfileLaunchContext(**built_context)
+            )
+        else:
+            launch_context = build_managed_profile_launch_context(
+                profile=profile,
+                runtime_for_profile=runtime_for_profile,
+                workflow_id=self._workflow_id,
+                default_credential_source=default_credential_source,
+            )
         credential_source = launch_context.credential_source
         delta_env_overrides = launch_context.delta_env_overrides
-        shaped_env = launch_context.shaped_env
         passthrough_env_keys = launch_context.passthrough_env_keys
 
         # Persist only the profile_id reference — never raw credentials
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = launch_context.profile_id
         
-        try:
-            from temporalio import workflow
-            if workflow.in_workflow():
-                run_id = str(workflow.uuid4())
-            else:
-                run_id = str(uuid4())
-        except ImportError:
-            run_id = str(uuid4())
+        run_id = _generate_run_id()
+        started_at = _current_time()
 
         # NOTE: Slot acquisition is handled by AgentRun before adapter.start()
         # is called.  Do NOT request a slot here — a duplicate request_slot
@@ -463,7 +455,7 @@ class ManagedAgentAdapter:
                 agent_id=request.agent_id,
                 runtime_id=self._runtime_id or request.agent_id,
                 status="launching",
-                started_at=datetime.now(tz=UTC),
+                started_at=started_at,
             )
             self._run_store.save(record)
             status = "launching"
@@ -481,11 +473,11 @@ class ManagedAgentAdapter:
                 agentKind="managed",
                 agentId=request.agent_id,
                 status=status,
-                startedAt=datetime.now(tz=UTC),
+                startedAt=started_at,
                 metadata={
                 "profile_id": launch_context.profile_id,
                 "credential_source": credential_source,
-                "env_keys_count": len(shaped_env),
+                "env_keys_count": launch_context.env_keys_count,
             },
         )
 

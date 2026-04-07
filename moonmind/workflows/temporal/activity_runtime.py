@@ -28,7 +28,12 @@ from moonmind.schemas.temporal_activity_models import (
 )
 from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
-from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+from moonmind.auth.env_shaping import _should_filter_base_env_var
+from moonmind.workflows.adapters.managed_agent_adapter import (
+    ManagedAgentAdapter,
+    ManagedProfileLaunchContext,
+    build_managed_profile_launch_context,
+)
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
@@ -345,6 +350,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
+    "agent_runtime.build_launch_context": (
+        "agent_runtime",
+        "agent_runtime_build_launch_context",
+    ),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "agent_runtime.launch_session": ("agent_runtime", "agent_runtime_launch_session"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
@@ -2260,6 +2269,94 @@ class TemporalAgentRuntimeActivities:
                 run_id,
                 exc_info=True,
             )
+
+    async def agent_runtime_build_launch_context(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Build managed launch context on the activity side."""
+
+        profile_raw = payload.get("profile")
+        if not isinstance(profile_raw, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload.profile is required for agent_runtime.build_launch_context"
+            )
+        runtime_for_profile = str(payload.get("runtime_for_profile") or "").strip()
+        workflow_id = str(payload.get("workflow_id") or "").strip()
+        default_credential_source = str(
+            payload.get("default_credential_source")
+            or payload.get("defaultCredentialSource")
+            or ""
+        ).strip()
+        if not runtime_for_profile or not workflow_id or not default_credential_source:
+            raise TemporalActivityRuntimeError(
+                "payload must include runtime_for_profile, workflow_id, and default_credential_source"
+            )
+
+        profile = dict(profile_raw)
+        context = build_managed_profile_launch_context(
+            profile=profile,
+            runtime_for_profile=runtime_for_profile,
+            workflow_id=workflow_id,
+            default_credential_source=default_credential_source,
+        )
+        delta_env_overrides = dict(context.delta_env_overrides)
+        tags = profile.get("tags") or []
+        if "proxy-first" in tags:
+            from cryptography.fernet import Fernet
+
+            from api_service.core.encryption import get_encryption_key
+
+            provider = str(profile.get("provider_id") or "anthropic").strip().lower()
+            payload_bytes = json.dumps(
+                {
+                    "provider": provider,
+                    "workflow_id": workflow_id,
+                    "secret_refs": profile.get("secret_refs", {}),
+                    "exp": time.time() + 3600,
+                }
+            ).encode("utf-8")
+            fernet = Fernet(get_encryption_key().encode("utf-8"))
+            proxy_token = "mm-proxy-token:" + fernet.encrypt(payload_bytes).decode(
+                "utf-8"
+            )
+            api_url = os.environ.get(
+                "MOONMIND_PROXY_URL",
+                "http://moonmind-api:8000/api/v1/proxy",
+            )
+            delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
+            if provider in {"anthropic", "minimax"}:
+                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/{provider}"
+                delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
+                delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
+            elif provider == "openai":
+                delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
+                delta_env_overrides["OPENAI_API_KEY"] = proxy_token
+
+        passthrough_env_keys = [
+            key
+            for key in context.passthrough_env_keys
+            if str(os.environ.get(key, "")).strip()
+        ]
+        combined_env_keys = {
+            key for key in os.environ if not _should_filter_base_env_var(key)
+        }
+        combined_env_keys.update(delta_env_overrides)
+        result = ManagedProfileLaunchContext(
+            profile_id=context.profile_id,
+            credential_source=context.credential_source,
+            delta_env_overrides=delta_env_overrides,
+            passthrough_env_keys=passthrough_env_keys,
+            env_keys_count=len(combined_env_keys),
+        )
+        return {
+            "profile_id": result.profile_id,
+            "credential_source": result.credential_source,
+            "delta_env_overrides": result.delta_env_overrides,
+            "passthrough_env_keys": result.passthrough_env_keys,
+            "env_keys_count": result.env_keys_count,
+        }
 
     async def agent_runtime_launch(
         self,
