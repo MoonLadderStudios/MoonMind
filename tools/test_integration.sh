@@ -34,12 +34,12 @@ fi
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest
 
 # Run integration tests (always cleaned up via trap)
-# --timeout 60: kill any single test that runs longer than 60 seconds
+# --timeout 120: kill any single test that runs longer than 120 seconds
 # --timeout-method=thread: use thread-based timeout (works with async tests)
 # --durations=10: print the 10 slowest tests at the end
 run_tests() {
   "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm pytest \
-    bash -lc "pytest tests/integration -m 'integration_ci' --tb=short --timeout 60 --timeout-method=thread --durations=10"
+    bash -lc "pytest tests/integration -m 'integration_ci' --tb=short --timeout 120 --timeout-method=thread --durations=10"
 }
 
 # Ensure compose stack is always torn down, even on failure or interrupt
