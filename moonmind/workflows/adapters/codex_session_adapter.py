@@ -172,7 +172,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_state=session_handle.session_state,
             runtime_epoch=session_handle.session_state.session_epoch,
         )
-        instructions = self._instructions_for_request(request)
+        instructions = await self._instructions_for_request(
+            binding=binding,
+            request=request,
+        )
         turn_response = await self._coerce_turn_response(
             self._send_turn(
                 SendCodexManagedSessionTurnRequest(
@@ -507,7 +510,19 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         return handle
 
-    def _instructions_for_request(self, request: AgentExecutionRequest) -> str:
+    async def _instructions_for_request(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+        request: AgentExecutionRequest,
+    ) -> str:
+        workspace_path = Path(self._workspace_path_for_request(binding=binding, request=request))
+        if str(request.instruction_ref or "").strip():
+            from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+                CodexCliStrategy,
+            )
+
+            await CodexCliStrategy().prepare_workspace(workspace_path, request)
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             return instruction_ref
