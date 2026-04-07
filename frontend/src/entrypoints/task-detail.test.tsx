@@ -773,6 +773,290 @@ describe('Task Detail Entrypoint', () => {
 
     confirmSpy.mockRestore();
   });
+
+  it('renders a Session Continuity panel for Codex managed-session task runs', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      taskRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            task_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 2,
+            grouped_artifacts: [
+              {
+                group_key: 'continuity',
+                title: 'Continuity',
+                artifacts: [
+                  { artifact_id: 'art-summary', status: 'complete' },
+                  { artifact_id: 'art-checkpoint', status: 'complete' },
+                ],
+              },
+              {
+                group_key: 'control',
+                title: 'Control',
+                artifacts: [
+                  { artifact_id: 'art-control', status: 'complete' },
+                  { artifact_id: 'art-reset', status: 'complete' },
+                ],
+              },
+            ],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+            latest_control_event_ref: { artifact_id: 'art-control' },
+            latest_reset_boundary_ref: { artifact_id: 'art-reset' },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Session Continuity' })).toBeTruthy();
+      expect(screen.getByText(/Epoch 2/)).toBeTruthy();
+      expect(screen.getAllByText('art-summary').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('art-checkpoint').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('art-control').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('art-reset').length).toBeGreaterThan(0);
+      expect(screen.getByText('Live Logs')).toBeTruthy();
+      expect(screen.getByText('Diagnostics')).toBeTruthy();
+    });
+  });
+
+  it('routes Session Continuity follow-up and reset controls through the task-run session control API', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      taskRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            action: JSON.parse(String(init?.body || '{}')).action,
+            projection: {
+              task_run_id: 'wf-task-1',
+              session_id: 'sess:wf-task-1:codex_cli',
+              session_epoch: JSON.parse(String(init?.body || '{}')).action === 'clear_session' ? 2 : 1,
+              grouped_artifacts: [],
+              latest_summary_ref: { artifact_id: 'art-summary' },
+              latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+              latest_control_event_ref: { artifact_id: 'art-control' },
+              latest_reset_boundary_ref:
+                JSON.parse(String(init?.body || '{}')).action === 'clear_session'
+                  ? { artifact_id: 'art-reset' }
+                  : null,
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            task_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+            latest_control_event_ref: null,
+            latest_reset_boundary_ref: null,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Follow-up message'), {
+      target: { value: 'Continue with the existing session.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/task-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'send_follow_up',
+            message: 'Continue with the existing session.',
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/task-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'clear_session',
+          }),
+        }),
+      );
+    });
+  });
+
+  it('reuses the existing execution cancel route from the Session Continuity panel', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      taskRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/cancel')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'canceled',
+            rawState: 'canceled',
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            task_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: null,
+            latest_checkpoint_ref: null,
+            latest_control_event_ref: null,
+            latest_reset_boundary_ref: null,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Session' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/cancel',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'cancel',
+            graceful: true,
+          }),
+        }),
+      );
+    });
+
+    confirmSpy.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------

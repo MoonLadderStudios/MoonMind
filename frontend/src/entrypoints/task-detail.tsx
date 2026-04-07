@@ -172,6 +172,52 @@ const ArtifactSummarySchema = z
   })
   .passthrough();
 
+const ArtifactRefSummarySchema = z
+  .object({
+    artifact_id: z.string(),
+  })
+  .passthrough();
+
+const ArtifactSessionProjectionSchema = z.object({
+  task_run_id: z.string(),
+  session_id: z.string(),
+  session_epoch: z.number(),
+  grouped_artifacts: z
+    .array(
+      z.object({
+        group_key: z.string(),
+        title: z.string(),
+        artifacts: z
+          .array(
+            z
+              .object({
+                artifact_id: z.string().optional(),
+                artifactId: z.string().optional(),
+                status: z.string().optional(),
+              })
+              .passthrough()
+              .transform((artifact) =>
+                ArtifactSummarySchema.parse({
+                  ...artifact,
+                  artifactId: artifact.artifactId ?? artifact.artifact_id,
+                }),
+              ),
+          )
+          .default([]),
+      }),
+    )
+    .default([]),
+  latest_summary_ref: ArtifactRefSummarySchema.nullable().optional(),
+  latest_checkpoint_ref: ArtifactRefSummarySchema.nullable().optional(),
+  latest_control_event_ref: ArtifactRefSummarySchema.nullable().optional(),
+  latest_reset_boundary_ref: ArtifactRefSummarySchema.nullable().optional(),
+});
+
+const ArtifactSessionControlResponseSchema = z.object({
+  action: z.enum(['send_follow_up', 'clear_session']),
+  projection: ArtifactSessionProjectionSchema,
+});
+
 const ArtifactListSchema = z.object({
   artifacts: z
     .array(
@@ -435,6 +481,53 @@ async function fetchRunSummaryArtifact(
   const text = await resp.text();
   if (!text.trim()) return null;
   return RunSummaryArtifactSchema.parse(JSON.parse(text));
+}
+
+function deriveCodexSessionId(
+  taskRunId: string | null | undefined,
+  runtimeId: string | null | undefined,
+): string | null {
+  if (!taskRunId || String(runtimeId || '').trim().toLowerCase() !== 'codex_cli') {
+    return null;
+  }
+  return `sess:${taskRunId}:codex_cli`;
+}
+
+async function fetchArtifactSessionProjection(
+  apiBase: string,
+  taskRunId: string,
+  sessionId: string,
+): Promise<z.infer<typeof ArtifactSessionProjectionSchema> | null> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw new Error(`Session continuity: ${resp.status}`);
+  }
+  return ArtifactSessionProjectionSchema.parse(await resp.json());
+}
+
+async function controlArtifactSession(
+  apiBase: string,
+  taskRunId: string,
+  sessionId: string,
+  body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string },
+): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    throw new Error(`Session control: ${resp.status}`);
+  }
+  return ArtifactSessionControlResponseSchema.parse(await resp.json());
 }
 
 /** Fetch the observability summary for a task run. */
@@ -1066,6 +1159,194 @@ function DiagnosticsPanel({
   );
 }
 
+function SessionContinuityPanel({
+  apiBase,
+  workflowId,
+  taskRunId,
+  targetRuntime,
+  isTerminal,
+  onCancel,
+  cancelBusy,
+}: {
+  apiBase: string;
+  workflowId: string;
+  taskRunId: string;
+  targetRuntime: string | null | undefined;
+  isTerminal: boolean;
+  onCancel: () => void;
+  cancelBusy: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const sessionId = deriveCodexSessionId(taskRunId, targetRuntime);
+  const [followUpMessage, setFollowUpMessage] = useState('');
+  const [panelError, setPanelError] = useState<string | null>(null);
+
+  const projectionQuery = useQuery({
+    queryKey: ['task-run-session-projection', taskRunId, sessionId],
+    queryFn: () => {
+      if (!sessionId) return Promise.resolve(null);
+      return fetchArtifactSessionProjection(apiBase, taskRunId, sessionId);
+    },
+    enabled: Boolean(taskRunId && sessionId),
+    retry: false,
+  });
+
+  const controlMutation = useMutation({
+    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string }) => {
+      if (!sessionId) throw new Error('Managed session is unavailable.');
+      return controlArtifactSession(apiBase, taskRunId, sessionId, body);
+    },
+    onSuccess: (result) => {
+      setPanelError(null);
+      void queryClient.setQueryData(
+        ['task-run-session-projection', taskRunId, sessionId],
+        result.projection,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['task-detail', encodeURIComponent(workflowId)] });
+      if (result.action === 'send_follow_up') {
+        setFollowUpMessage('');
+      }
+    },
+    onError: (error: Error) => setPanelError(error.message),
+  });
+
+  if (!sessionId) {
+    return null;
+  }
+  if (projectionQuery.isLoading) {
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <p className="small">Loading session continuity...</p>
+      </section>
+    );
+  }
+  if (projectionQuery.isError) {
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <div className="notice error">{(projectionQuery.error as Error).message}</div>
+      </section>
+    );
+  }
+  if (!projectionQuery.data) {
+    return null;
+  }
+
+  const projection = projectionQuery.data;
+  const latestBadges = [
+    ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
+    ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
+    ['Latest Control', projection.latest_control_event_ref?.artifact_id ?? null],
+    ['Latest Reset', projection.latest_reset_boundary_ref?.artifact_id ?? null],
+  ].filter(([, artifactId]) => artifactId !== null) as Array<[string, string]>;
+  const busy = controlMutation.isPending || cancelBusy;
+
+  const submitFollowUp = () => {
+    const message = followUpMessage.trim();
+    if (!message) return;
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'send_follow_up',
+      message,
+    });
+  };
+
+  const clearSession = () => {
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'clear_session',
+    });
+  };
+
+  return (
+    <section className="stack">
+      <div>
+        <h3>Session Continuity</h3>
+        <p className="small">
+          Session <code>{projection.session_id}</code> — Epoch {projection.session_epoch}
+        </p>
+      </div>
+
+      {panelError ? <div className="notice error">{panelError}</div> : null}
+
+      <div className="grid-2">
+        <Card label="Session ID">
+          <code className="text-xs break-all">{projection.session_id}</code>
+        </Card>
+        <Card label="Current Epoch">{projection.session_epoch}</Card>
+      </div>
+
+      {latestBadges.length > 0 ? (
+        <div className="actions">
+          {latestBadges.map(([label, artifactId]) => (
+            <span key={`${label}-${artifactId}`} className="card">
+              <strong>{label}:</strong> <code className="text-xs">{artifactId}</code>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="stack">
+        {projection.grouped_artifacts.map((group) => (
+          <div key={group.group_key} className="card">
+            <strong>{group.title}</strong>
+            <div className="stack gap-1" style={{ marginTop: '0.5rem' }}>
+              {group.artifacts.length === 0 ? (
+                <span className="small">No artifacts.</span>
+              ) : (
+                group.artifacts.map((artifact) => (
+                  <code key={artifact.artifactId} className="text-xs break-all">
+                    {artifact.artifactId}
+                  </code>
+                ))
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="stack">
+        <label htmlFor="session-follow-up">Follow-up message</label>
+        <textarea
+          id="session-follow-up"
+          value={followUpMessage}
+          onChange={(event) => setFollowUpMessage(event.target.value)}
+          rows={3}
+          placeholder="Send a follow-up turn to the managed Codex session."
+          disabled={busy || isTerminal}
+        />
+        <div className="actions">
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || isTerminal || !followUpMessage.trim()}
+            onClick={submitFollowUp}
+          >
+            Send follow-up
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || isTerminal}
+            onClick={clearSession}
+          >
+            Clear / Reset
+          </button>
+          <button
+            type="button"
+            className="queue-action queue-action-danger"
+            disabled={busy || isTerminal}
+            onClick={onCancel}
+          >
+            Cancel Session
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 type MissingTaskRunState = 'waiting_for_launch' | 'binding_missing' | 'launch_failed';
 
 function inferMissingTaskRunState(execution: z.infer<typeof ExecutionDetailSchema>): MissingTaskRunState {
@@ -1352,6 +1633,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const actions = execution?.actions;
   const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
+  const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const hasTaskActions = Boolean(actions?.canSetTitle || actions?.canRerun);
   const hasInterventionSection = Boolean(
     actions &&
@@ -1660,6 +1942,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
+          {resolvedTaskRunId ? (
+            <SessionContinuityPanel
+              apiBase={payload.apiBase}
+              workflowId={workflowId}
+              taskRunId={resolvedTaskRunId}
+              targetRuntime={execution.targetRuntime}
+              isTerminal={isTerminalExecution}
+              onCancel={onCancel}
+              cancelBusy={cancelMutation.isPending}
+            />
+          ) : null}
+
           <section className="stack">
             <h3>Timeline</h3>
             <div className="queue-table-wrapper" data-layout="table">
@@ -1774,7 +2068,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   <LiveLogsPanel
                     apiBase={payload.apiBase}
                     taskRunId={resolvedTaskRunId}
-                    isTerminal={TERMINAL_STATES.has(execution.rawState || execution.state || '')}
+                    isTerminal={isTerminalExecution}
                     autoExpand={showTaskRunAttachNotice}
                   />
                   <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stdout" />
