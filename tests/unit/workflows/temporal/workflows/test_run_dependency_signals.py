@@ -191,27 +191,18 @@ async def test_run_workflow_duplicate_signal_is_idempotent(
     """Sending the same DependencyResolved signal twice must not corrupt state
     or cause duplicate processing."""
 
-    signal_count = 0
+    memo_updates: list[dict] = []
 
     async def fake_reconcile(self, dependency_ids):
         pass  # Leave unresolved
-
-    original_record = MoonMindRunWorkflow._record_dependency_outcome
-
-    def spy_record(self, **kwargs):
-        nonlocal signal_count
-        signal_count += 1
-        return original_record(self, **kwargs)
 
     monkeypatch.setattr(
         workflow, "patched",
         lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
     )
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
     monkeypatch.setattr(
         MoonMindRunWorkflow, "_reconcile_dependencies", fake_reconcile
-    )
-    monkeypatch.setattr(
-        MoonMindRunWorkflow, "_record_dependency_outcome", spy_record
     )
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -237,12 +228,21 @@ async def test_run_workflow_duplicate_signal_is_idempotent(
             result = await handle.result()
 
     assert result["status"] == "success"
-    # The signal handler calls _record_dependency_outcome for each signal.
-    # The initial reconcile leaves deps unresolved (no record call), but
-    # each of the 3 signals triggers one call. The workflow's finish path
-    # may also record once more. Accept 3-4 calls — the key invariant is
-    # that the workflow completed successfully (no state corruption).
-    assert 3 <= signal_count <= 4
+    final_dependency_memo = next(
+        memo for memo in reversed(memo_updates) if "dependencies" in memo
+    )
+    assert final_dependency_memo["dependencies"]["resolution"] == "satisfied"
+    assert final_dependency_memo["dependencies"]["failedDependencyId"] is None
+    assert final_dependency_memo["dependencies"]["outcomes"] == [
+        {
+            "workflowId": "dep-dup-1",
+            "terminalState": "completed",
+            "closeStatus": "completed",
+            "resolvedAt": "2026-04-05T00:00:00+00:00",
+            "failureCategory": None,
+            "message": None,
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
