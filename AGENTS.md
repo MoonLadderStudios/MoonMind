@@ -46,18 +46,34 @@ When creating a new spec folder/feature ID:
 
 ### Test Taxonomy
 
-MoonMind distinguishes two categories of integration-level tests:
+MoonMind uses a four-tier test model that separates hermetic CI from credentialed provider checks:
+
+| Tier | Marker(s) | Required on PR? | Runner |
+|------|-----------|-----------------|--------|
+| **Unit** | `asyncio` (as needed) | Yes | `./tools/test_unit.sh` |
+| **Hermetic Integration CI** | `integration` + `integration_ci` | Yes | `./tools/test_integration.sh` |
+| **Provider Verification** | `provider_verification` + `jules` + `requires_credentials` | No (manual/nightly) | `./tools/test_jules_provider.sh` |
+| **Local-only Integration** | `integration` without `integration_ci` | No | local dev only |
 
 - **Hermetic Integration Tests** — compose-backed, local-dependencies-only, no external credentials required.
   These are marked with `@pytest.mark.integration_ci` and are run by the required CI pipeline.
   Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell) to run them locally.
+
+  The required integration_ci suite focuses on the highest-risk seams:
+  - **Artifacts**: create/upload/list, auth/preview, lifecycle cleanup, authorization boundaries
+  - **Worker topology**: activity family routing, task queue assignment, sandbox execution
+  - **Live logs**: SSE publisher/subscriber, performance at volume, managed runtime streaming
+  - **Compose foundation**: service topology, namespace bootstrapping, visibility schema rehearsal
+  - **Startup seeding**: profiles, managed secrets, task templates
 
 - **Provider Verification Tests** — real third-party provider checks using real credentials.
   These are **not** required for merge and are excluded from the required CI pipeline.
   They are marked with `@pytest.mark.provider_verification` (and often `@pytest.mark.jules` / `@pytest.mark.requires_credentials`).
   Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1` (PowerShell) to run them locally.
 
-Note: Jules **unit** tests remain in the required unit suite — only Jules *integration/provider* tests are excluded from required CI.
+- **Temporal workflow boundary tests with time-skipping** (`tests/integration/temporal/test_execution_rescheduling.py`, `tests/integration/temporal/test_interventions_temporal.py`, `tests/integration/workflows/temporal/**`) are **not** marked `integration_ci` because they consistently exceed CI timeout thresholds under the Temporal test server. They remain valuable for local dev verification.
+
+Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/test_jules_activities.py`, etc.) remain in the required unit suite — only Jules *provider verification* tests are excluded from required CI.
 
 ### Running Tests
 

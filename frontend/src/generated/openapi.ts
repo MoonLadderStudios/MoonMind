@@ -1229,6 +1229,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-runs/{task_run_id}/artifact-sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Task Run Artifact Session */
+        get: operations["get_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-runs/{id}/logs/stream": {
         parameters: {
             query?: never;
@@ -2157,6 +2174,36 @@ export interface components {
             content_type?: string | null;
             /** Encryption */
             encryption: string;
+        };
+        /**
+         * ArtifactSessionGroupModel
+         * @description Server-defined grouping of task-scoped session artifacts.
+         */
+        ArtifactSessionGroupModel: {
+            /** Group Key */
+            group_key: string;
+            /** Title */
+            title: string;
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactMetadataModel"][];
+        };
+        /**
+         * ArtifactSessionProjectionModel
+         * @description Minimal task-scoped session continuity projection.
+         */
+        ArtifactSessionProjectionModel: {
+            /** Task Run Id */
+            task_run_id: string;
+            /** Session Id */
+            session_id: string;
+            /** Session Epoch */
+            session_epoch: number;
+            /** Grouped Artifacts */
+            grouped_artifacts?: components["schemas"]["ArtifactSessionGroupModel"][];
+            latest_summary_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            latest_checkpoint_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            latest_control_event_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            latest_reset_boundary_ref?: components["schemas"]["ArtifactRefModel"] | null;
         };
         /**
          * ArtifactUploadModel
@@ -8007,6 +8054,52 @@ export interface operations {
                 };
             };
             /** @description Observability record not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_run_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSessionProjectionModel"];
+                };
+            };
+            /** @description You do not have permission to access this task run */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session projection not found for this task run */
             404: {
                 headers: {
                     [name: string]: unknown;
