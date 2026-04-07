@@ -117,6 +117,7 @@ class MoonMindAgentSessionWorkflow:
         locator: CodexManagedSessionLocator,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        binding = self._require_binding()
         summary = await self._execute_routed_activity(
             "agent_runtime.fetch_session_summary",
             FetchCodexManagedSessionSummaryRequest(
@@ -133,7 +134,7 @@ class MoonMindAgentSessionWorkflow:
                 sessionEpoch=locator.session_epoch,
                 containerId=locator.container_id,
                 threadId=locator.thread_id,
-                taskRunId=locator.session_id.split("sess:", 1)[-1].rsplit(":", 1)[0],
+                taskRunId=binding.task_run_id,
                 metadata=metadata or {},
             ).model_dump(by_alias=True),
         )
@@ -289,33 +290,37 @@ class MoonMindAgentSessionWorkflow:
         )
         binding = self._require_binding()
         locator = self._require_locator()
-        next_thread_id = f"thread:{binding.session_id}:{binding.session_epoch + 1}"
-        handle = await self._execute_routed_activity(
-            "agent_runtime.clear_session",
-            CodexManagedSessionClearRequest(
-                sessionId=locator.session_id,
-                sessionEpoch=locator.session_epoch,
-                containerId=locator.container_id,
-                threadId=locator.thread_id,
-                newThreadId=next_thread_id,
-                reason=reason_text,
-            ).model_dump(by_alias=True),
-        )
-        handle_payload = dict(handle if isinstance(handle, dict) else {})
-        session_state = dict(handle_payload.get("sessionState") or {})
-        self._binding = binding.model_copy(
-            update={"session_epoch": session_state.get("sessionEpoch", binding.session_epoch)}
-        )
-        self._container_id = str(session_state.get("containerId") or self._container_id)
-        self._thread_id = str(session_state.get("threadId") or self._thread_id)
-        self._active_turn_id = None
-        self._last_control_action = "clear_session"
-        self._last_control_reason = reason_text
-        continuity = await self._refresh_continuity_projection(
-            locator=self._require_locator(),
-            metadata={"action": "clear_session", "reason": reason_text},
-        )
-        return {
-            "sessionState": session_state,
-            **continuity,
-        }
+        self._status = AGENT_SESSION_STATUS_CLEARING
+        try:
+            next_thread_id = f"thread:{binding.session_id}:{binding.session_epoch + 1}"
+            handle = await self._execute_routed_activity(
+                "agent_runtime.clear_session",
+                CodexManagedSessionClearRequest(
+                    sessionId=locator.session_id,
+                    sessionEpoch=locator.session_epoch,
+                    containerId=locator.container_id,
+                    threadId=locator.thread_id,
+                    newThreadId=next_thread_id,
+                    reason=reason_text,
+                ).model_dump(by_alias=True),
+            )
+            handle_payload = dict(handle if isinstance(handle, dict) else {})
+            session_state = dict(handle_payload.get("sessionState") or {})
+            self._binding = binding.model_copy(
+                update={"session_epoch": session_state.get("sessionEpoch", binding.session_epoch)}
+            )
+            self._container_id = str(session_state.get("containerId") or self._container_id)
+            self._thread_id = str(session_state.get("threadId") or self._thread_id)
+            self._active_turn_id = None
+            self._last_control_action = "clear_session"
+            self._last_control_reason = reason_text
+            continuity = await self._refresh_continuity_projection(
+                locator=self._require_locator(),
+                metadata={"action": "clear_session", "reason": reason_text},
+            )
+            return {
+                "sessionState": session_state,
+                **continuity,
+            }
+        finally:
+            self._status = AGENT_SESSION_STATUS_ACTIVE

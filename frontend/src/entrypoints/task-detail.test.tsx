@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
-import { TaskDetailPage } from './task-detail';
+import { getSessionProjectionRefetchInterval, TaskDetailPage } from './task-detail';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -791,7 +791,7 @@ describe('Task Detail Entrypoint', () => {
       status: 'running',
       state: 'executing',
       rawState: 'executing',
-      targetRuntime: 'codex_cli',
+      targetRuntime: 'codex',
       taskRunId: 'wf-task-1',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -867,7 +867,7 @@ describe('Task Detail Entrypoint', () => {
     };
     const mockExecution = {
       taskId: 'test-123',
-      workflowId: 'test-123',
+      workflowId: 'wf-session-123',
       namespace: 'default',
       temporalRunId: '01-run',
       runId: '01-run',
@@ -885,6 +885,7 @@ describe('Task Detail Entrypoint', () => {
         canCancel: true,
       },
     };
+    const executionDetailUrl = '/api/executions/test-123?source=temporal';
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -954,6 +955,11 @@ describe('Task Detail Entrypoint', () => {
           }),
         }),
       );
+    });
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input) === executionDetailUrl).length,
+      ).toBeGreaterThan(1);
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
@@ -1040,7 +1046,7 @@ describe('Task Detail Entrypoint', () => {
 
     renderWithClient(<TaskDetailPage payload={codexPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Session' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Execution' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1056,6 +1062,13 @@ describe('Task Detail Entrypoint', () => {
     });
 
     confirmSpy.mockRestore();
+  });
+
+  it('keeps polling session continuity until a projection or terminal state exists', () => {
+    expect(getSessionProjectionRefetchInterval(false, false, false)).toBe(5000);
+    expect(getSessionProjectionRefetchInterval(false, true, false)).toBe(false);
+    expect(getSessionProjectionRefetchInterval(false, false, true)).toBe(false);
+    expect(getSessionProjectionRefetchInterval(true, false, false)).toBe(false);
   });
 });
 

@@ -559,13 +559,18 @@ async def control_task_run_artifact_session(
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
-    else:
+    elif payload.action == "clear_session":
         await client.update_workflow(
             workflow_id,
             "ClearSession",
             {
                 **({"reason": payload.reason} if payload.reason else {}),
             },
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported session control action: {payload.action}",
         )
 
     projection = await _build_task_run_artifact_session_projection(

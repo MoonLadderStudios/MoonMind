@@ -21,6 +21,18 @@ type DashboardConfig = {
 };
 
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
+const SESSION_PROJECTION_POLL_MS = 5000;
+
+export function getSessionProjectionRefetchInterval(
+  isTerminal: boolean,
+  hasProjection: boolean,
+  hasError: boolean,
+): number | false {
+  if (isTerminal || hasProjection || hasError) {
+    return false;
+  }
+  return SESSION_PROJECTION_POLL_MS;
+}
 
 function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
   if (!value) {
@@ -487,7 +499,8 @@ function deriveCodexSessionId(
   taskRunId: string | null | undefined,
   runtimeId: string | null | undefined,
 ): string | null {
-  if (!taskRunId || String(runtimeId || '').trim().toLowerCase() !== 'codex_cli') {
+  const normalizedRuntime = String(runtimeId || '').trim().toLowerCase();
+  if (!taskRunId || (normalizedRuntime !== 'codex' && normalizedRuntime !== 'codex_cli')) {
     return null;
   }
   return `sess:${taskRunId}:codex_cli`;
@@ -1161,19 +1174,19 @@ function DiagnosticsPanel({
 
 function SessionContinuityPanel({
   apiBase,
-  workflowId,
   taskRunId,
   targetRuntime,
   isTerminal,
   onCancel,
+  invalidateTaskDetail,
   cancelBusy,
 }: {
   apiBase: string;
-  workflowId: string;
   taskRunId: string;
   targetRuntime: string | null | undefined;
   isTerminal: boolean;
   onCancel: () => void;
+  invalidateTaskDetail: () => void;
   cancelBusy: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -1188,6 +1201,13 @@ function SessionContinuityPanel({
       return fetchArtifactSessionProjection(apiBase, taskRunId, sessionId);
     },
     enabled: Boolean(taskRunId && sessionId),
+    refetchInterval: (query) => {
+      return getSessionProjectionRefetchInterval(
+        isTerminal,
+        Boolean(query.state.data),
+        Boolean(query.state.error),
+      );
+    },
     retry: false,
   });
 
@@ -1202,7 +1222,7 @@ function SessionContinuityPanel({
         ['task-run-session-projection', taskRunId, sessionId],
         result.projection,
       );
-      void queryClient.invalidateQueries({ queryKey: ['task-detail', encodeURIComponent(workflowId)] });
+      invalidateTaskDetail();
       if (result.action === 'send_follow_up') {
         setFollowUpMessage('');
       }
@@ -1230,7 +1250,15 @@ function SessionContinuityPanel({
     );
   }
   if (!projectionQuery.data) {
-    return null;
+    if (isTerminal) {
+      return null;
+    }
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <p className="small">Waiting for session continuity artifacts...</p>
+      </section>
+    );
   }
 
   const projection = projectionQuery.data;
@@ -1339,7 +1367,7 @@ function SessionContinuityPanel({
             disabled={busy || isTerminal}
             onClick={onCancel}
           >
-            Cancel Session
+            Cancel Execution
           </button>
         </div>
       </div>
@@ -1945,11 +1973,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           {resolvedTaskRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
-              workflowId={workflowId}
               taskRunId={resolvedTaskRunId}
               targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
               onCancel={onCancel}
+              invalidateTaskDetail={invalidate}
               cancelBusy={cancelMutation.isPending}
             />
           ) : null}

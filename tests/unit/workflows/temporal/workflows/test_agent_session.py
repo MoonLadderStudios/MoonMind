@@ -12,6 +12,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.temporal.workflows import agent_session as agent_session_module
 from moonmind.workflows.temporal.workflows.agent_session import (
     AGENT_SESSION_STATUS_ACTIVE,
+    AGENT_SESSION_STATUS_CLEARING,
     AGENT_SESSION_STATUS_TERMINATING,
     MoonMindAgentSessionWorkflow,
 )
@@ -228,6 +229,88 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
 
 
 @pytest.mark.asyncio
+async def test_agent_session_refresh_projection_uses_authoritative_binding_task_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindAgentSessionWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    workflow._initialize_session(
+        CodexManagedSessionWorkflowInput(
+            taskRunId="wf-run-1",
+            runtimeId="codex_cli",
+            sessionId="custom-session-id",
+        )
+    )
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    )
+
+    publication_payloads: list[dict[str, object]] = []
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        if activity_name == "agent_runtime.send_turn":
+            return {
+                "sessionState": {
+                    "sessionId": "custom-session-id",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-2",
+                "status": "completed",
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "custom-session-id",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            publication_payloads.append(payload)
+            return {
+                "sessionState": {
+                    "sessionId": "custom-session-id",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    await workflow.send_follow_up({"message": "Continue the custom session."})
+
+    assert len(publication_payloads) == 1
+    assert publication_payloads[0]["sessionId"] == "custom-session-id"
+    assert publication_payloads[0]["sessionEpoch"] == 1
+    assert publication_payloads[0]["containerId"] == "container-1"
+    assert publication_payloads[0]["threadId"] == "thread-1"
+    assert publication_payloads[0]["taskRunId"] == "wf-run-1"
+    assert publication_payloads[0]["metadata"] == {
+        "action": "send_follow_up",
+        "reason": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_agent_session_clear_session_update_executes_remote_clear_and_updates_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -255,6 +338,7 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
         **_kwargs: object,
     ) -> dict[str, object]:
         captured.append(activity_name)
+        assert workflow.get_status()["status"] == AGENT_SESSION_STATUS_CLEARING
         if activity_name == "agent_runtime.clear_session":
             assert payload["newThreadId"] == "thread:sess:wf-run-1:codex_cli:2"
             return {
