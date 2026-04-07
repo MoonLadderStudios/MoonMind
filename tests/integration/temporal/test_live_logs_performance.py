@@ -80,7 +80,8 @@ async def test_log_stream_high_volume_performance():
                     if seq == total_events:
                         break
                 except json.JSONDecodeError:
-                    pass
+                    # Skip malformed JSON chunks and continue consuming the stream.
+                    continue
 
     start = time.perf_counter()
     await _consume_stream()

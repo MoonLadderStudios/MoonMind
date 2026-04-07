@@ -74,7 +74,7 @@ class TestArtifactAuthorizationBoundaries:
                     )
 
                 # Owner read must succeed
-                payload = await service.read(
+                _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
                     principal="owner@example.com",
                 )
@@ -104,7 +104,7 @@ class TestArtifactAuthorizationBoundaries:
                     content_type="text/plain",
                 )
 
-                payload = await service.read(
+                _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
                     principal="service:lifecycle",
                 )
@@ -146,7 +146,7 @@ class TestArtifactAuthorizationBoundaries:
                     payload=b"owner-content",
                     content_type="text/plain",
                 )
-                payload = await service.read(
+                _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
                     principal="owner@example.com",
                 )
@@ -177,7 +177,7 @@ class TestArtifactAuthorizationBoundaries:
                 )
 
                 # Any principal can read
-                payload = await service.read(
+                _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
                     principal="anyone",
                 )
@@ -190,7 +190,7 @@ class TestArtifactAuthorizationBoundaries:
                     payload=b"updated",
                     content_type="text/plain",
                 )
-                payload = await service.read(
+                _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
                     principal="anyone",
                 )
