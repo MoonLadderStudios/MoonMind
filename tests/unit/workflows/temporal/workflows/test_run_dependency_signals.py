@@ -5,7 +5,6 @@ covering signal-driven dependency scenarios that the existing
 test_run_scheduling.py tests do not reach.
 """
 
-from datetime import datetime
 import asyncio
 
 import pytest
