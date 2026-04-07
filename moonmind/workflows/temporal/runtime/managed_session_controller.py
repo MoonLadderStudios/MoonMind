@@ -39,7 +39,8 @@ class CommandRunner(Protocol):
         *,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
-    ) -> tuple[int, str, str]: ...
+    ) -> tuple[int, str, str]:
+        pass
 
 
 async def _default_command_runner(
