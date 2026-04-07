@@ -740,6 +740,59 @@ def test_orchestrate_ci_failures_after_transient_ci_states_escalates_fix_ci(
     assert sleeps == [15, 30]
 
 
+def test_orchestrate_merge_conflicts_after_ci_running_escalates_fix_conflicts(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "ci_running",
+            },
+            {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "merge_conflicts",
+            },
+            {
+                "status": "merged",
+                "merge_outcome": "merged",
+                "reason": "ci_complete",
+            },
+        ]
+    )
+    full_calls: list[tuple[int, int, str]] = []
+    sleeps: list[int] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda attempt, escalation, reason: (
+            full_calls.append((attempt, escalation, reason))
+            or {
+                "status": "needs_remediation",
+                "merge_outcome": "blocked",
+                "reason": reason,
+            }
+        ),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        monotonic_fn=lambda: 0.0,
+        finalize_max_retries=3,
+        fix_max_iterations=3,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert full_calls == [(2, 1, "merge_conflicts")]
+    assert sleeps == [15]
+
+
 def test_orchestrate_main_uses_extended_finalize_wait_defaults(
     pr_resolve_orchestrate_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,

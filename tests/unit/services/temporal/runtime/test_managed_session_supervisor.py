@@ -87,10 +87,14 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     assert finalized.stdout_artifact_ref == "sess-1/stdout.log"
     assert finalized.stderr_artifact_ref == "sess-1/stderr.log"
     assert finalized.diagnostics_ref == "sess-1/diagnostics.json"
+    assert finalized.latest_summary_ref == "sess-1/session.summary.json"
+    assert finalized.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
     assert finalized.last_log_offset == len("session started\nassistant: OK\nwarning: none\n")
     assert finalized.last_log_at is not None
     assert artifact_storage.resolve_storage_path("sess-1/stdout.log").read_text(encoding="utf-8") == "session started\nassistant: OK\n"
     assert artifact_storage.resolve_storage_path("sess-1/stderr.log").read_text(encoding="utf-8") == "warning: none\n"
+    assert artifact_storage.resolve_storage_path("sess-1/session.summary.json").exists()
+    assert artifact_storage.resolve_storage_path("sess-1/session.step_checkpoint.json").exists()
 
 
 @pytest.mark.asyncio
@@ -113,6 +117,8 @@ async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None
 
     snapshot = await supervisor.publish_snapshot("sess-1")
     assert snapshot.stdout_artifact_ref == "sess-1/stdout.log"
+    assert snapshot.latest_summary_ref == "sess-1/session.summary.json"
+    assert snapshot.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
 
     (spool / "stdout.log").write_text("first\nsecond\n", encoding="utf-8")
     await asyncio.sleep(0.05)
@@ -154,7 +160,7 @@ async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundar
     )
 
     assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
-    assert published.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
 
     control_payload = json.loads(
         artifact_storage.resolve_storage_path(
@@ -197,7 +203,7 @@ async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundar
     )
 
     assert republished.latest_control_event_ref == "sess-1/session.control_event.epoch-3.json"
-    assert republished.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-3.json"
+    assert republished.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-3.json"
     assert artifact_storage.resolve_storage_path(
         "sess-1/session.control_event.epoch-2.json"
     ).exists()
@@ -244,4 +250,4 @@ async def test_publish_reset_artifacts_preserves_newer_store_fields(tmp_path: Pa
     assert published.last_log_offset == 77
     assert published.last_log_at == datetime(2026, 4, 7, 8, 1, tzinfo=UTC)
     assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
-    assert published.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"

@@ -609,6 +609,7 @@ class DockerCodexManagedSessionController:
             latestSummaryRef=record.latest_summary_ref,
             latestCheckpointRef=record.latest_checkpoint_ref,
             latestControlEventRef=record.latest_control_event_ref,
+            latestResetBoundaryRef=record.latest_reset_boundary_ref,
             metadata={
                 "status": record.status,
                 "stdoutArtifactRef": record.stdout_artifact_ref,
@@ -641,6 +642,7 @@ class DockerCodexManagedSessionController:
             latestSummaryRef=record.latest_summary_ref,
             latestCheckpointRef=record.latest_checkpoint_ref,
             latestControlEventRef=record.latest_control_event_ref,
+            latestResetBoundaryRef=record.latest_reset_boundary_ref,
             metadata={
                 **dict(request.metadata),
                 "status": record.status,

@@ -2450,10 +2450,11 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult | None:
         """Publish agent-run outputs back to artifact storage.
 
-        Writes a summary JSON artifact containing the run result metadata
-        (output refs, summary, failure class) via the artifact service.
+        Best-effort publication writes ``output.summary`` and
+        ``output.agent_result`` JSON artifacts plus managed-session
+        ``input.*`` reference artifacts when those refs are present.
         Returns the result enriched with a ``diagnostics_ref`` pointing to
-        the persisted summary artifact.
+        the persisted ``output.agent_result`` artifact.
         """
         if result is None:
             return result
@@ -2472,6 +2473,53 @@ class TemporalAgentRuntimeActivities:
         else:
             result_dict = {"raw": str(result)}
 
+        from temporalio import activity
+
+        try:
+            info = activity.info()
+        except RuntimeError:
+            info = None
+
+        def _execution_ref(link_type: str) -> ExecutionRef | None:
+            if info is None:
+                return None
+            return ExecutionRef(
+                namespace=info.namespace,
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+                link_type=link_type,
+            )
+
+        metadata = (
+            result_dict.get("metadata")
+            if isinstance(result_dict.get("metadata"), Mapping)
+            else {}
+        )
+
+        async def _write_reference_artifact(
+            *,
+            link_type: str,
+            artifact_ref_value: str,
+            field_name: str,
+        ) -> str:
+            ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload={
+                    field_name: artifact_ref_value,
+                },
+                execution_ref=_execution_ref(link_type),
+                metadata_json={
+                    "name": link_type.replace(".", "_") + ".json",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", link_type],
+                },
+            )
+            return ref.artifact_id
+
+        instruction_ref = str(metadata.get("instructionRef") or "").strip()
+        resolved_skillset_ref = str(metadata.get("resolvedSkillsetRef") or "").strip()
+
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
             "summary": result_dict.get("summary") or result_dict.get("raw", ""),
@@ -2482,33 +2530,84 @@ class TemporalAgentRuntimeActivities:
         }
 
         try:
+            published_refs: dict[str, str] = {}
+            if instruction_ref:
+                published_refs["inputInstructionsRef"] = await _write_reference_artifact(
+                    link_type="input.instructions",
+                    artifact_ref_value=instruction_ref,
+                    field_name="instructionRef",
+                )
+            if resolved_skillset_ref:
+                published_refs["inputSkillSnapshotRef"] = await _write_reference_artifact(
+                    link_type="input.skill_snapshot",
+                    artifact_ref_value=resolved_skillset_ref,
+                    field_name="resolvedSkillsetRef",
+                )
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
                 payload=summary_payload,
+                execution_ref=_execution_ref("output.summary"),
+                metadata_json={
+                    "name": "agent_run_summary.json",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", "output.summary"],
+                },
+            )
+            agent_result_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=result_dict,
+                execution_ref=_execution_ref("output.agent_result"),
                 metadata_json={
                     "name": "agent_run_result.json",
                     "producer": "activity:agent_runtime.publish_artifacts",
-                    "labels": ["agent_runtime", "result"],
+                    "labels": ["agent_runtime", "output.agent_result"],
                 },
             )
             # Enrich result with the diagnostics ref
             if isinstance(result, Mapping):
                 enriched = dict(result)
                 if "diagnosticsRef" in enriched:
-                    enriched["diagnosticsRef"] = summary_ref.artifact_id
+                    enriched["diagnosticsRef"] = agent_result_ref.artifact_id
                 else:
-                    enriched["diagnostics_ref"] = summary_ref.artifact_id
+                    enriched["diagnostics_ref"] = agent_result_ref.artifact_id
+                enriched_metadata = (
+                    dict(enriched.get("metadata") or {})
+                    if isinstance(enriched.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata.update(
+                    {
+                        **published_refs,
+                        "outputSummaryRef": summary_ref.artifact_id,
+                        "outputAgentResultRef": agent_result_ref.artifact_id,
+                    }
+                )
+                enriched["metadata"] = enriched_metadata
                 # Remove snake_case if alias is present to avoid Pydantic validation errors
                 if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
                     del enriched["diagnostics_ref"]
                 return enriched
             if hasattr(result, "diagnostics_ref"):
-                result.diagnostics_ref = summary_ref.artifact_id
+                result.diagnostics_ref = agent_result_ref.artifact_id
+            if hasattr(result, "metadata"):
+                metadata_obj = getattr(result, "metadata", None)
+                enriched_metadata = (
+                    dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
+                )
+                enriched_metadata.update(
+                    {
+                        **published_refs,
+                        "outputSummaryRef": summary_ref.artifact_id,
+                        "outputAgentResultRef": agent_result_ref.artifact_id,
+                    }
+                )
+                result.metadata = enriched_metadata
             return result
         except Exception as exc:
             logger.warning(
-                "agent_runtime.publish_artifacts failed to write summary artifact",
+                "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
                 exc_info=True,
             )
             return result

@@ -281,6 +281,9 @@ class CodexManagedSessionSummary(_CodexManagedSessionRemoteContract):
     latest_control_event_ref: NonBlankStr | None = Field(
         None, alias="latestControlEventRef"
     )
+    latest_reset_boundary_ref: NonBlankStr | None = Field(
+        None, alias="latestResetBoundaryRef"
+    )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
 
@@ -297,6 +300,9 @@ class CodexManagedSessionArtifactsPublication(_CodexManagedSessionRemoteContract
     )
     latest_control_event_ref: NonBlankStr | None = Field(
         None, alias="latestControlEventRef"
+    )
+    latest_reset_boundary_ref: NonBlankStr | None = Field(
+        None, alias="latestResetBoundaryRef"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
@@ -324,6 +330,7 @@ class CodexManagedSessionRecord(BaseModel):
     latest_summary_ref: str | None = Field(None, alias="latestSummaryRef")
     latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
     latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
+    latest_reset_boundary_ref: str | None = Field(None, alias="latestResetBoundaryRef")
     last_log_offset: int | None = Field(None, alias="lastLogOffset", ge=0)
     last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
@@ -381,6 +388,11 @@ class CodexManagedSessionRecord(BaseModel):
                 self.latest_control_event_ref,
                 field_name="latestControlEventRef",
             )
+        if self.latest_reset_boundary_ref is not None:
+            self.latest_reset_boundary_ref = require_non_blank(
+                self.latest_reset_boundary_ref,
+                field_name="latestResetBoundaryRef",
+            )
         if self.error_message is not None:
             self.error_message = require_non_blank(
                 self.error_message,
@@ -404,15 +416,21 @@ class CodexManagedSessionRecord(BaseModel):
         )
 
     def published_artifact_refs(self) -> tuple[str, ...]:
-        return tuple(
-            ref
-            for ref in (
-                self.stdout_artifact_ref,
-                self.stderr_artifact_ref,
-                self.diagnostics_ref,
-            )
-            if ref
-        )
+        refs: list[str] = []
+        for ref in (
+            self.stdout_artifact_ref,
+            self.stderr_artifact_ref,
+            self.diagnostics_ref,
+            self.latest_summary_ref,
+            self.latest_checkpoint_ref,
+            self.latest_control_event_ref,
+            self.latest_reset_boundary_ref,
+        ):
+            if ref and ref not in refs:
+                refs.append(ref)
+        return tuple(refs)
+
+
 class CodexManagedSessionBinding(BaseModel):
     """Bounded task-scoped session binding passed across workflow boundaries."""
 

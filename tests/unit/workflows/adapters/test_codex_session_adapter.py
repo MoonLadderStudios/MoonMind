@@ -154,6 +154,7 @@ def _summary(
         latestSummaryRef="artifact:session-summary",
         latestCheckpointRef="artifact:session-checkpoint",
         latestControlEventRef=None,
+        latestResetBoundaryRef=None,
         metadata={"lastAssistantText": "Implemented through the session container."},
     )
 
@@ -173,10 +174,17 @@ def _publication(
             "threadId": thread_id,
             "activeTurnId": None,
         },
-        publishedArtifactRefs=("artifact:session-summary", "artifact:session-checkpoint"),
+        publishedArtifactRefs=(
+            "artifact:stdout",
+            "artifact:stderr",
+            "artifact:diagnostics",
+            "artifact:session-summary",
+            "artifact:session-checkpoint",
+        ),
         latestSummaryRef="artifact:session-summary",
         latestCheckpointRef="artifact:session-checkpoint",
         latestControlEventRef=None,
+        latestResetBoundaryRef=None,
     )
 
 
@@ -285,9 +293,13 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert result.summary == "Implemented through the session container."
     assert result.output_refs == [
         "artifact:turn-output",
+        "artifact:stdout",
+        "artifact:stderr",
+        "artifact:diagnostics",
         "artifact:session-summary",
         "artifact:session-checkpoint",
     ]
+    assert result.metadata["instructionRef"] == "artifact:instructions"
     assert result.metadata["sessionSummary"]["latestSummaryRef"] == "artifact:session-summary"
     assert result.metadata["sessionArtifacts"]["latestCheckpointRef"] == "artifact:session-checkpoint"
 

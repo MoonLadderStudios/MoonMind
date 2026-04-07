@@ -325,6 +325,10 @@ class MoonMindAgentRun:
             mode="json",
             by_alias=True,
         )
+        if request.instruction_ref:
+            metadata.setdefault("instructionRef", request.instruction_ref)
+        if request.resolved_skillset_ref:
+            metadata.setdefault("resolvedSkillsetRef", request.resolved_skillset_ref)
         return result.model_copy(update={"metadata": metadata})
 
     @staticmethod

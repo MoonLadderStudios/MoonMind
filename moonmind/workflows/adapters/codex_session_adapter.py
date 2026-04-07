@@ -173,6 +173,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
         run_id = _generate_run_id()
         started_at = _current_time()
+        original_instruction_ref = str(request.instruction_ref or "").strip() or None
+        original_skillset_ref = str(request.resolved_skillset_ref or "").strip() or None
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -240,6 +242,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             outputRefs=output_refs,
             summary=assistant_text,
             metadata={
+                "instructionRef": original_instruction_ref,
+                "resolvedSkillsetRef": original_skillset_ref,
                 "sessionSummary": summary.model_dump(mode="json", by_alias=True),
                 "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
                 "turnId": turn_response.turn_id,

@@ -176,8 +176,50 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_controller_clear_and_terminate_preserve_container_boundary() -> None:
+async def test_controller_clear_and_terminate_preserve_container_boundary(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/tmp/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+            artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
     commands: list[tuple[str, ...]] = []
+    session_supervisor = AsyncMock()
+
+    async def _publish_reset_artifacts(
+        *,
+        previous_record: CodexManagedSessionRecord,
+        record: CodexManagedSessionRecord,
+        action: str,
+        reason: str | None,
+    ):
+        assert previous_record.session_epoch == 1
+        assert previous_record.thread_id == "logical-thread-1"
+        assert record.session_epoch == 2
+        assert record.thread_id == "logical-thread-2"
+        assert action == "clear_session"
+        assert reason is None
+        return await store.update(
+            record.session_id,
+            latest_control_event_ref="sess-1/session.control_event.epoch-2.json",
+            latest_reset_boundary_ref="sess-1/session.reset_boundary.epoch-2.json",
+        )
+
+    session_supervisor.publish_reset_artifacts.side_effect = _publish_reset_artifacts
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -207,6 +249,8 @@ async def test_controller_clear_and_terminate_preserve_container_boundary() -> N
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
         workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
         command_runner=_fake_runner,
     )
 
@@ -229,6 +273,18 @@ async def test_controller_clear_and_terminate_preserve_container_boundary() -> N
     )
 
     assert cleared.session_state.session_epoch == 2
+    stored = store.load("sess-1")
+    assert stored is not None
+    assert stored.session_epoch == 2
+    assert stored.thread_id == "logical-thread-2"
+    assert stored.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert stored.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    session_supervisor.publish_reset_artifacts.assert_awaited_once()
+    publish_kwargs = session_supervisor.publish_reset_artifacts.await_args.kwargs
+    assert publish_kwargs["previous_record"].session_epoch == 1
+    assert publish_kwargs["previous_record"].thread_id == "logical-thread-1"
+    assert publish_kwargs["record"].session_epoch == 2
+    assert publish_kwargs["record"].thread_id == "logical-thread-2"
     assert terminated.status == "terminated"
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
 
@@ -311,7 +367,7 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
     assert cleared.session_state.session_epoch == 2
     assert stored.thread_id == "logical-thread-2"
     assert stored.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
-    assert stored.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert stored.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
     control_payload = json.loads(
         artifact_storage.resolve_storage_path(
             stored.latest_control_event_ref
@@ -338,9 +394,9 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
     )
 
     assert summary.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
-    assert summary.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert summary.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
     assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
-    assert publication.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
 
 
 @pytest.mark.asyncio
@@ -415,8 +471,9 @@ async def test_controller_summary_and_publication_read_from_durable_record(
             stderrArtifactRef="sess-1/stderr.log",
             diagnosticsRef="sess-1/diagnostics.json",
             latestSummaryRef="sess-1/session.summary.json",
-            latestCheckpointRef="sess-1/session.reset_boundary.epoch-2.json",
+            latestCheckpointRef="sess-1/session.step_checkpoint.json",
             latestControlEventRef="sess-1/session.control_event.epoch-2.json",
+            latestResetBoundaryRef="sess-1/session.reset_boundary.epoch-2.json",
             startedAt="2026-04-06T12:00:00Z",
         )
     )
@@ -448,16 +505,22 @@ async def test_controller_summary_and_publication_read_from_durable_record(
     )
 
     assert summary.latest_summary_ref == "sess-1/session.summary.json"
-    assert summary.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert summary.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
     assert summary.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert summary.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
     assert summary.metadata["stdoutArtifactRef"] == "sess-1/stdout.log"
     assert publication.published_artifact_refs == (
         "sess-1/stdout.log",
         "sess-1/stderr.log",
         "sess-1/diagnostics.json",
+        "sess-1/session.summary.json",
+        "sess-1/session.step_checkpoint.json",
+        "sess-1/session.control_event.epoch-2.json",
+        "sess-1/session.reset_boundary.epoch-2.json",
     )
-    assert publication.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert publication.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
     assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
 
 
 @pytest.mark.asyncio
@@ -499,6 +562,8 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
         stdoutArtifactRef="sess-1/stdout.log",
         stderrArtifactRef="sess-1/stderr.log",
         diagnosticsRef="sess-1/diagnostics.json",
+        latestSummaryRef="sess-1/session.summary.json",
+        latestCheckpointRef="sess-1/session.step_checkpoint.json",
         startedAt="2026-04-06T12:00:00Z",
     )
     session_supervisor.publish_snapshot.return_value = published_record
@@ -527,6 +592,8 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
         "sess-1/stdout.log",
         "sess-1/stderr.log",
         "sess-1/diagnostics.json",
+        "sess-1/session.summary.json",
+        "sess-1/session.step_checkpoint.json",
     )
 
 
