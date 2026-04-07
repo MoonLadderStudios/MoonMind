@@ -45,7 +45,6 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.auth.env_shaping import OAUTH_CLEARED_VARS
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 
 logger = logging.getLogger(__name__)
