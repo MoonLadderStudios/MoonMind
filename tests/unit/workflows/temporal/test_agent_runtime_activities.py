@@ -507,6 +507,7 @@ async def test_fetch_session_summary_delegates_to_remote_session_controller() ->
             },
             latestSummaryRef="art-summary",
             latestCheckpointRef="art-checkpoint",
+            latestControlEventRef="art-control",
         )
     )
     activities = TemporalAgentRuntimeActivities(session_controller=controller)
@@ -522,6 +523,8 @@ async def test_fetch_session_summary_delegates_to_remote_session_controller() ->
 
     assert isinstance(result, CodexManagedSessionSummary)
     assert result.latest_summary_ref == "art-summary"
+    assert result.latest_checkpoint_ref == "art-checkpoint"
+    assert result.latest_control_event_ref == "art-control"
 
 
 async def test_publish_session_artifacts_delegates_to_remote_session_controller() -> None:
@@ -536,6 +539,8 @@ async def test_publish_session_artifacts_delegates_to_remote_session_controller(
             },
             publishedArtifactRefs=("art-summary", "art-checkpoint"),
             latestSummaryRef="art-summary",
+            latestCheckpointRef="art-checkpoint",
+            latestControlEventRef="art-control",
         )
     )
     activities = TemporalAgentRuntimeActivities(session_controller=controller)
@@ -551,6 +556,8 @@ async def test_publish_session_artifacts_delegates_to_remote_session_controller(
 
     assert isinstance(result, CodexManagedSessionArtifactsPublication)
     assert result.published_artifact_refs == ("art-summary", "art-checkpoint")
+    assert result.latest_checkpoint_ref == "art-checkpoint"
+    assert result.latest_control_event_ref == "art-control"
 
 
 # ---------------------------------------------------------------------------

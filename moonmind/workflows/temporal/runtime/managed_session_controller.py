@@ -524,16 +524,43 @@ class DockerCodexManagedSessionController:
         self,
         request: CodexManagedSessionClearRequest,
     ) -> CodexManagedSessionHandle:
+        session_store = self._session_store
+        previous_record = None
+        if session_store is not None:
+            previous_record = session_store.load(request.session_id)
+            if previous_record is not None:
+                self._matches_locator(previous_record, request)
         payload = await self._invoke_json(
             container_id=request.container_id,
             action="clear_session",
             payload=request.model_dump(by_alias=True),
         )
         handle = CodexManagedSessionHandle.model_validate(payload)
-        await self._persist_handle_transition(
-            locator=self._locator_from_session_state(handle.session_state),
-            status=handle.status,
-        )
+        if previous_record is not None:
+            assert session_store is not None
+            updated_record = await session_store.update(
+                request.session_id,
+                session_epoch=handle.session_state.session_epoch,
+                container_id=handle.session_state.container_id,
+                thread_id=handle.session_state.thread_id,
+                image_ref=handle.image_ref or previous_record.image_ref,
+                control_url=handle.control_url or previous_record.control_url,
+                status=self._record_status_from_handle_status(handle.status),
+                updated_at=datetime.now(tz=UTC),
+                error_message=None,
+            )
+            if self._session_supervisor is not None:
+                await self._session_supervisor.publish_reset_artifacts(
+                    previous_record=previous_record,
+                    record=updated_record,
+                    action="clear_session",
+                    reason=request.reason,
+                )
+        else:
+            await self._persist_handle_transition(
+                locator=self._locator_from_session_state(handle.session_state),
+                status=handle.status,
+            )
         return handle
 
     async def terminate_session(

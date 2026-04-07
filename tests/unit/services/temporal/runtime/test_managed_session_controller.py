@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -23,6 +24,27 @@ from moonmind.workflows.temporal.runtime.managed_session_controller import (
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
+from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
+    ManagedSessionSupervisor,
+)
+from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+
+
+class _LocalArtifactStorage:
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    def write_artifact(
+        self, *, job_id: str, artifact_name: str, data: bytes
+    ) -> tuple[Path, str]:
+        target_dir = self._root / job_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / artifact_name
+        target.write_bytes(data)
+        return target, f"{job_id}/{artifact_name}"
+
+    def resolve_storage_path(self, ref: str) -> Path:
+        return self._root / ref
 
 
 @pytest.mark.asyncio
@@ -212,6 +234,165 @@ async def test_controller_clear_and_terminate_preserve_container_boundary() -> N
 
 
 @pytest.mark.asyncio
+async def test_controller_clear_session_publishes_durable_reset_artifacts(
+    tmp_path: Path,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+    store = ManagedSessionStore(tmp_path / "session-store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/work/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/work/agent_jobs/task-1/session",
+            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            startedAt=datetime(2026, 4, 7, 8, 0, tzinfo=UTC),
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if "clear_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 2,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-2",
+                },
+                "status": "ready",
+                "imageRef": "ghcr.io/moonladderstudios/moonmind:latest",
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=supervisor,
+        command_runner=_fake_runner,
+    )
+
+    cleared = await controller.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+            reason="reset stale context",
+        )
+    )
+    stored = store.load("sess-1")
+    assert stored is not None
+
+    assert cleared.session_state.session_epoch == 2
+    assert stored.thread_id == "logical-thread-2"
+    assert stored.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert stored.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    control_payload = json.loads(
+        artifact_storage.resolve_storage_path(
+            stored.latest_control_event_ref
+        ).read_text(encoding="utf-8")
+    )
+    assert control_payload["reason"] == "reset stale context"
+
+    summary = await controller.fetch_session_summary(
+        FetchCodexManagedSessionSummaryRequest(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+        )
+    )
+    publication = await controller.publish_session_artifacts(
+        PublishCodexManagedSessionArtifactsRequest(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            taskRunId="task-1",
+        )
+    )
+
+    assert summary.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert summary.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert publication.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+
+
+@pytest.mark.asyncio
+async def test_controller_clear_session_rejects_stale_durable_locator(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/work/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/work/agent_jobs/task-1/session",
+            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            startedAt=datetime(2026, 4, 7, 8, 0, tzinfo=UTC),
+        )
+    )
+    runner = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=AsyncMock(),
+        command_runner=runner,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="sessionEpoch does not match the durable managed session record",
+    ):
+        await controller.clear_session(
+            CodexManagedSessionClearRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                newThreadId="logical-thread-2",
+            )
+        )
+
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_controller_summary_and_publication_read_from_durable_record(
     tmp_path: Path,
 ) -> None:
@@ -234,6 +415,8 @@ async def test_controller_summary_and_publication_read_from_durable_record(
             stderrArtifactRef="sess-1/stderr.log",
             diagnosticsRef="sess-1/diagnostics.json",
             latestSummaryRef="sess-1/session.summary.json",
+            latestCheckpointRef="sess-1/session.reset_boundary.epoch-2.json",
+            latestControlEventRef="sess-1/session.control_event.epoch-2.json",
             startedAt="2026-04-06T12:00:00Z",
         )
     )
@@ -265,12 +448,16 @@ async def test_controller_summary_and_publication_read_from_durable_record(
     )
 
     assert summary.latest_summary_ref == "sess-1/session.summary.json"
+    assert summary.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert summary.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert summary.metadata["stdoutArtifactRef"] == "sess-1/stdout.log"
     assert publication.published_artifact_refs == (
         "sess-1/stdout.log",
         "sess-1/stderr.log",
         "sess-1/diagnostics.json",
     )
+    assert publication.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
 
 
 @pytest.mark.asyncio
