@@ -93,6 +93,7 @@ class CodexSessionExecutionState(BaseModel):
     status: AgentRunState = Field(..., alias="status")
     started_at: datetime = Field(..., alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
+    managed_run_id: str | None = Field(None, alias="managedRunId")
     locator: CodexManagedSessionLocator = Field(..., alias="locator")
     active_turn_id: str | None = Field(None, alias="activeTurnId")
     profile_id: str | None = Field(None, alias="profileId")
@@ -254,6 +255,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._save_run_state(
             run_id=run_id,
             agent_id=request.agent_id,
+            managed_run_id=binding.task_run_id,
             binding=binding,
             locator=current_locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
@@ -354,6 +356,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._save_run_state(
             run_id=state.run_id,
             agent_id=state.agent_id,
+            managed_run_id=state.managed_run_id,
             binding=None,
             locator=state.locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
@@ -615,6 +618,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         run_id: str,
         agent_id: str,
+        managed_run_id: str | None = None,
         binding: CodexManagedSessionBinding | None = None,
         locator: Mapping[str, Any],
         active_turn_id: str | None,
@@ -632,6 +636,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             status=status,
             startedAt=started_at,
             finishedAt=finished_at,
+            managedRunId=managed_run_id,
             locator=locator,
             activeTurnId=active_turn_id,
             profileId=profile_id,
@@ -640,6 +645,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._persist_managed_run_record(
             run_id=run_id,
             agent_id=agent_id,
+            managed_run_id=managed_run_id,
             binding=binding,
             result=result,
             status=status,
@@ -652,6 +658,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         run_id: str,
         agent_id: str,
+        managed_run_id: str | None,
         binding: CodexManagedSessionBinding | None,
         result: Mapping[str, Any],
         status: AgentRunState,
@@ -661,7 +668,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         if self._run_store is None:
             return
 
-        existing = self._run_store.load(run_id)
+        record_key = str(managed_run_id or "").strip() or run_id
+        existing = self._run_store.load(record_key)
         session_artifacts = result.get("metadata", {}).get("sessionArtifacts")
         session_artifact_metadata = (
             session_artifacts.get("metadata", {})
@@ -705,7 +713,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             else (existing.workspace_path if existing is not None else None)
         )
         record = ManagedRunRecord(
-            runId=run_id,
+            runId=record_key,
             workflowId=self._workflow_id,
             agentId=agent_id,
             runtimeId=runtime_id,

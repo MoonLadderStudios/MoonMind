@@ -274,7 +274,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
     status = await adapter.status(handle.run_id)
     result = await adapter.fetch_result(handle.run_id)
-    persisted_record = run_store.load(handle.run_id)
+    persisted_record = run_store.load(binding.task_run_id)
 
     assert len(launch_calls) == 1
     launch_request = launch_calls[0]
@@ -292,6 +292,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert handle.metadata["sessionId"] == binding.session_id
     assert handle.metadata["containerId"] == "container-1"
     assert persisted_record is not None
+    assert persisted_record.run_id == binding.task_run_id
     assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
