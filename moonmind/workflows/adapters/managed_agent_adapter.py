@@ -28,6 +28,7 @@ import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,108 @@ _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
 _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
     {"blocked", "attempts_exhausted"}
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedProfileLaunchContext:
+    """Resolved managed-profile launch context shared across adapters."""
+
+    profile_id: str
+    credential_source: str
+    delta_env_overrides: dict[str, str]
+    shaped_env: dict[str, str]
+    passthrough_env_keys: list[str]
+
+
+def build_managed_profile_launch_context(
+    *,
+    profile: dict[str, Any],
+    runtime_for_profile: str,
+    workflow_id: str,
+    default_credential_source: str,
+) -> ManagedProfileLaunchContext:
+    """Build the shared launch-time environment context for one profile."""
+
+    del runtime_for_profile  # Reserved for future profile-strategy shaping.
+    credential_source: str = profile.get(
+        "credential_source", default_credential_source
+    )
+
+    base_env = {
+        k: v for k, v in os.environ.items()
+        if not _should_filter_base_env_var(k)
+    }
+    tags = profile.get("tags") or []
+    is_proxy_first = "proxy-first" in tags
+
+    delta_env_overrides: dict[str, str] = {}
+
+    if is_proxy_first:
+        import time
+        from cryptography.fernet import Fernet
+        from api_service.core.encryption import get_encryption_key
+
+        provider = str(profile.get("provider_id") or "anthropic").strip().lower()
+        payload_bytes = json.dumps(
+            {
+                "provider": provider,
+                "workflow_id": workflow_id,
+                "secret_refs": profile.get("secret_refs", {}),
+                "exp": time.time() + 3600,
+            }
+        ).encode("utf-8")
+
+        fernet = Fernet(get_encryption_key().encode("utf-8"))
+        proxy_token = "mm-proxy-token:" + fernet.encrypt(payload_bytes).decode("utf-8")
+        api_url = os.environ.get(
+            "MOONMIND_PROXY_URL",
+            "http://moonmind-api:8000/api/v1/proxy",
+        )
+
+        delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
+
+        if provider in {"anthropic", "minimax"}:
+            delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/{provider}"
+            delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
+            delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
+        elif provider == "openai":
+            delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
+            delta_env_overrides["OPENAI_API_KEY"] = proxy_token
+
+    volume_mount_path = profile.get("volume_mount_path")
+    if volume_mount_path:
+        delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
+
+    account_label = profile.get("account_label")
+    if account_label:
+        delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
+
+    runtime_env_overrides = profile.get("runtime_env_overrides") or {}
+    if isinstance(runtime_env_overrides, dict):
+        for key, value in runtime_env_overrides.items():
+            ks = str(key).strip()
+            if not ks:
+                continue
+            is_safe_proxy_var = is_proxy_first and (
+                ks == "MOONMIND_PROXY_TOKEN" or ks.endswith("_BASE_URL")
+            )
+            if not _should_filter_base_env_var(ks) or is_safe_proxy_var:
+                delta_env_overrides[ks] = str(value) if value is not None else ""
+
+    shaped_env = base_env.copy()
+    shaped_env.update(delta_env_overrides)
+    passthrough_env_keys = [
+        key
+        for key in _SECRET_ENV_PASSTHROUGH_KEYS
+        if str(os.environ.get(key, "")).strip()
+    ]
+    return ManagedProfileLaunchContext(
+        profile_id=str(profile.get("profile_id") or "").strip(),
+        credential_source=credential_source,
+        delta_env_overrides=delta_env_overrides,
+        shaped_env=shaped_env,
+        passthrough_env_keys=passthrough_env_keys,
+    )
 
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
@@ -271,102 +374,20 @@ class ManagedAgentAdapter:
         default_credential_source = (
             "oauth_volume" if default_auth == "oauth" else "secret_ref"
         )
-        credential_source: str = profile.get(
-            "credential_source", default_credential_source
+        launch_context = build_managed_profile_launch_context(
+            profile=profile,
+            runtime_for_profile=runtime_for_profile,
+            workflow_id=self._workflow_id,
+            default_credential_source=default_credential_source,
         )
-
-        # Build a safe delta-only env_overrides dict for ManagedRuntimeProfile.
-        #
-        # The launcher (launcher.py) already starts from os.environ and then
-        # overlays env_overrides on top.  Therefore env_overrides MUST contain
-        # only the profile-specific delta keys — never the full base environment.
-        # Passing the entire shaped_env (which inherits os.environ) would cause
-        # the ManagedRuntimeProfile validator to reject any sensitive-named env
-        # vars that the profile legitimately reads from the ambient environment
-        # (e.g. ANTHROPIC_AUTH_TOKEN, MINIMAX_API_KEY).
-        #
-        # The full shaped_env is still computed below for use in env_keys_count
-        # metadata only.
-        base_env = {
-            k: v for k, v in os.environ.items()
-            if not _should_filter_base_env_var(k)
-        }
-        # Determine if we should use proxy-first token injection instead of 
-        # distributing the raw secret_ref downstream.
-        tags = profile.get("tags") or []
-        is_proxy_first = "proxy-first" in tags
-        
-        # delta_env_overrides: only the safe profile-specific additions.
-        delta_env_overrides: dict[str, str] = {}
-        
-        if is_proxy_first:
-            import time
-            from cryptography.fernet import Fernet
-            from api_service.core.encryption import get_encryption_key
-            
-            provider = str(profile.get("provider_id") or "anthropic").strip().lower()
-            
-            # Mint a synthetic proxy token to authorize internal routes without leaking the true DB secret
-            payload_bytes = json.dumps({
-                "provider": provider,
-                "workflow_id": self._workflow_id,
-                "secret_refs": profile.get("secret_refs", {}),
-                "exp": time.time() + 3600  # 1 hour expiration for proxied tokens
-            }).encode("utf-8")
-            
-            fernet = Fernet(get_encryption_key().encode("utf-8"))
-            proxy_token = "mm-proxy-token:" + fernet.encrypt(payload_bytes).decode("utf-8")
-            
-            api_url = os.environ.get("MOONMIND_PROXY_URL", "http://moonmind-api:8000/api/v1/proxy")
-            
-            # Inject standard proxy variables into the delta block directly for the worker
-            delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
-            
-            if provider == "anthropic" or provider == "minimax":
-                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/{provider}"
-                delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
-                delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
-            elif provider == "openai":
-                delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
-                delta_env_overrides["OPENAI_API_KEY"] = proxy_token
-
-        # Phase 4: Removed auth_mode branching and shape_environment_* calls.
-        # Ensure base environment variables from proxy and runtime overrides are preserved.
-        volume_mount_path = profile.get("volume_mount_path")
-        if volume_mount_path:
-            delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
-
-        account_label = profile.get("account_label")
-        if account_label:
-            delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
-
-        runtime_env_overrides = profile.get("runtime_env_overrides") or {}
-        if isinstance(runtime_env_overrides, dict):
-            for key, value in runtime_env_overrides.items():
-                ks = str(key).strip()
-                if not ks:
-                    continue
-                # Only propagate non-sensitive runtime_env_overrides keys
-                # into delta_env_overrides so they reach the launcher.
-                is_safe_proxy_var = is_proxy_first and (
-                    ks == "MOONMIND_PROXY_TOKEN" or ks.endswith("_BASE_URL")
-                )
-                if not _should_filter_base_env_var(ks) or is_safe_proxy_var:
-                    delta_env_overrides[ks] = str(value) if value is not None else ""
-
-        # We construct shaped_env purely for the metadata count metric, matching the old behavior
-        # where it included base_env + delta.
-        shaped_env = base_env.copy()
-        shaped_env.update(delta_env_overrides)
-        passthrough_env_keys = [
-            key
-            for key in _SECRET_ENV_PASSTHROUGH_KEYS
-            if str(os.environ.get(key, "")).strip()
-        ]
+        credential_source = launch_context.credential_source
+        delta_env_overrides = launch_context.delta_env_overrides
+        shaped_env = launch_context.shaped_env
+        passthrough_env_keys = launch_context.passthrough_env_keys
 
         # Persist only the profile_id reference — never raw credentials
         # (DOC-REQ-008 / constitution security rule).
-        self._active_profile_id = profile_id
+        self._active_profile_id = launch_context.profile_id
         
         try:
             from temporalio import workflow
@@ -456,13 +477,13 @@ class ManagedAgentAdapter:
             self._workflow_id,
         )
         return AgentRunHandle(
-            runId=run_id,
-            agentKind="managed",
-            agentId=request.agent_id,
-            status=status,
-            startedAt=datetime.now(tz=UTC),
-            metadata={
-                "profile_id": profile_id,
+                runId=run_id,
+                agentKind="managed",
+                agentId=request.agent_id,
+                status=status,
+                startedAt=datetime.now(tz=UTC),
+                metadata={
+                "profile_id": launch_context.profile_id,
                 "credential_source": credential_source,
                 "env_keys_count": len(shaped_env),
             },
@@ -687,10 +708,12 @@ class ManagedAgentAdapter:
 
 __all__ = [
     "ManagedAgentAdapter",
+    "ManagedProfileLaunchContext",
     "ProfileResolutionError",
     "ProfileFetcherFunc",
     "SlotRequestFunc",
     "SlotReleaseFunc",
     "CooldownReportFunc",
+    "build_managed_profile_launch_context",
 
 ]
