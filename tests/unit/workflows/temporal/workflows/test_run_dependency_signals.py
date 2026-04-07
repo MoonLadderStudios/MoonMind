@@ -1,11 +1,11 @@
 """Integration tests for signal-driven dependency resolution.
 
-These tests exercise the real DependencyResolved signal path rather than
-monkey-patching _reconcile_dependencies, covering scenarios that the
-existing test_run_scheduling.py tests do not reach.
+These tests exercise the real DependencyResolved signal handler path,
+covering signal-driven dependency scenarios that the existing
+test_run_scheduling.py tests do not reach.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import asyncio
 
 import pytest
@@ -67,7 +67,7 @@ def mock_run_environment(monkeypatch):
 def _make_dependency_resolved_payload(
     prerequisite_workflow_id: str,
     terminal_state: str = "completed",
-    close_status: str = "COMPLETED",
+    close_status: str = "completed",
     resolved_at: str | None = None,
     failure_category: str | None = None,
     message: str | None = None,
@@ -243,8 +243,7 @@ async def test_run_workflow_duplicate_signal_is_idempotent(
     # each of the 3 signals triggers one call. The workflow's finish path
     # may also record once more. Accept 3-4 calls — the key invariant is
     # that the workflow completed successfully (no state corruption).
-    assert signal_count >= 3
-    # But the workflow completed successfully — no corruption.
+    assert 3 <= signal_count <= 4
 
 
 # ---------------------------------------------------------------------------
@@ -351,8 +350,8 @@ async def test_run_workflow_fails_when_prerequisite_is_canceled(
                 _make_dependency_resolved_payload(
                     "dep-canceled-1",
                     terminal_state="canceled",
-                    close_status="CANCELED",
-                    failure_category="prerequisite_canceled",
+                    close_status="canceled",
+                    failure_category="dependency_canceled",
                     message="Prerequisite was canceled.",
                 ),
             )
@@ -403,7 +402,7 @@ async def test_run_workflow_fails_when_prerequisite_is_terminated(
                 _make_dependency_resolved_payload(
                     "dep-terminated-1",
                     terminal_state="terminated",
-                    close_status="TERMINATED",
+                    close_status="terminated",
                     failure_category="prerequisite_terminated",
                     message="Prerequisite was terminated.",
                 ),
@@ -455,7 +454,7 @@ async def test_run_workflow_fails_when_prerequisite_timed_out(
                 _make_dependency_resolved_payload(
                     "dep-timedout-1",
                     terminal_state="timed_out",
-                    close_status="TIMED_OUT",
+                    close_status="timed_out",
                     failure_category="prerequisite_timed_out",
                     message="Prerequisite timed out.",
                 ),
@@ -632,14 +631,14 @@ async def test_run_workflow_pause_then_prerequisite_failure(
                 _make_dependency_resolved_payload(
                     "dep-pause-fail-1",
                     terminal_state="failed",
-                    close_status="FAILED",
+                    close_status="failed",
                     failure_category="dependency_failed",
                     message="Prerequisite failed while dependent was paused.",
                 ),
             )
 
-            # Resume — should fail immediately.
-            await handle.execute_update("Resume")
+            # The current workflow logic fails immediately on dependency
+            # failure, even while paused, so no Resume update is required.
 
             with pytest.raises(WorkflowFailureError):
                 await handle.result()
@@ -687,7 +686,9 @@ async def test_run_workflow_pause_then_prerequisite_success(
             # Signal success while paused.
             await handle.signal(
                 "DependencyResolved",
-                _make_dependency_resolved_payload("dep-pause-ok-1"),
+                _make_dependency_resolved_payload(
+                    "dep-pause-ok-1",
+                ),
             )
 
             await handle.execute_update("Resume")

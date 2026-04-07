@@ -1198,8 +1198,9 @@ describe("Task Create Entrypoint", () => {
     expect(options).not.toContain("mm:dep-1");
 
     // The list should have exactly ONE entry.
-    const list = screen.getByRole("list", { id: "queue-dependency-list" });
-    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    const list = document.getElementById("queue-dependency-list");
+    expect(list).toBeTruthy();
+    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(1);
 
     // Add a second dependency to verify the list grows.
     fireEvent.change(screen.getByLabelText("Existing run"), {
@@ -1231,8 +1232,9 @@ describe("Task Create Entrypoint", () => {
 
     // Wait for all 10 to appear.
     await waitFor(() => {
-      const list = screen.getByRole("list", { id: "queue-dependency-list" });
-      expect(within(list).getAllByRole("listitem")).toHaveLength(10);
+      const list = document.getElementById("queue-dependency-list");
+      expect(list).toBeTruthy();
+      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(10);
     });
 
     // Try to add an 11th.
@@ -1242,8 +1244,9 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
 
     // Still 10 items.
-    const list = screen.getByRole("list", { id: "queue-dependency-list" });
-    expect(within(list).getAllByRole("listitem")).toHaveLength(10);
+    const list = document.getElementById("queue-dependency-list");
+    expect(list).toBeTruthy();
+    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(10);
 
     // Limit-exceeded message should be visible.
     expect(

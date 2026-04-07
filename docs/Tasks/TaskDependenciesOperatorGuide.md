@@ -46,7 +46,7 @@ Any other terminal prerequisite outcome causes **immediate failure** of the depe
 | `canceled` | Dependent run fails immediately |
 | `terminated` | Dependent run fails immediately |
 | `timed_out` | Dependent run fails immediately |
-| Unresolvable (not found) | Dependent run fails after reconciliation timeout cycle |
+| Unresolvable (not found) | Dependent run fails on reconciliation (often immediately at startup) |
 
 When a prerequisite fails, the dependent run records a structured `DependencyFailureError` with:
 - `failedDependencyId`
@@ -64,15 +64,16 @@ When a prerequisite fails, the dependent run records a structured `DependencyFai
 | Action | Effect |
 |---|---|
 | **Cancel** dependent run | Cancels only the dependent run. Prerequisites are untouched. |
-| **Pause** dependent run | Pauses the dependency gate. Signals continue to be received and recorded. |
-| **Resume** dependent run | If all prerequisites resolved while paused, proceeds normally. If any prerequisite failed while paused, fails immediately. |
+| **Pause** dependent run | Pauses progression through the dependency gate. Signals continue to be received and recorded; if a prerequisite failure is recorded while paused, the dependent run fails immediately. |
+| **Resume** dependent run | If all prerequisites resolved successfully while paused, proceeds normally. Any prerequisite failure recorded during pause would already have failed the dependent run before resume. |
 | Cancel/prerequisite run | **Never** affected by dependent run's state. |
 
 ### Key Guarantees
 
 - Pausing the dependent run does **not** suppress receipt of `DependencyResolved` signals.
 - While paused, dependency outcomes continue to be recorded in local state.
-- While paused, the workflow does **not** leave the dependency gate and enter planning or execution.
+- Pausing does **not** defer dependency-failure propagation; a prerequisite failure recorded while paused fails the dependent run immediately.
+- While paused, the workflow does **not** leave the dependency gate and enter planning or execution unless it is failed by dependency resolution.
 
 ---
 
@@ -142,7 +143,7 @@ Sent to dependent workflows when a prerequisite reaches terminal state.
 {
   "prerequisiteWorkflowId": "mm:01ABC...",
   "terminalState": "completed",
-  "closeStatus": "COMPLETED",
+  "closeStatus": "completed",
   "resolvedAt": "2026-04-03T17:24:16Z",
   "failureCategory": null,
   "message": null
@@ -155,7 +156,7 @@ Sent to dependent workflows when a prerequisite reaches terminal state.
 {
   "prerequisiteWorkflowId": "mm:01ABC...",
   "terminalState": "failed",
-  "closeStatus": "FAILED",
+  "closeStatus": "failed",
   "resolvedAt": "2026-04-03T17:24:16Z",
   "failureCategory": "dependency_failed",
   "message": "Prerequisite run failed before dependent gate cleared"

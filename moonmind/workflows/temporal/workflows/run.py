@@ -582,24 +582,26 @@ class MoonMindRunWorkflow:
                 prerequisite_workflow_id,
                 extra={
                     "event": "dependency_signal_ignored_undeclared",
-                    "prerequisite_workflow_id": prerequisite_workflow_id,
                 },
             )
             return
 
-        is_terminal_failure = signal.terminal_state not in (
-            "completed",
-            "succeeded",
-        )
+        # Normalize "succeeded" to "completed" so the outcome recorder
+        # (which only treats "completed" as success) can satisfy the gate.
+        terminal_state = signal.terminal_state
+        if terminal_state == "succeeded":
+            terminal_state = "completed"
+
+        is_terminal_failure = terminal_state != "completed"
         if is_terminal_failure:
             self._get_logger().warning(
                 "DependencyResolved signal indicates non-success terminal state %s for %s",
-                signal.terminal_state,
+                terminal_state,
                 prerequisite_workflow_id,
                 extra={
                     "event": "dependency_signal_failure",
                     "prerequisite_workflow_id": prerequisite_workflow_id,
-                    "terminal_state": signal.terminal_state,
+                    "terminal_state": terminal_state,
                     "close_status": signal.close_status,
                     "failure_category": signal.failure_category,
                 },
@@ -611,14 +613,14 @@ class MoonMindRunWorkflow:
                 extra={
                     "event": "dependency_signal_received",
                     "prerequisite_workflow_id": prerequisite_workflow_id,
-                    "terminal_state": signal.terminal_state,
+                    "terminal_state": terminal_state,
                     "close_status": signal.close_status,
                 },
             )
 
         self._record_dependency_outcome(
             prerequisite_workflow_id=prerequisite_workflow_id,
-            terminal_state=signal.terminal_state,
+            terminal_state=terminal_state,
             close_status=signal.close_status,
             resolved_at=signal.resolved_at.isoformat(),
             failure_category=signal.failure_category,
@@ -774,7 +776,10 @@ class MoonMindRunWorkflow:
                     self._update_memo()
             self._update_dependency_wait_duration()
 
-            if self._dependency_failure is None:
+            if (
+                self._dependency_failure is None
+                and self._close_status != CLOSE_STATUS_CANCELED
+            ):
                 self._get_logger().info(
                     "Dependency gate satisfied",
                     extra={
