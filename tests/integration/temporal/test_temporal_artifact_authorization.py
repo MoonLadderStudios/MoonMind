@@ -183,15 +183,21 @@ class TestArtifactAuthorizationBoundaries:
                 )
                 assert payload == b"content"
 
-                # Any principal can mutate
+                # Any principal can mutate (write_complete on an already-COMPLETE artifact
+                # is a no-op in the service; to validate the auth-disabled mutation bypass,
+                # create a second artifact and have the non-owner write it before completion).
+                artifact2, _upload2 = await service.create(
+                    principal="anyone",
+                    content_type="text/plain",
+                )
                 await service.write_complete(
-                    artifact_id=artifact.artifact_id,
+                    artifact_id=artifact2.artifact_id,
                     principal="anyone",
                     payload=b"updated",
                     content_type="text/plain",
                 )
-                _artifact, payload = await service.read(
-                    artifact_id=artifact.artifact_id,
+                _artifact2, payload2 = await service.read(
+                    artifact_id=artifact2.artifact_id,
                     principal="anyone",
                 )
-                assert payload == b"updated"
+                assert payload2 == b"updated"

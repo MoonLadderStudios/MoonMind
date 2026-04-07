@@ -84,7 +84,10 @@ async def test_log_stream_high_volume_performance():
                     continue
 
     start = time.perf_counter()
-    await _consume_stream()
+    try:
+        await asyncio.wait_for(_consume_stream(), timeout=10.0)
+    except asyncio.TimeoutError:
+        pytest.fail("Test timed out: log stream consumer did not reach the barrier event")
     duration = time.perf_counter() - start
 
     assert seen_sequences == list(range(total_events)), (
