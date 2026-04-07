@@ -64,6 +64,7 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     supervisor = ManagedSessionSupervisor(
         store=store,
         log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
         poll_interval_seconds=0.01,
     )
     record = _record(tmp_path)
@@ -74,9 +75,13 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     (spool / "stdout.log").write_text("session started\nassistant: OK\n", encoding="utf-8")
     (spool / "stderr.log").write_text("warning: none\n", encoding="utf-8")
     await asyncio.sleep(0.05)
+    watched = store.load("sess-1")
 
     finalized = await supervisor.finalize("sess-1", status="terminated")
 
+    assert watched is not None
+    assert watched.last_log_offset == len("session started\nassistant: OK\nwarning: none\n")
+    assert watched.last_log_at is not None
     assert finalized.status == "terminated"
     assert finalized.stdout_artifact_ref == "sess-1/stdout.log"
     assert finalized.stderr_artifact_ref == "sess-1/stderr.log"
@@ -86,3 +91,33 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     assert artifact_storage.resolve_storage_path("sess-1/stdout.log").read_text(encoding="utf-8") == "session started\nassistant: OK\n"
     assert artifact_storage.resolve_storage_path("sess-1/stderr.log").read_text(encoding="utf-8") == "warning: none\n"
 
+
+@pytest.mark.asyncio
+async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    spool = Path(record.artifact_spool_path)
+
+    await supervisor.start(record)
+    (spool / "stdout.log").write_text("first\n", encoding="utf-8")
+    await asyncio.sleep(0.05)
+
+    snapshot = await supervisor.publish_snapshot("sess-1")
+    assert snapshot.stdout_artifact_ref == "sess-1/stdout.log"
+
+    (spool / "stdout.log").write_text("first\nsecond\n", encoding="utf-8")
+    await asyncio.sleep(0.05)
+    watched = store.load("sess-1")
+
+    assert watched is not None
+    assert watched.last_log_offset == len("first\nsecond\n")
+
+    await supervisor.finalize("sess-1", status="terminated")

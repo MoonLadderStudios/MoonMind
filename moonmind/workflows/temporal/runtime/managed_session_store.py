@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -19,6 +20,14 @@ class ManagedSessionStore:
 
     def __init__(self, store_root: str | Path) -> None:
         self.store_root = Path(store_root)
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _get_lock(self, session_id: str) -> asyncio.Lock:
+        lock = self._locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[session_id] = lock
+        return lock
 
     def _resolve_path(self, session_id: str) -> Path:
         relative = Path(session_id)
@@ -47,6 +56,7 @@ class ManagedSessionStore:
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # The temp file is best-effort cleanup only; the original error wins.
                 pass
             raise
         return path
@@ -58,18 +68,28 @@ class ManagedSessionStore:
         data = json.loads(path.read_text(encoding="utf-8"))
         return CodexManagedSessionRecord(**data)
 
-    def update(self, session_id: str, **kwargs: Any) -> CodexManagedSessionRecord:
-        record = self.load(session_id)
-        if record is None:
-            raise ValueError(f"managed session record not found: {session_id}")
-        for key, value in kwargs.items():
-            if not hasattr(record, key):
-                raise AttributeError(
-                    f"CodexManagedSessionRecord has no attribute '{key}'"
-                )
-            setattr(record, key, value)
-        self.save(record)
-        return record
+    async def update(
+        self,
+        session_id: str,
+        **kwargs: Any,
+    ) -> CodexManagedSessionRecord:
+        async with self._get_lock(session_id):
+            record = self.load(session_id)
+            if record is None:
+                raise ValueError(f"managed session record not found: {session_id}")
+            for key in kwargs:
+                if key not in CodexManagedSessionRecord.model_fields:
+                    raise AttributeError(
+                        f"CodexManagedSessionRecord has no attribute '{key}'"
+                    )
+            updated = CodexManagedSessionRecord.model_validate(
+                {
+                    **record.model_dump(mode="python"),
+                    **kwargs,
+                }
+            )
+            self.save(updated)
+            return updated
 
     def list_active(self) -> list[CodexManagedSessionRecord]:
         self.store_root.mkdir(parents=True, exist_ok=True)

@@ -557,6 +557,7 @@ def _build_agent_runtime_deps() -> tuple[
     session_supervisor = ManagedSessionSupervisor(
         store=session_store,
         log_streamer=session_log_streamer,
+        artifact_storage=artifact_storage,
     )
     workspace_root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
     workspace_volume_name = os.environ.get(

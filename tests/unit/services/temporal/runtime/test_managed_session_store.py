@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -39,12 +41,13 @@ def test_store_round_trips_phase6_session_record(tmp_path) -> None:
     assert loaded.container_id == "ctr-1"
 
 
-def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) -> None:
     store = ManagedSessionStore(tmp_path)
     record = _record()
     store.save(record)
 
-    updated = store.update(
+    updated = await store.update(
         "sess-1",
         status="terminated",
         stdout_artifact_ref="sess-1/stdout.log",
@@ -61,3 +64,19 @@ def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) -> Non
     assert updated.last_log_offset == 17
     assert updated.last_log_at == datetime(2026, 4, 6, 12, 5, tzinfo=UTC)
 
+
+@pytest.mark.asyncio
+async def test_store_update_revalidates_and_normalizes_mutations(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+
+    updated = await store.update(
+        "sess-1",
+        runtime_id="codex",
+        error_message="  temporary failure  ",
+        updated_at=datetime(2026, 4, 6, 12, 6),
+    )
+
+    assert updated.runtime_id == "codex_cli"
+    assert updated.error_message == "temporary failure"
+    assert updated.updated_at == datetime(2026, 4, 6, 12, 6, tzinfo=UTC)
