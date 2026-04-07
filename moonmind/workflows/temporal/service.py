@@ -2032,23 +2032,47 @@ class TemporalExecutionService:
             return
 
         payload = self._build_dependency_resolved_signal(record)
+        sent_count = 0
+        failed_count = 0
+
         async def _signal_safe(workflow_id: str) -> None:
+            nonlocal sent_count, failed_count
             try:
                 await self._client_adapter.signal_workflow(
                     workflow_id,
                     "DependencyResolved",
                     payload,
                 )
+                sent_count += 1
             except Exception as exc:
+                failed_count += 1
                 logger.warning(
                     "DependencyResolved fan-out failed for dependent %s from prerequisite %s: %s",
                     workflow_id,
                     record.workflow_id,
                     exc,
+                    extra={
+                        "event": "dependency_signal_delivery_failed",
+                        "dependent_workflow_id": workflow_id,
+                        "prerequisite_workflow_id": record.workflow_id,
+                        "error": str(exc),
+                    },
                 )
 
         await asyncio.gather(
             *(_signal_safe(edge.dependent_workflow_id) for edge in dependent_edges)
+        )
+
+        logger.info(
+            "DependencyResolved fan-out completed for prerequisite %s",
+            record.workflow_id,
+            extra={
+                "event": "dependency_signal_fan_out",
+                "prerequisite_workflow_id": record.workflow_id,
+                "fan_out_count": len(dependent_edges),
+                "signals_sent": sent_count,
+                "signals_failed": failed_count,
+            },
         )
 
     def _append_intervention_audit(
