@@ -246,8 +246,64 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
     assert stored.latest_control_event_ref == "sess-1/session.control_event.json"
     assert stored.latest_reset_boundary_ref == "sess-1/session.reset_boundary.json"
     session_supervisor.publish_reset_artifacts.assert_awaited_once()
+    publish_kwargs = session_supervisor.publish_reset_artifacts.await_args.kwargs
+    assert publish_kwargs["control_event"]["oldSessionEpoch"] == 1
+    assert publish_kwargs["control_event"]["oldThreadId"] == "logical-thread-1"
+    assert (
+        publish_kwargs["control_event"]["clearedAt"]
+        == publish_kwargs["reset_boundary"]["clearedAt"]
+    )
     assert terminated.status == "terminated"
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
+
+
+@pytest.mark.asyncio
+async def test_controller_clear_session_rejects_stale_locator_before_runtime_call(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/tmp/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+            artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    command_runner = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=AsyncMock(),
+        command_runner=command_runner,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="sessionEpoch does not match the durable managed session record",
+    ):
+        await controller.clear_session(
+            CodexManagedSessionClearRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                newThreadId="logical-thread-3",
+            )
+        )
+
+    command_runner.assert_not_awaited()
 
 
 @pytest.mark.asyncio

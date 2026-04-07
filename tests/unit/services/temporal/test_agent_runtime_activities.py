@@ -101,6 +101,26 @@ async def test_publish_artifacts_handles_write_failure_gracefully():
 
 
 @pytest.mark.asyncio
+async def test_publish_artifacts_handles_input_reference_write_failure_gracefully():
+    activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
+    input_result = AgentRunResult(
+        summary="Completed successfully",
+        output_refs=[],
+        metadata={"instructionRef": "artifact:instructions"},
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
+        side_effect=RuntimeError("write failed"),
+    ):
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert isinstance(result, AgentRunResult)
+    assert result.summary == "Completed successfully"
+    assert result.metadata == {"instructionRef": "artifact:instructions"}
+
+
+@pytest.mark.asyncio
 async def test_publish_artifacts_writes_managed_session_input_reference_artifacts():
     activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
     input_result = AgentRunResult(
@@ -134,6 +154,27 @@ async def test_publish_artifacts_writes_managed_session_input_reference_artifact
         "output.summary",
         "output.agent_result",
     ]
+
+
+@pytest.mark.asyncio
+async def test_publish_artifacts_handles_object_without_metadata_mapping():
+    activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
+    input_result = SimpleNamespace(diagnostics_ref=None)
+
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime._write_json_artifact"
+    ) as mock_write:
+        summary_ref = MagicMock()
+        summary_ref.artifact_id = "art-summary"
+        result_ref = MagicMock()
+        result_ref.artifact_id = "art-result"
+        mock_write.side_effect = [summary_ref, result_ref]
+
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert result is input_result
+    assert input_result.diagnostics_ref == "art-result"
+    assert not hasattr(input_result, "metadata")
 
 
 # ---------------------------------------------------------------------------

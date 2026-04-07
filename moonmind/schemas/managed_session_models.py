@@ -429,6 +429,8 @@ class CodexManagedSessionRecord(BaseModel):
             if ref and ref not in refs:
                 refs.append(ref)
         return tuple(refs)
+
+
 class CodexManagedSessionBinding(BaseModel):
     """Bounded task-scoped session binding passed across workflow boundaries."""
 

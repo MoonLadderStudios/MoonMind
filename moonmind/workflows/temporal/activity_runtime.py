@@ -2450,10 +2450,11 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult | None:
         """Publish agent-run outputs back to artifact storage.
 
-        Writes a summary JSON artifact containing the run result metadata
-        (output refs, summary, failure class) via the artifact service.
+        Best-effort publication writes ``output.summary`` and
+        ``output.agent_result`` JSON artifacts plus managed-session
+        ``input.*`` reference artifacts when those refs are present.
         Returns the result enriched with a ``diagnostics_ref`` pointing to
-        the persisted summary artifact.
+        the persisted ``output.agent_result`` artifact.
         """
         if result is None:
             return result
@@ -2518,19 +2519,6 @@ class TemporalAgentRuntimeActivities:
 
         instruction_ref = str(metadata.get("instructionRef") or "").strip()
         resolved_skillset_ref = str(metadata.get("resolvedSkillsetRef") or "").strip()
-        published_refs: dict[str, str] = {}
-        if instruction_ref:
-            published_refs["inputInstructionsRef"] = await _write_reference_artifact(
-                link_type="input.instructions",
-                artifact_ref_value=instruction_ref,
-                field_name="instructionRef",
-            )
-        if resolved_skillset_ref:
-            published_refs["inputSkillSnapshotRef"] = await _write_reference_artifact(
-                link_type="input.skill_snapshot",
-                artifact_ref_value=resolved_skillset_ref,
-                field_name="resolvedSkillsetRef",
-            )
 
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
@@ -2542,6 +2530,19 @@ class TemporalAgentRuntimeActivities:
         }
 
         try:
+            published_refs: dict[str, str] = {}
+            if instruction_ref:
+                published_refs["inputInstructionsRef"] = await _write_reference_artifact(
+                    link_type="input.instructions",
+                    artifact_ref_value=instruction_ref,
+                    field_name="instructionRef",
+                )
+            if resolved_skillset_ref:
+                published_refs["inputSkillSnapshotRef"] = await _write_reference_artifact(
+                    link_type="input.skill_snapshot",
+                    artifact_ref_value=resolved_skillset_ref,
+                    field_name="resolvedSkillsetRef",
+                )
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
@@ -2590,17 +2591,23 @@ class TemporalAgentRuntimeActivities:
                 return enriched
             if hasattr(result, "diagnostics_ref"):
                 result.diagnostics_ref = agent_result_ref.artifact_id
-            result.metadata.update(
-                {
-                    **published_refs,
-                    "outputSummaryRef": summary_ref.artifact_id,
-                    "outputAgentResultRef": agent_result_ref.artifact_id,
-                }
-            )
+            if hasattr(result, "metadata"):
+                metadata_obj = getattr(result, "metadata", None)
+                enriched_metadata = (
+                    dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
+                )
+                enriched_metadata.update(
+                    {
+                        **published_refs,
+                        "outputSummaryRef": summary_ref.artifact_id,
+                        "outputAgentResultRef": agent_result_ref.artifact_id,
+                    }
+                )
+                result.metadata = enriched_metadata
             return result
         except Exception as exc:
             logger.warning(
-                "agent_runtime.publish_artifacts failed to write summary artifact",
+                "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
                 exc_info=True,
             )
             return result

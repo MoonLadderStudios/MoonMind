@@ -529,6 +529,8 @@ class DockerCodexManagedSessionController:
             if self._session_store is not None
             else None
         )
+        if previous_record is not None:
+            self._matches_locator(previous_record, request)
         payload = await self._invoke_json(
             container_id=request.container_id,
             action="clear_session",
@@ -540,18 +542,19 @@ class DockerCodexManagedSessionController:
             status=handle.status,
         )
         if self._session_supervisor is not None and previous_record is not None:
+            cleared_at = datetime.now(tz=UTC).isoformat()
             await self._session_supervisor.publish_reset_artifacts(
                 request.session_id,
                 control_event={
                     "action": "clear_session",
                     "sessionId": request.session_id,
                     "containerId": request.container_id,
-                    "oldSessionEpoch": request.session_epoch,
+                    "oldSessionEpoch": previous_record.session_epoch,
                     "newSessionEpoch": handle.session_state.session_epoch,
-                    "oldThreadId": request.thread_id,
+                    "oldThreadId": previous_record.thread_id,
                     "newThreadId": handle.session_state.thread_id,
                     "reason": request.reason,
-                    "clearedAt": datetime.now(tz=UTC).isoformat(),
+                    "clearedAt": cleared_at,
                 },
                 reset_boundary={
                     "sessionId": request.session_id,
@@ -561,7 +564,7 @@ class DockerCodexManagedSessionController:
                     "oldThreadId": previous_record.thread_id,
                     "newThreadId": handle.session_state.thread_id,
                     "reason": request.reason,
-                    "clearedAt": datetime.now(tz=UTC).isoformat(),
+                    "clearedAt": cleared_at,
                 },
             )
         return handle
