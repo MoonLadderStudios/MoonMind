@@ -75,6 +75,7 @@ def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integrati
         "tests.integration.temporal.test_temporal_artifact_local_dev",
         "tests.integration.temporal.test_temporal_artifact_auth_preview",
         "tests.integration.temporal.test_temporal_artifact_lifecycle",
+        "tests.integration.temporal.test_temporal_artifact_authorization",
         "tests.integration.temporal.test_activity_worker_topology",
     )
 
@@ -160,3 +161,41 @@ def test_docker_compose_test_runners_provision_the_shared_network() -> None:
     assert '$env:MOONMIND_DOCKER_NETWORK' in powershell_runner
     assert 'docker network inspect $networkName' in powershell_runner
     assert 'docker network create $networkName' in powershell_runner
+
+
+def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
+    """Phase 6: the required integration_ci suite must stay focused on artifacts,
+    worker topology, live logs, managed runtime, and compose foundation.
+
+    Tests that require external credentials or third-party providers must NOT
+    be in the integration_ci suite.
+    """
+    # Verify the performance test uses deterministic bounds (Phase 6 hardening)
+    perf_test = (
+        REPO_ROOT
+        / "tests"
+        / "integration"
+        / "temporal"
+        / "test_live_logs_performance.py"
+    ).read_text(encoding="utf-8")
+    assert "10000" not in perf_test, (
+        "Performance test should not use 10k events — use deterministic bounds"
+    )
+    assert "500" in perf_test, (
+        "Performance test should use 500 deterministic event count"
+    )
+
+
+def test_phase6_artifact_authorization_tests_require_oidc() -> None:
+    """Phase 6: artifact authorization tests must toggle AUTH_PROVIDER to
+    exercise real ownership checks, not rely on disabled auth."""
+    authz_test = (
+        REPO_ROOT
+        / "tests"
+        / "integration"
+        / "temporal"
+        / "test_temporal_artifact_authorization.py"
+    ).read_text(encoding="utf-8")
+    assert "AUTH_PROVIDER" in authz_test
+    assert "keycloak" in authz_test
+    assert "TemporalArtifactAuthorizationError" in authz_test
