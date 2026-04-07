@@ -15,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunState,
     AgentRunStatus,
+    ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -92,6 +93,7 @@ class CodexSessionExecutionState(BaseModel):
     status: AgentRunState = Field(..., alias="status")
     started_at: datetime = Field(..., alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
+    managed_run_id: str | None = Field(None, alias="managedRunId")
     locator: CodexManagedSessionLocator = Field(..., alias="locator")
     active_turn_id: str | None = Field(None, alias="activeTurnId")
     profile_id: str | None = Field(None, alias="profileId")
@@ -253,6 +255,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._save_run_state(
             run_id=run_id,
             agent_id=request.agent_id,
+            managed_run_id=binding.task_run_id,
+            binding=binding,
             locator=current_locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
             result=result.model_dump(mode="json", by_alias=True),
@@ -352,6 +356,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._save_run_state(
             run_id=state.run_id,
             agent_id=state.agent_id,
+            managed_run_id=state.managed_run_id,
+            binding=None,
             locator=state.locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
             result=canceled_result.model_dump(mode="json", by_alias=True),
@@ -612,6 +618,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         run_id: str,
         agent_id: str,
+        managed_run_id: str | None = None,
+        binding: CodexManagedSessionBinding | None = None,
         locator: Mapping[str, Any],
         active_turn_id: str | None,
         result: Mapping[str, Any],
@@ -628,11 +636,118 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             status=status,
             startedAt=started_at,
             finishedAt=finished_at,
+            managedRunId=managed_run_id,
             locator=locator,
             activeTurnId=active_turn_id,
             profileId=profile_id,
             result=result,
         )
+        self._persist_managed_run_record(
+            run_id=run_id,
+            agent_id=agent_id,
+            managed_run_id=managed_run_id,
+            binding=binding,
+            result=result,
+            status=status,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    def _persist_managed_run_record(
+        self,
+        *,
+        run_id: str,
+        agent_id: str,
+        managed_run_id: str | None,
+        binding: CodexManagedSessionBinding | None,
+        result: Mapping[str, Any],
+        status: AgentRunState,
+        started_at: datetime,
+        finished_at: datetime | None,
+    ) -> None:
+        if self._run_store is None:
+            return
+
+        record_key = str(managed_run_id or "").strip() or run_id
+        existing = self._run_store.load(record_key)
+        session_artifacts = result.get("metadata", {}).get("sessionArtifacts")
+        session_artifact_metadata = (
+            session_artifacts.get("metadata", {})
+            if isinstance(session_artifacts, Mapping)
+            else {}
+        )
+        published_artifact_refs = (
+            tuple(session_artifacts.get("publishedArtifactRefs", ()))
+            if isinstance(session_artifacts, Mapping)
+            else ()
+        )
+
+        def _artifact_ref(value: Any, *, fallback: str | None = None) -> str | None:
+            normalized = str(value or "").strip()
+            return normalized or fallback
+
+        def _infer_runtime_artifact_ref(
+            kind: str,
+            *,
+            fallback: str | None = None,
+        ) -> str | None:
+            normalized_kind = kind.strip().lower()
+            for raw_ref in published_artifact_refs:
+                ref = str(raw_ref or "").strip()
+                lowered = ref.lower()
+                if not ref:
+                    continue
+                if normalized_kind == "stdout" and "stdout" in lowered:
+                    return ref
+                if normalized_kind == "stderr" and "stderr" in lowered:
+                    return ref
+                if normalized_kind == "diagnostics" and "diagnostics" in lowered:
+                    return ref
+            return fallback
+
+        runtime_id = self._runtime_id or "codex_cli"
+        summary = str(result.get("summary") or "").strip() or None
+        workspace_path = (
+            str(self._session_root(binding))
+            if binding is not None
+            else (existing.workspace_path if existing is not None else None)
+        )
+        record = ManagedRunRecord(
+            runId=record_key,
+            workflowId=self._workflow_id,
+            agentId=agent_id,
+            runtimeId=runtime_id,
+            status=status,
+            startedAt=started_at,
+            finishedAt=finished_at,
+            workspacePath=workspace_path,
+            stdoutArtifactRef=_artifact_ref(
+                session_artifact_metadata.get("stdoutArtifactRef"),
+                fallback=_infer_runtime_artifact_ref(
+                    "stdout",
+                    fallback=existing.stdout_artifact_ref if existing is not None else None,
+                ),
+            ),
+            stderrArtifactRef=_artifact_ref(
+                session_artifact_metadata.get("stderrArtifactRef"),
+                fallback=_infer_runtime_artifact_ref(
+                    "stderr",
+                    fallback=existing.stderr_artifact_ref if existing is not None else None,
+                ),
+            ),
+            diagnosticsRef=_artifact_ref(
+                session_artifact_metadata.get("diagnosticsRef"),
+                fallback=_infer_runtime_artifact_ref(
+                    "diagnostics",
+                    fallback=existing.diagnostics_ref if existing is not None else None,
+                ),
+            ),
+            errorMessage=summary if status != "completed" else None,
+            failureClass=result.get("failureClass"),
+            providerErrorCode=_artifact_ref(result.get("providerErrorCode")),
+            liveStreamCapable=False,
+        )
+        self._run_store.save(record)
 
     def _merge_output_refs(self, *groups: Any) -> list[str]:
         seen: list[str] = []
