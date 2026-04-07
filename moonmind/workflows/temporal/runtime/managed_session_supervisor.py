@@ -214,15 +214,12 @@ class ManagedSessionSupervisor:
                 + "\n"
             ).encode("utf-8"),
         )[1]
-        updated = record.model_copy(
-            update={
-                "latest_control_event_ref": control_ref,
-                "latest_checkpoint_ref": boundary_ref,
-                "updated_at": recorded_at,
-            }
+        return await self._store.update(
+            record.session_id,
+            latest_control_event_ref=control_ref,
+            latest_checkpoint_ref=boundary_ref,
+            updated_at=recorded_at,
         )
-        self._store.save(updated)
-        return updated
 
     async def finalize(
         self,

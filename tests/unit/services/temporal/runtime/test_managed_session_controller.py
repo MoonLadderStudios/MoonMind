@@ -344,6 +344,55 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
 
 
 @pytest.mark.asyncio
+async def test_controller_clear_session_rejects_stale_durable_locator(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/work/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/work/agent_jobs/task-1/session",
+            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            startedAt=datetime(2026, 4, 7, 8, 0, tzinfo=UTC),
+        )
+    )
+    runner = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=AsyncMock(),
+        command_runner=runner,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="sessionEpoch does not match the durable managed session record",
+    ):
+        await controller.clear_session(
+            CodexManagedSessionClearRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                newThreadId="logical-thread-2",
+            )
+        )
+
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_controller_summary_and_publication_read_from_durable_record(
     tmp_path: Path,
 ) -> None:

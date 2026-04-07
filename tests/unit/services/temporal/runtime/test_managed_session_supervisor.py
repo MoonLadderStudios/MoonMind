@@ -204,3 +204,44 @@ async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundar
     assert artifact_storage.resolve_storage_path(
         "sess-1/session.reset_boundary.epoch-2.json"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_publish_reset_artifacts_preserves_newer_store_fields(tmp_path: Path) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    previous = _record(tmp_path)
+    store.save(previous)
+    await store.update(
+        "sess-1",
+        session_epoch=2,
+        thread_id="thread-2",
+        last_log_offset=77,
+        last_log_at=datetime(2026, 4, 7, 8, 1, tzinfo=UTC),
+    )
+    stale_current = previous.model_copy(
+        update={
+            "session_epoch": 2,
+            "thread_id": "thread-2",
+            "last_log_offset": None,
+            "last_log_at": None,
+        }
+    )
+
+    published = await supervisor.publish_reset_artifacts(
+        previous_record=previous,
+        record=stale_current,
+        action="clear_session",
+        reason=None,
+    )
+
+    assert published.last_log_offset == 77
+    assert published.last_log_at == datetime(2026, 4, 7, 8, 1, tzinfo=UTC)
+    assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert published.latest_checkpoint_ref == "sess-1/session.reset_boundary.epoch-2.json"
