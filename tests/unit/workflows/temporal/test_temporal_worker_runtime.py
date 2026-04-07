@@ -678,6 +678,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     run_supervisor.reconcile = AsyncMock(return_value=[])
     run_launcher = MagicMock()
     session_controller = MagicMock()
+    session_controller.reconcile = AsyncMock(return_value=[])
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -727,6 +728,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         session_controller=session_controller,
     )
     run_supervisor.reconcile.assert_awaited_once()
+    session_controller.reconcile.assert_awaited_once()
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(
         dispatcher=mock_dispatcher_cls.return_value,

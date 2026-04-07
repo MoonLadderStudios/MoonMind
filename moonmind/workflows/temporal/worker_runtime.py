@@ -85,6 +85,12 @@ from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
 )
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+)
+from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
+    ManagedSessionSupervisor,
+)
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
@@ -541,6 +547,17 @@ def _build_agent_runtime_deps() -> tuple[
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
     launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
+    session_store = ManagedSessionStore(
+        os.path.join(
+            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            "managed_sessions",
+        )
+    )
+    session_log_streamer = RuntimeLogStreamer(artifact_storage)
+    session_supervisor = ManagedSessionSupervisor(
+        store=session_store,
+        log_streamer=session_log_streamer,
+    )
     workspace_root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
     workspace_volume_name = os.environ.get(
         "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME",
@@ -560,6 +577,8 @@ def _build_agent_runtime_deps() -> tuple[
         workspace_volume_name=workspace_volume_name,
         codex_volume_name=codex_volume_name,
         workspace_root=workspace_root,
+        session_store=session_store,
+        session_supervisor=session_supervisor,
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
     )
@@ -602,6 +621,12 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             logger.info(
                 "Reconciled %d stale managed run records during startup",
                 len(reconciled),
+            )
+        session_reconciled = await session_controller.reconcile()
+        if session_reconciled:
+            logger.info(
+                "Reconciled %d managed session records during startup",
+                len(session_reconciled),
             )
 
         bindings = build_worker_activity_bindings(

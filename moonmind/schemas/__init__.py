@@ -25,6 +25,7 @@ from .managed_session_models import (
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
     CodexManagedSessionPlaneContract,
+    CodexManagedSessionRecord,
     CodexManagedSessionSnapshot,
     CodexManagedSessionState,
     CodexManagedSessionSummary,
@@ -37,6 +38,7 @@ from .managed_session_models import (
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
+    ManagedSessionRecordStatus,
     canonical_codex_managed_runtime_id,
 )
 from .manifest_models import (
@@ -171,6 +173,7 @@ __all__ = [
     "CodexManagedSessionHandle",
     "CodexManagedSessionLocator",
     "CodexManagedSessionPlaneContract",
+    "CodexManagedSessionRecord",
     "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
     "CodexManagedSessionSummary",
@@ -183,5 +186,6 @@ __all__ = [
     "SendCodexManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",
     "TerminateCodexManagedSessionRequest",
+    "ManagedSessionRecordStatus",
     "canonical_codex_managed_runtime_id",
 ]
