@@ -524,6 +524,11 @@ class DockerCodexManagedSessionController:
         self,
         request: CodexManagedSessionClearRequest,
     ) -> CodexManagedSessionHandle:
+        previous_record = (
+            self._session_store.load(request.session_id)
+            if self._session_store is not None
+            else None
+        )
         payload = await self._invoke_json(
             container_id=request.container_id,
             action="clear_session",
@@ -534,6 +539,31 @@ class DockerCodexManagedSessionController:
             locator=self._locator_from_session_state(handle.session_state),
             status=handle.status,
         )
+        if self._session_supervisor is not None and previous_record is not None:
+            await self._session_supervisor.publish_reset_artifacts(
+                request.session_id,
+                control_event={
+                    "action": "clear_session",
+                    "sessionId": request.session_id,
+                    "containerId": request.container_id,
+                    "oldSessionEpoch": request.session_epoch,
+                    "newSessionEpoch": handle.session_state.session_epoch,
+                    "oldThreadId": request.thread_id,
+                    "newThreadId": handle.session_state.thread_id,
+                    "reason": request.reason,
+                    "clearedAt": datetime.now(tz=UTC).isoformat(),
+                },
+                reset_boundary={
+                    "sessionId": request.session_id,
+                    "containerId": request.container_id,
+                    "oldSessionEpoch": previous_record.session_epoch,
+                    "newSessionEpoch": handle.session_state.session_epoch,
+                    "oldThreadId": previous_record.thread_id,
+                    "newThreadId": handle.session_state.thread_id,
+                    "reason": request.reason,
+                    "clearedAt": datetime.now(tz=UTC).isoformat(),
+                },
+            )
         return handle
 
     async def terminate_session(
@@ -582,6 +612,7 @@ class DockerCodexManagedSessionController:
             latestSummaryRef=record.latest_summary_ref,
             latestCheckpointRef=record.latest_checkpoint_ref,
             latestControlEventRef=record.latest_control_event_ref,
+            latestResetBoundaryRef=record.latest_reset_boundary_ref,
             metadata={
                 "status": record.status,
                 "stdoutArtifactRef": record.stdout_artifact_ref,
@@ -614,6 +645,7 @@ class DockerCodexManagedSessionController:
             latestSummaryRef=record.latest_summary_ref,
             latestCheckpointRef=record.latest_checkpoint_ref,
             latestControlEventRef=record.latest_control_event_ref,
+            latestResetBoundaryRef=record.latest_reset_boundary_ref,
             metadata={
                 **dict(request.metadata),
                 "status": record.status,

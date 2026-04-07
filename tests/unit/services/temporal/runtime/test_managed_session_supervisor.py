@@ -86,10 +86,14 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     assert finalized.stdout_artifact_ref == "sess-1/stdout.log"
     assert finalized.stderr_artifact_ref == "sess-1/stderr.log"
     assert finalized.diagnostics_ref == "sess-1/diagnostics.json"
+    assert finalized.latest_summary_ref == "sess-1/session.summary.json"
+    assert finalized.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
     assert finalized.last_log_offset == len("session started\nassistant: OK\nwarning: none\n")
     assert finalized.last_log_at is not None
     assert artifact_storage.resolve_storage_path("sess-1/stdout.log").read_text(encoding="utf-8") == "session started\nassistant: OK\n"
     assert artifact_storage.resolve_storage_path("sess-1/stderr.log").read_text(encoding="utf-8") == "warning: none\n"
+    assert artifact_storage.resolve_storage_path("sess-1/session.summary.json").exists()
+    assert artifact_storage.resolve_storage_path("sess-1/session.step_checkpoint.json").exists()
 
 
 @pytest.mark.asyncio
@@ -112,6 +116,8 @@ async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None
 
     snapshot = await supervisor.publish_snapshot("sess-1")
     assert snapshot.stdout_artifact_ref == "sess-1/stdout.log"
+    assert snapshot.latest_summary_ref == "sess-1/session.summary.json"
+    assert snapshot.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
 
     (spool / "stdout.log").write_text("first\nsecond\n", encoding="utf-8")
     await asyncio.sleep(0.05)
@@ -121,3 +127,38 @@ async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None
     assert watched.last_log_offset == len("first\nsecond\n")
 
     await supervisor.finalize("sess-1", status="terminated")
+
+
+@pytest.mark.asyncio
+async def test_session_supervisor_publishes_control_and_reset_boundary_artifacts(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+
+    updated = await supervisor.publish_reset_artifacts(
+        "sess-1",
+        control_event={
+            "action": "clear_session",
+            "oldSessionEpoch": 1,
+            "newSessionEpoch": 2,
+        },
+        reset_boundary={
+            "oldSessionEpoch": 1,
+            "newSessionEpoch": 2,
+            "newThreadId": "thread-2",
+        },
+    )
+
+    assert updated.latest_control_event_ref == "sess-1/session.control_event.json"
+    assert updated.latest_reset_boundary_ref == "sess-1/session.reset_boundary.json"
+    assert artifact_storage.resolve_storage_path("sess-1/session.control_event.json").exists()
+    assert artifact_storage.resolve_storage_path("sess-1/session.reset_boundary.json").exists()

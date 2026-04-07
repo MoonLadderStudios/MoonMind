@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -104,6 +105,20 @@ class ManagedSessionSupervisor:
             stderr_bytes = stderr_path.read_bytes()
         return stdout_bytes, stderr_bytes
 
+    def _write_json_artifact(
+        self,
+        *,
+        job_id: str,
+        artifact_name: str,
+        payload: dict[str, object],
+    ) -> str:
+        _path, ref = self._artifact_storage.write_artifact(
+            job_id=job_id,
+            artifact_name=artifact_name,
+            data=(json.dumps(payload, sort_keys=True, indent=2) + "\n").encode("utf-8"),
+        )
+        return ref
+
     async def _publish_record(
         self,
         record: CodexManagedSessionRecord,
@@ -130,6 +145,37 @@ class ManagedSessionSupervisor:
             annotations=[],
             events=[],
         )
+        summary_ref = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name="session.summary.json",
+            payload={
+                "sessionId": record.session_id,
+                "sessionEpoch": record.session_epoch,
+                "containerId": record.container_id,
+                "threadId": record.thread_id,
+                "status": status,
+                "stdoutArtifactRef": stdout_ref,
+                "stderrArtifactRef": stderr_ref,
+                "diagnosticsRef": diagnostics_ref,
+                "errorMessage": error_message,
+            },
+        )
+        checkpoint_ref = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name="session.step_checkpoint.json",
+            payload={
+                "sessionState": record.session_state().model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "status": status,
+                "runtimeArtifacts": {
+                    "stdout": stdout_ref,
+                    "stderr": stderr_ref,
+                    "diagnostics": diagnostics_ref,
+                },
+                "recordUpdatedAt": datetime.now(tz=UTC).isoformat(),
+            },
+        )
         now = datetime.now(tz=UTC)
         return await self._store.update(
             record.session_id,
@@ -137,6 +183,8 @@ class ManagedSessionSupervisor:
             stdout_artifact_ref=stdout_ref,
             stderr_artifact_ref=stderr_ref,
             diagnostics_ref=diagnostics_ref,
+            latest_summary_ref=summary_ref,
+            latest_checkpoint_ref=checkpoint_ref,
             last_log_offset=len(stdout_bytes) + len(stderr_bytes),
             last_log_at=now,
             updated_at=now,
@@ -174,4 +222,31 @@ class ManagedSessionSupervisor:
             record,
             status=status,
             error_message=error_message,
+        )
+
+    async def publish_reset_artifacts(
+        self,
+        session_id: str,
+        *,
+        control_event: dict[str, object],
+        reset_boundary: dict[str, object],
+    ) -> CodexManagedSessionRecord:
+        record = self._store.load(session_id)
+        if record is None:
+            raise ValueError(f"managed session record not found: {session_id}")
+        control_ref = self._write_json_artifact(
+            job_id=session_id,
+            artifact_name="session.control_event.json",
+            payload=control_event,
+        )
+        reset_ref = self._write_json_artifact(
+            job_id=session_id,
+            artifact_name="session.reset_boundary.json",
+            payload=reset_boundary,
+        )
+        return await self._store.update(
+            session_id,
+            latest_control_event_ref=control_ref,
+            latest_reset_boundary_ref=reset_ref,
+            updated_at=datetime.now(tz=UTC),
         )
