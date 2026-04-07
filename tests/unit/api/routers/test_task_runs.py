@@ -87,6 +87,38 @@ def test_get_observability_summary_returns_200(
     assert body["status"] == "running"
 
 
+def test_get_observability_summary_returns_session_backed_artifact_refs(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {
+        "runId": str(run_id),
+        "status": "completed",
+        "runtimeId": "codex_cli",
+        "stdoutArtifactRef": "sess-1/stdout.log",
+        "stderrArtifactRef": "sess-1/stderr.log",
+        "diagnosticsRef": "sess-1/diagnostics.json",
+        "liveStreamCapable": False,
+    }
+    mock_record.status = "completed"
+    mock_record.live_stream_capable = False
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    body = response.json()["summary"]
+    assert body["runtimeId"] == "codex_cli"
+    assert body["stdoutArtifactRef"] == "sess-1/stdout.log"
+    assert body["stderrArtifactRef"] == "sess-1/stderr.log"
+    assert body["diagnosticsRef"] == "sess-1/diagnostics.json"
+    assert body["supportsLiveStreaming"] is False
+    assert body["liveStreamStatus"] == "ended"
+
+
 def test_get_observability_summary_includes_live_stream_fields_for_active_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

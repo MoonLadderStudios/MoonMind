@@ -245,6 +245,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     async def _apply_control_action(payload: dict[str, Any]) -> None:
         control_calls.append(payload)
 
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
             [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
@@ -254,7 +255,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
         runtime_id="codex_cli",
-        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        run_store=run_store,
         load_session_snapshot=_load_snapshot,
         launch_session=_launch_session,
         session_status=_session_status,
@@ -273,6 +274,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
     status = await adapter.status(handle.run_id)
     result = await adapter.fetch_result(handle.run_id)
+    persisted_record = run_store.load(handle.run_id)
 
     assert len(launch_calls) == 1
     launch_request = launch_calls[0]
@@ -289,6 +291,14 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert handle.status == "completed"
     assert handle.metadata["sessionId"] == binding.session_id
     assert handle.metadata["containerId"] == "container-1"
+    assert persisted_record is not None
+    assert persisted_record.workflow_id == "wf-agent-run-1"
+    assert persisted_record.runtime_id == "codex_cli"
+    assert persisted_record.status == "completed"
+    assert persisted_record.stdout_artifact_ref == "artifact:stdout"
+    assert persisted_record.stderr_artifact_ref == "artifact:stderr"
+    assert persisted_record.diagnostics_ref == "artifact:diagnostics"
+    assert persisted_record.live_stream_capable is False
     assert status.status == "completed"
     assert result.summary == "Implemented through the session container."
     assert result.output_refs == [
