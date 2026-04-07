@@ -14,9 +14,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.task_runs import router
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.auth_providers import get_current_user
 from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
+from api_service.db import models as db_models
 from api_service.db.models import User
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
 
 @pytest.fixture
@@ -39,13 +42,14 @@ def test_worker_auth() -> _WorkerRequestAuth:
 def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    db_mock = AsyncMock()
+    artifact_service = AsyncMock()
 
     app.dependency_overrides[get_current_user()] = lambda: test_user
     app.dependency_overrides[_require_worker_auth] = lambda: test_worker_auth
+    app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
 
     with TestClient(app) as test_client:
-        yield test_client, db_mock
+        yield test_client, artifact_service
 
     app.dependency_overrides.clear()
 
@@ -708,3 +712,259 @@ def test_get_task_run_diagnostics_uses_supported_artifact_root_layouts(
 # ---------------------------------------------------------------------------
 
 # Tests removed due to an AnyIO test transport deadlock with fake streaming generators
+
+
+def _build_session_record() -> CodexManagedSessionRecord:
+    now = datetime.now(UTC)
+    return CodexManagedSessionRecord(
+        sessionId="sess:wf-task-1:codex_cli",
+        sessionEpoch=2,
+        taskRunId="wf-task-1",
+        containerId="container-123",
+        threadId="thread-2",
+        runtimeId="codex_cli",
+        imageRef="moonmind:latest",
+        controlUrl="docker-exec://container-123",
+        status="ready",
+        workspacePath="/work/agent_jobs/wf-task-1/repo",
+        sessionWorkspacePath="/work/agent_jobs/wf-task-1/session",
+        artifactSpoolPath="/work/agent_jobs/wf-task-1/artifacts",
+        stdoutArtifactRef="art_stdout",
+        stderrArtifactRef="art_stderr",
+        diagnosticsRef="art_diag",
+        latestSummaryRef="art_summary",
+        latestCheckpointRef="art_checkpoint",
+        latestControlEventRef="art_control",
+        latestResetBoundaryRef="art_reset",
+        startedAt=now,
+        updatedAt=now,
+    )
+
+
+def _build_artifact(artifact_id: str, link_type: str, *, label: str) -> tuple[SimpleNamespace, list[SimpleNamespace], bool, SimpleNamespace]:
+    now = datetime.now(UTC)
+    artifact = SimpleNamespace(
+        artifact_id=artifact_id,
+        created_at=now,
+        created_by_principal="system:agent_runtime",
+        content_type="application/json",
+        size_bytes=128,
+        sha256=None,
+        storage_backend=db_models.TemporalArtifactStorageBackend.LOCAL_FS,
+        storage_key=f"moonmind/artifacts/2026/04/07/{artifact_id}",
+        encryption=db_models.TemporalArtifactEncryption.NONE,
+        status=db_models.TemporalArtifactStatus.COMPLETE,
+        retention_class=db_models.TemporalArtifactRetentionClass.STANDARD,
+        expires_at=None,
+        redaction_level=db_models.TemporalArtifactRedactionLevel.NONE,
+        metadata_json={"label": label},
+    )
+    links = [
+        SimpleNamespace(
+            namespace="moonmind",
+            workflow_id="wf-step-1",
+            run_id="run-step-1",
+            link_type=link_type,
+            label=label,
+            created_at=now,
+            created_by_activity_type="activity:agent_runtime.publish_artifacts",
+            created_by_worker="worker-1",
+        )
+    ]
+    read_policy = SimpleNamespace(
+        raw_access_allowed=True,
+        preview_artifact_ref=None,
+        default_read_ref=SimpleNamespace(
+            artifact_ref_v=1,
+            artifact_id=artifact_id,
+            sha256=None,
+            size_bytes=128,
+            content_type="application/json",
+            encryption="none",
+        ),
+    )
+    return artifact, links, False, read_policy
+
+
+def test_get_task_run_artifact_session_projection_returns_grouped_projection(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, artifact_service = client
+    record = _build_session_record()
+
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == "service:task_runs"
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
+        response = test_client.get(
+            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["task_run_id"] == "wf-task-1"
+    assert body["session_id"] == "sess:wf-task-1:codex_cli"
+    assert body["session_epoch"] == 2
+    assert body["latest_summary_ref"]["artifact_id"] == "art_summary"
+    assert body["latest_checkpoint_ref"]["artifact_id"] == "art_checkpoint"
+    assert body["latest_control_event_ref"]["artifact_id"] == "art_control"
+    assert body["latest_reset_boundary_ref"]["artifact_id"] == "art_reset"
+    assert [group["group_key"] for group in body["grouped_artifacts"]] == [
+        "runtime",
+        "continuity",
+        "control",
+    ]
+    assert [artifact["artifact_id"] for artifact in body["grouped_artifacts"][0]["artifacts"]] == [
+        "art_stdout",
+        "art_stderr",
+        "art_diag",
+    ]
+    assert [artifact["artifact_id"] for artifact in body["grouped_artifacts"][2]["artifacts"]] == [
+        "art_control",
+        "art_reset",
+    ]
+
+
+def test_get_task_run_artifact_session_projection_reads_durable_state_only(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, artifact_service = client
+    record = _build_session_record().model_copy(update={"status": "degraded"})
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == "service:task_runs"
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
+        response = test_client.get(
+            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session_epoch"] == 2
+
+
+def test_get_task_run_artifact_session_projection_returns_404_when_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _artifact_service = client
+
+    with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=None):
+        response = test_client.get(
+            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "session_projection_not_found"
+
+
+def test_get_task_run_artifact_session_projection_returns_404_for_task_mismatch(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _artifact_service = client
+    record = _build_session_record().model_copy(update={"task_run_id": "wf-task-2"})
+
+    with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
+        response = test_client.get(
+            "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "session_projection_not_found"
+
+
+def test_get_task_run_artifact_session_projection_allows_owner_access() -> None:
+    owner_id = uuid4()
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    artifact_service = AsyncMock()
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=owner_id,
+        email="owner@example.com",
+        is_superuser=False,
+    )
+    app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == "service:task_runs"
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.task_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(owner_id))),
+            ):
+                response = test_client.get(
+                    "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+                )
+
+    assert response.status_code == 200
+
+
+def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -> None:
+    owner_id = uuid4()
+    other_id = uuid4()
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    artifact_service = AsyncMock()
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=other_id,
+        email="other@example.com",
+        is_superuser=False,
+    )
+    app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.task_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(owner_id))),
+            ):
+                response = test_client.get(
+                    "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
+                )
+
+    assert response.status_code == 403

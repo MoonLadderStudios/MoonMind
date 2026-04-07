@@ -9,10 +9,27 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from api_service.api.routers.temporal_artifacts import (
+    _get_temporal_artifact_service,
+    _serialize_metadata,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
+from moonmind.schemas.temporal_artifact_models import (
+    ArtifactMetadataModel,
+    ArtifactRefModel,
+    ArtifactSessionGroupModel,
+    ArtifactSessionProjectionModel,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactNotFoundError,
+    TemporalArtifactService,
+    TemporalArtifactStateError,
+)
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
 from moonmind.observability.transport import SpoolLogReader
@@ -30,6 +47,14 @@ def _get_agent_runtime_store_root() -> str:
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_runs",
     )
+
+
+def _get_managed_session_store_root() -> str:
+    return os.path.join(
+        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+        "managed_sessions",
+    )
+
 
 def _get_agent_runtime_artifacts_root() -> str:
     return str(managed_runtime_artifact_root())
@@ -92,6 +117,139 @@ async def _require_observability_access(record: object, user: User) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to access observability for this run.",
         )
+
+
+async def _require_task_run_access(task_run_id: str, user: User) -> None:
+    if getattr(user, "is_superuser", False):
+        return
+
+    owner_type, owner_id = await _load_execution_owner_binding(task_run_id)
+    if owner_type != "user" or owner_id != str(user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access observability for this run.",
+        )
+
+
+def _session_projection_not_found() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "session_projection_not_found",
+            "message": "Managed session projection was not found for the requested task run.",
+        },
+    )
+
+
+async def _resolve_projection_artifact(
+    *,
+    artifact_id: str | None,
+    service: TemporalArtifactService,
+) -> ArtifactMetadataModel | None:
+    normalized = str(artifact_id or "").strip()
+    if not normalized:
+        return None
+    try:
+        artifact, links, pinned, read_policy = await service.get_metadata(
+            artifact_id=normalized,
+            principal="service:task_runs",
+        )
+    except (
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactNotFoundError,
+        TemporalArtifactStateError,
+    ):
+        return None
+    return _serialize_metadata(
+        artifact=artifact,
+        links=links,
+        pinned=pinned,
+        read_policy=read_policy,
+    )
+
+
+async def _build_task_run_artifact_session_projection(
+    *,
+    task_run_id: str,
+    session_id: str,
+    service: TemporalArtifactService,
+) -> ArtifactSessionProjectionModel | None:
+    store = ManagedSessionStore(_get_managed_session_store_root())
+    record = await asyncio.to_thread(store.load, session_id)
+    if record is None or record.task_run_id != task_run_id:
+        return None
+
+    cache: dict[str, ArtifactMetadataModel | None] = {}
+
+    async def _cached_metadata(artifact_id: str | None) -> ArtifactMetadataModel | None:
+        normalized = str(artifact_id or "").strip()
+        if not normalized:
+            return None
+        if normalized not in cache:
+            cache[normalized] = await _resolve_projection_artifact(
+                artifact_id=normalized,
+                service=service,
+            )
+        return cache[normalized]
+
+    groups: list[ArtifactSessionGroupModel] = []
+    for group_key, title, refs in (
+        (
+            "runtime",
+            "Runtime",
+            (
+                record.stdout_artifact_ref,
+                record.stderr_artifact_ref,
+                record.diagnostics_ref,
+            ),
+        ),
+        (
+            "continuity",
+            "Continuity",
+            (
+                record.latest_summary_ref,
+                record.latest_checkpoint_ref,
+            ),
+        ),
+        (
+            "control",
+            "Control",
+            (
+                record.latest_control_event_ref,
+                record.latest_reset_boundary_ref,
+            ),
+        ),
+    ):
+        artifacts: list[ArtifactMetadataModel] = []
+        for ref in refs:
+            metadata = await _cached_metadata(ref)
+            if metadata is not None:
+                artifacts.append(metadata)
+        if artifacts:
+            groups.append(
+                ArtifactSessionGroupModel(
+                    group_key=group_key,
+                    title=title,
+                    artifacts=artifacts,
+                )
+            )
+
+    async def _artifact_ref(artifact_id: str | None) -> ArtifactRefModel | None:
+        metadata = await _cached_metadata(artifact_id)
+        if metadata is None:
+            return None
+        return ArtifactRefModel(**metadata.artifact_ref.model_dump())
+
+    return ArtifactSessionProjectionModel(
+        task_run_id=record.task_run_id,
+        session_id=record.session_id,
+        session_epoch=record.session_epoch,
+        grouped_artifacts=groups,
+        latest_summary_ref=await _artifact_ref(record.latest_summary_ref),
+        latest_checkpoint_ref=await _artifact_ref(record.latest_checkpoint_ref),
+        latest_control_event_ref=await _artifact_ref(record.latest_control_event_ref),
+        latest_reset_boundary_ref=await _artifact_ref(record.latest_reset_boundary_ref),
+    )
 
 
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
@@ -314,6 +472,31 @@ async def get_observability_summary(
     base["supportsLiveStreaming"] = supports_live
     base["liveStreamStatus"] = live_stream_status
     return {"summary": base}
+
+
+@router.get(
+    "/{task_run_id}/artifact-sessions/{session_id}",
+    response_model=ArtifactSessionProjectionModel,
+    responses={
+        403: {"description": "You do not have permission to access this task run"},
+        404: {"description": "Session projection not found for this task run"},
+    },
+)
+async def get_task_run_artifact_session(
+    task_run_id: str,
+    session_id: str,
+    _user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+) -> ArtifactSessionProjectionModel:
+    await _require_task_run_access(task_run_id, _user)
+    projection = await _build_task_run_artifact_session_projection(
+        task_run_id=task_run_id,
+        session_id=session_id,
+        service=artifact_service,
+    )
+    if projection is None:
+        _session_projection_not_found()
+    return projection
 
 
 @router.get(
