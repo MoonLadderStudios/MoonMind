@@ -40,6 +40,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
         if "ready" in command:
@@ -63,7 +65,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     controller = DockerCodexManagedSessionController(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
-        workspace_root="/tmp/agent_jobs",
+        workspace_root=str(workspace_root),
         command_runner=_fake_runner,
         ready_poll_interval_seconds=0,
     )
@@ -73,7 +75,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert handle.status == "ready"
     assert handle.session_state.container_id == "ctr-1"
     assert handle.metadata["vendorThreadId"] == "vendor-thread-1"
-    run_command = commands[0]
+    assert commands[0] == ("docker", "rm", "-f", "mm-codex-session-sess-1")
+    run_command = commands[1]
     assert "--name" in run_command
     assert request.image_ref in run_command
     assert "python3" in run_command
@@ -156,7 +159,7 @@ async def test_controller_clear_and_terminate_preserve_container_boundary() -> N
             }
             return 0, json.dumps(payload), ""
         if command[:3] == ("docker", "rm", "-f"):
-            return 0, "ctr-1\n", ""
+            return 1, "", "No such container"
         raise AssertionError(f"unexpected command: {command}")
 
     controller = DockerCodexManagedSessionController(
@@ -187,3 +190,142 @@ async def test_controller_clear_and_terminate_preserve_container_boundary() -> N
     assert cleared.session_state.session_epoch == 2
     assert terminated.status == "terminated"
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    ready_attempts = 0
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        nonlocal ready_attempts
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            ready_attempts += 1
+            if ready_attempts == 1:
+                return 1, "", "container not ready"
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+                "metadata": {"vendorThreadId": "vendor-thread-1"},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+        ready_poll_attempts=2,
+    )
+
+    handle = await controller.launch_session(request)
+
+    assert handle.status == "ready"
+    assert ready_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_cleans_up_container_when_handshake_fails() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            return 1, "", "launch failed"
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="launch failed"):
+        await controller.launch_session(request)
+
+    assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_rejects_reserved_session_environment() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MOONMIND_SESSION_WORKSPACE_PATH": "/tmp/override"},
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+    )
+
+    with pytest.raises(RuntimeError, match="reserved session keys"):
+        await controller.launch_session(request)

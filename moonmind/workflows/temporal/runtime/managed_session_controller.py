@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import posixpath
 import re
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from pathlib import PurePosixPath
+from typing import Any, Mapping, Protocol, Sequence
 
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -27,11 +29,17 @@ from moonmind.schemas.managed_session_models import (
 
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
+_RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
 
-CommandRunner = Callable[
-    [tuple[str, ...]],
-    Awaitable[tuple[int, str, str]],
-]
+
+class CommandRunner(Protocol):
+    async def __call__(
+        self,
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]: ...
 
 
 async def _default_command_runner(
@@ -57,6 +65,13 @@ async def _default_command_runner(
     )
 
 
+def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixPath:
+    normalized = PurePosixPath(posixpath.normpath(value))
+    if not normalized.is_absolute():
+        raise RuntimeError(f"{field_name} must be an absolute path: {value}")
+    return normalized
+
+
 class DockerCodexManagedSessionController:
     """Launch and control managed Codex session containers via Docker CLI."""
 
@@ -70,10 +85,7 @@ class DockerCodexManagedSessionController:
         docker_host: str | None = None,
         ready_poll_interval_seconds: float = 1.0,
         ready_poll_attempts: int = 30,
-        command_runner: Callable[
-            [tuple[str, ...]],
-            Awaitable[tuple[int, str, str]],
-        ] = _default_command_runner,
+        command_runner: CommandRunner = _default_command_runner,
     ) -> None:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
@@ -95,6 +107,56 @@ class DockerCodexManagedSessionController:
         if not sanitized:
             sanitized = "managed-session"
         return f"mm-codex-session-{sanitized}"
+
+    def _validate_workspace_path(self, value: str, *, field_name: str) -> None:
+        workspace_root = _normalize_absolute_posix_path(
+            self._workspace_root,
+            field_name="workspace_root",
+        )
+        candidate = _normalize_absolute_posix_path(value, field_name=field_name)
+        try:
+            candidate.relative_to(workspace_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{field_name} must stay within workspace_root {workspace_root}: {candidate}"
+            ) from exc
+
+    def _validate_launch_request(self, request: LaunchCodexManagedSessionRequest) -> None:
+        self._validate_workspace_path(request.workspace_path, field_name="workspacePath")
+        self._validate_workspace_path(
+            request.session_workspace_path,
+            field_name="sessionWorkspacePath",
+        )
+        self._validate_workspace_path(
+            request.artifact_spool_path,
+            field_name="artifactSpoolPath",
+        )
+        _normalize_absolute_posix_path(
+            request.codex_home_path,
+            field_name="codexHomePath",
+        )
+        reserved_keys = sorted(
+            key
+            for key in request.environment
+            if key.startswith(_RESERVED_SESSION_ENV_PREFIX)
+        )
+        if reserved_keys:
+            raise RuntimeError(
+                "launch_session environment cannot override reserved session keys: "
+                + ", ".join(reserved_keys)
+            )
+
+    async def _remove_container(
+        self,
+        container_identifier: str,
+        *,
+        ignore_failure: bool,
+    ) -> None:
+        try:
+            await self._run((self._docker_binary, "rm", "-f", container_identifier))
+        except RuntimeError:
+            if not ignore_failure:
+                raise
 
     async def _run(
         self,
@@ -159,22 +221,30 @@ class DockerCodexManagedSessionController:
             _RUNTIME_MODULE,
             "ready",
         )
+        last_error: Exception | None = None
         for attempt in range(self._ready_poll_attempts):
-            stdout, _stderr = await self._run(command)
-            payload = json.loads(stdout.strip() or "{}")
-            if payload.get("ready") is True:
-                return
+            try:
+                stdout, _stderr = await self._run(command)
+                payload = json.loads(stdout.strip() or "{}")
+            except (RuntimeError, json.JSONDecodeError) as exc:
+                last_error = exc
+            else:
+                if payload.get("ready") is True:
+                    return
             if self._ready_poll_interval_seconds > 0:
                 await asyncio.sleep(self._ready_poll_interval_seconds)
+        details = f": {last_error}" if last_error is not None else ""
         raise RuntimeError(
-            f"managed session container {container_id} did not become ready"
+            f"managed session container {container_id} did not become ready{details}"
         )
 
     async def launch_session(
         self,
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
+        self._validate_launch_request(request)
         container_name = self._container_name(request.session_id)
+        await self._remove_container(container_name, ignore_failure=True)
         run_command = [
             self._docker_binary,
             "run",
@@ -213,13 +283,17 @@ class DockerCodexManagedSessionController:
         container_id = stdout.strip()
         if not container_id:
             raise RuntimeError("docker run returned a blank container id")
-        await self._wait_ready(container_id=container_id)
-        payload = await self._invoke_json(
-            container_id=container_id,
-            action="launch_session",
-            payload=request.model_dump(by_alias=True),
-            extra_env={"MOONMIND_SESSION_CONTAINER_ID": container_id},
-        )
+        try:
+            await self._wait_ready(container_id=container_id)
+            payload = await self._invoke_json(
+                container_id=container_id,
+                action="launch_session",
+                payload=request.model_dump(by_alias=True),
+                extra_env={"MOONMIND_SESSION_CONTAINER_ID": container_id},
+            )
+        except Exception:
+            await self._remove_container(container_id, ignore_failure=True)
+            raise
         return CodexManagedSessionHandle.model_validate(payload)
 
     async def session_status(
@@ -281,7 +355,7 @@ class DockerCodexManagedSessionController:
         self,
         request: TerminateCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
-        await self._run((self._docker_binary, "rm", "-f", request.container_id))
+        await self._remove_container(request.container_id, ignore_failure=True)
         return CodexManagedSessionHandle(
             sessionState={
                 "sessionId": request.session_id,

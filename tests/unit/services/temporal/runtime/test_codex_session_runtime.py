@@ -7,27 +7,53 @@ import pytest
 
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
+    InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
     SendCodexManagedSessionTurnRequest,
 )
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
+    _run_ready,
 )
 
 
-def _write_fake_app_server(tmp_path: Path) -> Path:
+def _write_fake_app_server(
+    tmp_path: Path,
+    *,
+    emit_completion: bool = True,
+    interrupt_record_path: Path | None = None,
+    codex_home_record_path: Path | None = None,
+) -> Path:
     script = tmp_path / "fake_app_server.py"
-    script.write_text(
-        """
+    completion_block = """
+        sys.stdout.write(json.dumps({
+            "method": "turn/completed",
+            "params": {
+                "threadId": thread_id,
+                "turn": {"id": "vendor-turn-1", "items": [], "status": "completed", "error": None},
+            },
+        }) + "\\n")
+""".rstrip()
+    if not emit_completion:
+        completion_block = ""
+    script_template = """
 import json
+import os
 import sys
+
+INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
+CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 
 for line in sys.stdin:
     message = json.loads(line)
     msg_id = message.get("id")
     method = message.get("method")
     if method == "initialize":
+        if CODEX_HOME_RECORD_PATH:
+            with open(CODEX_HOME_RECORD_PATH, "w", encoding="utf-8") as handle:
+                handle.write(sys.argv[0] + "\\n")
+                handle.write(os.environ.get("CODEX_HOME", ""))
         sys.stdout.write(json.dumps({
             "method": "configWarning",
             "params": {"summary": "fake-warning", "details": None},
@@ -88,12 +114,15 @@ for line in sys.stdin:
             "id": msg_id,
             "result": {"turn": {"id": "vendor-turn-1", "items": [], "status": "inProgress", "error": None}},
         }) + "\\n")
+__COMPLETION_BLOCK__
+        sys.stdout.flush()
+    elif method == "turn/interrupt":
+        if INTERRUPT_RECORD_PATH:
+            with open(INTERRUPT_RECORD_PATH, "w", encoding="utf-8") as handle:
+                json.dump(message["params"], handle)
         sys.stdout.write(json.dumps({
-            "method": "turn/completed",
-            "params": {
-                "threadId": thread_id,
-                "turn": {"id": "vendor-turn-1", "items": [], "status": "completed", "error": None},
-            },
+            "id": msg_id,
+            "result": {"status": "interrupted"},
         }) + "\\n")
         sys.stdout.flush()
     elif method == "thread/read":
@@ -133,8 +162,17 @@ for line in sys.stdin:
     else:
         sys.stdout.write(json.dumps({"id": msg_id, "result": {}}) + "\\n")
         sys.stdout.flush()
-""".strip()
-        + "\n",
+""".strip() + "\n"
+    script.write_text(
+        script_template.replace(
+            "__INTERRUPT_RECORD_PATH__",
+            repr(str(interrupt_record_path) if interrupt_record_path is not None else ""),
+        )
+        .replace(
+            "__CODEX_HOME_RECORD_PATH__",
+            repr(str(codex_home_record_path) if codex_home_record_path is not None else ""),
+        )
+        .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )
     return script
@@ -267,3 +305,126 @@ def test_runtime_clear_session_rotates_logical_thread_and_epoch(tmp_path: Path) 
     assert handle.session_state.session_epoch == 2
     assert handle.session_state.thread_id == "logical-thread-2"
     assert handle.metadata["vendorThreadId"] == "vendor-thread-1"
+
+
+def test_runtime_send_turn_times_out_without_completion_notification(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(tmp_path, emit_completion=False)
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    with pytest.raises(RuntimeError, match="timed out waiting for codex app-server"):
+        runtime.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+
+    state_payload = json.loads(
+        (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state_payload["activeTurnId"] == "vendor-turn-1"
+
+
+def test_runtime_interrupt_turn_uses_app_server_transport(tmp_path: Path) -> None:
+    interrupt_record_path = tmp_path / "interrupt.json"
+    script = _write_fake_app_server(
+        tmp_path,
+        interrupt_record_path=interrupt_record_path,
+    )
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["activeTurnId"] = "vendor-turn-1"
+    state_path.write_text(json.dumps(state_payload) + "\n", encoding="utf-8")
+
+    response = runtime.interrupt_turn(
+        InterruptCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            turnId="vendor-turn-1",
+            reason="operator requested interrupt",
+        )
+    )
+
+    assert response.status == "interrupted"
+    assert json.loads(interrupt_record_path.read_text(encoding="utf-8")) == {
+        "threadId": "vendor-thread-1",
+        "turnId": "vendor-turn-1",
+        "reason": "operator requested interrupt",
+    }
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state.get("activeTurnId") is None
+
+
+def test_runtime_launch_session_exports_codex_home(tmp_path: Path) -> None:
+    codex_home_record_path = tmp_path / "codex-home.txt"
+    script = _write_fake_app_server(
+        tmp_path,
+        codex_home_record_path=codex_home_record_path,
+    )
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+
+    assert codex_home_record_path.read_text(encoding="utf-8").splitlines()[-1] == str(
+        Path(request.codex_home_path)
+    )
+
+
+def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace_path = tmp_path / "repo"
+    workspace_path.mkdir()
+    monkeypatch.setenv("MOONMIND_SESSION_WORKSPACE_PATH", str(workspace_path))
+    monkeypatch.setenv("MOONMIND_SESSION_WORKSPACE_STATE_PATH", str(tmp_path / "session"))
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("MOONMIND_SESSION_CODEX_HOME_PATH", str(tmp_path / "codex-home"))
+    monkeypatch.delenv("MOONMIND_SESSION_IMAGE_REF", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.which",
+        lambda _name: "/usr/bin/codex",
+    )
+
+    with pytest.raises(RuntimeError, match="MOONMIND_SESSION_IMAGE_REF is required"):
+        _run_ready()

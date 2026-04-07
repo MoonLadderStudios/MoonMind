@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -35,6 +38,8 @@ from moonmind.schemas.managed_session_models import (
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
+_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = 300.0
+_STDOUT_EOF = object()
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -65,13 +70,19 @@ class CodexAppServerRpcClient:
         client_version: str,
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
+        notification_timeout_seconds: float | None = None,
     ) -> None:
         self._command = tuple(command)
         self._client_name = client_name
         self._client_version = client_version
         self._cwd = cwd
         self._env = dict(env or {})
+        self._notification_timeout_seconds = notification_timeout_seconds
         self._process: subprocess.Popen[str] | None = None
+        self._stderr_capture: tempfile.SpooledTemporaryFile[str] | None = None
+        self._stdout_reader: threading.Thread | None = None
+        self._stdout_queue: queue.Queue[object] = queue.Queue()
+        self._stdout_reader_error: Exception | None = None
         self._next_id = 1
         self._notifications: list[dict[str, Any]] = []
         self._responses: dict[int, dict[str, Any]] = {}
@@ -80,31 +91,73 @@ class CodexAppServerRpcClient:
     def _ensure_started(self) -> None:
         if self._process is not None:
             return
+        self._stderr_capture = tempfile.SpooledTemporaryFile(
+            max_size=1_000_000,
+            mode="w+",
+            encoding="utf-8",
+        )
         self._process = subprocess.Popen(
             self._command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=self._stderr_capture,
             text=True,
             bufsize=1,
             cwd=self._cwd,
             env={**os.environ, **self._env},
         )
+        self._stdout_reader = threading.Thread(
+            target=self._drain_stdout,
+            name="codex-app-server-stdout",
+            daemon=True,
+        )
+        self._stdout_reader.start()
 
-    def _read_message(self) -> dict[str, Any]:
-        self._ensure_started()
+    def _drain_stdout(self) -> None:
         assert self._process is not None
         assert self._process.stdout is not None
-        line = self._process.stdout.readline()
-        if not line:
-            stderr_text = ""
-            if self._process.stderr is not None:
-                stderr_text = self._process.stderr.read()
+        try:
+            for line in self._process.stdout:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                self._stdout_queue.put(json.loads(stripped))
+        except Exception as exc:
+            self._stdout_reader_error = exc
+        finally:
+            self._stdout_queue.put(_STDOUT_EOF)
+
+    def _stderr_text(self) -> str:
+        if self._stderr_capture is None:
+            return ""
+        self._stderr_capture.flush()
+        self._stderr_capture.seek(0)
+        return self._stderr_capture.read().strip()
+
+    def _read_message(self, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        self._ensure_started()
+        try:
+            if timeout_seconds is None:
+                message = self._stdout_queue.get()
+            else:
+                message = self._stdout_queue.get(timeout=timeout_seconds)
+        except queue.Empty as exc:
+            raise TimeoutError(
+                "timed out waiting for codex app-server message"
+            ) from exc
+        if message is _STDOUT_EOF:
+            stderr_text = self._stderr_text()
+            if self._stdout_reader_error is not None:
+                raise RuntimeError(
+                    "codex app-server emitted invalid JSON"
+                    + (f": {self._stdout_reader_error}" if str(self._stdout_reader_error) else "")
+                    + (f"; stderr: {stderr_text}" if stderr_text else "")
+                ) from self._stdout_reader_error
             raise RuntimeError(
                 "codex app-server closed unexpectedly"
-                + (f": {stderr_text.strip()}" if stderr_text.strip() else "")
+                + (f": {stderr_text}" if stderr_text else "")
             )
-        return json.loads(line)
+        return message if isinstance(message, dict) else {}
 
     def _write_message(self, message: Mapping[str, Any]) -> None:
         self._ensure_started()
@@ -182,7 +235,16 @@ class CodexAppServerRpcClient:
         method: str,
         *,
         predicate: Callable[[Mapping[str, Any]], bool] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        deadline = None
+        effective_timeout = (
+            self._notification_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        if effective_timeout is not None:
+            deadline = time.monotonic() + effective_timeout
         while True:
             for index, notification in enumerate(self._notifications):
                 if notification.get("method") != method:
@@ -191,7 +253,14 @@ class CodexAppServerRpcClient:
                     continue
                 return self._notifications.pop(index)
 
-            message = self._read_message()
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"timed out waiting for codex app-server notification {method}"
+                    )
+            message = self._read_message(timeout_seconds=remaining)
             if message.get("method") == method and (
                 predicate is None or predicate(message)
             ):
@@ -212,6 +281,14 @@ class CodexAppServerRpcClient:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=2)
+        if process.stdout is not None:
+            process.stdout.close()
+        if self._stdout_reader is not None:
+            self._stdout_reader.join(timeout=2)
+            self._stdout_reader = None
+        if self._stderr_capture is not None:
+            self._stderr_capture.close()
+            self._stderr_capture = None
 
 
 class CodexManagedSessionRuntime:
@@ -228,6 +305,7 @@ class CodexManagedSessionRuntime:
         control_url: str,
         container_id: str,
         app_server_command: Sequence[str] = ("codex", "app-server"),
+        turn_completion_timeout_seconds: float = _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS,
     ) -> None:
         self._workspace_path = Path(workspace_path)
         self._session_workspace_path = Path(session_workspace_path)
@@ -237,6 +315,7 @@ class CodexManagedSessionRuntime:
         self._control_url = control_url
         self._container_id = container_id
         self._app_server_command = tuple(app_server_command)
+        self._turn_completion_timeout_seconds = turn_completion_timeout_seconds
         self._client: CodexAppServerRpcClient | None = None
 
     @property
@@ -256,7 +335,8 @@ class CodexManagedSessionRuntime:
                 client_name="MoonMind",
                 client_version="phase4",
                 cwd=str(self._workspace_path),
-                env={"HOME": str(self._codex_home_path)},
+                env={"CODEX_HOME": str(self._codex_home_path)},
+                notification_timeout_seconds=self._turn_completion_timeout_seconds,
             )
         return self._client
 
@@ -420,13 +500,20 @@ class CodexManagedSessionRuntime:
         state.last_control_at = time.time()
         self._save_state(state)
 
-        client.wait_for_notification(
-            "turn/completed",
-            predicate=lambda message: (
-                isinstance(message.get("params"), Mapping)
-                and message["params"].get("threadId") == state.vendor_thread_id
-            ),
-        )
+        try:
+            client.wait_for_notification(
+                "turn/completed",
+                predicate=lambda message: (
+                    isinstance(message.get("params"), Mapping)
+                    and message["params"].get("threadId") == state.vendor_thread_id
+                ),
+                timeout_seconds=self._turn_completion_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "timed out waiting for codex app-server turn/completed notification "
+                f"after {self._turn_completion_timeout_seconds} seconds"
+            ) from exc
         thread_payload = client.request("thread/read", {"threadId": state.vendor_thread_id})
         assistant_text = self._extract_assistant_text(thread_payload)
 
@@ -462,6 +549,26 @@ class CodexManagedSessionRuntime:
         request: InterruptCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
         state = self._validate_locator(request)
+        if state.active_turn_id != request.turn_id:
+            return CodexManagedSessionTurnResponse(
+                sessionState=self._session_state(state),
+                turnId=request.turn_id,
+                status="failed",
+                metadata={
+                    "reason": (
+                        "interrupt_turn requires the active managed-session turn id"
+                    )
+                },
+            )
+        client = self._app_server_client()
+        client.initialize()
+        interrupt_params = {
+            "threadId": state.vendor_thread_id,
+            "turnId": request.turn_id,
+        }
+        if request.reason:
+            interrupt_params["reason"] = request.reason
+        client.request("turn/interrupt", interrupt_params)
         state.active_turn_id = None
         state.last_control_action = "interrupt_turn"
         state.last_control_at = time.time()
@@ -536,12 +643,75 @@ class CodexManagedSessionRuntime:
         )
 
 
+def _require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+
+def _require_writable_directory(
+    path_value: str,
+    env_name: str,
+    *,
+    create: bool,
+) -> str:
+    path = Path(path_value)
+    if not path.is_absolute():
+        raise RuntimeError(f"{env_name} must be an absolute path: {path}")
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        raise RuntimeError(f"{env_name} must exist: {path}")
+    if not path.is_dir():
+        raise RuntimeError(f"{env_name} must be a directory: {path}")
+    if not os.access(path, os.W_OK):
+        raise RuntimeError(f"{env_name} must be writable: {path}")
+    return str(path)
+
+
+def _validated_runtime_environment() -> dict[str, str]:
+    if shutil.which("codex") is None:
+        raise RuntimeError("codex is required on PATH")
+
+    workspace_path = _require_writable_directory(
+        _require_env("MOONMIND_SESSION_WORKSPACE_PATH"),
+        "MOONMIND_SESSION_WORKSPACE_PATH",
+        create=False,
+    )
+    session_workspace_path = _require_writable_directory(
+        _require_env("MOONMIND_SESSION_WORKSPACE_STATE_PATH"),
+        "MOONMIND_SESSION_WORKSPACE_STATE_PATH",
+        create=True,
+    )
+    artifact_spool_path = _require_writable_directory(
+        _require_env("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"),
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        create=True,
+    )
+    codex_home_path = _require_writable_directory(
+        _require_env("MOONMIND_SESSION_CODEX_HOME_PATH"),
+        "MOONMIND_SESSION_CODEX_HOME_PATH",
+        create=True,
+    )
+    image_ref = _require_env("MOONMIND_SESSION_IMAGE_REF")
+
+    return {
+        "workspace_path": workspace_path,
+        "session_workspace_path": session_workspace_path,
+        "artifact_spool_path": artifact_spool_path,
+        "codex_home_path": codex_home_path,
+        "image_ref": image_ref,
+    }
+
+
 def _runtime_from_environment() -> CodexManagedSessionRuntime:
-    workspace_path = os.environ["MOONMIND_SESSION_WORKSPACE_PATH"]
-    session_workspace_path = os.environ["MOONMIND_SESSION_WORKSPACE_STATE_PATH"]
-    artifact_spool_path = os.environ["MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"]
-    codex_home_path = os.environ["MOONMIND_SESSION_CODEX_HOME_PATH"]
-    image_ref = os.environ["MOONMIND_SESSION_IMAGE_REF"]
+    env = _validated_runtime_environment()
+    workspace_path = env["workspace_path"]
+    session_workspace_path = env["session_workspace_path"]
+    artifact_spool_path = env["artifact_spool_path"]
+    codex_home_path = env["codex_home_path"]
+    image_ref = env["image_ref"]
     container_id = os.environ.get("MOONMIND_SESSION_CONTAINER_ID", "").strip()
     if not container_id:
         state_path = Path(session_workspace_path) / _STATE_FILENAME
@@ -556,6 +726,12 @@ def _runtime_from_environment() -> CodexManagedSessionRuntime:
     control_url = os.environ.get("MOONMIND_SESSION_CONTROL_URL", "").strip()
     if not control_url:
         control_url = f"docker-exec://{os.environ.get('HOSTNAME', 'codex-session')}"
+    timeout_seconds = float(
+        os.environ.get(
+            "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS",
+            str(_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS),
+        )
+    )
     return CodexManagedSessionRuntime(
         workspace_path=workspace_path,
         session_workspace_path=session_workspace_path,
@@ -564,6 +740,7 @@ def _runtime_from_environment() -> CodexManagedSessionRuntime:
         image_ref=image_ref,
         control_url=control_url,
         container_id=container_id,
+        turn_completion_timeout_seconds=timeout_seconds,
     )
 
 
@@ -578,11 +755,12 @@ def _emit_json(payload: BaseModel | Mapping[str, Any], *, exit_code: int = 0) ->
 
 
 def _run_ready() -> int:
-    ready = shutil.which("codex") is not None
-    return _emit_json({"ready": ready})
+    _validated_runtime_environment()
+    return _emit_json({"ready": True})
 
 
 def _run_serve() -> int:
+    _validated_runtime_environment()
     stopping = False
 
     def _handle_signal(signum: int, _frame: object) -> None:
