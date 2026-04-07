@@ -12,18 +12,18 @@ if (-not $env:JULES_API_KEY) {
     exit 1
 }
 
-# Detect Docker Compose CLI
-$composeCmd = $null
+# Detect Docker Compose command (docker compose vs docker-compose)
+$composeDriver = $null
 if (Get-Command "docker" -ErrorAction SilentlyContinue) {
-    $composeVersion = docker compose version 2>$null
+    & docker compose version 2>$null
     if ($LASTEXITCODE -eq 0) {
-        $composeCmd = "docker compose"
+        $composeDriver = "docker"
     }
 }
-if (-not $composeCmd -and (Get-Command "docker-compose" -ErrorAction SilentlyContinue)) {
-    $composeCmd = "docker-compose"
+if (-not $composeDriver -and (Get-Command "docker-compose" -ErrorAction SilentlyContinue)) {
+    $composeDriver = "docker-compose"
 }
-if (-not $composeCmd) {
+if (-not $composeDriver) {
     Write-Error "Error: docker compose CLI is not available."
     exit 127
 }
@@ -42,22 +42,38 @@ if (-not (Test-Path $envFile)) {
 }
 
 # Ensure Docker network exists
-$networkExists = docker network inspect $networkName 2>$null
+& docker network inspect $networkName 2>$null
 if ($LASTEXITCODE -ne 0) {
-    docker network create $networkName | Out-Null
+    & docker network create $networkName | Out-Null
     Write-Host "Created Docker network: $networkName" -ForegroundColor Cyan
 }
 
-# Build and run pytest service
-Invoke-Expression "$composeCmd -f `"$composeFile`" --project-directory `"$repoRoot`" build pytest"
-Invoke-Expression "$composeCmd -f `"$composeFile`" --project-directory `"$repoRoot`" run --rm -e JULES_API_KEY -e JULES_API_URL pytest bash -lc `"pytest tests/provider/jules -m 'provider_verification and jules' -q --tb=short -s`""
+# Helper: run docker compose command with proper argument handling
+function Run-Compose {
+    param([string[]]$ComposeArgs)
+    if ($composeDriver -eq "docker") {
+        & docker @("compose", "-f", $composeFile, "--project-directory", $repoRoot) + $ComposeArgs
+    } else {
+        & "docker-compose" @("-f", $composeFile, "--project-directory", $repoRoot) + $ComposeArgs
+    }
+}
+
+# Build pytest service using the call operator for safer command execution
+Run-Compose @("build", "pytest") 2>&1 | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Error: docker compose build failed."
+    exit $LASTEXITCODE
+}
+
+# Run pytest provider verification
+Run-Compose @("run", "--rm", "-e", "JULES_API_KEY", "-e", "JULES_API_URL", "pytest", "bash", "-lc", "pytest tests/provider/jules -m 'provider_verification and jules' -q --tb=short -s") 2>&1 | Out-Host
 $testExitCode = $LASTEXITCODE
 
-# Bring down compose services
-Invoke-Expression "$composeCmd -f `"$composeFile`" --project-directory `"$repoRoot`" down --remove-orphans" | Out-Null
+# Bring down compose services (always runs, even on test failure)
+Run-Compose @("down", "--remove-orphans") 2>&1 | Out-Null
 
 if ($testExitCode -ne 0) {
-    Write-Error "Provider verification tests failed with exit code $testExitCode."
+    Write-Host "Provider verification tests failed with exit code $testExitCode." -ForegroundColor Red
     exit $testExitCode
 }
 

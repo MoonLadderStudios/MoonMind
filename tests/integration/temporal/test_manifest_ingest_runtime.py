@@ -14,17 +14,18 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
-
-pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+
+import pytest
 
 from api_service.db.models import (
     Base,
     TemporalWorkflowType,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @asynccontextmanager

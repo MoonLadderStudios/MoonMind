@@ -17,7 +17,7 @@ Phase 5 closes the documentation and convention gaps left by Phases 1–4 of the
 **Project Type**: Single project (Python backend + Temporal workflows)
 **Performance Goals**: N/A — no performance-sensitive code changes
 **Constraints**: No changes to test logic, CI YAMLs, or `pyproject.toml` marker definitions. Marker additions only (pytest decorator `@pytest.mark.integration_ci`).
-**Scale/Scope**: ~31 integration test files to evaluate; ~15-20 expected to receive `integration_ci` marker; 1 new PowerShell script; 1 AGENTS.md section update; 2 doc updates.
+**Scale/Scope**: ~31 integration test files to evaluate; 23 files received the `integration_ci` marker (bringing the total to 27); 1 new PowerShell script; 1 AGENTS.md section update; 2 doc updates.
 
 ## Constitution Check
 

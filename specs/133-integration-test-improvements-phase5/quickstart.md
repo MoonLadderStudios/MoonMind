@@ -11,7 +11,7 @@ Phase 5 updates documentation and conventions for the test taxonomy introduced i
 # Run only CI-safe hermetic integration tests
 ./tools/test_integration.sh
 
-# Should run ~15-20 test files (all marked integration_ci)
+# Should run all tests marked integration_ci
 ```
 
 ### 2. Check provider verification script

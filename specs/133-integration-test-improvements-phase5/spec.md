@@ -10,7 +10,7 @@ Phase 5 closes the loop by making the policy visible in developer-facing docs, a
 
 1. **Update AGENTS.md** to explicitly distinguish hermetic integration from provider verification, so agents and humans alike understand that "integration tests" no longer implies all of `tests/integration` is one default bucket.
 2. **Add `tools/test-provider.ps1`** (or `tools/test-jules.ps1`) as the PowerShell counterpart to `tools/test_jules_provider.sh`.
-3. **Ensure all CI-safe integration tests carry the `integration_ci` marker** so the required CI workflow actually runs them. Currently only 4 of ~39 integration test files carry this marker.
+3. **Ensure all CI-safe integration tests carry the `integration_ci` marker** so the required CI workflow actually runs them. Several integration test files are missing this marker.
 4. **Ensure all live Jules/provider tests carry `provider_verification` + `jules` + `requires_credentials` markers** and are excluded from CI-safe runs.
 5. **Update relevant spec/task docs** so Jules is no longer described as required compose-backed integration, while artifact validation remains explicitly required.
 
