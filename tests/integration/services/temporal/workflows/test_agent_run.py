@@ -11,6 +11,8 @@ from temporalio.service import RPCError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 # Local mock activities that simulate the catalog-routed activities
 # (the standalone stubs were removed in favor of catalog routing).

@@ -10,6 +10,8 @@ from api_service.main import app
 from api_service.db.base import get_async_session
 from api_service.api.routers.executions import _get_service, get_current_user
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 @pytest_asyncio.fixture
 async def mock_execution_service():
     service_mock = MagicMock()

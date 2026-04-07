@@ -11,6 +11,8 @@ from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionSta
 from api_service.core.sync import sync_execution_projection
 from api_service.db.models import Base, TemporalExecutionRecord
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 @pytest_asyncio.fixture
 async def db_session(tmp_path):

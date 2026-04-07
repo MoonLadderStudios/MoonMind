@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

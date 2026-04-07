@@ -15,6 +15,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 

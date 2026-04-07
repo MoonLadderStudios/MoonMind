@@ -7,6 +7,8 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":
         import json

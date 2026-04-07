@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleSpec
 from temporalio.testing import WorkflowEnvironment
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 @pytest.mark.asyncio
 @pytest.mark.integration

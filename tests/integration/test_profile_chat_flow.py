@@ -13,6 +13,8 @@ from api_service.main import app, startup_event
 from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
 
 @pytest.mark.asyncio
 async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):

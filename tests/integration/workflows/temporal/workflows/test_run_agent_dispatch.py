@@ -13,6 +13,8 @@ import pytest
 
 pytest.importorskip("temporalio")
 
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
 from temporalio import activity, client, workflow
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest

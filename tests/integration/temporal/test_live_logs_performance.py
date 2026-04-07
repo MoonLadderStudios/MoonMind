@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 from moonmind.services.observability.publisher import ObservabilityPublisher
 from moonmind.services.observability.models import LogStreamEvent, LogStreamType

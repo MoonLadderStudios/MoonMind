@@ -1,8 +1,11 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
 def _load_compose() -> dict:
