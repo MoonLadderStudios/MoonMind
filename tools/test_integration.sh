@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
-NETWORK_NAME="local-network"
+NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD=(docker compose)
@@ -25,8 +25,8 @@ if [[ ! -f "$REPO_ROOT/.env" ]]; then
   fi
 fi
 
-if ! docker network inspect "$NETWORK_NAME" > /dev/null 2>&1; then
-  docker network create "$NETWORK_NAME" > /dev/null
+if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+  docker network create "$NETWORK_NAME" >/dev/null
   echo "Created Docker network: $NETWORK_NAME"
 fi
 

@@ -132,6 +132,38 @@ h1 {
   line-height: 1;
 }
 
+.masthead-meta {
+  margin: 0.25rem 0 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  row-gap: 0.2rem;
+  font-size: 0.78rem;
+  color: rgb(var(--mm-muted) / 0.85);
+  font-weight: 500;
+}
+
+.masthead-meta-item {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(100%, 36ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.75rem;
+  color: rgb(var(--mm-muted));
+  letter-spacing: 0.02em;
+}
+
+.masthead-meta-item + .masthead-meta-item::before {
+  content: "\00b7";
+  margin-right: 0.4rem;
+  color: rgb(var(--mm-border));
+}
+
 .subhead {
   margin: 0;
   max-width: 60ch;
@@ -558,6 +590,12 @@ tr[data-proposal-id].proposal-consuming td {
   color: rgb(var(--mm-accent));
   background: rgb(var(--mm-accent) / 0.14);
   border-color: rgb(var(--mm-accent) / 0.55);
+}
+
+.status-waiting {
+  color: rgb(var(--mm-warning-ink, var(--mm-warn)));
+  background: rgb(var(--mm-warn) / 0.18);
+  border-color: rgb(var(--mm-warn) / 0.7);
 }
 
 .status-succeeded,

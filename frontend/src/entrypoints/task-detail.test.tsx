@@ -92,6 +92,7 @@ describe('Task Detail Entrypoint', () => {
       summary: 'Did work',
       status: 'completed',
       state: 'succeeded',
+      prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/123',
       rawState: 'succeeded',
       temporalStatus: 'completed',
       closeStatus: 'COMPLETED',
@@ -124,6 +125,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Gemini CLI')).toBeTruthy();
       expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
@@ -178,6 +180,7 @@ describe('Task Detail Entrypoint', () => {
                 branch: 'feature/no-op',
                 baseRef: 'origin/main',
                 commitCount: 0,
+                pullRequestUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/456',
               },
               lastStep: {
                 summary: 'Files edited in this run: none',
@@ -205,7 +208,139 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Run Summary')).toBeTruthy();
       expect(screen.getByText('feature/no-op')).toBeTruthy();
       expect(screen.getByText('origin/main')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/456' })).toBeTruthy();
       expect(screen.getAllByText(/no publishable diff was produced/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Unsafe task',
+      summary: 'Ignore unsafe PR links',
+      status: 'completed',
+      state: 'succeeded',
+      prUrl: 'javascript:alert(1)',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      summaryArtifactRef: 'art-summary-unsafe',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-unsafe/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              publishContext: {
+                pullRequestUrl: 'javascript:alert(2)',
+              },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unsafe task')).toBeTruthy();
+    });
+
+    expect(screen.queryByText('PR Link')).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
+    const mockExecution = {
+      taskId: 'mm:dependent-1',
+      workflowId: 'mm:dependent-1',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Dependent task',
+      summary: 'Waiting on upstream work',
+      status: 'waiting',
+      state: 'waiting_on_dependencies',
+      rawState: 'waiting_on_dependencies',
+      temporalStatus: 'running',
+      dependsOn: ['mm:dep-1'],
+      hasDependencies: true,
+      blockedOnDependencies: true,
+      dependencyResolution: 'not_applicable',
+      dependencyWaitDurationMs: 3200,
+      prerequisites: [
+        {
+          workflowId: 'mm:dep-1',
+          title: 'Build shared schema',
+          summary: 'Finishing migrations',
+          state: 'executing',
+          closeStatus: null,
+          workflowType: 'MoonMind.Run',
+        },
+      ],
+      dependents: [
+        {
+          workflowId: 'mm:child-1',
+          title: 'Run UI smoke tests',
+          summary: 'Blocked on this task',
+          state: 'waiting_on_dependencies',
+          closeStatus: null,
+          workflowType: 'MoonMind.Run',
+        },
+      ],
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Dependencies' })).toBeTruthy();
+      expect(screen.getByText(/Blocked on prerequisites/i)).toBeTruthy();
+      expect(screen.getByText('Build shared schema')).toBeTruthy();
+      expect(screen.getByText('Run UI smoke tests')).toBeTruthy();
     });
   });
 

@@ -3099,6 +3099,11 @@ export interface components {
             targetBranch?: string | null;
             /** Repository */
             repository?: string | null;
+            /**
+             * Prurl
+             * @description URL of the pull request associated with this execution.
+             */
+            prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
             /** Resolvedskillsetref */

@@ -16,7 +16,9 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence, get_type_hints
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+
+from pydantic import BaseModel
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
@@ -41,6 +43,21 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     ManagedRunRecord,
     ManagedRuntimeProfile,
+)
+from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionClearRequest,
+    CodexManagedSessionHandle,
+    CodexManagedSessionLocator,
+    CodexManagedSessionSummary,
+    CodexManagedSessionTurnResponse,
+    FetchCodexManagedSessionSummaryRequest,
+    InterruptCodexManagedSessionTurnRequest,
+    LaunchCodexManagedSessionRequest,
+    PublishCodexManagedSessionArtifactsRequest,
+    SendCodexManagedSessionTurnRequest,
+    SteerCodexManagedSessionTurnRequest,
+    TerminateCodexManagedSessionRequest,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
@@ -106,6 +123,7 @@ JulesClientFactory = Callable[[], JulesClient]
 JulesAgentAdapterFactory = Callable[[], JulesAgentAdapter]
 CodexCloudClientFactory = Callable[[], CodexCloudHttpClient]
 CodexCloudAdapterFactory = Callable[[], CodexCloudAgentAdapter]
+SessionContractT = TypeVar("SessionContractT", bound=BaseModel)
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
@@ -132,6 +150,55 @@ _PUBLISH_GIT_ADD_EXCLUDES: tuple[str, ...] = (
     ":(exclude)live_streams.spool",
     ":(exclude).agents/skills/active",
 )
+
+
+class ManagedSessionController(Protocol):
+    """Remote control surface for managed session containers."""
+
+    async def launch_session(
+        self, request: LaunchCodexManagedSessionRequest, /
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
+
+    async def session_status(
+        self, request: CodexManagedSessionLocator, /
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
+
+    async def send_turn(
+        self, request: SendCodexManagedSessionTurnRequest, /
+    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
+        pass
+
+    async def steer_turn(
+        self, request: SteerCodexManagedSessionTurnRequest, /
+    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
+        pass
+
+    async def interrupt_turn(
+        self, request: InterruptCodexManagedSessionTurnRequest, /
+    ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
+        pass
+
+    async def clear_session(
+        self, request: CodexManagedSessionClearRequest, /
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
+
+    async def terminate_session(
+        self, request: TerminateCodexManagedSessionRequest, /
+    ) -> CodexManagedSessionHandle | Mapping[str, Any]:
+        pass
+
+    async def fetch_session_summary(
+        self, request: FetchCodexManagedSessionSummaryRequest, /
+    ) -> CodexManagedSessionSummary | Mapping[str, Any]:
+        pass
+
+    async def publish_session_artifacts(
+        self, request: PublishCodexManagedSessionArtifactsRequest, /
+    ) -> CodexManagedSessionArtifactsPublication | Mapping[str, Any]:
+        pass
 
 
 def _managed_runtime_artifact_root() -> Path:
@@ -279,6 +346,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
+    "agent_runtime.launch_session": ("agent_runtime", "agent_runtime_launch_session"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
     "integration.codex_cloud.fetch_result": (
@@ -290,6 +358,32 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
+    ),
+    "agent_runtime.session_status": (
+        "agent_runtime",
+        "agent_runtime_session_status",
+    ),
+    "agent_runtime.send_turn": ("agent_runtime", "agent_runtime_send_turn"),
+    "agent_runtime.steer_turn": ("agent_runtime", "agent_runtime_steer_turn"),
+    "agent_runtime.interrupt_turn": (
+        "agent_runtime",
+        "agent_runtime_interrupt_turn",
+    ),
+    "agent_runtime.clear_session": (
+        "agent_runtime",
+        "agent_runtime_clear_session",
+    ),
+    "agent_runtime.terminate_session": (
+        "agent_runtime",
+        "agent_runtime_terminate_session",
+    ),
+    "agent_runtime.fetch_session_summary": (
+        "agent_runtime",
+        "agent_runtime_fetch_session_summary",
+    ),
+    "agent_runtime.publish_session_artifacts": (
+        "agent_runtime",
+        "agent_runtime_publish_session_artifacts",
     ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
@@ -2108,11 +2202,13 @@ class TemporalAgentRuntimeActivities:
         run_store: "ManagedRunStore | None" = None,
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
+        session_controller: ManagedSessionController | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
+        self._session_controller = session_controller
         self._supervision_tasks: set[asyncio.Task] = set()
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
@@ -2319,6 +2415,232 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
             return result
+
+    def _require_session_controller(
+        self, *, activity_type: str
+    ) -> ManagedSessionController:
+        if self._session_controller is None:
+            raise TemporalActivityRuntimeError(
+                f"session_controller is required for {activity_type}"
+            )
+        return self._session_controller
+
+    @staticmethod
+    def _validate_session_request(
+        request: Mapping[str, Any] | BaseModel | None,
+        *,
+        activity_type: str,
+        model_type: type[SessionContractT],
+    ) -> SessionContractT:
+        if isinstance(request, model_type):
+            return request
+        raw_payload: Mapping[str, Any] | None
+        if isinstance(request, BaseModel):
+            raw_payload = request.model_dump(mode="json", by_alias=True)
+        else:
+            raw_payload = request
+        payload = _coerce_activity_request(raw_payload, activity_type=activity_type)
+        return model_type.model_validate(payload)
+
+    @staticmethod
+    def _validate_session_response(
+        response: Any,
+        *,
+        activity_type: str,
+        model_type: type[SessionContractT],
+    ) -> SessionContractT:
+        try:
+            return model_type.model_validate(response)
+        except Exception as exc:
+            raise TemporalActivityRuntimeError(
+                f"{activity_type} returned an invalid session contract payload"
+            ) from exc
+
+    async def agent_runtime_launch_session(
+        self,
+        request: Mapping[str, Any] | LaunchCodexManagedSessionRequest | None = None,
+        /,
+    ) -> CodexManagedSessionHandle:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.launch_session"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.launch_session",
+            model_type=LaunchCodexManagedSessionRequest,
+        )
+        response = await controller.launch_session(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.launch_session",
+            model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_session_status(
+        self,
+        request: Mapping[str, Any] | CodexManagedSessionLocator | None = None,
+        /,
+    ) -> CodexManagedSessionHandle:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.session_status"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.session_status",
+            model_type=CodexManagedSessionLocator,
+        )
+        response = await controller.session_status(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.session_status",
+            model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_send_turn(
+        self,
+        request: Mapping[str, Any] | SendCodexManagedSessionTurnRequest | None = None,
+        /,
+    ) -> CodexManagedSessionTurnResponse:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.send_turn"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.send_turn",
+            model_type=SendCodexManagedSessionTurnRequest,
+        )
+        response = await controller.send_turn(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.send_turn",
+            model_type=CodexManagedSessionTurnResponse,
+        )
+
+    async def agent_runtime_steer_turn(
+        self,
+        request: Mapping[str, Any] | SteerCodexManagedSessionTurnRequest | None = None,
+        /,
+    ) -> CodexManagedSessionTurnResponse:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.steer_turn"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.steer_turn",
+            model_type=SteerCodexManagedSessionTurnRequest,
+        )
+        response = await controller.steer_turn(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.steer_turn",
+            model_type=CodexManagedSessionTurnResponse,
+        )
+
+    async def agent_runtime_interrupt_turn(
+        self,
+        request: Mapping[str, Any]
+        | InterruptCodexManagedSessionTurnRequest
+        | None = None,
+        /,
+    ) -> CodexManagedSessionTurnResponse:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.interrupt_turn"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.interrupt_turn",
+            model_type=InterruptCodexManagedSessionTurnRequest,
+        )
+        response = await controller.interrupt_turn(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.interrupt_turn",
+            model_type=CodexManagedSessionTurnResponse,
+        )
+
+    async def agent_runtime_clear_session(
+        self,
+        request: Mapping[str, Any] | CodexManagedSessionClearRequest | None = None,
+        /,
+    ) -> CodexManagedSessionHandle:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.clear_session"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.clear_session",
+            model_type=CodexManagedSessionClearRequest,
+        )
+        response = await controller.clear_session(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.clear_session",
+            model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_terminate_session(
+        self,
+        request: Mapping[str, Any] | TerminateCodexManagedSessionRequest | None = None,
+        /,
+    ) -> CodexManagedSessionHandle:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.terminate_session"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.terminate_session",
+            model_type=TerminateCodexManagedSessionRequest,
+        )
+        response = await controller.terminate_session(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.terminate_session",
+            model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_fetch_session_summary(
+        self,
+        request: Mapping[str, Any]
+        | FetchCodexManagedSessionSummaryRequest
+        | None = None,
+        /,
+    ) -> CodexManagedSessionSummary:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.fetch_session_summary"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.fetch_session_summary",
+            model_type=FetchCodexManagedSessionSummaryRequest,
+        )
+        response = await controller.fetch_session_summary(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.fetch_session_summary",
+            model_type=CodexManagedSessionSummary,
+        )
+
+    async def agent_runtime_publish_session_artifacts(
+        self,
+        request: Mapping[str, Any]
+        | PublishCodexManagedSessionArtifactsRequest
+        | None = None,
+        /,
+    ) -> CodexManagedSessionArtifactsPublication:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.publish_session_artifacts"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.publish_session_artifacts",
+            model_type=PublishCodexManagedSessionArtifactsRequest,
+        )
+        response = await controller.publish_session_artifacts(validated)
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.publish_session_artifacts",
+            model_type=CodexManagedSessionArtifactsPublication,
+        )
 
     @staticmethod
     def _agent_runtime_request_identifiers(

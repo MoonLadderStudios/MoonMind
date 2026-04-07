@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,18 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
 _TASK_SUMMARY_ELLIPSIS = "..."
+_GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
+    r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$",
+    re.IGNORECASE,
+)
+_PR_URL_CANDIDATE_SOURCES = (
+    ("memo", "pull_request_url"),
+    ("memo", "pullRequestUrl"),
+    ("search_attributes", "mm_pull_request_url"),
+    ("search_attributes", "pullRequestUrl"),
+    ("params", "prUrl"),
+    ("params", "pullRequestUrl"),
+)
 
 
 def _enum_value(value: object | None) -> str | None:
@@ -190,6 +204,40 @@ def _normalize_entry_value(value: object | None) -> str | None:
             first = inner.split(",", 1)[0].strip().strip("'\"")
             if first in {"run", "manifest"}:
                 return first
+    return None
+
+
+def _normalize_github_pull_request_url(value: object | None) -> str | None:
+    candidate = _coerce_temporal_scalar(value)
+    if not candidate:
+        return None
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() != "https" or parsed.netloc.lower() != "github.com":
+        return None
+    normalized_path = parsed.path.rstrip("/")
+    if not _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(normalized_path):
+        return None
+    return f"https://github.com{normalized_path}"
+
+
+def _extract_execution_pr_url(
+    memo: Mapping[str, object],
+    search_attributes: Mapping[str, object],
+    params: Mapping[str, object],
+) -> str | None:
+    sources = {
+        "memo": memo,
+        "search_attributes": search_attributes,
+        "params": params,
+    }
+    for source_name, key in _PR_URL_CANDIDATE_SOURCES:
+        value = sources[source_name].get(key)
+        normalized = _normalize_github_pull_request_url(value)
+        if normalized:
+            return normalized
     return None
 
 
@@ -485,6 +533,7 @@ def _serialize_execution(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+    pr_url = _extract_execution_pr_url(memo, search_attributes, params)
     is_admin = _is_execution_admin(user)
 
     return ExecutionModel(
@@ -524,6 +573,7 @@ def _serialize_execution(
         starting_branch=starting_branch,
         target_branch=target_branch,
         repository=repository,
+        pr_url=pr_url,
         publish_mode=publish_mode,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,

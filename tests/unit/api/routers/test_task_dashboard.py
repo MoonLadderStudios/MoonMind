@@ -259,6 +259,23 @@ def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestC
     assert "dashboardConfig" in detail.text
 
 
+def test_react_shell_renders_build_metadata_with_accurate_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_BUILD_ID", "build-2026.04.07")
+    monkeypatch.setenv("CODEX_CLI_VERSION", "0.105.0")
+
+    with _client_with_mock_service(monkeypatch) as (client, _mock_service):
+        response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert 'title="Build ID"' in response.text
+    assert "build-2026.04.07" in response.text
+    assert 'title="Codex CLI version"' in response.text
+    assert "0.105.0" in response.text
+    assert 'title="Docker image tag"' not in response.text
+
+
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/system")
 

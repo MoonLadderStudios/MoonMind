@@ -46,6 +46,17 @@
         <div class="masthead-copy">
           <p class="eyebrow">MoonMind Operations</p>
           <h1>Mission Control</h1>
+          <p class="masthead-meta">
+            {% if build_id %}
+            <span class="masthead-meta-item" title="Build ID">{{ build_id }}</span>
+            {% endif %}
+            {% if codex_cli_version %}
+            <span class="masthead-meta-item" title="Codex CLI version">{{ codex_cli_version }}</span>
+            {% endif %}
+            {% if hostname %}
+            <span class="masthead-meta-item" title="Hostname">{{ hostname }}</span>
+            {% endif %}
+          </p>
         </div>
       </header>
 

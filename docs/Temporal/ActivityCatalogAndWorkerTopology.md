@@ -443,7 +443,16 @@ Purpose: managed runtime launch, supervision support, result collection, artifac
 Current implemented activities:
 
 - `agent_runtime.launch`
+- `agent_runtime.launch_session`
 - `agent_runtime.publish_artifacts`
+- `agent_runtime.session_status`
+- `agent_runtime.send_turn`
+- `agent_runtime.steer_turn`
+- `agent_runtime.interrupt_turn`
+- `agent_runtime.clear_session`
+- `agent_runtime.terminate_session`
+- `agent_runtime.fetch_session_summary`
+- `agent_runtime.publish_session_artifacts`
 - `agent_runtime.status`
 - `agent_runtime.fetch_result`
 - `agent_runtime.cancel`
@@ -455,10 +464,21 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.status(...) -> AgentRunStatus`
 - `agent_runtime.fetch_result(...) -> AgentRunResult`
 - `agent_runtime.cancel(...) -> AgentRunStatus`
+- `agent_runtime.launch_session(...) -> CodexManagedSessionHandle`
+- `agent_runtime.session_status(...) -> CodexManagedSessionHandle`
+- `agent_runtime.send_turn(...) -> CodexManagedSessionTurnResponse`
+- `agent_runtime.steer_turn(...) -> CodexManagedSessionTurnResponse`
+- `agent_runtime.interrupt_turn(...) -> CodexManagedSessionTurnResponse`
+- `agent_runtime.clear_session(...) -> CodexManagedSessionHandle`
+- `agent_runtime.terminate_session(...) -> CodexManagedSessionHandle`
+- `agent_runtime.fetch_session_summary(...) -> CodexManagedSessionSummary`
+- `agent_runtime.publish_session_artifacts(...) -> CodexManagedSessionArtifactsPublication`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
 
 `agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
+
+The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
 
 ## 8.10 Proposal and review activities
 

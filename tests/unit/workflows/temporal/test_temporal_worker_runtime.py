@@ -204,7 +204,7 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
 
-    store, supervisor, _launcher = _build_agent_runtime_deps()
+    store, supervisor, _launcher, _session_controller = _build_agent_runtime_deps()
 
     assert store.store_root == tmp_path / "managed_runs"
     assert supervisor._log_streamer._storage._root == artifacts_root
@@ -575,12 +575,16 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     mock_worker_cls.assert_called_once()
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.workflow"
+    from moonmind.workflows.temporal.workflows.agent_session import (
+        MoonMindAgentSessionWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     assert kwargs["workflows"] == [
         MoonMindRun,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
+        MoonMindAgentSessionWorkflow,
         MoonMindAgentRun,
         MoonMindOAuthSession,
     ]
@@ -673,7 +677,14 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     run_supervisor = MagicMock()
     run_supervisor.reconcile = AsyncMock(return_value=[])
     run_launcher = MagicMock()
-    mock_build_deps.return_value = (run_store, run_supervisor, run_launcher)
+    session_controller = MagicMock()
+    session_controller.reconcile = AsyncMock(return_value=[])
+    mock_build_deps.return_value = (
+        run_store,
+        run_supervisor,
+        run_launcher,
+        session_controller,
+    )
     @asynccontextmanager
     async def _fake_session_context():
         yield "session"
@@ -714,8 +725,10 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         run_store=ANY,
         run_supervisor=ANY,
         run_launcher=ANY,
+        session_controller=session_controller,
     )
     run_supervisor.reconcile.assert_awaited_once()
+    session_controller.reconcile.assert_awaited_once()
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(
         dispatcher=mock_dispatcher_cls.return_value,

@@ -124,3 +124,39 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     assert 'provider_verification and jules' in provider_runner
     assert 'pytest tests/provider/jules' in provider_runner
     assert 'integration_ci' in powershell_runner
+
+
+def test_provider_verification_workflow_is_separate_from_required_pr_ci() -> None:
+    provider_workflow = (
+        REPO_ROOT / ".github" / "workflows" / "provider-verification.yml"
+    ).read_text(encoding="utf-8")
+    required_workflow = (
+        REPO_ROOT / ".github" / "workflows" / "pytest-integration-ci.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in provider_workflow
+    assert "schedule:" in provider_workflow
+    assert "pull_request:" not in provider_workflow
+    assert "./tools/test_jules_provider.sh" in provider_workflow
+    assert "./tools/test_integration.sh" in required_workflow
+
+def test_docker_compose_test_runners_provision_the_shared_network() -> None:
+    shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
+        encoding="utf-8"
+    )
+    provider_runner = (REPO_ROOT / "tools" / "test_jules_provider.sh").read_text(
+        encoding="utf-8"
+    )
+    powershell_runner = (REPO_ROOT / "tools" / "test-integration.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'MOONMIND_DOCKER_NETWORK' in shell_runner
+    assert 'docker network inspect "$NETWORK_NAME"' in shell_runner
+    assert 'docker network create "$NETWORK_NAME"' in shell_runner
+    assert 'MOONMIND_DOCKER_NETWORK' in provider_runner
+    assert 'docker network inspect "$NETWORK_NAME"' in provider_runner
+    assert 'docker network create "$NETWORK_NAME"' in provider_runner
+    assert '$env:MOONMIND_DOCKER_NETWORK' in powershell_runner
+    assert 'docker network inspect $networkName' in powershell_runner
+    assert 'docker network create $networkName' in powershell_runner

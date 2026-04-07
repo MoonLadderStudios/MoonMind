@@ -1,4 +1,4 @@
-WARNING: This project is still pre-release. A release should be ready in April 2026 after the full migration to Temporal.
+WARNING: This project is still pre-release. A release should be ready in May 2026 after the full migration to Temporal.
 
 # 🌙 MoonMind — Mission control for your AI agents
 

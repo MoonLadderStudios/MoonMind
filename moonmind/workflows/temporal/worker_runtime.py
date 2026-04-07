@@ -66,6 +66,9 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
+from moonmind.workflows.temporal.workflows.agent_session import (
+    MoonMindAgentSessionWorkflow as MoonMindAgentSession,
+)
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     resolve_adapter_metadata,
@@ -79,6 +82,15 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+from moonmind.workflows.temporal.runtime.managed_session_controller import (
+    DockerCodexManagedSessionController,
+)
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+)
+from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
+    ManagedSessionSupervisor,
+)
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
@@ -496,8 +508,13 @@ def _build_runtime_planner():
     return _runtime_planner
 
 
-def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, ManagedRuntimeLauncher]:
-    """Build shared store, supervisor, and launcher for the agent_runtime fleet."""
+def _build_agent_runtime_deps() -> tuple[
+    ManagedRunStore,
+    ManagedRunSupervisor,
+    ManagedRuntimeLauncher,
+    DockerCodexManagedSessionController,
+]:
+    """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
     from pathlib import Path
 
@@ -530,7 +547,43 @@ def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, 
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
     launcher = ManagedRuntimeLauncher(store, log_streamer=log_streamer)
-    return store, supervisor, launcher
+    session_store = ManagedSessionStore(
+        os.path.join(
+            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            "managed_sessions",
+        )
+    )
+    session_log_streamer = RuntimeLogStreamer(artifact_storage)
+    session_supervisor = ManagedSessionSupervisor(
+        store=session_store,
+        log_streamer=session_log_streamer,
+        artifact_storage=artifact_storage,
+    )
+    workspace_root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+    workspace_volume_name = os.environ.get(
+        "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME",
+        "agent_workspaces",
+    )
+    codex_volume_name = (
+        settings.workflow.codex_volume_name
+        or os.environ.get("CODEX_VOLUME_NAME")
+        or "codex_auth_volume"
+    )
+    docker_host = (
+        os.environ.get("DOCKER_HOST")
+        or os.environ.get("SYSTEM_DOCKER_HOST")
+        or "tcp://docker-proxy:2375"
+    )
+    session_controller = DockerCodexManagedSessionController(
+        workspace_volume_name=workspace_volume_name,
+        codex_volume_name=codex_volume_name,
+        workspace_root=workspace_root,
+        session_store=session_store,
+        session_supervisor=session_supervisor,
+        docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
+        docker_host=docker_host,
+    )
+    return store, supervisor, launcher, session_controller
 
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
@@ -557,13 +610,24 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         dispatcher = SkillActivityDispatcher()
 
-        # Build agent_runtime dependencies (store + supervisor + launcher)
-        run_store, run_supervisor, run_launcher = _build_agent_runtime_deps()
+        # Build agent_runtime dependencies (store + supervisor + launcher + session controller)
+        (
+            run_store,
+            run_supervisor,
+            run_launcher,
+            session_controller,
+        ) = _build_agent_runtime_deps()
         reconciled = await run_supervisor.reconcile()
         if reconciled:
             logger.info(
                 "Reconciled %d stale managed run records during startup",
                 len(reconciled),
+            )
+        session_reconciled = await session_controller.reconcile()
+        if session_reconciled:
+            logger.info(
+                "Reconciled %d managed session records during startup",
+                len(session_reconciled),
             )
 
         bindings = build_worker_activity_bindings(
@@ -586,6 +650,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_store=run_store,
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
+                session_controller=session_controller,
             ),
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
@@ -719,7 +784,14 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindProviderProfileManager, MoonMindAgentRun, MoonMindOAuthSession]
+        workflows = [
+            MoonMindRun,
+            MoonMindManifestIngest,
+            MoonMindProviderProfileManager,
+            MoonMindAgentSession,
+            MoonMindAgentRun,
+            MoonMindOAuthSession,
+        ]
         activities = [
             resolve_adapter_metadata,
             get_activity_route,

@@ -22,7 +22,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
 TEST_SERVICE="pytest"
-NETWORK_NAME="local-network"
 SKIP_BUILD=0
 
 # Parse --no-build before forwarding remaining args.
@@ -58,12 +57,6 @@ if [[ ! -f "$REPO_ROOT/.env" ]]; then
         echo "Error: missing $REPO_ROOT/.env and $REPO_ROOT/.env-template." >&2
         exit 1
     fi
-fi
-
-# Ensure the shared Docker network exists (required by docker-compose.test.yaml).
-if ! docker network inspect "$NETWORK_NAME" > /dev/null 2>&1; then
-    docker network create "$NETWORK_NAME" > /dev/null
-    echo "Created Docker network: $NETWORK_NAME"
 fi
 
 # Build the test image (cached after first build; only rebuilds when Dockerfile/pyproject.toml changes).

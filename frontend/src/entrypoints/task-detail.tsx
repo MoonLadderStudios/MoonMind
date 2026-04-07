@@ -20,6 +20,52 @@ type DashboardConfig = {
   };
 };
 
+const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
+
+function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') {
+      return null;
+    }
+
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+    if (!GITHUB_PULL_REQUEST_PATH_PATTERN.test(normalizedPath)) {
+      return null;
+    }
+
+    return `https://github.com${normalizedPath}`;
+  } catch {
+    return null;
+  }
+}
+
+const DependencyOutcomeSchema = z
+  .object({
+    workflowId: z.string(),
+    terminalState: z.string().nullable().optional(),
+    closeStatus: z.string().nullable().optional(),
+    resolvedAt: z.string().nullable().optional(),
+    failureCategory: z.string().nullable().optional(),
+    message: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const DependencySummarySchema = z
+  .object({
+    workflowId: z.string(),
+    title: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+    state: z.string().nullable().optional(),
+    closeStatus: z.string().nullable().optional(),
+    workflowType: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string(),
@@ -38,6 +84,16 @@ const ExecutionDetailSchema = z
     temporalStatus: z.string().optional(),
     closeStatus: z.string().nullable().optional(),
     waitingReason: z.string().nullable().optional(),
+    dependsOn: z.array(z.string()).default([]),
+    hasDependencies: z.boolean().optional(),
+    dependencyWaitOccurred: z.boolean().optional(),
+    dependencyWaitDurationMs: z.number().nullable().optional(),
+    dependencyResolution: z.string().nullable().optional(),
+    failedDependencyId: z.string().nullable().optional(),
+    blockedOnDependencies: z.boolean().optional(),
+    dependencyOutcomes: z.array(DependencyOutcomeSchema).default([]),
+    prerequisites: z.array(DependencySummarySchema).default([]),
+    dependents: z.array(DependencySummarySchema).default([]),
     attentionRequired: z.boolean().optional(),
     targetRuntime: z.string().nullable().optional(),
     targetSkill: z.string().nullable().optional(),
@@ -49,6 +105,7 @@ const ExecutionDetailSchema = z
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
+    prUrl: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
     publishMode: z.string().nullable().optional(),
@@ -243,6 +300,29 @@ function renderProviderProfileSummary(
       ) : null}
     </span>
   );
+}
+
+function formatDurationMs(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  if (value < 1000) return `${value} ms`;
+  const totalSeconds = Math.round(value / 1000);
+  if (totalSeconds < 60) {
+    const seconds = value / 1000;
+    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+function formatDependencyResolution(value: string | null | undefined): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '—';
+  return normalized.replaceAll('_', ' ');
+}
+
+function dependencyHref(workflowId: string): string {
+  return `/tasks/${encodeURIComponent(workflowId)}?source=temporal`;
 }
 
 function formatDebugValue(value: unknown): string {
@@ -1111,6 +1191,37 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
   const runSummary = runSummaryQuery.data;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
+  const prUrl =
+    normalizeGitHubPullRequestUrl(execution?.prUrl) ||
+    normalizeGitHubPullRequestUrl(runSummary?.publishContext?.pullRequestUrl);
+  const dependencyOutcomesById = useMemo(() => {
+    const entries = (execution?.dependencyOutcomes || []).map((item) => [item.workflowId, item] as const);
+    return new Map(entries);
+  }, [execution?.dependencyOutcomes]);
+  const prerequisiteRows = useMemo(() => {
+    const ids = execution?.dependsOn || [];
+    if (!execution) {
+      return [];
+    }
+    if (execution.prerequisites.length > 0) {
+      return execution.prerequisites;
+    }
+    return ids.map((workflowId) => ({
+      workflowId,
+      title: workflowId,
+      summary: null,
+      state: null,
+      closeStatus: null,
+      workflowType: 'MoonMind.Run',
+    }));
+  }, [execution]);
+  const hasDependencySection = Boolean(
+    execution &&
+      (execution.hasDependencies ||
+        execution.dependsOn.length > 0 ||
+        execution.prerequisites.length > 0 ||
+        execution.dependents.length > 0),
+  );
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
@@ -1329,6 +1440,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <code className="text-xs">{execution.publishMode}</code>
               </Card>
             ) : null}
+            {prUrl ? (
+              <Card label="PR Link">
+                <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
+                  {prUrl}
+                </a>
+              </Card>
+            ) : null}
             <Card label="Temporal Status">{execution.temporalStatus || '—'}</Card>
             <Card label="Current State">{execution.rawState || execution.state || '—'}</Card>
             {execution.closeStatus ? <Card label="Close Status">{execution.closeStatus}</Card> : null}
@@ -1421,6 +1539,89 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           {execution.attentionRequired ? (
             <section className="notice">
               <strong>Attention required.</strong> This task is waiting for external input before it can continue.
+            </section>
+          ) : null}
+
+          {hasDependencySection ? (
+            <section className="stack">
+              <div>
+                <h3>Dependencies</h3>
+                <p className="small">
+                  Direct prerequisite runs gate this execution before planning or execution begins.
+                </p>
+              </div>
+              <div className="grid-2">
+                <Card label="Declared Prerequisites">{String(execution.dependsOn.length)}</Card>
+                <Card label="Blocked On Dependencies">{execution.blockedOnDependencies ? 'Yes' : 'No'}</Card>
+                <Card label="Dependency Resolution">{formatDependencyResolution(execution.dependencyResolution)}</Card>
+                <Card label="Dependency Wait Duration">
+                  {formatDurationMs(execution.dependencyWaitDurationMs ?? null)}
+                </Card>
+                {execution.failedDependencyId ? (
+                  <Card label="Failed Dependency">
+                    <code className="text-xs break-all">{execution.failedDependencyId}</code>
+                  </Card>
+                ) : null}
+              </div>
+              {execution.blockedOnDependencies ? (
+                <div className="notice">
+                  <strong>Blocked on prerequisites.</strong> This run will not advance until every prerequisite reaches <code>completed</code>.
+                </div>
+              ) : null}
+              <div className="stack">
+                <h4>Prerequisites</h4>
+                {prerequisiteRows.length === 0 ? (
+                  <p className="small">No prerequisites declared.</p>
+                ) : (
+                  <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {prerequisiteRows.map((item) => {
+                      const outcome = dependencyOutcomesById.get(item.workflowId);
+                      const stateLabel = outcome?.terminalState || item.state || 'unknown';
+                      return (
+                        <li key={item.workflowId} className="card">
+                          <div className="stack gap-1">
+                            <a href={dependencyHref(item.workflowId)}>
+                              <strong>{item.title || item.workflowId}</strong>
+                            </a>
+                            <code className="text-xs break-all">{item.workflowId}</code>
+                            <span className={executionStatusPillClasses(stateLabel)}>{stateLabel}</span>
+                            {item.summary ? <p className="small">{item.summary}</p> : null}
+                            {outcome?.message ? <p className="small">{outcome.message}</p> : null}
+                            {outcome?.failureCategory ? (
+                              <p className="small">Failure category: <code>{outcome.failureCategory}</code></p>
+                            ) : null}
+                            {(outcome?.closeStatus || item.closeStatus) ? (
+                              <p className="small">Close status: {outcome?.closeStatus || item.closeStatus}</p>
+                            ) : null}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+              <div className="stack">
+                <h4>Dependents</h4>
+                {execution.dependents.length === 0 ? (
+                  <p className="small">No downstream dependents reference this run.</p>
+                ) : (
+                  <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {execution.dependents.map((item) => (
+                      <li key={item.workflowId} className="card">
+                        <div className="stack gap-1">
+                          <a href={dependencyHref(item.workflowId)}>
+                            <strong>{item.title || item.workflowId}</strong>
+                          </a>
+                          <code className="text-xs break-all">{item.workflowId}</code>
+                          <span className={executionStatusPillClasses(item.state)}>{item.state || 'unknown'}</span>
+                          {item.summary ? <p className="small">{item.summary}</p> : null}
+                          {item.closeStatus ? <p className="small">Close status: {item.closeStatus}</p> : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </section>
           ) : null}
 

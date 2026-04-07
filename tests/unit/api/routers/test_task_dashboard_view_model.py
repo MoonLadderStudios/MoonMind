@@ -102,6 +102,9 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
+    assert "buildId" in config["system"]
+    assert "codexCliVersion" in config["system"]
+    assert "hostname" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex_cli", "gemini_cli", "claude_code")
     assert "defaultTaskModel" in config["system"]
     assert "defaultTaskEffort" in config["system"]
@@ -122,6 +125,18 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert attachment_policy["maxBytes"] >= 1
     assert attachment_policy["totalBytes"] >= attachment_policy["maxBytes"]
     assert "image/png" in attachment_policy["allowedContentTypes"]
+
+
+def test_build_runtime_config_includes_dashboard_build_metadata(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_BUILD_ID", "build-2026.04.07")
+    monkeypatch.setenv("CODEX_CLI_VERSION", "0.105.0")
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["buildId"] == "build-2026.04.07"
+    assert config["system"]["codexCliVersion"] == "0.105.0"
+    assert isinstance(config["system"]["hostname"], str)
+    assert config["system"]["hostname"]
 
 
 def test_build_runtime_config_normalizes_attachment_policy_settings(

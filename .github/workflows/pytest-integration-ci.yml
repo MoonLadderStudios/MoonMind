@@ -1,0 +1,71 @@
+name: Run Pytest Integration CI
+
+"on":
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pytest-integration-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-integration-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+
+    - name: Run hermetic integration CI suite
+      env:
+        MOONMIND_FORCE_LOCAL_TESTS: "1"
+      run: |
+        set -euo pipefail
+        ./tools/test_integration.sh
+
+    - name: Capture docker compose diagnostics
+      if: failure()
+      run: |
+        set -uo pipefail
+        mkdir -p /tmp/pytest-integration-ci
+        printf 'Collecting docker compose diagnostics\n' > /tmp/pytest-integration-ci/diagnostics-status.txt
+        if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+          COMPOSE_CMD=(docker compose)
+        elif command -v docker-compose >/dev/null 2>&1; then
+          COMPOSE_CMD=(docker-compose)
+        else
+          COMPOSE_CMD=()
+          printf 'docker compose CLI is unavailable\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+        fi
+        if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt 2>&1; then
+            printf 'docker compose config failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt 2>&1; then
+            printf 'docker compose ps -a failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+          if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt 2>&1; then
+            printf 'docker compose logs failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+        fi
+        if [[ -d var/artifacts ]]; then
+          cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts || printf 'copying var/artifacts failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+        fi
+
+    - name: Upload integration diagnostics
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-integration-ci-diagnostics
+        path: /tmp/pytest-integration-ci
+        if-no-files-found: error
