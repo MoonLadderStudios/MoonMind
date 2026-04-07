@@ -47,9 +47,6 @@
           <p class="eyebrow">MoonMind Operations</p>
           <h1>Mission Control</h1>
           <p class="masthead-meta">
-            {% if build_id %}
-            <span class="masthead-meta-item" title="Build ID">{{ build_id }}</span>
-            {% endif %}
             {% if codex_cli_version %}
             <span class="masthead-meta-item" title="Codex CLI version">{{ codex_cli_version }}</span>
             {% endif %}
@@ -58,6 +55,11 @@
             {% endif %}
           </p>
         </div>
+        {% if build_id %}
+        <div class="masthead-controls">
+          <div class="version-badge" title="Build version">{{ build_id }}</div>
+        </div>
+        {% endif %}
       </header>
 
       {% include "_navigation.html" %}

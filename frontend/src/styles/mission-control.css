@@ -108,6 +108,33 @@ body {
   justify-content: flex-end;
   align-items: flex-start;
   flex: 0 0 auto;
+  gap: 0.75rem;
+}
+
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.35rem;
+  background: rgb(var(--mm-accent) / 0.1);
+  border: 1px solid rgb(var(--mm-accent) / 0.25);
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgb(var(--mm-accent) / 0.95);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.version-badge::before {
+  content: "version";
+  font-size: 0.65rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--mm-accent) / 0.7);
 }
 
 .theme-toggle {
