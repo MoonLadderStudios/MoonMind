@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import socket
 from html import escape
 from collections.abc import Callable
 from pathlib import Path
@@ -264,6 +266,9 @@ def _render_react_page(
     if isinstance(assets_html, HTMLResponse):
         return assets_html
 
+    docker_image_tag = os.environ.get("CODEX_CLI_VERSION", "").strip() or "latest"
+    hostname = socket.gethostname()
+
     return templates.TemplateResponse(
         request,
         "react_dashboard.html",
@@ -272,6 +277,8 @@ def _render_react_page(
             "boot_payload": boot_payload,
             "assets_html": assets_html,
             "current_path": current_path,
+            "docker_image_tag": docker_image_tag,
+            "hostname": hostname,
         },
     )
 

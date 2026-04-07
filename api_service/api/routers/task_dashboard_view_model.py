@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from copy import deepcopy
 from typing import Any
 
@@ -153,6 +154,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         str(settings.workflow.default_publish_mode or "").strip().lower() or "pr"
     )
 
+    docker_image_tag = os.environ.get("CODEX_CLI_VERSION", "").strip() or "latest"
+    hostname = socket.gethostname()
+
     return {
         "initialPath": initial_path,
         "pollIntervalsMs": {
@@ -209,6 +213,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             ),
         },
         "system": {
+            "dockerImageTag": docker_image_tag,
+            "hostname": hostname,
             "defaultRepository": default_repository,
             "defaultTaskRuntime": default_task_runtime,
             "defaultTaskModel": default_task_model,
