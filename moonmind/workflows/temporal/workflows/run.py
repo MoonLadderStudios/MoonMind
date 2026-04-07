@@ -577,11 +577,50 @@ class MoonMindRunWorkflow:
 
         prerequisite_workflow_id = signal.prerequisite_workflow_id
         if prerequisite_workflow_id not in self._declared_dependencies:
+            self._get_logger().warning(
+                "Ignoring DependencyResolved signal for undeclared prerequisite %s",
+                prerequisite_workflow_id,
+                extra={
+                    "event": "dependency_signal_ignored_undeclared",
+                },
+            )
             return
+
+        # Normalize "succeeded" to "completed" so the outcome recorder
+        # (which only treats "completed" as success) can satisfy the gate.
+        terminal_state = signal.terminal_state
+        if terminal_state == "succeeded":
+            terminal_state = "completed"
+
+        is_terminal_failure = terminal_state != "completed"
+        if is_terminal_failure:
+            self._get_logger().warning(
+                "DependencyResolved signal indicates non-success terminal state %s for %s",
+                terminal_state,
+                prerequisite_workflow_id,
+                extra={
+                    "event": "dependency_signal_failure",
+                    "prerequisite_workflow_id": prerequisite_workflow_id,
+                    "terminal_state": terminal_state,
+                    "close_status": signal.close_status,
+                    "failure_category": signal.failure_category,
+                },
+            )
+        else:
+            self._get_logger().info(
+                "DependencyResolved signal received for %s",
+                prerequisite_workflow_id,
+                extra={
+                    "event": "dependency_signal_received",
+                    "prerequisite_workflow_id": prerequisite_workflow_id,
+                    "terminal_state": terminal_state,
+                    "close_status": signal.close_status,
+                },
+            )
 
         self._record_dependency_outcome(
             prerequisite_workflow_id=prerequisite_workflow_id,
-            terminal_state=signal.terminal_state,
+            terminal_state=terminal_state,
             close_status=signal.close_status,
             resolved_at=signal.resolved_at.isoformat(),
             failure_category=signal.failure_category,
@@ -610,6 +649,15 @@ class MoonMindRunWorkflow:
         for dependency_id in dependency_ids:
             raw_entry = snapshot.get(dependency_id)
             if not isinstance(raw_entry, Mapping):
+                self._get_logger().warning(
+                    "Dependency reconciliation: prerequisite %s not found in snapshot",
+                    dependency_id,
+                    extra={
+                        "event": "dependency_reconciliation_mismatch",
+                        "prerequisite_workflow_id": dependency_id,
+                        "mismatch_type": "missing_from_snapshot",
+                    },
+                )
                 self._record_missing_dependency(dependency_id)
                 continue
 
@@ -664,6 +712,17 @@ class MoonMindRunWorkflow:
             f"Prerequisite execution '{detail.get('failedDependencyId')}' "
             "did not complete successfully."
         )
+        self._get_logger().error(
+            "Dependency gate failed",
+            extra={
+                "event": "dependency_gate_failed",
+                "failed_dependency_id": detail.get("failedDependencyId"),
+                "terminal_state": detail.get("terminalState"),
+                "close_status": detail.get("closeStatus"),
+                "failure_category": detail.get("failureCategory"),
+                "wait_duration_ms": self._dependency_wait_duration_ms,
+            },
+        )
         raise DependencyFailureError(message, detail=detail)
 
     async def _wait_for_dependencies(self, dependency_ids: list[str]) -> None:
@@ -683,6 +742,14 @@ class MoonMindRunWorkflow:
         self._set_state(
             STATE_WAITING_ON_DEPENDENCIES,
             summary=f"Waiting on {len(dependency_ids)} prerequisite execution(s).",
+        )
+        self._get_logger().info(
+            "Dependency gate entered",
+            extra={
+                "event": "dependency_gate_entered",
+                "dependency_count": len(dependency_ids),
+                "dependency_ids": dependency_ids,
+            },
         )
 
         try:
@@ -708,6 +775,20 @@ class MoonMindRunWorkflow:
                     self._update_search_attributes()
                     self._update_memo()
             self._update_dependency_wait_duration()
+
+            if (
+                self._dependency_failure is None
+                and self._close_status != CLOSE_STATUS_CANCELED
+            ):
+                self._get_logger().info(
+                    "Dependency gate satisfied",
+                    extra={
+                        "event": "dependency_gate_satisfied",
+                        "dependency_count": len(dependency_ids),
+                        "wait_duration_ms": self._dependency_wait_duration_ms,
+                    },
+                )
+
             self._raise_for_dependency_failure()
         finally:
             self._waiting_reason = None

@@ -266,25 +266,17 @@ describe("Task Create Entrypoint", () => {
           } as Response);
         }
         if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+          const depItems = Array.from({ length: 12 }, (_, i) => ({
+            taskId: `mm:dep-${i + 1}`,
+            workflowType: "MoonMind.Run",
+            entry: "run",
+            title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
+            state: i % 3 === 0 ? "completed" : "executing",
+          }));
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              items: [
-                {
-                  taskId: "mm:dep-1",
-                  workflowType: "MoonMind.Run",
-                  entry: "run",
-                  title: "Build shared schema",
-                  state: "completed",
-                },
-                {
-                  taskId: "mm:dep-2",
-                  workflowType: "MoonMind.Run",
-                  entry: "run",
-                  title: "Prepare fixture data",
-                  state: "executing",
-                },
-              ],
+              items: depItems,
             }),
           } as Response);
         }
@@ -681,25 +673,17 @@ describe("Task Create Entrypoint", () => {
           } as Response);
         }
         if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+          const depItems = Array.from({ length: 12 }, (_, i) => ({
+            taskId: `mm:dep-${i + 1}`,
+            workflowType: "MoonMind.Run",
+            entry: "run",
+            title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
+            state: i % 3 === 0 ? "completed" : "executing",
+          }));
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              items: [
-                {
-                  taskId: "mm:dep-1",
-                  workflowType: "MoonMind.Run",
-                  entry: "run",
-                  title: "Build shared schema",
-                  state: "completed",
-                },
-                {
-                  taskId: "mm:dep-2",
-                  workflowType: "MoonMind.Run",
-                  entry: "run",
-                  title: "Prepare fixture data",
-                  state: "executing",
-                },
-              ],
+              items: depItems,
             }),
           } as Response);
         }
@@ -881,25 +865,17 @@ describe("Task Create Entrypoint", () => {
               } as Response);
             }
             if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run")) {
+              const depItems = Array.from({ length: 12 }, (_, i) => ({
+                taskId: `mm:dep-${i + 1}`,
+                workflowType: "MoonMind.Run",
+                entry: "run",
+                title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
+                state: i % 3 === 0 ? "completed" : "executing",
+              }));
               return Promise.resolve({
                 ok: true,
                 json: async () => ({
-                  items: [
-                    {
-                      taskId: "mm:dep-1",
-                      workflowType: "MoonMind.Run",
-                      entry: "run",
-                      title: "Build shared schema",
-                      state: "completed",
-                    },
-                    {
-                      taskId: "mm:dep-2",
-                      workflowType: "MoonMind.Run",
-                      entry: "run",
-                      title: "Prepare fixture data",
-                      state: "executing",
-                    },
-                  ],
+                  items: depItems,
                 }),
               } as Response);
             }
@@ -1192,5 +1168,106 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
 
     promptSpy.mockRestore();
+  });
+
+  // -----------------------------------------------------------------------
+  // Dependency picker hardening tests
+  // -----------------------------------------------------------------------
+
+  it("prevents adding the same dependency twice", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Dependent stage." },
+    });
+
+    // Add mm:dep-1 first time.
+    fireEvent.change(screen.getByLabelText("Existing run"), {
+      target: { value: "mm:dep-1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Build shared schema/)).toBeTruthy();
+    });
+
+    // After adding, mm:dep-1 should be removed from the dropdown options
+    // (filtered out by availableDependencyOptions).
+    const select = screen.getByLabelText("Existing run") as HTMLSelectElement;
+    const options = Array.from(select.options).map((o) => o.value);
+    expect(options).not.toContain("mm:dep-1");
+
+    // The list should have exactly ONE entry.
+    const list = document.getElementById("queue-dependency-list");
+    expect(list).toBeTruthy();
+    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(1);
+
+    // Add a second dependency to verify the list grows.
+    fireEvent.change(screen.getByLabelText("Existing run"), {
+      target: { value: "mm:dep-2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
+
+    await waitFor(() => {
+      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(2);
+    });
+  });
+
+  it("enforces the 10-item dependency limit", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Dependent stage." },
+    });
+
+    // Add 10 dependencies.
+    for (let i = 1; i <= 10; i += 1) {
+      fireEvent.change(screen.getByLabelText("Existing run"), {
+        target: { value: `mm:dep-${i}` },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Add dependency" }),
+      );
+    }
+
+    // Wait for all 10 to appear.
+    await waitFor(() => {
+      const list = document.getElementById("queue-dependency-list");
+      expect(list).toBeTruthy();
+      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(10);
+    });
+
+    // Try to add an 11th.
+    fireEvent.change(screen.getByLabelText("Existing run"), {
+      target: { value: "mm:dep-11" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
+
+    // Still 10 items.
+    const list = document.getElementById("queue-dependency-list");
+    expect(list).toBeTruthy();
+    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(10);
+
+    // Limit-exceeded message should be visible.
+    expect(
+      screen.getByText(/at most 10 direct dependencies/),
+    ).toBeTruthy();
+  });
+
+  it("shows validation message when adding dependency without selection", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Dependent stage." },
+    });
+
+    // Click Add without selecting a run.
+    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Choose a prerequisite run before adding/),
+      ).toBeTruthy();
+    });
   });
 });
