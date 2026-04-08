@@ -306,16 +306,20 @@ class DockerCodexManagedSessionController:
         session_workspace_path.mkdir(parents=True, exist_ok=True)
         artifact_spool_path.mkdir(parents=True, exist_ok=True)
 
-        if workspace_path.exists():
-            return
-
-        workspace_path.parent.mkdir(parents=True, exist_ok=True)
-
         repository = str(
             request.workspace_spec.get("repository")
             or request.workspace_spec.get("repo")
             or ""
         ).strip()
+        if workspace_path.exists():
+            if repository:
+                await self._ensure_target_branch(
+                    workspace_path=workspace_path,
+                    request=request,
+                )
+            return
+
+        workspace_path.parent.mkdir(parents=True, exist_ok=True)
         if not repository:
             workspace_path.mkdir(parents=True, exist_ok=True)
             return
@@ -334,6 +338,53 @@ class DockerCodexManagedSessionController:
             clone_command.extend(["--branch", branch, "--single-branch"])
         clone_command.extend([source, str(workspace_path)])
         await self._run_host_command(clone_command)
+        await self._ensure_target_branch(
+            workspace_path=workspace_path,
+            request=request,
+        )
+
+    async def _ensure_target_branch(
+        self,
+        *,
+        workspace_path: Path,
+        request: LaunchCodexManagedSessionRequest,
+    ) -> None:
+        target_branch = str(request.workspace_spec.get("targetBranch") or "").strip()
+        if not target_branch:
+            return
+
+        checkout_command = (
+            "git",
+            "-C",
+            str(workspace_path),
+            "checkout",
+            target_branch,
+        )
+        returncode, stdout, stderr = await self._command_runner(checkout_command)
+        if returncode == 0:
+            return
+
+        failure_detail = (stderr or stdout).lower()
+        branch_missing = (
+            "did not match any file(s) known to git" in failure_detail
+            or "pathspec" in failure_detail
+        )
+        if not branch_missing:
+            raise RuntimeError(
+                f"{' '.join(checkout_command)} failed with exit code {returncode}: "
+                f"{stderr.strip() or stdout.strip()}"
+            )
+
+        await self._run_host_command(
+            [
+                "git",
+                "-C",
+                str(workspace_path),
+                "checkout",
+                "-b",
+                target_branch,
+            ]
+        )
 
     async def _invoke_json(
         self,

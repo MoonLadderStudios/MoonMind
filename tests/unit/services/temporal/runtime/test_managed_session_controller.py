@@ -144,6 +144,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         workspaceSpec={
             "repository": "MoonLadderStudios/MoonMind",
             "startingBranch": "dependabot/pip/requests-2.33.1",
+            "targetBranch": "codex/session-fix",
         },
     )
     commands: list[tuple[str, ...]] = []
@@ -160,6 +161,11 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         if command[:2] == ("git", "clone"):
             Path(request.workspace_path).mkdir(parents=True, exist_ok=True)
             return 0, "", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "checkout"):
+            if command[4:] == ("codex/session-fix",):
+                return 1, "", "error: pathspec 'codex/session-fix' did not match any file(s) known to git"
+            if command[4:] == ("-b", "codex/session-fix"):
+                return 0, "", ""
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
         if "ready" in command:
@@ -196,9 +202,99 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         "https://github.com/MoonLadderStudios/MoonMind.git" in commands[0]
     )
     assert request.workspace_path in commands[0]
+    assert commands[1] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "codex/session-fix",
+    )
+    assert commands[2] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "-b",
+        "codex/session-fix",
+    )
     assert Path(request.workspace_path).exists()
     assert Path(request.session_workspace_path).exists()
     assert Path(request.artifact_spool_path).exists()
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_reuses_existing_workspace_and_checks_out_target_branch(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "main",
+            "targetBranch": "codex/session-fix",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:4] == ("git", "-C", request.workspace_path, "checkout"):
+            if command[4:] == ("codex/session-fix",):
+                return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    assert all(command[:2] != ("git", "clone") for command in commands)
+    assert commands[0] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "codex/session-fix",
+    )
 
 
 @pytest.mark.asyncio
