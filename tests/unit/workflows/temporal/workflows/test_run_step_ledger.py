@@ -149,6 +149,113 @@ def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPa
     assert progress["canceled"] == 1
 
 
+def test_run_terminal_success_clears_previous_last_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+    workflow._mark_step_running("prepare", updated_at=now, summary="Preparing workspace")
+    workflow._mark_step_terminal(
+        "prepare",
+        status="failed",
+        updated_at=now,
+        summary="Workspace failed",
+        last_error="pytest failed",
+    )
+    workflow._mark_step_running("prepare", updated_at=now, summary="Retrying workspace")
+    workflow._mark_step_terminal(
+        "prepare",
+        status="succeeded",
+        updated_at=now,
+        summary="Workspace ready",
+        last_error=None,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+
+    assert step["status"] == "succeeded"
+    assert step["lastError"] is None
+
+
+def test_run_missing_step_ledger_updates_do_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    workflow._mark_step_running("missing-step", updated_at=now, summary="Ignored")
+    workflow._mark_step_waiting(
+        "missing-step",
+        status="reviewing",
+        updated_at=now,
+        waiting_reason="Ignored",
+        summary="Ignored",
+    )
+    workflow._mark_step_terminal(
+        "missing-step",
+        status="failed",
+        updated_at=now,
+        summary="Ignored",
+        last_error="ignored",
+    )
+
+    progress = workflow.get_progress()
+    assert progress["ready"] == 1
+    assert progress["pending"] == 1
+    assert progress["running"] == 0
+
+
+def test_plan_dependency_map_rewrites_bundled_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    bundle_id = "wf-run-1:jules-bundle:step-1:step-2"
+
+    dependency_map = workflow._plan_dependency_map(
+        ordered_nodes=[
+            {
+                "id": "prepare",
+                "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+            },
+            {
+                "id": bundle_id,
+                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "inputs": {"bundledNodeIds": ["step-1", "step-2"]},
+            },
+            {
+                "id": "publish",
+                "tool": {"type": "skill", "name": "repo.publish", "version": "1"},
+            },
+        ],
+        edges=(
+            SimpleNamespace(from_node="prepare", to_node="step-1"),
+            SimpleNamespace(from_node="step-1", to_node="step-2"),
+            SimpleNamespace(from_node="step-2", to_node="publish"),
+        ),
+    )
+
+    assert dependency_map == {
+        "prepare": [],
+        bundle_id: ["prepare"],
+        "publish": [bundle_id],
+    }
+
+
 def test_run_queries_remain_available_after_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

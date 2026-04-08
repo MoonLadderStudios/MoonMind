@@ -40,8 +40,11 @@ def build_initial_step_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     updated_at_iso = updated_at.isoformat()
-    for order, node in enumerate(ordered_nodes, start=1):
+    for node in ordered_nodes:
         node_id = str(node.get("id") or "").strip()
+        if not node_id:
+            continue
+        order = len(rows) + 1
         tool = dict(node.get("tool") or node.get("skill") or {})
         inputs = dict(node.get("inputs") or {})
         title = (

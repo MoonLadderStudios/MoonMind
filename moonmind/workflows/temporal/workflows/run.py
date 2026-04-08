@@ -76,6 +76,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
+_TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
@@ -217,7 +218,6 @@ class MoonMindRunWorkflow:
         self._last_step_id: Optional[str] = None
         self._last_step_summary: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
-        self._active_step_id: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int = 0
@@ -468,16 +468,78 @@ class MoonMindRunWorkflow:
         edges: tuple[Any, ...],
     ) -> dict[str, list[str]]:
         dependency_map = {
-            str(node.get("id") or "").strip(): []
+            str(node.get("id") or "").strip(): set()
             for node in ordered_nodes
             if str(node.get("id") or "").strip()
         }
+        bundle_id_by_member_id: dict[str, str] = {}
+        for node in ordered_nodes:
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            node_inputs = node.get("inputs")
+            candidates: list[Any] = [
+                node.get("bundledNodeIds"),
+                node.get("bundled_node_ids"),
+            ]
+            if isinstance(node_inputs, Mapping):
+                candidates.extend(
+                    [
+                        node_inputs.get("bundledNodeIds"),
+                        node_inputs.get("bundled_node_ids"),
+                        node_inputs.get("bundleNodeIds"),
+                        node_inputs.get("bundle_node_ids"),
+                    ]
+                )
+            for candidate in candidates:
+                if not isinstance(candidate, (list, tuple, set)):
+                    continue
+                for member_id in candidate:
+                    normalized_member_id = str(member_id or "").strip()
+                    if normalized_member_id and normalized_member_id != node_id:
+                        bundle_id_by_member_id[normalized_member_id] = node_id
         for edge in edges:
             from_node = str(getattr(edge, "from_node", "") or "").strip()
             to_node = str(getattr(edge, "to_node", "") or "").strip()
-            if to_node in dependency_map and from_node:
-                dependency_map[to_node].append(from_node)
-        return dependency_map
+            if not from_node or not to_node:
+                continue
+            mapped_from_node = bundle_id_by_member_id.get(from_node, from_node)
+            mapped_to_node = bundle_id_by_member_id.get(to_node, to_node)
+            if mapped_from_node == mapped_to_node:
+                continue
+            if (
+                mapped_to_node not in dependency_map
+                or mapped_from_node not in dependency_map
+            ):
+                continue
+            dependency_map[mapped_to_node].add(mapped_from_node)
+        return {
+            node_id: sorted(dependencies)
+            for node_id, dependencies in dependency_map.items()
+        }
+
+    def _try_update_step_row(
+        self,
+        logical_step_id: str,
+        **update_kwargs: Any,
+    ) -> bool:
+        try:
+            update_step_row(
+                self._step_ledger_rows,
+                logical_step_id,
+                **update_kwargs,
+            )
+        except KeyError:
+            self._get_logger().warning(
+                "Skipping step-ledger update for unknown logical step id %s",
+                logical_step_id,
+                extra={
+                    "event": "step_ledger_unknown_step",
+                    "logical_step_id": logical_step_id,
+                },
+            )
+            return False
+        return True
 
     def _sync_progress_snapshot(self, *, updated_at: datetime) -> None:
         self._progress_snapshot = build_progress_summary(
@@ -506,9 +568,7 @@ class MoonMindRunWorkflow:
         updated_at: datetime,
         summary: str | None = None,
     ) -> None:
-        self._active_step_id = logical_step_id
-        update_step_row(
-            self._step_ledger_rows,
+        if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
             status="running",
@@ -517,7 +577,8 @@ class MoonMindRunWorkflow:
             attention_required=False,
             increment_attempt=True,
             set_started_at=True,
-        )
+        ):
+            return
         self._sync_progress_snapshot(updated_at=updated_at)
 
     def _mark_step_waiting(
@@ -530,15 +591,15 @@ class MoonMindRunWorkflow:
         summary: str | None = None,
         attention_required: bool = False,
     ) -> None:
-        update_step_row(
-            self._step_ledger_rows,
+        if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
             status=status,
             summary=summary,
             waiting_reason=waiting_reason,
             attention_required=attention_required,
-        )
+        ):
+            return
         self._sync_progress_snapshot(updated_at=updated_at)
 
     def _mark_step_terminal(
@@ -548,22 +609,20 @@ class MoonMindRunWorkflow:
         status: str,
         updated_at: datetime,
         summary: str | None = None,
-        last_error: str | None | object = None,
+        last_error: str | None | object = _TERMINAL_LAST_ERROR_UNSET,
     ) -> None:
         update_kwargs: dict[str, Any] = {
             "updated_at": updated_at,
             "status": status,
             "summary": summary,
         }
-        if last_error is not None:
+        if last_error is not _TERMINAL_LAST_ERROR_UNSET:
             update_kwargs["last_error"] = last_error
-        update_step_row(
-            self._step_ledger_rows,
+        if not self._try_update_step_row(
             logical_step_id,
             **update_kwargs,
-        )
-        if self._active_step_id == logical_step_id:
-            self._active_step_id = None
+        ):
+            return
         self._sync_progress_snapshot(updated_at=updated_at)
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:

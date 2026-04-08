@@ -13,6 +13,7 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    update_step_row,
 )
 
 
@@ -47,6 +48,59 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[1]["status"] == "pending"
     assert rows[1]["dependsOn"] == ["step-1"]
     assert rows[1]["tool"] == {"type": "skill", "name": "repo.test", "version": "1"}
+
+
+def test_build_initial_step_rows_skips_blank_node_ids() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "",
+                "tool": {"type": "skill", "name": "repo.invalid", "version": "1"},
+            },
+            {
+                "id": "step-2",
+                "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+                "inputs": {"title": "Run tests"},
+            },
+        ],
+        dependency_map={"step-2": []},
+        updated_at=updated_at,
+    )
+
+    assert rows == [
+        {
+            "logicalStepId": "step-2",
+            "order": 1,
+            "title": "Run tests",
+            "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+            "dependsOn": [],
+            "status": "ready",
+            "waitingReason": None,
+            "attentionRequired": False,
+            "attempt": 0,
+            "startedAt": None,
+            "updatedAt": updated_at.isoformat(),
+            "summary": None,
+            "checks": [],
+            "refs": {
+                "childWorkflowId": None,
+                "childRunId": None,
+                "taskRunId": None,
+            },
+            "artifacts": {
+                "outputSummary": None,
+                "outputPrimary": None,
+                "runtimeStdout": None,
+                "runtimeStderr": None,
+                "runtimeMergedLogs": None,
+                "runtimeDiagnostics": None,
+                "providerSnapshot": None,
+            },
+            "lastError": None,
+        }
+    ]
 
 
 def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> None:
@@ -252,3 +306,36 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
     }
+
+
+def test_update_step_row_allows_explicit_last_error_clear() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=updated_at,
+    )
+
+    update_step_row(
+        rows,
+        "run-tests",
+        updated_at=updated_at,
+        status="failed",
+        last_error="pytest failed",
+    )
+    update_step_row(
+        rows,
+        "run-tests",
+        updated_at=updated_at,
+        status="succeeded",
+        last_error=None,
+    )
+
+    assert rows[0]["status"] == "succeeded"
+    assert rows[0]["lastError"] is None
