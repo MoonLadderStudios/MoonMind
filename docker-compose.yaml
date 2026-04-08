@@ -615,7 +615,7 @@ services:
   agent-workspaces-init:
     image: alpine:3.20
     command: >-
-      sh -lc "mkdir -p /work/agent_jobs && chown -R 1000:1000 /work/agent_jobs && chmod 0775 /work/agent_jobs"
+      sh -lc "for dir in /work/agent_jobs /work/agent_jobs/artifacts /work/agent_jobs/managed_runs /work/agent_jobs/managed_sessions /work/agent_jobs/workspaces; do mkdir -p \"$dir\" && chown 1000:1000 \"$dir\" && chmod 0775 \"$dir\"; done"
     volumes:
       - agent_workspaces:/work/agent_jobs
     restart: "no"

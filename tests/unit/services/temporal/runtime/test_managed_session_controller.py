@@ -114,6 +114,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert commands[0] == ("docker", "rm", "-f", "mm-codex-session-sess-1")
     run_command = commands[1]
     assert "--name" in run_command
+    assert "--user" in run_command
+    assert "1000:1000" in run_command
     assert "--mount" in run_command
     assert "-v" not in run_command
     assert request.image_ref in run_command
@@ -1254,6 +1256,8 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
 
     run_command = commands[1]
     assert "-v" not in run_command
+    assert "--user" in run_command
+    assert "1000:1000" in run_command
     assert "--mount" in run_command
     assert (
         "type=volume,src=codex_auth_volume,"

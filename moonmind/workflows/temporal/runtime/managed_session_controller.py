@@ -36,6 +36,7 @@ from .managed_session_supervisor import ManagedSessionSupervisor
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+_MANAGED_SESSION_CONTAINER_USER = "1000:1000"
 
 
 class CommandRunner(Protocol):
@@ -470,6 +471,8 @@ class DockerCodexManagedSessionController:
             "-d",
             "--name",
             container_name,
+            "--user",
+            _MANAGED_SESSION_CONTAINER_USER,
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
             "--mount",
