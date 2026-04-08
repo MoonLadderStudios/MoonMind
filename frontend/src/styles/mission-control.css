@@ -105,7 +105,7 @@ body {
 
 .masthead-title-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
@@ -134,29 +134,20 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.25rem 0.6rem;
-  border-radius: 0.35rem;
-  background: rgb(var(--mm-accent) / 0.1);
-  border: 1px solid rgb(var(--mm-accent) / 0.25);
+  padding: 0.18rem 0.56rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-muted) / 0.12);
   white-space: nowrap;
-  line-height: 1.4;
+  line-height: 1.2;
   margin-left: auto;
-}
-
-.version-badge-label {
-  font-size: 0.65rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: rgb(var(--mm-accent) / 0.7);
+  opacity: 0.72;
 }
 
 .version-badge-value {
   font-family: "IBM Plex Mono", "Fira Code", monospace;
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   font-weight: 600;
-  color: rgb(var(--mm-accent) / 0.95);
+  color: rgb(var(--mm-muted) / 0.95);
   letter-spacing: 0.02em;
 }
 

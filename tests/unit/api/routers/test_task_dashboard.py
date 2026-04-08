@@ -269,8 +269,8 @@ def test_react_shell_renders_build_metadata_with_accurate_labels(
 
     assert response.status_code == 200
     assert 'title="MoonMind image version"' in response.text
-    assert '<span class="version-badge-label">MoonMind</span>' in response.text
-    assert "20260408.1703" in response.text
+    assert '<span class="version-badge-value">v20260408.1703</span>' in response.text
+    assert "MoonMind</span>" not in response.text
     assert 'title="Codex CLI version"' not in response.text
 
 
@@ -285,7 +285,7 @@ def test_react_shell_places_operator_metadata_in_title_row(
     assert response.status_code == 200
     assert 'class="masthead-title-meta"' in response.text
     assert 'title="MoonMind image version"' in response.text
-    assert "20260408.1703" in response.text
+    assert "v20260408.1703" in response.text
     assert 'class="masthead-meta"' not in response.text
 
 
