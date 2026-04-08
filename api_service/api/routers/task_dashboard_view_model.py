@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-import socket
 from copy import deepcopy
 from typing import Any
 
 from moonmind.config.settings import settings
+from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.tasks.runtime_defaults import (
     DEFAULT_REPOSITORY,
     normalize_runtime_id,
@@ -22,7 +22,6 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "gemini_cli", "claude_code", "jules", "universal")
-_HOSTNAME = socket.gethostname()
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
@@ -121,12 +120,9 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
 def _build_dashboard_system_metadata() -> dict[str, str | None]:
     """Return operator-facing build metadata for the dashboard shell and runtime config."""
 
-    build_id = str(os.environ.get("MOONMIND_BUILD_ID", "")).strip() or None
-    codex_cli_version = str(os.environ.get("CODEX_CLI_VERSION", "")).strip() or None
+    build_id = resolve_moonmind_build_id()
     return {
         "buildId": build_id,
-        "codexCliVersion": codex_cli_version,
-        "hostname": _HOSTNAME,
     }
 
 

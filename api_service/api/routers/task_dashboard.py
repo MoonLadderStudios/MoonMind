@@ -279,8 +279,6 @@ def _render_react_page(
             "assets_html": assets_html,
             "current_path": current_path,
             "build_id": system_config.get("buildId"),
-            "codex_cli_version": system_config.get("codexCliVersion"),
-            "hostname": system_config.get("hostname"),
         },
     )
 

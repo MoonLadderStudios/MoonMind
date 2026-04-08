@@ -111,6 +111,25 @@ body {
   flex-wrap: wrap;
 }
 
+.masthead-title-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.masthead-title-meta .version-badge {
+  margin-left: 0;
+}
+
+.masthead-title-meta .masthead-meta-item {
+  max-width: none;
+}
+
 .version-badge {
   display: inline-flex;
   align-items: center;
@@ -1141,6 +1160,11 @@ button.secondary:hover {
   .masthead-title-row {
     width: 100%;
     align-items: flex-start;
+  }
+
+  .masthead-title-meta {
+    margin-left: 0;
+    justify-content: flex-start;
   }
 
   .version-badge {

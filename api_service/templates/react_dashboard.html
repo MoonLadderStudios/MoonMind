@@ -48,23 +48,14 @@
           <div class="masthead-title-row">
             <h1>Mission Control</h1>
             {% if build_id %}
-            <div class="version-badge" title="Build version">
-              <span class="version-badge-label">Version</span>
-              <span class="version-badge-value">{{ build_id }}</span>
+            <div class="masthead-title-meta">
+              <div class="version-badge" title="MoonMind image version">
+                <span class="version-badge-label">MoonMind</span>
+                <span class="version-badge-value">{{ build_id }}</span>
+              </div>
             </div>
             {% endif %}
           </div>
-          <p class="masthead-meta">
-            {% if build_id %}
-            <span class="masthead-meta-item" title="Build version">{{ build_id }}</span>
-            {% endif %}
-            {% if codex_cli_version %}
-            <span class="masthead-meta-item" title="Codex CLI version">{{ codex_cli_version }}</span>
-            {% endif %}
-            {% if hostname %}
-            <span class="masthead-meta-item" title="Hostname">{{ hostname }}</span>
-            {% endif %}
-          </p>
         </div>
       </header>
 

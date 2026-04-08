@@ -6,7 +6,7 @@ This document outlines the operational procedures for deploying updates to MoonM
 
 MoonMind uses the Temporal Python SDK's worker versioning APIs (`build_id` on the worker). Your **Temporal Server must support worker versioning** for the namespace where MoonMind runs; if the cluster is too old or the feature is disabled for that namespace, workers may fail to start—check server release notes and namespace settings before rolling this out.
 
-When a worker starts, it registers a unique `build_id` from the `MOONMIND_BUILD_ID` environment variable. If not set, it falls back to the current Git SHA (or `"unknown"` if Git metadata is unavailable, e.g. in minimal images).
+When a worker starts, it registers a unique `build_id` from the `MOONMIND_BUILD_ID` environment variable. If that is unset, it falls back to the build id baked into the Docker image at image build time. If neither source exists, it falls back to the current Git SHA (or `"unknown"` if Git metadata is unavailable, e.g. in minimal images).
 
 ```bash
 # Example deployment
