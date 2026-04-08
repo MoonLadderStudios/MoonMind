@@ -161,10 +161,21 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert diagnostics_payload["observability_events"][0]["stream"] == "session"
     assert diagnostics_payload["observability_events"][0]["kind"] == "session_cleared"
     assert diagnostics_payload["observability_events"][0]["metadata"]["reason"] == "operator_reset"
+    assert [
+        event["kind"] for event in diagnostics_payload["observability_events"]
+    ] == [
+        "session_cleared",
+        "summary_published",
+        "checkpoint_published",
+    ]
     assert snapshot.observability_events_ref == "sess-1/observability.events.jsonl"
     journal = artifact_storage.resolve_storage_path(snapshot.observability_events_ref)
     assert journal.exists()
-    assert '"stream":"session"' in journal.read_text(encoding="utf-8")
+    journal_text = journal.read_text(encoding="utf-8")
+    assert '"stream":"session"' in journal_text
+    assert '"kind":"summary_published"' in journal_text
+    assert '"kind":"checkpoint_published"' in journal_text
+    assert log_streamer.consume_observability_events(record.task_run_id) == []
 
 
 @pytest.mark.asyncio
@@ -286,5 +297,44 @@ async def test_publish_reset_artifacts_preserves_newer_store_fields(tmp_path: Pa
 
     assert published.last_log_offset == 77
     assert published.last_log_at == datetime(2026, 4, 7, 8, 1, tzinfo=UTC)
+    assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
+    assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
+
+
+@pytest.mark.asyncio
+async def test_publish_reset_artifacts_tolerates_event_publication_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    previous = _record(tmp_path)
+    store.save(previous)
+    current = previous.model_copy(
+        update={
+            "session_epoch": 2,
+            "thread_id": "thread-2",
+            "updated_at": datetime(2026, 4, 7, 8, 0, tzinfo=UTC),
+        }
+    )
+
+    def _raise(*args, **kwargs) -> None:
+        raise RuntimeError("publisher unavailable")
+
+    monkeypatch.setattr(supervisor._log_streamer, "emit_observability_event", _raise)
+
+    published = await supervisor.publish_reset_artifacts(
+        previous_record=previous,
+        record=current,
+        action="clear_session",
+        reason="reset stale context",
+    )
+
     assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
