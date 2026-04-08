@@ -175,14 +175,26 @@ def _manifest_tree_is_usable(
     return True
 
 
+def _dist_root_manifest_mtime_ns(dist_root: Path) -> int:
+    manifest_path = _manifest_path_for_dist_root(dist_root)
+    try:
+        return manifest_path.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
 def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Path:
     configured_manifest_path = _configured_manifest_path()
     if configured_manifest_path:
         return _dist_root_for_manifest(configured_manifest_path)
 
+    usable_candidates: list[Path] = []
     for candidate in (local_ui_dist_root(), bundled_ui_dist_root()):
         if _manifest_tree_is_usable(candidate, entrypoint):
-            return candidate
+            usable_candidates.append(candidate)
+
+    if usable_candidates:
+        return max(usable_candidates, key=_dist_root_manifest_mtime_ns)
 
     local_root = local_ui_dist_root()
     if _manifest_path_for_dist_root(local_root).exists():
