@@ -178,6 +178,7 @@ def _publication(
             "artifact:stdout",
             "artifact:stderr",
             "artifact:diagnostics",
+            "artifact:observability.events.jsonl",
             "artifact:session-summary",
             "artifact:session-checkpoint",
         ),
@@ -299,6 +300,10 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"
+    assert (
+        persisted_record.observability_events_ref
+        == "artifact:observability.events.jsonl"
+    )
     assert persisted_record.live_stream_capable is False
     assert status.status == "completed"
     assert result.summary == "Implemented through the session container."
@@ -307,6 +312,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         "artifact:stdout",
         "artifact:stderr",
         "artifact:diagnostics",
+        "artifact:observability.events.jsonl",
         "artifact:session-summary",
         "artifact:session-checkpoint",
     ]

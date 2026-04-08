@@ -436,6 +436,7 @@ class CodexManagedSessionRecord(BaseModel):
             self.stdout_artifact_ref,
             self.stderr_artifact_ref,
             self.diagnostics_ref,
+            self.observability_events_ref,
             self.latest_summary_ref,
             self.latest_checkpoint_ref,
             self.latest_control_event_ref,

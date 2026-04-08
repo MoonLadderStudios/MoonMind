@@ -707,6 +707,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     return ref
                 if normalized_kind == "diagnostics" and "diagnostics" in lowered:
                     return ref
+                if (
+                    normalized_kind == "observability"
+                    and "observability.events" in lowered
+                ):
+                    return ref
             return fallback
 
         runtime_id = self._runtime_id or "codex_cli"
@@ -751,9 +756,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             observabilityEventsRef=_artifact_ref(
                 session_artifact_metadata.get("observabilityEventsRef"),
                 fallback=(
-                    existing.observability_events_ref
-                    if existing is not None
-                    else None
+                    _infer_runtime_artifact_ref(
+                        "observability",
+                        fallback=(
+                            existing.observability_events_ref
+                            if existing is not None
+                            else None
+                        ),
+                    )
                 ),
             ),
             errorMessage=summary if status != "completed" else None,

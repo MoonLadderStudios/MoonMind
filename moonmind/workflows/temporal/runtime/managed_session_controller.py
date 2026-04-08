@@ -699,6 +699,7 @@ class DockerCodexManagedSessionController:
                 "stdoutArtifactRef": record.stdout_artifact_ref,
                 "stderrArtifactRef": record.stderr_artifact_ref,
                 "diagnosticsRef": record.diagnostics_ref,
+                "observabilityEventsRef": record.observability_events_ref,
                 "errorMessage": record.error_message,
             },
         )
@@ -733,6 +734,7 @@ class DockerCodexManagedSessionController:
                 "stdoutArtifactRef": record.stdout_artifact_ref,
                 "stderrArtifactRef": record.stderr_artifact_ref,
                 "diagnosticsRef": record.diagnostics_ref,
+                "observabilityEventsRef": record.observability_events_ref,
             },
         )
 
