@@ -321,6 +321,11 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert result.metadata["sessionArtifacts"]["latestCheckpointRef"] == "artifact:session-checkpoint"
 
     assert attach_calls == [{"containerId": "container-1", "threadId": "thread-1"}]
+    assert control_calls[0] == {
+        "action": "start_session",
+        "containerId": "container-1",
+        "threadId": "thread-1",
+    }
     assert control_calls[-1]["action"] == "send_turn"
     assert control_calls[-1]["containerId"] == "container-1"
     assert control_calls[-1]["threadId"] == "thread-1"
@@ -457,6 +462,7 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
 ) -> None:
     binding = _binding()
     session_status_calls: list[Any] = []
+    control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(
@@ -501,6 +507,9 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
             thread_id="thread-existing",
         )
 
+    async def _apply_control_action(payload: dict[str, Any]) -> None:
+        control_calls.append(payload)
+
     adapter = CodexSessionAdapter(
         profile_fetcher=_fake_profiles(
             [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
@@ -521,7 +530,7 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        apply_session_control_action=_apply_control_action,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -532,6 +541,11 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
     assert len(session_status_calls) == 1
     assert session_status_calls[0].container_id == "container-existing"
     assert session_status_calls[0].thread_id == "thread-existing"
+    assert control_calls[0] == {
+        "action": "resume_session",
+        "containerId": "container-existing",
+        "threadId": "thread-existing",
+    }
 
 
 async def test_clear_session_rotates_epoch_and_signals_session_workflow(

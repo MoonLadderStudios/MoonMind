@@ -28,7 +28,6 @@ from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
 from moonmind.workflows.tasks.routing import _coerce_bool
-from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.auth.env_shaping import _should_filter_base_env_var
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
@@ -99,6 +98,10 @@ from moonmind.workflows.temporal.manifest_ingest import (
     compile_manifest_plan,
     plan_nodes_to_runtime_nodes,
 )
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    shape_launch_github_auth_environment,
+)
+from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 
 
 
@@ -2719,6 +2722,18 @@ class TemporalAgentRuntimeActivities:
                 f"{activity_type} returned an invalid session contract payload"
             ) from exc
 
+    @staticmethod
+    async def _shape_launch_session_request(
+        request: LaunchCodexManagedSessionRequest,
+    ) -> LaunchCodexManagedSessionRequest:
+        """Resolve runtime-only auth immediately before remote session launch."""
+
+        environment = await shape_launch_github_auth_environment(
+            request.environment,
+            ambient_github_token=os.environ.get("GITHUB_TOKEN"),
+        )
+        return request.model_copy(update={"environment": environment})
+
     async def agent_runtime_launch_session(
         self,
         request: Mapping[str, Any] | LaunchCodexManagedSessionRequest | None = None,
@@ -2732,7 +2747,14 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.launch_session",
             model_type=LaunchCodexManagedSessionRequest,
         )
-        response = await controller.launch_session(validated)
+        validated = await self._shape_launch_session_request(validated)
+        try:
+            response = await controller.launch_session(validated)
+        except Exception as exc:
+            detail = self._sanitize_operator_summary(str(exc)) or "managed session launch failed"
+            raise TemporalActivityRuntimeError(
+                f"agent_runtime.launch_session failed: {detail}"
+            ) from exc
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.launch_session",

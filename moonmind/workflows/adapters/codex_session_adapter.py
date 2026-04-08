@@ -552,7 +552,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     ) -> CodexManagedSessionHandle:
         snapshot = await self._load_snapshot(binding.workflow_id)
         if snapshot.container_id and snapshot.thread_id:
-            return await self._coerce_handle(
+            handle = await self._coerce_handle(
                 self._session_status(
                     CodexManagedSessionLocator(
                         sessionId=binding.session_id,
@@ -562,6 +562,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                 )
             )
+            await self._signal_control_action(
+                action="resume_session",
+                reason=None,
+                container_id=handle.session_state.container_id,
+                thread_id=handle.session_state.thread_id,
+                active_turn_id=handle.session_state.active_turn_id,
+            )
+            return handle
 
         active_binding = snapshot.binding
         launch_request = LaunchCodexManagedSessionRequest(
@@ -588,6 +596,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "containerId": handle.session_state.container_id,
                 "threadId": handle.session_state.thread_id,
             }
+        )
+        await self._signal_control_action(
+            action="start_session",
+            reason=None,
+            container_id=handle.session_state.container_id,
+            thread_id=handle.session_state.thread_id,
+            active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
 

@@ -29,6 +29,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
+    LaunchCodexManagedSessionRequest,
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal import client as temporal_client_module
@@ -360,6 +361,124 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
+
+
+async def test_launch_session_injects_github_token_from_activity_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-ambient-token")
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "environment": {"PATH": "/usr/bin"},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["PATH"] == "/usr/bin"
+    assert launched_request.environment["GITHUB_TOKEN"] == "ghp-ambient-token"
+    assert launched_request.environment["GIT_TERMINAL_PROMPT"] == "0"
+
+
+async def test_launch_session_injects_github_token_from_managed_secret_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_store_token() -> str:
+        return "ghp-managed-secret"
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["GITHUB_TOKEN"] == "ghp-managed-secret"
+    assert launched_request.environment["GIT_TERMINAL_PROMPT"] == "0"
+
+
+async def test_launch_session_redacts_github_token_in_failure_details() -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        side_effect=RuntimeError(
+            "docker run -e GITHUB_TOKEN=ghp_inline_secret_token_12345678901234567890 failed"
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="agent_runtime\\.launch_session failed:",
+    ) as exc_info:
+        await activities.agent_runtime_launch_session(
+            {
+                "taskRunId": "task-1",
+                "sessionId": "sess-1",
+                "threadId": "thread-1",
+                "workspacePath": "/work/task/repo",
+                "sessionWorkspacePath": "/work/task/session",
+                "artifactSpoolPath": "/work/task/artifacts",
+                "codexHomePath": "/work/task/codex-home",
+                "imageRef": "moonmind:latest",
+                "environment": {"PATH": "/usr/bin"},
+            }
+        )
+
+    message = str(exc_info.value)
+    assert "ghp_inline_secret_token_12345678901234567890" not in message
+    assert "[REDACTED]" in message
 
 
 async def test_load_session_snapshot_queries_session_workflow_via_client_boundary(
@@ -1212,12 +1331,19 @@ class AgentRuntimeSendTurnBoundaryTest:
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_launch_session_temporal_boundary() -> None:
+async def test_agent_runtime_launch_session_temporal_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from temporalio import activity
 
-    controller = AsyncMock()
-    controller.launch_session = AsyncMock(
-        return_value=CodexManagedSessionHandle(
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs-boundary-token")
+    captured_request: dict[str, Any] = {}
+
+    async def _capture_launch_session(
+        request: LaunchCodexManagedSessionRequest,
+    ) -> CodexManagedSessionHandle:
+        captured_request["request"] = request
+        return CodexManagedSessionHandle(
             sessionState={
                 "sessionId": "sess-boundary",
                 "sessionEpoch": 1,
@@ -1227,7 +1353,9 @@ async def test_agent_runtime_launch_session_temporal_boundary() -> None:
             status="ready",
             imageRef="moonmind:latest",
         )
-    )
+
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(side_effect=_capture_launch_session)
     activities_impl = TemporalAgentRuntimeActivities(session_controller=controller)
 
     @activity.defn(name="agent_runtime.launch_session")
@@ -1262,6 +1390,9 @@ async def test_agent_runtime_launch_session_temporal_boundary() -> None:
 
             assert isinstance(result, CodexManagedSessionHandle)
             assert result.session_state.container_id == "ctr-boundary"
+            launch_request = captured_request["request"]
+            assert launch_request.environment["GITHUB_TOKEN"] == "ghs-boundary-token"
+            assert launch_request.environment["GIT_TERMINAL_PROMPT"] == "0"
 
 
 @pytest.mark.asyncio

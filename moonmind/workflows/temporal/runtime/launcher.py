@@ -25,6 +25,7 @@ from moonmind.utils.logging import SecretRedactor
 from .github_auth_broker import GitHubAuthBrokerManager
 from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
+from .managed_api_key_resolve import resolve_github_token_for_launch
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _MANAGED_RUNTIME_ATLASSIAN_ENV_PREFIX_BLOCKLIST: frozenset[str] = frozenset(
@@ -394,44 +395,6 @@ class ManagedRuntimeLauncher:
                 )
 
         return str(repo_path)
-
-    @staticmethod
-    async def _resolve_github_token_for_launch(env: dict[str, str]) -> str | None:
-        token = env.get("GITHUB_TOKEN", "").strip()
-        if token:
-            return token
-
-        from moonmind.config.settings import settings as _mm_settings
-        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-            resolve_managed_api_key_reference,
-            resolve_managed_github_token_from_store,
-        )
-
-        secret_ref = str(
-            getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
-        ).strip()
-        if secret_ref:
-            try:
-                return await resolve_managed_api_key_reference(secret_ref)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning(
-                    "Failed to resolve GitHub token secret ref for managed runtime launch",
-                    exc_info=True,
-                )
-
-        try:
-            store_token = await resolve_managed_github_token_from_store()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning(
-                "Failed to resolve GitHub token from managed secrets store",
-                exc_info=True,
-            )
-            return None
-        return store_token
 
     @staticmethod
     def _runtime_requires_direct_github_env(runtime_id: str | None) -> bool:
@@ -829,7 +792,7 @@ class ManagedRuntimeLauncher:
             env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
             env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
-        github_token = await self._resolve_github_token_for_launch(env_overrides)
+        github_token = await resolve_github_token_for_launch(env_overrides)
         cleanup_paths: list[str] = list(materializer.generated_files)
         cleanup_paths.extend(reversed(materializer.generated_dirs))
         deferred_cleanup_paths: list[str] = []
