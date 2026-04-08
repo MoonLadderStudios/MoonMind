@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -12,6 +13,8 @@ from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
 from .log_streamer import RuntimeLogStreamer
 from .managed_session_store import ManagedSessionStore
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactStorageWriter(Protocol):
@@ -73,20 +76,29 @@ class ManagedSessionSupervisor:
         metadata: dict[str, object] | None = None,
     ) -> None:
         """Publish one session-aware observability row into the run-level stream."""
-        self._log_streamer.emit_observability_event(
-            run_id=record.task_run_id,
-            workspace_path=record.workspace_path,
-            stream="session",
-            text=text,
-            kind=kind,
-            session_id=record.session_id,
-            session_epoch=record.session_epoch,
-            container_id=record.container_id,
-            thread_id=record.thread_id,
-            turn_id=turn_id,
-            active_turn_id=active_turn_id if active_turn_id is not None else record.active_turn_id,
-            metadata=dict(metadata or {}),
-        )
+        try:
+            self._log_streamer.emit_observability_event(
+                run_id=record.task_run_id,
+                workspace_path=record.workspace_path,
+                stream="session",
+                text=text,
+                kind=kind,
+                session_id=record.session_id,
+                session_epoch=record.session_epoch,
+                container_id=record.container_id,
+                thread_id=record.thread_id,
+                turn_id=turn_id,
+                active_turn_id=active_turn_id if active_turn_id is not None else record.active_turn_id,
+                metadata=dict(metadata or {}),
+            )
+        except Exception:
+            logger.warning(
+                "Session observability publication failed for task run %s session %s kind %s",
+                record.task_run_id,
+                record.session_id,
+                kind,
+                exc_info=True,
+            )
 
     async def _watch(self, session_id: str) -> None:
         stop_event = self._stop_events[session_id]
@@ -152,12 +164,6 @@ class ManagedSessionSupervisor:
         status: str,
         error_message: str | None,
     ) -> CodexManagedSessionRecord:
-        observability_events_ref = await asyncio.to_thread(
-            self._log_streamer.persist_observability_events,
-            run_id=record.task_run_id,
-            workspace_path=record.workspace_path,
-            artifact_job_id=record.session_id,
-        )
         stdout_bytes, stderr_bytes = self._read_spool_bytes(record)
         _, stdout_ref = self._artifact_storage.write_artifact(
             job_id=record.session_id,
@@ -208,6 +214,24 @@ class ManagedSessionSupervisor:
                 },
                 "recordUpdatedAt": datetime.now(tz=UTC).isoformat(),
             },
+        )
+        self.emit_session_event(
+            record=record,
+            kind="summary_published",
+            text=f"Session summary published for {record.session_id}.",
+            metadata={"summaryRef": summary_ref, "status": status},
+        )
+        self.emit_session_event(
+            record=record,
+            kind="checkpoint_published",
+            text=f"Session checkpoint published for {record.session_id}.",
+            metadata={"checkpointRef": checkpoint_ref, "status": status},
+        )
+        observability_events_ref = await asyncio.to_thread(
+            self._log_streamer.persist_observability_events,
+            run_id=record.task_run_id,
+            workspace_path=record.workspace_path,
+            artifact_job_id=record.session_id,
         )
         now = datetime.now(tz=UTC)
         return await self._store.update(
