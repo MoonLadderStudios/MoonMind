@@ -264,6 +264,13 @@ class TemporalDashboardSettings(BaseSettings):
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT"),
     )
 
+    @property
+    def steps_endpoint(self) -> str:
+        detail_endpoint = str(self.detail_endpoint or "").strip()
+        if not detail_endpoint:
+            return "/api/executions/{workflowId}/steps"
+        return f"{detail_endpoint.rstrip('/')}/steps"
+
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="",
