@@ -51,6 +51,7 @@ class CodexSessionRuntimeState(BaseModel):
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     logical_thread_id: str = Field(..., alias="logicalThreadId")
     vendor_thread_id: str = Field(..., alias="vendorThreadId")
+    vendor_thread_path: str | None = Field(None, alias="vendorThreadPath")
     container_id: str = Field(..., alias="containerId")
     active_turn_id: str | None = Field(None, alias="activeTurnId")
     launched_at: float | None = Field(None, alias="launchedAt")
@@ -225,7 +226,10 @@ class CodexAppServerRpcClient:
                 "clientInfo": {
                     "name": self._client_name,
                     "version": self._client_version,
-                }
+                },
+                "capabilities": {
+                    "experimentalApi": True,
+                },
             },
         )
         return self._initialize_result
@@ -435,6 +439,51 @@ class CodexManagedSessionRuntime:
                     return text.strip()
         return ""
 
+    def _find_vendor_thread_path(self, vendor_thread_id: str) -> str | None:
+        sessions_root = self._codex_home_path / "sessions"
+        if not sessions_root.is_dir():
+            return None
+        matches = sorted(sessions_root.rglob(f"*{vendor_thread_id}.jsonl"))
+        if not matches:
+            return None
+        return str(matches[-1])
+
+    def _resume_thread(
+        self,
+        *,
+        client: CodexAppServerRpcClient,
+        state: CodexSessionRuntimeState,
+    ) -> str:
+        thread_path = state.vendor_thread_path or self._find_vendor_thread_path(
+            state.vendor_thread_id
+        )
+        params: dict[str, Any] = {"threadId": state.vendor_thread_id}
+        if thread_path:
+            params["path"] = thread_path
+        try:
+            resumed = client.request("thread/resume", params)
+            thread_payload = resumed.get("thread")
+        except RuntimeError as exc:
+            message = str(exc)
+            if "no rollout found" not in message and "thread not found" not in message:
+                raise
+            started = client.request("thread/start", {"cwd": str(self._workspace_path)})
+            thread_payload = started.get("thread")
+        if not isinstance(thread_payload, Mapping):
+            raise RuntimeError(
+                "codex app-server thread/resume did not return a thread"
+            )
+        vendor_thread_id = str(thread_payload.get("id") or "").strip()
+        if not vendor_thread_id:
+            raise RuntimeError(
+                "codex app-server thread/resume returned a blank thread id"
+            )
+        state.vendor_thread_id = vendor_thread_id
+        state.vendor_thread_path = (
+            str(thread_payload.get("path") or thread_path or "").strip() or None
+        )
+        return vendor_thread_id
+
     def launch_session(
         self,
         request: LaunchCodexManagedSessionRequest,
@@ -449,12 +498,14 @@ class CodexManagedSessionRuntime:
         vendor_thread_id = str(thread_payload.get("id") or "").strip()
         if not vendor_thread_id:
             raise RuntimeError("codex app-server thread/start returned a blank thread id")
+        vendor_thread_path = str(thread_payload.get("path") or "").strip() or None
 
         state = CodexSessionRuntimeState(
             sessionId=request.session_id,
             sessionEpoch=request.session_epoch,
             logicalThreadId=request.thread_id,
             vendorThreadId=vendor_thread_id,
+            vendorThreadPath=vendor_thread_path,
             containerId=self._container_id,
             activeTurnId=None,
             launchedAt=time.time(),
@@ -490,14 +541,18 @@ class CodexManagedSessionRuntime:
         state = self._validate_locator(request)
         client = self._app_server_client()
         client.initialize()
+        vendor_thread_id = self._resume_thread(client=client, state=state)
 
         started = client.request(
             "turn/start",
             {
-                "threadId": state.vendor_thread_id,
-                "instructions": request.instructions,
-                "inputRefs": list(request.input_refs),
-                "metadata": request.metadata,
+                "threadId": vendor_thread_id,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": request.instructions,
+                    }
+                ],
             },
         )
         turn_payload = started.get("turn")
@@ -518,7 +573,7 @@ class CodexManagedSessionRuntime:
                 "turn/completed",
                 predicate=lambda message: (
                     isinstance(message.get("params"), Mapping)
-                    and message["params"].get("threadId") == state.vendor_thread_id
+                    and message["params"].get("threadId") == vendor_thread_id
                 ),
                 timeout_seconds=self._turn_completion_timeout_seconds,
             )
@@ -527,7 +582,7 @@ class CodexManagedSessionRuntime:
                 "timed out waiting for codex app-server turn/completed notification "
                 f"after {self._turn_completion_timeout_seconds} seconds"
             ) from exc
-        thread_payload = client.request("thread/read", {"threadId": state.vendor_thread_id})
+        thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
         assistant_text = self._extract_assistant_text(thread_payload)
 
         state.active_turn_id = None
@@ -611,10 +666,12 @@ class CodexManagedSessionRuntime:
         vendor_thread_id = str(thread_payload.get("id") or "").strip()
         if not vendor_thread_id:
             raise RuntimeError("codex app-server thread/start returned a blank thread id")
+        vendor_thread_path = str(thread_payload.get("path") or "").strip() or None
 
         state.session_epoch += 1
         state.logical_thread_id = request.new_thread_id
         state.vendor_thread_id = vendor_thread_id
+        state.vendor_thread_path = vendor_thread_path
         state.active_turn_id = None
         state.last_control_action = "clear_session"
         state.last_control_at = time.time()

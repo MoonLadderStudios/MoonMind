@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import inspect
 import json
@@ -157,6 +158,7 @@ _PUBLISH_GIT_ADD_EXCLUDES: tuple[str, ...] = (
     ":(exclude)live_streams.spool",
     ":(exclude).agents/skills/active",
 )
+_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 
 class ManagedSessionController(Protocol):
@@ -768,6 +770,36 @@ async def _maybe_call_heartbeat(
     result = callback(payload)
     if inspect.isawaitable(result):
         await result
+
+
+async def _await_with_activity_heartbeats(
+    awaitable: Awaitable[Any],
+    *,
+    heartbeat_payload: Mapping[str, Any],
+    interval_seconds: float | None = None,
+) -> Any:
+    from temporalio import activity
+
+    task = asyncio.ensure_future(awaitable)
+    try:
+        if not activity.in_activity():
+            return await task
+
+        heartbeat_interval = (
+            interval_seconds
+            if interval_seconds is not None
+            else _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS
+        )
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
+            if task in done:
+                return await task
+            activity.heartbeat(dict(heartbeat_payload))
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 class TemporalPlanActivities:
@@ -2758,7 +2790,15 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.send_turn",
             model_type=SendCodexManagedSessionTurnRequest,
         )
-        response = await controller.send_turn(validated)
+        response = await _await_with_activity_heartbeats(
+            controller.send_turn(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.send_turn",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+                "threadId": validated.thread_id,
+            },
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.send_turn",

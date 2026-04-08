@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -83,7 +84,6 @@ def _request(
         idempotencyKey="idem-1",
         instructionRef="artifact:instructions",
         managedSession=binding,
-        inputRefs=["artifact:input-1"],
         workspaceSpec=workspace_spec,
         parameters={"publishMode": "none"},
     )
@@ -284,9 +284,9 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert launch_request.artifact_spool_path.endswith(f"{binding.task_run_id}/artifacts")
     assert launch_request.codex_home_path.endswith(f"{binding.task_run_id}/.moonmind/codex-home")
     assert launch_request.image_ref == "ghcr.io/moonladderstudios/moonmind:latest"
+    assert launch_request.workspace_spec == {"workspacePath": str(workspace_path)}
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
-    assert send_turn_calls[0].input_refs == ("artifact:input-1",)
 
     assert handle.status == "completed"
     assert handle.metadata["sessionId"] == binding.session_id
@@ -318,6 +318,132 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert control_calls[-1]["action"] == "send_turn"
     assert control_calls[-1]["containerId"] == "container-1"
     assert control_calls[-1]["threadId"] == "thread-1"
+
+
+async def test_start_restores_context_injection_before_sending_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = _binding()
+    expected_workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    send_turn_calls: list[Any] = []
+
+    class _FakeContextInjectionService:
+        async def inject_context(
+            self,
+            *,
+            request: AgentExecutionRequest,
+            workspace_path: Path,
+        ) -> None:
+            assert workspace_path == expected_workspace_path
+            request.instruction_ref = "Injected context instruction"
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService",
+        _FakeContextInjectionService,
+    )
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed-runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    await adapter.start(_request(binding, workspace_path=str(expected_workspace_path)))
+
+    assert send_turn_calls
+    assert send_turn_calls[0].instructions.startswith("Injected context instruction")
+    assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
+
+
+async def test_start_rejects_non_text_input_refs_for_session_turns(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed-runs"),
+        load_session_snapshot=AsyncMock(),
+        launch_session=AsyncMock(),
+        session_status=AsyncMock(),
+        send_turn=AsyncMock(),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(),
+        publish_remote_artifacts=AsyncMock(),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    request = _request(binding).model_copy(update={"input_refs": ["artifact:input-1"]})
+
+    with pytest.raises(
+        ValueError,
+        match="does not support inputRefs",
+    ):
+        await adapter.start(request)
 
 
 async def test_start_reuses_existing_task_scoped_session_without_launching(

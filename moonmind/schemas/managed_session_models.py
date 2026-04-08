@@ -183,6 +183,7 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     codex_home_path: NonBlankStr = Field(..., alias="codexHomePath")
     image_ref: NonBlankStr = Field(..., alias="imageRef")
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+    workspace_spec: dict[str, Any] = Field(default_factory=dict, alias="workspaceSpec")
 
     @model_validator(mode="after")
     def _normalize_environment(self) -> "LaunchCodexManagedSessionRequest":
@@ -191,6 +192,11 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
             key = require_non_blank(str(raw_key), field_name="environment key")
             normalized[key] = str(raw_value)
         self.environment = normalized
+        self.workspace_spec = (
+            dict(self.workspace_spec)
+            if isinstance(self.workspace_spec, dict)
+            else {}
+        )
         return self
 
 
@@ -198,8 +204,7 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Send a new turn to the remote session container."""
 
     instructions: NonBlankStr = Field(..., alias="instructions")
-    input_refs: tuple[NonBlankStr, ...] = Field(default=(), alias="inputRefs")
-    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    reason: NonBlankStr | None = Field(None, alias="reason")
 
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):

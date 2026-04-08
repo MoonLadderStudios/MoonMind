@@ -7,6 +7,7 @@ agent_runtime_publish_artifacts return typed Pydantic contracts
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal import client as temporal_client_module
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
@@ -568,6 +570,80 @@ async def test_send_turn_delegates_to_remote_session_controller() -> None:
 
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.turn_id == "turn-1"
+
+
+async def test_send_turn_heartbeats_while_waiting_for_remote_session_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporalio import activity as temporal_activity
+
+    heartbeats: list[dict[str, Any]] = []
+
+    async def _slow_send_turn(
+        _request: Any,
+    ) -> CodexManagedSessionTurnResponse:
+        await asyncio.sleep(0.03)
+        return CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            },
+            turnId="turn-1",
+            status="completed",
+        )
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(temporal_activity, "in_activity", lambda: True)
+    monkeypatch.setattr(temporal_activity, "heartbeat", heartbeats.append)
+
+    controller = AsyncMock()
+    controller.send_turn = AsyncMock(side_effect=_slow_send_turn)
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_send_turn(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+            "instructions": "Inspect the workspace",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionTurnResponse)
+    assert result.status == "completed"
+    assert heartbeats
+    assert all(
+        heartbeat["activityType"] == "agent_runtime.send_turn"
+        for heartbeat in heartbeats
+    )
+
+
+async def test_await_with_activity_heartbeats_accepts_existing_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporalio import activity as temporal_activity
+
+    monkeypatch.setattr(temporal_activity, "in_activity", lambda: False)
+
+    async def _complete() -> str:
+        await asyncio.sleep(0)
+        return "done"
+
+    task = asyncio.create_task(_complete())
+    result = await activity_runtime_module._await_with_activity_heartbeats(
+        task,
+        heartbeat_payload={"activityType": "agent_runtime.send_turn"},
+    )
+
+    assert result == "done"
 
 
 async def test_steer_turn_delegates_to_remote_session_controller() -> None:

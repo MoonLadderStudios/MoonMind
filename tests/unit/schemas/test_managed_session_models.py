@@ -280,15 +280,15 @@ def test_codex_managed_session_summary_and_publication_allow_artifact_refs() -> 
     assert publication.published_artifact_refs == ("art-summary", "art-checkpoint")
 
 
-def test_send_codex_managed_session_turn_request_trims_instruction_and_refs() -> None:
+def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() -> None:
     request = SendCodexManagedSessionTurnRequest(
         sessionId="sess-123",
         sessionEpoch=1,
         containerId="ctr-123",
         threadId="thread-1",
         instructions="  Investigate the failing test  ",
-        inputRefs=["art-1", "art-2"],
+        reason="  Operator follow-up  ",
     )
 
     assert request.instructions == "Investigate the failing test"
-    assert request.input_refs == ("art-1", "art-2")
+    assert request.reason == "Operator follow-up"

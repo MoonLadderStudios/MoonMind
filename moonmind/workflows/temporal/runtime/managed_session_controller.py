@@ -8,7 +8,7 @@ import os
 import posixpath
 import re
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
 
 from moonmind.schemas.managed_session_models import (
@@ -158,6 +158,10 @@ class DockerCodexManagedSessionController:
             )
 
     @staticmethod
+    def _volume_mount(volume_name: str, target_path: str) -> str:
+        return f"type=volume,src={volume_name},dst={target_path}"
+
+    @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:
         normalized = str(status or "").strip().lower()
         if normalized in {"launching", "ready", "busy", "terminating", "terminated", "failed"}:
@@ -279,6 +283,57 @@ class DockerCodexManagedSessionController:
                 f"{' '.join(command)} failed with exit code {returncode}: {stderr.strip() or stdout.strip()}"
             )
         return stdout, stderr
+
+    async def _run_host_command(
+        self,
+        command: Sequence[str],
+    ) -> tuple[str, str]:
+        returncode, stdout, stderr = await self._command_runner(tuple(command))
+        if returncode != 0:
+            raise RuntimeError(
+                f"{' '.join(command)} failed with exit code {returncode}: {stderr.strip() or stdout.strip()}"
+            )
+        return stdout, stderr
+
+    async def _ensure_workspace_paths(
+        self,
+        request: LaunchCodexManagedSessionRequest,
+    ) -> None:
+        workspace_path = Path(request.workspace_path)
+        session_workspace_path = Path(request.session_workspace_path)
+        artifact_spool_path = Path(request.artifact_spool_path)
+
+        session_workspace_path.mkdir(parents=True, exist_ok=True)
+        artifact_spool_path.mkdir(parents=True, exist_ok=True)
+
+        if workspace_path.exists():
+            return
+
+        workspace_path.parent.mkdir(parents=True, exist_ok=True)
+
+        repository = str(
+            request.workspace_spec.get("repository")
+            or request.workspace_spec.get("repo")
+            or ""
+        ).strip()
+        if not repository:
+            workspace_path.mkdir(parents=True, exist_ok=True)
+            return
+
+        from .launcher import ManagedRuntimeLauncher
+
+        source = ManagedRuntimeLauncher._resolve_repository_source(repository)
+        branch = str(
+            request.workspace_spec.get("startingBranch")
+            or request.workspace_spec.get("branch")
+            or ""
+        ).strip()
+
+        clone_command = ["git", "clone"]
+        if branch:
+            clone_command.extend(["--branch", branch, "--single-branch"])
+        clone_command.extend([source, str(workspace_path)])
+        await self._run_host_command(clone_command)
 
     async def _invoke_json(
         self,
@@ -406,6 +461,7 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         self._validate_launch_request(request)
+        await self._ensure_workspace_paths(request)
         container_name = self._container_name(request.session_id)
         await self._remove_container(container_name, ignore_failure=True)
         run_command = [
@@ -414,10 +470,10 @@ class DockerCodexManagedSessionController:
             "-d",
             "--name",
             container_name,
-            "-v",
-            f"{self._workspace_volume_name}:{self._workspace_root}",
-            "-v",
-            f"{self._codex_volume_name}:{request.codex_home_path}",
+            "--mount",
+            self._volume_mount(self._workspace_volume_name, self._workspace_root),
+            "--mount",
+            self._volume_mount(self._codex_volume_name, request.codex_home_path),
             "-e",
             f"MOONMIND_SESSION_WORKSPACE_PATH={request.workspace_path}",
             "-e",
@@ -448,10 +504,14 @@ class DockerCodexManagedSessionController:
             raise RuntimeError("docker run returned a blank container id")
         try:
             await self._wait_ready(container_id=container_id)
+            container_payload = request.model_dump(
+                by_alias=True,
+                exclude={"workspace_spec"},
+            )
             payload = await self._invoke_json(
                 container_id=container_id,
                 action="launch_session",
-                payload=request.model_dump(by_alias=True),
+                payload=container_payload,
                 extra_env={"MOONMIND_SESSION_CONTAINER_ID": container_id},
             )
         except Exception:
@@ -523,7 +583,10 @@ class DockerCodexManagedSessionController:
                         text=f"Turn started: {response.turn_id}.",
                         turn_id=response.turn_id,
                         active_turn_id=response.turn_id,
-                        metadata={"action": "send_turn"},
+                        metadata={
+                            "action": "send_turn",
+                            "reason": request.reason,
+                        },
                     )
                     if response.status == "completed":
                         await self._emit_session_event(
@@ -535,6 +598,7 @@ class DockerCodexManagedSessionController:
                             metadata={
                                 "action": "send_turn",
                                 "assistantText": response.metadata.get("assistantText"),
+                                "reason": request.reason,
                             },
                         )
         return response
