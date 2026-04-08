@@ -429,7 +429,7 @@ def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
     assert updated_state["vendorThreadId"] == "vendor-thread-1"
 
 
-def test_runtime_send_turn_ignores_missing_vendor_thread_path_from_state(
+def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
     tmp_path: Path,
 ) -> None:
     script = _write_fake_app_server(
