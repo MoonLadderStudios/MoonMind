@@ -188,19 +188,21 @@ def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Pa
     if configured_manifest_path:
         return _dist_root_for_manifest(configured_manifest_path)
 
-    usable_candidates: list[Path] = []
-    for candidate in (local_ui_dist_root(), bundled_ui_dist_root()):
-        if _manifest_tree_is_usable(candidate, entrypoint):
-            usable_candidates.append(candidate)
-
-    if usable_candidates:
-        return max(usable_candidates, key=_dist_root_manifest_mtime_ns)
-
     local_root = local_ui_dist_root()
+    bundled_root = bundled_ui_dist_root()
+    candidates = sorted(
+        (local_root, bundled_root),
+        key=_dist_root_manifest_mtime_ns,
+        reverse=True,
+    )
+    for candidate in candidates:
+        if _manifest_tree_is_usable(candidate, entrypoint):
+            return candidate
+
     if _manifest_path_for_dist_root(local_root).exists():
         return local_root
 
-    return bundled_ui_dist_root()
+    return bundled_root
 
 
 def _verify_asset_paths(dist_root: Path, asset_info: Dict[str, Any]) -> None:

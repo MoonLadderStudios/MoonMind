@@ -263,6 +263,44 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     assert resolve_mission_control_dist_root() == bundled_dist_root
 
 
+def test_resolve_mission_control_dist_root_returns_after_newest_usable_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_dist_root = tmp_path / "local-dist"
+    bundled_dist_root = tmp_path / "bundled-dist"
+    local_dist_root.mkdir()
+    bundled_dist_root.mkdir()
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
+
+    mtimes = {
+        local_dist_root: 1,
+        bundled_dist_root: 2,
+    }
+    monkeypatch.setattr(
+        ui_assets_module,
+        "_dist_root_manifest_mtime_ns",
+        lambda dist_root: mtimes[dist_root],
+    )
+
+    checked_candidates: list[Path] = []
+
+    def fake_manifest_tree_is_usable(dist_root: Path, entrypoint: str | None = None) -> bool:
+        checked_candidates.append(dist_root)
+        return dist_root == bundled_dist_root
+
+    monkeypatch.setattr(
+        ui_assets_module,
+        "_manifest_tree_is_usable",
+        fake_manifest_tree_is_usable,
+    )
+
+    assert resolve_mission_control_dist_root() == bundled_dist_root
+    assert checked_candidates == [bundled_dist_root]
+
+
 def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
