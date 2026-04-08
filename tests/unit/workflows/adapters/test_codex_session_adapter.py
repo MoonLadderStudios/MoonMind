@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, ManagedRunRecord
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -739,3 +739,165 @@ async def test_terminate_session_uses_remote_session_control_surface(
     assert terminate_calls[0].container_id == "container-1"
     assert handle.status == "terminated"
     assert control_calls == [{"action": "terminate_session", "reason": "task-complete"}]
+
+
+async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "failed",\n'
+            '  "final_reason": "pr_not_found",\n'
+            '  "next_step": "done"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    run_id = "run-result-pr-failure"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(tz=UTC),
+            workspacePath=str(workspace_path),
+        )
+    )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=run_id,
+        agent_id="codex_cli",
+        locator={
+            "sessionId": "sess:wf-task-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Codex managed-session turn completed.",
+            "metadata": {},
+        },
+        status="completed",
+        started_at=datetime.now(tz=UTC),
+    )
+
+    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+
+    assert result.failure_class == "execution_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'failed'" in result.summary
+    assert "pr_not_found" in result.summary
+
+
+async def test_fetch_result_maps_blocked_pr_resolver_artifact_for_completed_run(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "attempts_exhausted",\n'
+            '  "final_reason": "actionable_comments",\n'
+            '  "next_step": "run_fix_comments_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    run_id = "run-result-pr-blocked"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(tz=UTC),
+            workspacePath=str(workspace_path),
+        )
+    )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=run_id,
+        agent_id="codex_cli",
+        locator={
+            "sessionId": "sess:wf-task-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Codex managed-session turn completed.",
+            "metadata": {},
+        },
+        status="completed",
+        started_at=datetime.now(tz=UTC),
+    )
+
+    result = await adapter.fetch_result(run_id, pr_resolver_expected=True)
+
+    assert result.failure_class == "user_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
+    assert "run_fix_comments_skill" in result.summary
