@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
@@ -139,6 +140,8 @@ def update_step_row(
     waiting_reason: str | None | object = _UNSET,
     attention_required: bool | None = None,
     last_error: str | None | object = _UNSET,
+    refs: Mapping[str, Any] | object = _UNSET,
+    artifacts: Mapping[str, Any] | object = _UNSET,
     increment_attempt: bool = False,
     set_started_at: bool = False,
 ) -> dict[str, Any]:
@@ -159,6 +162,26 @@ def update_step_row(
             row["attentionRequired"] = attention_required
         if last_error is not _UNSET:
             row["lastError"] = last_error
+        if refs is not _UNSET:
+            merged_refs = default_step_refs()
+            current_refs = row.get("refs")
+            if isinstance(current_refs, dict):
+                merged_refs.update(current_refs)
+            if isinstance(refs, Mapping):
+                for key, value in refs.items():
+                    if key in merged_refs:
+                        merged_refs[key] = value
+            row["refs"] = merged_refs
+        if artifacts is not _UNSET:
+            merged_artifacts = default_step_artifacts()
+            current_artifacts = row.get("artifacts")
+            if isinstance(current_artifacts, dict):
+                merged_artifacts.update(current_artifacts)
+            if isinstance(artifacts, Mapping):
+                for key, value in artifacts.items():
+                    if key in merged_artifacts:
+                        merged_artifacts[key] = value
+            row["artifacts"] = merged_artifacts
         if status in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False

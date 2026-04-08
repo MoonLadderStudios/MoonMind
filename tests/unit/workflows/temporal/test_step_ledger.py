@@ -339,3 +339,50 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
 
     assert rows[0]["status"] == "succeeded"
     assert rows[0]["lastError"] is None
+
+
+def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "delegate-agent",
+                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "inputs": {"title": "Delegate agent"},
+            }
+        ],
+        dependency_map={"delegate-agent": []},
+        updated_at=updated_at,
+    )
+
+    row = update_step_row(
+        rows,
+        "delegate-agent",
+        updated_at=updated_at,
+        refs={
+            "childWorkflowId": "wf-child-1",
+            "childRunId": "run-child-1",
+            "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+        },
+        artifacts={
+            "outputSummary": "art_summary_1",
+            "outputPrimary": "art_primary_1",
+            "runtimeStdout": "art_stdout_1",
+            "runtimeDiagnostics": "art_diag_1",
+        },
+    )
+
+    assert row["refs"] == {
+        "childWorkflowId": "wf-child-1",
+        "childRunId": "run-child-1",
+        "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+    }
+    assert row["artifacts"] == {
+        "outputSummary": "art_summary_1",
+        "outputPrimary": "art_primary_1",
+        "runtimeStdout": "art_stdout_1",
+        "runtimeStderr": None,
+        "runtimeMergedLogs": None,
+        "runtimeDiagnostics": "art_diag_1",
+        "providerSnapshot": None,
+    }

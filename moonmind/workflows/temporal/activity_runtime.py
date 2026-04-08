@@ -2507,6 +2507,26 @@ class TemporalAgentRuntimeActivities:
             if isinstance(result_dict.get("metadata"), Mapping)
             else {}
         )
+        moonmind_metadata = (
+            metadata.get("moonmind")
+            if isinstance(metadata.get("moonmind"), Mapping)
+            else {}
+        )
+        step_ledger_metadata = (
+            moonmind_metadata.get("stepLedger")
+            if isinstance(moonmind_metadata.get("stepLedger"), Mapping)
+            else {}
+        )
+        step_artifact_metadata: dict[str, Any] = {}
+        logical_step_id = str(step_ledger_metadata.get("logicalStepId") or "").strip()
+        if logical_step_id:
+            step_artifact_metadata["step_id"] = logical_step_id
+        attempt = step_ledger_metadata.get("attempt")
+        if isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
+            step_artifact_metadata["attempt"] = int(attempt)
+        scope = str(step_ledger_metadata.get("scope") or "").strip()
+        if scope:
+            step_artifact_metadata["scope"] = scope
 
         async def _write_reference_artifact(
             *,
@@ -2525,6 +2545,7 @@ class TemporalAgentRuntimeActivities:
                     "name": link_type.replace(".", "_") + ".json",
                     "producer": "activity:agent_runtime.publish_artifacts",
                     "labels": ["agent_runtime", link_type],
+                    **step_artifact_metadata,
                 },
             )
             return ref.artifact_id
@@ -2564,6 +2585,7 @@ class TemporalAgentRuntimeActivities:
                     "name": "agent_run_summary.json",
                     "producer": "activity:agent_runtime.publish_artifacts",
                     "labels": ["agent_runtime", "output.summary"],
+                    **step_artifact_metadata,
                 },
             )
             agent_result_ref = await _write_json_artifact(
@@ -2575,6 +2597,7 @@ class TemporalAgentRuntimeActivities:
                     "name": "agent_run_result.json",
                     "producer": "activity:agent_runtime.publish_artifacts",
                     "labels": ["agent_runtime", "output.agent_result"],
+                    **step_artifact_metadata,
                 },
             )
             # Enrich result with the diagnostics ref
@@ -3052,6 +3075,18 @@ class TemporalAgentRuntimeActivities:
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
             if record is not None:
+                meta.setdefault("taskRunId", record.run_id)
+                if record.stdout_artifact_ref:
+                    meta.setdefault("stdoutArtifactRef", record.stdout_artifact_ref)
+                if record.stderr_artifact_ref:
+                    meta.setdefault("stderrArtifactRef", record.stderr_artifact_ref)
+                if record.merged_log_artifact_ref:
+                    meta.setdefault(
+                        "mergedLogArtifactRef",
+                        record.merged_log_artifact_ref,
+                    )
+                if record.diagnostics_ref:
+                    meta.setdefault("diagnosticsRef", record.diagnostics_ref)
                 operator_summary = await self._collect_operator_summary(
                     record=record,
                     result=result,
