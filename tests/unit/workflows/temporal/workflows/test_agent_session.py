@@ -220,12 +220,16 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
         "agent_runtime.publish_session_artifacts",
     ]
     assert captured[0][1]["instructions"] == "Continue the task-scoped session."
+    assert captured[0][1]["reason"] == "Operator follow-up"
     assert workflow.get_status()["lastControlAction"] == "send_turn"
 
-    for _name, _payload, kwargs in captured:
+    for name, _payload, kwargs in captured:
         assert kwargs["task_queue"] == "mm.activity.agent_runtime"
         assert isinstance(kwargs["retry_policy"], RetryPolicy)
-        assert kwargs["start_to_close_timeout"] == timedelta(seconds=60)
+        route = agent_session_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(name)
+        assert kwargs["start_to_close_timeout"] == timedelta(
+            seconds=route.timeouts.start_to_close_seconds
+        )
 
 
 @pytest.mark.asyncio

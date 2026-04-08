@@ -780,7 +780,7 @@ async def _await_with_activity_heartbeats(
 ) -> Any:
     from temporalio import activity
 
-    task = asyncio.create_task(awaitable)
+    task = asyncio.ensure_future(awaitable)
     try:
         if not activity.in_activity():
             return await task

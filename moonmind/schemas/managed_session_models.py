@@ -204,8 +204,7 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Send a new turn to the remote session container."""
 
     instructions: NonBlankStr = Field(..., alias="instructions")
-    input_refs: tuple[NonBlankStr, ...] = Field(default=(), alias="inputRefs")
-    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    reason: NonBlankStr | None = Field(None, alias="reason")
 
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):

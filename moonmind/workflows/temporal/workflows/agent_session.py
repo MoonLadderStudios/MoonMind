@@ -253,7 +253,7 @@ class MoonMindAgentSessionWorkflow:
                 containerId=locator.container_id,
                 threadId=locator.thread_id,
                 instructions=message,
-                metadata={"reason": reason_text} if reason_text else {},
+                reason=reason_text,
             ).model_dump(by_alias=True),
         )
         turn_payload = dict(turn_response if isinstance(turn_response, dict) else {})

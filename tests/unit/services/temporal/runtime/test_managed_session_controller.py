@@ -212,7 +212,7 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         commands.append(command)
-        if command[:3] == ("docker", "exec", "-i") and "-c" in command:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
             payload = {
                 "sessionState": {
                     "sessionId": "sess-1",
@@ -249,11 +249,89 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
     assert response.metadata["assistantText"] == "OK"
     exec_command = commands[0]
     assert exec_command[:3] == ("docker", "exec", "-i")
-    assert "-c" in exec_command
-    assert "invoke" not in exec_command
-    assert "thread/resume" in exec_command[-1]
-    assert "turn/start" in exec_command[-1]
-    assert '"input"' in exec_command[-1]
+    assert "-c" not in exec_command
+    assert exec_command[-2:] == ("invoke", "send_turn")
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+    session_supervisor.emit_session_event = Mock()
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "completed",
+                "metadata": {"assistantText": "OK"},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+    )
+
+    await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            instructions="Reply with exactly the word OK",
+            reason="Operator follow-up",
+        )
+    )
+
+    emitted_metadata = [
+        call.kwargs.get("metadata")
+        for call in session_supervisor.emit_session_event.call_args_list
+    ]
+    assert emitted_metadata == [
+        {"action": "send_turn", "reason": "Operator follow-up"},
+        {
+            "action": "send_turn",
+            "assistantText": "OK",
+            "reason": "Operator follow-up",
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -875,7 +953,7 @@ async def test_controller_send_turn_skips_missing_durable_record(tmp_path: Path)
         input_text: str | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
-        if command[:3] == ("docker", "exec", "-i") and "-c" in command:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
             payload = {
                 "sessionState": {
                     "sessionId": "sess-1",
@@ -940,7 +1018,7 @@ async def test_controller_send_turn_persists_failed_turn_status(tmp_path: Path) 
         input_text: str | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
-        if command[:3] == ("docker", "exec", "-i") and "-c" in command:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
             payload = {
                 "sessionState": {
                     "sessionId": "sess-1",

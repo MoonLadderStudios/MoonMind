@@ -545,6 +545,26 @@ async def test_send_turn_heartbeats_while_waiting_for_remote_session_controller(
     )
 
 
+async def test_await_with_activity_heartbeats_accepts_existing_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporalio import activity as temporal_activity
+
+    monkeypatch.setattr(temporal_activity, "in_activity", lambda: False)
+
+    async def _complete() -> str:
+        await asyncio.sleep(0)
+        return "done"
+
+    task = asyncio.create_task(_complete())
+    result = await activity_runtime_module._await_with_activity_heartbeats(
+        task,
+        heartbeat_payload={"activityType": "agent_runtime.send_turn"},
+    )
+
+    assert result == "done"
+
+
 async def test_steer_turn_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
     controller.steer_turn = AsyncMock(

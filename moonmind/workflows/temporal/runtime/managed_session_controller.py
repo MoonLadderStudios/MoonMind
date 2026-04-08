@@ -36,122 +36,6 @@ from .managed_session_supervisor import ManagedSessionSupervisor
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
-_SEND_TURN_INLINE_SCRIPT = """
-import json
-import importlib
-from pathlib import Path
-import sys
-import time
-from collections.abc import Mapping
-
-runtime_mod = importlib.import_module(
-    "moonmind.workflows.temporal.runtime.codex_session_runtime"
-)
-
-
-request = runtime_mod.SendCodexManagedSessionTurnRequest.model_validate(
-    json.loads(sys.stdin.read() or "{}")
-)
-runtime = runtime_mod._runtime_from_environment()
-try:
-    state = runtime._validate_locator(request)
-    client = runtime._app_server_client()
-    client._initialize_result = client.request(
-        "initialize",
-        {
-            "clientInfo": {
-                "name": "MoonMind",
-                "version": "phase4",
-            },
-            "capabilities": {
-                "experimentalApi": True,
-            },
-        },
-    )
-
-    sessions_root = Path(runtime._codex_home_path) / "sessions"
-    thread_path = None
-    if sessions_root.is_dir():
-        matches = sorted(sessions_root.rglob(f"*{state.vendor_thread_id}.jsonl"))
-        if matches:
-            thread_path = str(matches[-1])
-    resume_params = {"threadId": state.vendor_thread_id}
-    if thread_path:
-        resume_params["path"] = thread_path
-    try:
-        resumed = client.request("thread/resume", resume_params)
-        resumed_thread = resumed.get("thread")
-    except RuntimeError as exc:
-        message = str(exc)
-        if "no rollout found" not in message and "thread not found" not in message:
-            raise
-        started_thread = client.request(
-            "thread/start",
-            {"cwd": str(runtime._workspace_path)},
-        )
-        resumed_thread = started_thread.get("thread")
-    if not isinstance(resumed_thread, Mapping):
-        raise RuntimeError("codex app-server thread/resume did not return a thread")
-    vendor_thread_id = str(resumed_thread.get("id") or "").strip()
-    if not vendor_thread_id:
-        raise RuntimeError("codex app-server thread/resume returned a blank thread id")
-    state.vendor_thread_id = vendor_thread_id
-
-    started = client.request(
-        "turn/start",
-        {
-            "threadId": vendor_thread_id,
-            "input": [{"type": "text", "text": request.instructions}],
-        },
-    )
-    turn_payload = started.get("turn")
-    if not isinstance(turn_payload, Mapping):
-        raise RuntimeError("codex app-server turn/start did not return a turn")
-    vendor_turn_id = str(turn_payload.get("id") or "").strip()
-    if not vendor_turn_id:
-        raise RuntimeError("codex app-server turn/start returned a blank turn id")
-
-    state.active_turn_id = vendor_turn_id
-    state.last_control_action = "send_turn"
-    state.last_control_at = time.time()
-    runtime._save_state(state)
-    runtime._append_spool("stdout", f"turn started: {vendor_turn_id}\\n")
-
-    try:
-        client.wait_for_notification(
-            "turn/completed",
-            predicate=lambda message: (
-                isinstance(message.get("params"), Mapping)
-                and message["params"].get("threadId") == vendor_thread_id
-            ),
-            timeout_seconds=runtime._turn_completion_timeout_seconds,
-        )
-    except TimeoutError as exc:
-        raise RuntimeError(
-            "timed out waiting for codex app-server turn/completed notification "
-            f"after {runtime._turn_completion_timeout_seconds} seconds"
-        ) from exc
-
-    thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
-    assistant_text = runtime._extract_assistant_text(thread_payload)
-
-    state.active_turn_id = None
-    state.last_assistant_text = assistant_text or None
-    runtime._save_state(state)
-    if assistant_text:
-        runtime._append_spool("stdout", f"assistant: {assistant_text}\\n")
-
-    response = runtime_mod.CodexManagedSessionTurnResponse(
-        sessionState=runtime._session_state(state),
-        turnId=vendor_turn_id,
-        status="completed",
-        metadata={"assistantText": assistant_text},
-    )
-    sys.stdout.write(response.model_dump_json(by_alias=True, exclude_none=True) + "\\n")
-    sys.stdout.flush()
-finally:
-    runtime.close()
-""".strip()
 
 
 class CommandRunner(Protocol):
@@ -483,29 +367,6 @@ class DockerCodexManagedSessionController:
         )
         return json.loads(stdout.strip() or "{}")
 
-    async def _invoke_inline_python_json(
-        self,
-        *,
-        container_id: str,
-        program: str,
-        payload: Mapping[str, Any],
-        extra_env: Mapping[str, str] | None = None,
-    ) -> dict[str, Any]:
-        command = [
-            self._docker_binary,
-            "exec",
-            "-i",
-        ]
-        if extra_env:
-            for key, value in extra_env.items():
-                command.extend(["-e", f"{key}={value}"])
-        command.extend([container_id, "python3", "-c", program])
-        stdout, _stderr = await self._run(
-            command,
-            input_text=json.dumps(payload),
-        )
-        return json.loads(stdout.strip() or "{}")
-
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (
             self._docker_binary,
@@ -693,9 +554,9 @@ class DockerCodexManagedSessionController:
         self,
         request: SendCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
-        payload = await self._invoke_inline_python_json(
+        payload = await self._invoke_json(
             container_id=request.container_id,
-            program=_SEND_TURN_INLINE_SCRIPT,
+            action="send_turn",
             payload=request.model_dump(by_alias=True),
         )
         response = CodexManagedSessionTurnResponse.model_validate(payload)
@@ -722,7 +583,10 @@ class DockerCodexManagedSessionController:
                         text=f"Turn started: {response.turn_id}.",
                         turn_id=response.turn_id,
                         active_turn_id=response.turn_id,
-                        metadata={"action": "send_turn"},
+                        metadata={
+                            "action": "send_turn",
+                            "reason": request.reason,
+                        },
                     )
                     if response.status == "completed":
                         await self._emit_session_event(
@@ -734,6 +598,7 @@ class DockerCodexManagedSessionController:
                             metadata={
                                 "action": "send_turn",
                                 "assistantText": response.metadata.get("assistantText"),
+                                "reason": request.reason,
                             },
                         )
         return response

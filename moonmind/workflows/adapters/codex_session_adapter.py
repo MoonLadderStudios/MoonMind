@@ -180,6 +180,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         started_at = _current_time()
         original_instruction_ref = str(request.instruction_ref or "").strip() or None
         original_skillset_ref = str(request.resolved_skillset_ref or "").strip() or None
+        if request.input_refs:
+            raise ValueError(
+                "CodexSessionAdapter does not support inputRefs for managed session turns"
+            )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -201,11 +205,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     containerId=locator.container_id,
                     threadId=locator.thread_id,
                     instructions=instructions,
-                    inputRefs=tuple(request.input_refs),
-                    metadata={
-                        "correlationId": request.correlation_id,
-                        "idempotencyKey": request.idempotency_key,
-                    },
                 )
             )
         )
@@ -492,7 +491,19 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     ) -> str:
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
-            return append_managed_codex_runtime_note(instruction_ref)
+            from moonmind.rag.context_injection import ContextInjectionService
+
+            workspace_path = Path(
+                self._workspace_path_for_request(binding=binding, request=request)
+            )
+            service = ContextInjectionService()
+            await service.inject_context(
+                request=request,
+                workspace_path=workspace_path,
+            )
+            return append_managed_codex_runtime_note(
+                str(request.instruction_ref or instruction_ref).strip()
+            )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
