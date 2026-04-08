@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_github_token_for_launch,
     resolve_managed_api_key_reference,
     resolve_managed_github_token_from_store,
+    shape_launch_github_auth_environment,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -118,3 +121,86 @@ async def test_resolve_managed_github_token_from_store_stops_after_lookup_failur
 
     assert session_maker.calls == 1
     assert session.seen_slugs == ["GITHUB_TOKEN"]
+
+
+async def test_resolve_github_token_for_launch_prefers_existing_environment_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://unused")
+
+    async def _unexpected_resolve(_secret_ref: str) -> str:
+        raise AssertionError("secret ref lookup should not run")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _unexpected_resolve,
+    )
+
+    out = await resolve_github_token_for_launch({"GITHUB_TOKEN": "ghp-inline-token"})
+
+    assert out == "ghp-inline-token"
+
+
+async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+
+    async def _unexpected_store() -> str:
+        raise AssertionError("managed store lookup should not run")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _unexpected_store,
+    )
+
+    shaped = await shape_launch_github_auth_environment(
+        {"PATH": "/usr/bin"},
+        ambient_github_token="ghp-ambient-token",
+    )
+
+    assert shaped["PATH"] == "/usr/bin"
+    assert shaped["GITHUB_TOKEN"] == "ghp-ambient-token"
+    assert shaped["GIT_TERMINAL_PROMPT"] == "0"
+
+
+async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_resolve(_secret_name: str) -> str:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_github_token_for_launch({})
+
+
+async def test_resolve_github_token_for_launch_propagates_cancellation_from_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings as app_settings
+
+    async def _fake_store_token() -> str:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
+        _fake_store_token,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_github_token_for_launch({})
