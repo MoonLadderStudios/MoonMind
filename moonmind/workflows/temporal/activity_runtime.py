@@ -51,9 +51,11 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionBinding,
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
+    CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     FetchCodexManagedSessionSummaryRequest,
@@ -356,6 +358,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "agent_runtime.launch_session": ("agent_runtime", "agent_runtime_launch_session"),
+    "agent_runtime.load_session_snapshot": (
+        "agent_runtime",
+        "agent_runtime_load_session_snapshot",
+    ),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
     "integration.codex_cloud.fetch_result": (
@@ -2212,12 +2218,18 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        if client_adapter is None:
+            from moonmind.workflows.temporal import client as temporal_client_module
+
+            client_adapter = temporal_client_module.TemporalClientAdapter()
+        self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
@@ -2670,6 +2682,24 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.launch_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_load_session_snapshot(
+        self,
+        request: Mapping[str, Any] | CodexManagedSessionBinding | None = None,
+        /,
+    ) -> CodexManagedSessionSnapshot:
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.load_session_snapshot",
+            model_type=CodexManagedSessionBinding,
+        )
+        handle = await self._client_adapter.get_workflow_handle(validated.workflow_id)
+        response = await handle.query("get_status")
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.load_session_snapshot",
+            model_type=CodexManagedSessionSnapshot,
         )
 
     async def agent_runtime_session_status(
