@@ -2218,12 +2218,18 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        if client_adapter is None:
+            from moonmind.workflows.temporal import client as temporal_client_module
+
+            client_adapter = temporal_client_module.TemporalClientAdapter()
+        self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
@@ -2683,16 +2689,12 @@ class TemporalAgentRuntimeActivities:
         request: Mapping[str, Any] | CodexManagedSessionBinding | None = None,
         /,
     ) -> CodexManagedSessionSnapshot:
-        from moonmind.workflows.temporal.client import TemporalClientAdapter
-
         validated = self._validate_session_request(
             request,
             activity_type="agent_runtime.load_session_snapshot",
             model_type=CodexManagedSessionBinding,
         )
-        handle = await TemporalClientAdapter().get_workflow_handle(
-            validated.workflow_id
-        )
+        handle = await self._client_adapter.get_workflow_handle(validated.workflow_id)
         response = await handle.query("get_status")
         return self._validate_session_response(
             response,

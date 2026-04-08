@@ -73,6 +73,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     routed_calls: list[tuple[str, Any]] = []
     session_adapter_requests: list[AgentExecutionRequest] = []
     loaded_snapshots: list[dict[str, Any]] = []
+    requested_snapshot_workflow_ids: list[str] = []
 
     _configure_workflow_runtime(monkeypatch)
 
@@ -86,8 +87,10 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
 
         async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
             session_adapter_requests.append(request)
+            snapshot_workflow_id = "wf-task-1:session:override"
+            requested_snapshot_workflow_ids.append(snapshot_workflow_id)
             loaded_snapshots.append(
-                await self._load_session_snapshot(request.managed_session.workflow_id)
+                await self._load_session_snapshot(snapshot_workflow_id)
             )
             return AgentRunHandle(
                 runId="managed-session-run-1",
@@ -191,6 +194,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     result = await run.run(_managed_session_request())
 
     assert session_adapter_requests[0].managed_session is not None
+    assert requested_snapshot_workflow_ids == ["wf-task-1:session:override"]
     assert loaded_snapshots == [
         {
             "binding": {
@@ -216,6 +220,8 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
         "agent_runtime.load_session_snapshot",
         "agent_runtime.publish_artifacts",
     ]
+    assert routed_calls[0][1]["workflowId"] == "wf-task-1:session:override"
+    assert routed_calls[0][1]["taskRunId"] == "wf-task-1"
 
 
 async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(

@@ -300,7 +300,12 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
             terminationRequested=False,
         ).model_dump(mode="json", by_alias=True)
     )
+    created_adapters: list[object] = []
+
     class _FakeTemporalClientAdapter:
+        def __init__(self) -> None:
+            created_adapters.append(self)
+
         async def get_workflow_handle(self, workflow_id: str) -> AsyncMock:
             assert workflow_id == "wf-task-1:session:codex_cli"
             return workflow_handle
@@ -326,7 +331,62 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
     assert isinstance(result, CodexManagedSessionSnapshot)
     assert result.binding.workflow_id == "wf-task-1:session:codex_cli"
     assert result.container_id == "ctr-1"
+    assert len(created_adapters) == 1
     workflow_handle.query.assert_awaited_once_with("get_status")
+
+
+async def test_load_session_snapshot_reuses_client_adapter_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_handle = AsyncMock()
+    workflow_handle.query = AsyncMock(
+        return_value=CodexManagedSessionSnapshot(
+            binding=CodexManagedSessionBinding(
+                workflowId="wf-task-1:session:codex_cli",
+                taskRunId="wf-task-1",
+                sessionId="sess:wf-task-1:codex_cli",
+                sessionEpoch=1,
+                runtimeId="codex_cli",
+                executionProfileRef="codex-default",
+            ),
+            status="active",
+            containerId="ctr-1",
+            threadId="thread-1",
+            activeTurnId=None,
+            terminationRequested=False,
+        ).model_dump(mode="json", by_alias=True)
+    )
+    created_adapters: list[object] = []
+
+    class _FakeTemporalClientAdapter:
+        def __init__(self) -> None:
+            created_adapters.append(self)
+
+        async def get_workflow_handle(self, workflow_id: str) -> AsyncMock:
+            assert workflow_id == "wf-task-1:session:codex_cli"
+            return workflow_handle
+
+    monkeypatch.setattr(
+        temporal_client_module,
+        "TemporalClientAdapter",
+        _FakeTemporalClientAdapter,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    payload = {
+        "workflowId": "wf-task-1:session:codex_cli",
+        "taskRunId": "wf-task-1",
+        "sessionId": "sess:wf-task-1:codex_cli",
+        "sessionEpoch": 1,
+        "runtimeId": "codex_cli",
+        "executionProfileRef": "codex-default",
+    }
+
+    await activities.agent_runtime_load_session_snapshot(payload)
+    await activities.agent_runtime_load_session_snapshot(payload)
+
+    assert len(created_adapters) == 1
+    assert workflow_handle.query.await_count == 2
 
 
 async def test_session_status_delegates_to_remote_session_controller() -> None:

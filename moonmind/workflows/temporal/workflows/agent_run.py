@@ -919,12 +919,14 @@ class MoonMindAgentRun:
                         )
 
                         async def _load_session_snapshot(workflow_id: str) -> dict[str, Any]:
+                            session_snapshot_request = request.managed_session.model_dump(
+                                mode="json",
+                                by_alias=True,
+                            )
+                            session_snapshot_request["workflowId"] = workflow_id
                             return await self._execute_routed_activity(
                                 "agent_runtime.load_session_snapshot",
-                                request.managed_session.model_dump(
-                                    mode="json",
-                                    by_alias=True,
-                                ),
+                                session_snapshot_request,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
 
