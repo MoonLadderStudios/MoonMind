@@ -453,8 +453,9 @@ class CodexManagedSessionRuntime:
         normalized = str(path_value or "").strip()
         return normalized or None
 
-    def _existing_thread_path(self, path_value: str | None) -> str | None:
-        normalized = self._normalized_thread_path(path_value)
+    @staticmethod
+    def _existing_thread_path(path_value: str | None) -> str | None:
+        normalized = CodexManagedSessionRuntime._normalized_thread_path(path_value)
         if normalized is None:
             return None
         return normalized if Path(normalized).is_file() else None
@@ -489,9 +490,12 @@ class CodexManagedSessionRuntime:
             raise RuntimeError(
                 "codex app-server thread/resume returned a blank thread id"
             )
+        recovered_thread_path = (
+            thread_path if vendor_thread_id == state.vendor_thread_id else None
+        )
         state.vendor_thread_id = vendor_thread_id
         state.vendor_thread_path = self._normalized_thread_path(
-            thread_payload.get("path") or thread_path
+            thread_payload.get("path") or recovered_thread_path
         )
         return vendor_thread_id
 

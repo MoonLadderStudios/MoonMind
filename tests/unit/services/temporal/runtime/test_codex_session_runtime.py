@@ -24,6 +24,8 @@ def _write_fake_app_server(
     emit_completion: bool = True,
     fail_thread_resume: bool = False,
     resume_requires_existing_rollout_path: bool = False,
+    start_thread_id: str = "vendor-thread-1",
+    start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
 ) -> Path:
@@ -48,6 +50,8 @@ INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
+START_THREAD_ID = __START_THREAD_ID__
+START_THREAD_PATH = __START_THREAD_PATH__
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -79,14 +83,14 @@ for line in sys.stdin:
             "id": msg_id,
             "result": {
                 "thread": {
-                    "id": "vendor-thread-1",
+                    "id": START_THREAD_ID,
                     "preview": "",
                     "ephemeral": False,
                     "modelProvider": "openai",
                     "createdAt": 1,
                     "updatedAt": 1,
                     "status": {"type": "idle"},
-                    "path": "/tmp/vendor-thread-1.jsonl",
+                    "path": START_THREAD_PATH,
                     "cwd": "/work/repo",
                     "cliVersion": "0.118.0",
                     "source": "app-server",
@@ -189,18 +193,19 @@ __COMPLETION_BLOCK__
         }) + "\\n")
         sys.stdout.flush()
     elif method == "thread/read":
+        thread_id = message["params"]["threadId"]
         sys.stdout.write(json.dumps({
             "id": msg_id,
             "result": {
                 "thread": {
-                    "id": "vendor-thread-1",
+                    "id": thread_id,
                     "preview": "OK",
                     "ephemeral": False,
                     "modelProvider": "openai",
                     "createdAt": 1,
                     "updatedAt": 2,
                     "status": {"type": "idle"},
-                    "path": "/tmp/vendor-thread-1.jsonl",
+                    "path": f"/tmp/{thread_id}.jsonl",
                     "cwd": "/work/repo",
                     "cliVersion": "0.118.0",
                     "source": "app-server",
@@ -240,6 +245,8 @@ __COMPLETION_BLOCK__
             "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
             "True" if resume_requires_existing_rollout_path else "False",
         )
+        .replace("__START_THREAD_ID__", repr(start_thread_id))
+        .replace("__START_THREAD_PATH__", repr(start_thread_path))
         .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )
@@ -427,6 +434,48 @@ def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
         )
     )
     assert updated_state["vendorThreadId"] == "vendor-thread-1"
+
+
+def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_new_thread(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(
+        tmp_path,
+        fail_thread_resume=True,
+        start_thread_id="vendor-thread-2",
+        start_thread_path=None,
+    )
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    updated_state = json.loads(
+        (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert updated_state["vendorThreadId"] == "vendor-thread-2"
+    assert "vendorThreadPath" not in updated_state
 
 
 def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
