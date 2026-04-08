@@ -1,421 +1,442 @@
-# Live Logs Implementation Plan
+# Live Logs Session-Aware Implementation Plan
 
-This document turns `docs/ManagedAgents/LiveLogs.md` into a phased implementation plan for MoonMind.
+Status: Proposed
+Owners: MoonMind Platform
+Last updated: 2026-04-08
+Related:
+- `docs/ManagedAgents/LiveLogs.md`
+- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/tmp/009-LiveLogsPlan.md`
 
-## Objective
+## 1. Objective
 
-Implement MoonMind-managed live logs for managed agent runs using an artifact-first model with:
+Evolve the current functional Live Logs stack into the desired final state:
 
-- durable `stdout`, `stderr`, and diagnostics artifacts
-- MoonMind-owned observability APIs
-- optional live streaming for active runs
-- a Mission Control log viewer for passive observation
-- explicit separation between logs, intervention controls, and OAuth terminal flows
+- still artifact-first
+- still MoonMind-owned
+- still spool/SSE backed for live follow
+- but no longer only a merged stdout/stderr/system tail
+- instead, a continuity-aware observability timeline for Codex managed sessions
 
-## Guiding decisions
+This plan starts from the codebase as it exists today and avoids replacing working pieces unless the new session-plane contract requires it.
 
-- Managed run logs are **not** terminal sessions.
-- `xterm.js` is reserved for **OAuth** and other interactive auth flows, not run logs.
-- Managed runs must always capture raw `stdout` and `stderr` directly from subprocess pipes.
-- Durable artifacts are the source of truth; live streaming is a convenience layer.
-- Logging and intervention must be modeled separately in the backend and UI.
-- Legacy `tmate`, `web_ro`, and terminal-embed assumptions must be removed from the managed-run log path.
-- The live stream transport must be cross-process; an API-local in-memory publisher is not the architecture boundary.
+## 2. Honest current baseline
 
-## Scope
+The current project is not starting from zero.
 
-This plan covers:
+Already in place:
 
-- managed runtime launcher and supervisor changes
-- data model and persistence updates
-- artifact production and retrieval APIs
-- live log streaming
-- Mission Control UI work
-- migration away from `TaskRunLiveSession`-style terminal-session assumptions for observability
-- rollout, testing, and cleanup
+- durable `stdout`, `stderr`, and diagnostics artifact production
+- run-level observability summary and artifact-backed log retrieval APIs
+- shared append-only spool transport for live chunks
+- SSE endpoint for active runs
+- Mission Control Live Logs panel with summary -> merged-tail -> optional SSE lifecycle
+- run-global sequence numbering across `stdout` / `stderr` / `system`
+- session continuity projection and control APIs for Codex-style session artifacts
 
-This plan does **not** cover implementing the OAuth browser terminal itself beyond preserving the boundary that OAuth remains separate from run logging.
+Still missing for the desired final state:
 
-## Known current state (as of 2026-04-01)
+- a canonical session-aware observability event model
+- session-plane lifecycle events in the same run-global timeline as stdout/stderr/system
+- explicit reset-boundary rows in the Live Logs timeline
+- structured historical event retrieval for the timeline
+- frontend rendering beyond line-centric `stdout` / `stderr` / `system`
+- `react-virtuoso` and `anser` adoption for the long-term viewer baseline
+- hardening/performance work for large logs and long-lived sessions
 
-This section captures an honest snapshot of the implementation, to prevent future confusion about what is and is not done:
+## 3. Delta from current state
 
-Canonical architecture and operator-visible contract text lives in [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md). This tmp plan owns rollout tracking and implementation status.
+The Codex Managed Session Plane adds four requirements that the shipped line-centric Live Logs stack does not yet model as first-class timeline facts:
 
-- **Done**: Durable stdout/stderr/diagnostics artifact production is substantially implemented in the managed runtime supervisor.
-- **Done**: Data model fields (`stdout_artifact_ref`, `stderr_artifact_ref`, `diagnostics_ref`, `last_log_at`, `last_log_offset`) exist and are populated.
-- **Done**: Observability read APIs (summary, tail endpoints, downloads, diagnostics) are consumed by the Mission Control task detail page through durable `taskRunId` resolution from execution detail.
-- **Done**: The runtime supervisor emits live log records into the shared append-only spool transport consumed by the API SSE endpoint.
-- **Done**: The launcher persists `liveStreamCapable` for workspace-backed managed runs so summary metadata truthfully reports stream availability.
-- **Done**: Live log sequence assignment is one run-global namespace across stdout/stderr/system, so reconnect-by-sequence now matches the API contract.
-- **Partial**: The merged endpoint now prefers chronological synthesis from spool metadata; historical runs without spool metadata still degrade to labeled artifact concatenation with a warning.
-- **Done**: Historical runs that only persisted legacy `logArtifactRef` now degrade through the merged-log endpoint instead of any session-viewer path.
-- **Done**: The full Mission Control observability panel now handles delayed managed-run attachment, launch-failed states, binding-missing states, and owner-visible authorization failures without falling back to the Temporal run id.
+- bounded session identity: `session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id`
+- control vocabulary: `start_session`, `resume_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `cancel_session`, and `terminate_session`
+- reset-boundary semantics: `clear_session` must produce a visible epoch/thread boundary instead of hiding the change inside plain text
+- durable continuity artifacts: summary, checkpoint, control-event, and reset-boundary artifacts remain the authoritative drill-down evidence
 
-## Completed implementation slice that made Mission Control live logs functional
+## 4. Guiding migration rules
 
-This slice completed the contract that was previously blocking real Mission Control usage:
+1. Keep the current transport boundary.
+   - Do not replace the spool/SSE architecture unless it blocks the new contract.
+   - Extend it to carry richer events.
 
-### Workstream A - Complete
+2. Preserve artifact-first semantics.
+   - Every new live-visible fact must also be reconstructable from artifacts or bounded workflow metadata.
 
-- `ManagedRunRecord` now persists `workflow_id`.
-- Managed launch now saves the managed run record before binding it back to the execution.
-- The managed launch path now binds the parent logical `MoonMind.Run` workflow id so Mission Control resolves the correct live-log record for task detail.
-- `/api/executions/{workflowId}` now derives `taskRunId` from the durable managed-run store when the memo/search-attribute path does not already provide it.
+3. Do not merge logging and control.
+   - Session controls remain separate.
+   - Live Logs only reflects those controls as passive observability rows.
 
-### Workstream B - Complete
+4. Prefer additive, backward-compatible changes first.
+   - Enrich payloads before replacing endpoints.
+   - Dual-read and dual-write where helpful.
 
-- Mission Control no longer falls back to the Temporal run id as a fake task-run id.
-- The task-detail page now distinguishes waiting-for-launch, launch-failed, binding-missing, and authorization-failed observability states.
-- When a delayed `taskRunId` appears, the page automatically attaches the live-log panel and immediately proceeds through summary and merged-tail retrieval.
+5. Keep historical runs usable.
+   - Runs without session-aware history must continue to degrade through merged artifacts and continuity drill-down.
 
-### Workstream C - Complete
+## 5. Rollout flag
 
-- `/api/task-runs/*` observability routes now allow both superusers and the owning execution user, matching the surrounding Mission Control visibility model.
-- The React panel now surfaces 403 authorization failures with explicit operator-facing copy instead of silently degrading to an empty log view.
+The new timeline contract is gated behind `liveLogsSessionTimelineEnabled`.
 
-### Workstream D - Complete
+Rollout scopes:
 
-- Backend coverage now includes a long-running managed-runtime integration test that simulates real streaming output while the process is still active.
-- Browser-facing coverage now exercises delayed `taskRunId` attachment and the Mission Control state transitions that were previously missing.
+- `off`
+- `internal`
+- `codex_managed`
+- `all_managed`
 
-### Workstream E - Finish the remaining viewer and rollout hardening after the contract works
+`logStreamingEnabled` remains the transport toggle for existing spool/SSE behavior. The new flag controls session-aware timeline semantics independently from live transport availability.
 
-Workstreams A-D are complete. The remaining work is optional hardening and presentation polish:
+## 6. Desired end state
 
-- adopt the planned `react-virtuoso` viewer baseline for long logs,
-- adopt `anser` for ANSI rendering,
-- complete Phase 7 response-time / large-log validation,
-- remove any "done" markings in this tmp plan that still depend on the above contract being proven in Mission Control.
+By the end of this plan:
 
-### Status
-
-Workstreams A-D are complete. The feature is now functional in Mission Control when the updated backend and frontend are deployed together.
+- `/observability-summary` returns both live-stream status and the latest session snapshot when present
+- Live streaming still uses `/logs/stream`, but events can include session metadata and event kinds
+- the UI prefers a structured event-history endpoint for initial load when available
+- Live Logs renders a unified timeline of `stdout`, `stderr`, `system`, and `session`
+- `clear_session` appears as a visible epoch-boundary banner, not just a text line or a separate side panel artifact
+- Session Continuity remains as drill-down evidence, but the main operator experience is the unified timeline
 
 ---
 
-## Phase 0 — Design alignment and implementation scaffolding
+## Phase 0 — Re-baseline the implementation plan
 
 ### Goal
 
-Align the codebase, docs, and feature boundaries before changing runtime behavior.
+Reset the project plan so it reflects what is already shipped versus what is newly required by the Codex Managed Session Plane.
 
 ### Tasks
 
-- [x] Confirm the canonical implementation target is `docs/ManagedAgents/LiveLogs.md`.
-- [x] Inventory current managed-run logging, transcript, `tmate`, `web_ro`, and terminal-embed code paths.
-- [x] Identify all UI surfaces that currently present "Live Output", embedded terminals, or session-viewer semantics.
-- [x] Identify current data models and DTOs that store log/session metadata for managed runs.
-- [x] Identify current artifact-writing paths for stdout, stderr, transcripts, and diagnostics.
-- [x] Decide where the new observability service layer will live in the backend.
-- [x] Define feature flags for incremental rollout, including a `logStreamingEnabled` flag.
-- [x] Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.
-- [x] Update any stale docs/specs that still describe `tmate web_ro` as the primary live-log path.
-- [x] Create implementation issues/tasks for each phase in this plan.
+- [x] Replace the old line-centric `docs/tmp/009-LiveLogsPlan.md` with this session-aware migration plan.
+- [x] Mark the original line-centric Live Logs phases as baseline-complete for the shipped artifact/spool/SSE architecture.
+- [x] Document the delta from current state:
+  - bounded session identity
+  - control vocabulary
+  - reset-boundary semantics
+  - durable continuity artifacts
+- [x] Introduce one feature flag for the new timeline contract:
+  - `liveLogsSessionTimelineEnabled`
+- [x] Define explicit rollout scopes:
+  - `off`
+  - `internal`
+  - `codex_managed`
+  - `all_managed`
 
 ### Exit criteria
 
-- [x] The team has a single agreed backend architecture for artifact-backed logs and SSE streaming.
-- [x] The team has a list of current files/modules that must be changed.
-- [x] Legacy terminal assumptions are explicitly marked deprecated for managed-run observability.
+- [x] The current spool/SSE/artifact stack is treated as the baseline, not a prototype to be replaced.
+- [x] The remaining work is clearly framed as a session-aware upgrade rather than "build Live Logs from scratch."
 
 ---
 
-## Phase 1 — Runtime capture contract and durable artifact production
+## Phase 1 — Define and persist the canonical observability event model
 
 ### Goal
 
-Make managed runs always capture raw `stdout` and `stderr` durably, independent of any UI attachment.
+Introduce a stable MoonMind event model that can represent both existing log chunks and new session-plane lifecycle facts.
 
 ### Tasks
 
-- [x] Update the managed launcher to always start subprocesses with piped `stdout` and `stderr`.
-- [x] Remove any requirement that managed runs be wrapped in `tmate` or similar terminal relays for visibility.
-- [x] Ensure the supervisor drains `stdout` and `stderr` concurrently and continuously.
-- [x] Preserve raw stream fidelity; do not normalize subprocess output into framework logs before persistence.
-- [x] Implement or finalize spool/buffer handling for long-running streams.
-- [x] Write durable stdout artifacts for every managed run.
-- [x] Write durable stderr artifacts for every managed run.
-- [x] Write diagnostics artifacts for every managed run.
-- [x] Optionally generate a merged log artifact if that materially simplifies retrieval or support workflows.
-- [x] Record artifact refs and summary metadata when the run ends.
-- [x] Capture and persist exit code, failure class, timestamps, and run summary fields needed by the UI.
-- [x] Ensure artifact generation succeeds even when the frontend never connects.
-- [x] Ensure supervisor heartbeat and timeout handling integrate cleanly with log capture.
-- [x] Add tests for successful runs, failed runs, timed-out runs, and abrupt process termination.
-- [x] Add tests for high-volume log output and interleaved stdout/stderr.
+- [x] Define a canonical browser/backend contract: `RunObservabilityEvent`
+- [x] Keep current live-log payloads readable during migration while the canonical event contract becomes the source of truth.
+- [x] Persist structured historical event reconstruction via an artifact-backed JSONL journal.
+- [x] Extend the managed-run persistence model with session snapshot and historical event refs:
+  - `session_id`
+  - `session_epoch`
+  - `container_id`
+  - `thread_id`
+  - `active_turn_id`
+  - `observability_events_ref`
+- [x] Keep sequence numbering run-global across all streams, including `session` rows.
 
 ### Exit criteria
 
-- [x] Every managed run produces durable stdout, stderr, and diagnostics outputs.
-- [x] Log capture no longer depends on interactive terminal infrastructure.
-- [x] Raw stdout/stderr fidelity is preserved well enough for replay, download, and troubleshooting.
+- [x] A single event model can represent current stdout/stderr/system chunks and future session lifecycle rows.
+- [x] No frontend work depends on provider-native event payloads.
+- [x] The backend can persist enough structured history to reconstruct the timeline after the run ends.
+
+### Notes
+
+This phase is the contract anchor. Everything after this becomes simpler once the browser sees one unified event shape.
 
 ---
 
-## Phase 2 — Observability data model and backend read APIs
+## Phase 2 — Make the Codex Managed Session Plane a first-class observability producer
 
 ### Goal
 
-Expose artifact-backed observability through MoonMind-owned backend APIs and records.
-
-### Completion status of tasks (honest labels)
-
-- [x] **complete** — Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
-- [x] **complete** — Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
-- [x] **complete** — Design and implement the replacement or successor to terminal-session-style observability records.
-- [x] **complete** — Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
-- [x] **complete** — Add an observability summary endpoint for task runs.
-- [x] **complete** — Add stdout tail retrieval endpoint(s).
-- [x] **complete** — Add stderr tail retrieval endpoint(s).
-- [x] **complete** — Add merged tail retrieval endpoint(s). Endpoint exists and merged-tail contract semantics (ordering guarantees, fallback from stdout/stderr when no merged artifact exists) have been hardened.
-- [x] **complete** — Add diagnostics retrieval endpoint(s).
-- [x] **complete** — Add full stdout/stderr download endpoint(s).
-- [x] **complete** — Ensure API responses are stable, typed, and suitable for Mission Control consumption.
-- [x] **complete** — Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.
-- [x] **complete** — Add authorization checks for observability endpoints.
-- [x] **complete** — Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
-- [x] **complete** — Add tests for tail semantics, pagination/range behavior, and large artifacts.
-- [x] **complete** — Mission Control calls the summary and tail APIs from the main task detail page.
-
-### Exit criteria
-
-- [x] **complete** — Mission Control can fetch observability metadata without relying on terminal-session endpoints.
-- [x] **complete** — Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
-- [x] **complete** — The persisted model matches the contract described in `LiveLogs.md`.
-- [x] **complete** — Mission Control actually consumes the observability APIs on task detail page load. This is required before Phase 2 exit criteria are fully met.
-
----
-
-## Phase 3 — Live log stream pipeline
-
-### Goal
-
-Add MoonMind-owned live log delivery for active runs, with artifacts still remaining authoritative.
-
-### Pre-step: Choose the shared live-stream transport
-
-Before implementing the publisher, an explicit design decision must be made and documented:
-
-- [x] Choose the real cross-process streaming mechanism.
-  - Options: Redis pub/sub, shared append-only spool file, DB-backed tailing (e.g. polling a log records table), or another MoonMind-owned mechanism.
-  - **Reject**: API-local singleton memory is not a valid architecture boundary (see `LiveLogs.md` §6.4).
-- [x] Document the chosen mechanism in a short ADR or inline note in this plan.
-  - Current choice: shared append-only spool file under the run workspace, consumed by the API SSE endpoint via `SpoolLogReader`.
-- [x] Confirm the chosen mechanism works when the managed runtime supervisor runs in a different process or container from the API service.
+Have the session plane publish passive lifecycle events into the same run-global observability stream already used by Live Logs.
 
 ### Tasks
 
-- [x] Choose the first transport as SSE over `text/event-stream` (client-side delivery — already decided).
-- [x] Implement a live log publisher that fans out log chunks to active subscribers via the chosen cross-process transport.
-- [x] Assign monotonically increasing sequence values for emitted log records.
-- [x] Include `stream`, `offset`, `timestamp`, and raw `text` for each event.
-- [x] Wire the runtime supervisor to actually emit live log records into the shared transport (this is the key missing producer-to-stream link).
-- [x] Add a `GET /api/task-runs/{id}/logs/stream` endpoint or equivalent that consumes from the shared transport (not from an API-local buffer).
-- [x] Support filtering by stream where practical.
-- [x] Support resume semantics using `since=<sequence_or_offset>` or equivalent; resume is best-effort.
-- [x] Ensure reconnect behavior works after transient disconnects; artifacts are the durable fallback when the resume window has expired.
-- [x] Ensure closed/collapsed clients stop receiving live updates promptly.
-- [x] Ensure stream lifecycle metadata (`live_stream_status`, `supports_live_streaming`) is reflected in the observability summary.
-- [x] Implement graceful fallback to artifact-backed tail retrieval when live streaming is unavailable.
-- [x] Add supervisor/system events to the merged stream only as clearly identified `system` entries.
-- [x] Add tests for reconnection, sequence continuity, run completion, and stream shutdown.
-- [x] Add tests for multiple concurrent viewers observing the same run.
-- [x] Add tests for runs with no live-stream support and for viewers that connect after the run has already ended.
+- Add an observability sink/adapter at the session-plane boundary.
+- For each stable session-plane action, emit a normalized `session` event:
+  - `start_session`
+  - `resume_session`
+  - `send_turn`
+  - `steer_turn`
+  - `interrupt_turn`
+  - `clear_session`
+  - `cancel_session`
+  - `terminate_session`
+- Emit session events for major session lifecycle transitions:
+  - session started
+  - session resumed
+  - turn started
+  - turn completed
+  - turn interrupted
+  - approval requested
+  - approval resolved
+  - summary published
+  - checkpoint published
+- For `clear_session`, emit both:
+  - a passive control event row, and
+  - a dedicated `session_reset_boundary` row carrying the new epoch/thread info
+- Ensure each emitted session event includes the latest known session snapshot fields when available.
+- Update the managed session store/workflow adapter so the latest session snapshot is mirrored onto the run record or other summary source.
+- Sanity-check that session-plane publishing failures do not break runtime control or artifact persistence.
 
 ### Exit criteria
 
-- [x] Supervised runtime chunks are actually published into the shared transport consumed by the API endpoint.
-- [x] Operators can open a live stream for an active run and receive appended log records that came from actual process output.
-- [x] Reconnect-from-last-sequence behavior works reliably enough for normal browser refreshes and short disconnects.
-- [x] When streaming is unavailable, the UX still works via artifact-backed retrieval.
-- [x] Endpoint presence alone does not satisfy exit criteria; real emitted events from managed runs are required.
+- Session-plane lifecycle facts show up in the same sequence namespace as stdout/stderr/system.
+- `clear_session` produces an explicit boundary event with epoch/thread changes.
+- Live observability no longer depends on the separate continuity panel for the operator to notice a reset.
+
+### Risk to watch
+
+Avoid turning the session-plane adapter into a mirror of raw Codex provider events. The emitted contract should stay MoonMind-normalized.
 
 ---
 
-## Phase 4 — Mission Control observability UI
+## Phase 3 — Add structured historical event retrieval while preserving current APIs
 
 ### Goal
 
-Replace terminal-style live output with a MoonMind-native observability surface.
-
-### Dependency chain
-
-Before this phase can be considered complete, all of the following must exist:
-
-1. backend live event production (Phase 3)
-2. backend stream delivery to API via cross-process transport (Phase 3)
-3. observability summary and tail fallback (Phase 2 fully consumed by UI)
-4. Mission Control panel behavior and state model (this phase)
-5. ended-run behavior (this phase)
-6. collapse/background lifecycle (this phase)
-7. artifact-only degraded mode (this phase)
+Give the UI a durable structured history source for the timeline, without breaking the existing merged-tail and SSE behavior.
 
 ### Tasks
 
-- [x] Create or update the task detail page Observability section.
-- [x] Implement the **Live Logs** panel using a native React log viewer.
-- [x] Implement the **Stdout** panel backed by stdout retrieval/download APIs.
-- [x] Implement the **Stderr** panel backed by stderr retrieval/download APIs.
-- [x] Implement the **Diagnostics** panel backed by diagnostics APIs.
-- [x] Keep **Artifacts** visible and consistent with the rest of Mission Control.
-- [ ] Use `react-virtuoso` or the chosen virtualized rendering base for long/growing log streams.
-- [ ] Use `anser` or the chosen ANSI parser for styled rendering of ANSI output.
-- [x] Use TanStack Query for initial tail fetches, cache invalidation, and fallback retrieval.
-- [x] Use `EventSource` for live follow mode.
-- [x] Default the Live Logs panel to collapsed with no active connection.
-- [x] On open, fetch observability summary and merged tail before connecting to live updates. Initial content must not depend on SSE success.
-- [x] Stop streaming when the panel is collapsed.
-- [x] Stop or pause streaming when the tab is backgrounded; reconnect when visibility returns only if run is still active.
-- [x] Surface viewer states: `not_available`, `starting`, `live`, `ended`, `error` (defined in `LiveLogs.md` §12.3).
-- [x] Show per-line stream provenance (`stdout`, `stderr`, `system`).
-- [x] Add wrap toggle, copy support, and download affordances.
-- [x] Ensure ended runs show useful artifact-backed logs without attempting live streaming.
-- [x] Remove any thin UI assumptions that SSE alone is sufficient (e.g. current thin SSE tail view on task detail).
-- [x] Remove any remaining implicit dependence on legacy session semantics for managed-run logs.
-- [x] Add UI tests for load states, reconnect behavior, collapse behavior, and ended-run behavior.
+- Add a historical retrieval endpoint:
+  - `GET /api/task-runs/{id}/observability/events`
+- Support:
+  - `since=`
+  - `limit=`
+  - optional stream filtering
+  - optional kind filtering
+- Keep `/logs/stream` as the live endpoint, but enrich its payload to use the same event schema.
+- Keep `/logs/merged` as a human-readable fallback/download surface.
+- Decide and document fallback order for historical load:
+  1. structured events endpoint
+  2. merged artifact-backed tail
+  3. continuity artifact drill-down if necessary for missing session facts
+- Enrich `/observability-summary` to include latest session snapshot fields when present.
+- Ensure the summary endpoint remains truthful for ended runs and non-stream-capable runs.
 
 ### Exit criteria
 
-- [x] The task detail page no longer depends on an embedded terminal for managed-run logs.
-- [x] Operators can inspect live logs, stdout, stderr, diagnostics, and artifacts in one coherent area.
-- [x] Opening and closing the panel has the expected connection lifecycle behavior.
-- [x] Artifact-backed initial load works independently of whether live streaming succeeds.
-- [x] Completed runs remain fully inspectable without ever having had a live stream connection.
+- The UI can render a session-aware historical timeline without depending on live transport.
+- `/logs/stream` and `/logs/merged` remain compatible with current consumers.
+- Summary payloads expose enough session snapshot data for compact header rendering.
 
 ---
 
-## Phase 5 — Intervention separation and control-surface cleanup
+## Phase 4 — Upgrade the frontend from line viewer to observability timeline
 
 ### Goal
 
-Make sure logging remains passive observation while intervention uses explicit workflow/provider controls.
+Preserve the current panel lifecycle while replacing the underlying row model and rendering logic.
 
 ### Tasks
 
-- [x] Audit the current UI and backend for places where live output and intervention are coupled.
-- [x] Remove assumptions that a live log session implies shell access or operator control access.
-- [x] Define the Intervention panel or controls separately from the log viewer.
-- [x] Ensure Pause/Resume/Cancel/Approve/Reject/Send Message actions route through Temporal signals/updates or provider-native adapters rather than terminal transport.
-- [x] Ensure intervention actions are logged/audited separately from stdout/stderr.
-- [x] Ensure the live log viewer can show future inline system annotations without becoming an intervention mechanism itself.
-- [x] Add tests verifying intervention actions do not require a live log connection.
-- [x] Update UI language to clearly distinguish observation from control.
+- Replace the current `LogLine` model with a richer timeline row model.
+- Keep the current lifecycle:
+  - fetch summary
+  - fetch historical content
+  - attach live SSE only when panel is open, visible, and active
+- Change initial load order to:
+  1. summary
+  2. structured history if available
+  3. fallback to merged text if not
+- Render distinct row types:
+  - stdout line
+  - stderr line
+  - system annotation
+  - session lifecycle row
+  - reset boundary banner
+  - summary/checkpoint publication marker
+  - approval row
+- Add a compact header snapshot for session context:
+  - session ID
+  - epoch
+  - container ID
+  - thread ID
+  - active turn ID
+  - live status
+- Keep Session Continuity as a drill-down area, but reduce duplication with the main timeline.
+- Decide whether to:
+  - keep a separate "Session Continuity" panel, or
+  - collapse it into "Artifacts / Session drill-down" once timeline integration lands
+- Finish the viewer hardening work already open in the previous plan:
+  - adopt `react-virtuoso`
+  - adopt `anser`
+- Add stream/session filters if cheap enough in the first pass.
 
 ### Exit criteria
 
-- [x] Managed-run logs are a passive observability surface only.
-- [x] Intervention is explicit, auditable, and transport-independent.
-- [x] No managed-run operator action depends on a terminal embed or log session attachment.
+- The Live Logs panel renders a unified timeline of `stdout`, `stderr`, `system`, and `session`.
+- Reset boundaries are visually obvious.
+- The current passive-observation UX remains intact.
+- Large logs no longer depend on naive DOM growth.
 
 ---
 
-## Phase 6 — Migration off legacy session-based observability
+## Phase 5 — Unify continuity artifacts with timeline semantics
 
 ### Goal
 
-Retire legacy `tmate`/terminal-session assumptions for managed-run log viewing without breaking existing runs.
+Make the continuity artifact system and Live Logs feel like one observability model instead of two parallel ones.
 
 ### Tasks
 
-- [x] Add compatibility handling for historical runs that only have legacy session/transcript data.
-- [x] Decide how old runs should appear in the new Observability UI when stdout/stderr artifacts are missing.
-- [x] Mark legacy terminal-session observability records as deprecated in code and docs.
-- [x] Remove or gate old `web_ro`-driven viewer paths for managed runs.
-- [x] Remove launcher/runtime branches that enabled `tmate` only for live-log visibility.
-- [x] Remove obsolete DTOs, frontend state, and API paths once replacement coverage is complete.
-- [x] Update docs that previously described terminal embedding as the standard managed-run observability path.
-- [x] Ensure OAuth docs still retain `xterm.js` where interactive terminal behavior is actually needed.
-- [x] Add migration notes for operators and contributors.
-- [x] Add regression tests covering both migrated and non-migrated runs.
+- Add explicit links from timeline rows to continuity artifacts where relevant.
+- Ensure the session projection remains the source for artifact drill-down, not for the main operator timeline.
+- Add helper APIs or response shaping if the UI needs artifact refs attached directly to timeline events.
+- Decide whether the current artifact session projection polling should remain separate or be folded into summary/history refresh paths.
+- Ensure artifact groups still cover:
+  - summary
+  - checkpoint
+  - control
+  - reset boundary
+- Update copy and panel labels so operators understand that:
+  - timeline = what happened
+  - continuity artifacts = durable evidence / drill-down
 
 ### Exit criteria
 
-- [x] Managed-run observability no longer depends on legacy session-viewer infrastructure.
-- [x] Historical runs degrade gracefully.
-- [x] The docs consistently describe the new architecture.
+- Operators can move from a timeline event to the related artifact without context switching.
+- Continuity artifacts remain available for audit/postmortem even if the main timeline is enough for most usage.
+- The UI no longer feels split between logs and session continuity as separate worlds.
 
 ---
 
-## Phase 7 — Hardening, performance, and rollout
+## Phase 6 — Compatibility, migration, and cleanup
 
 ### Goal
 
-Make the system production-ready and safe to enable by default.
+Roll out the new timeline without breaking existing active runs, historical runs, or non-session-managed runs.
 
 ### Tasks
 
-- [ ] Measure initial-tail response times against the success target.
-- [ ] Load test large logs and long-running streams.
-- [ ] Validate that the UI remains responsive with very large merged tails.
-- [ ] Tune tail sizes, buffering, and reconnect windows.
-- [ ] Add observability for the observability system itself, including structured supervisor events and metrics.
-- [ ] Correlate log-streaming operations with OpenTelemetry traces/metrics where applicable.
-- [ ] Add alerting or health indicators for stream failures, artifact write failures, and diagnostics generation failures.
-- [ ] Validate security and authorization on all observability and download endpoints.
-- [ ] Validate behavior across browser refreshes, tab visibility changes, and network interruptions.
-- [ ] Keep `MOONMIND_LOG_STREAMING_ENABLED` as an operator disable switch, with default-on behavior preserved.
-- [ ] Validate the default-on path in local/dev, then broader internal usage.
-- [ ] Remove any stale default-off or staged-rollout assumptions from related docs and UI copy.
+- Support a compatibility mode where `/logs/stream` may still emit old minimal events while the new UI can read both shapes.
+- Support a compatibility mode where the UI can synthesize timeline rows from merged text if structured history is absent.
+- Keep `/logs/merged` and existing stream-name endpoints stable during rollout.
+- Avoid backfilling old runs unless needed; degrade them gracefully.
+- Gate the new timeline rendering behind `liveLogsSessionTimelineEnabled` until dev/internal validation is complete.
+- Roll out in stages:
+  1. dev/internal only
+  2. Codex-managed runs
+  3. all managed runs that emit session events
+- Remove obsolete assumptions once the new path is stable:
+  - plain `LogLine`-only UI logic
+  - ad hoc merged-text parsing as the primary model
+  - duplication between separate continuity banners and the main timeline
 
 ### Exit criteria
 
-- [ ] The feature meets the core success criteria from `LiveLogs.md`.
-- [ ] Operators can reliably observe active and completed runs.
-- [ ] The system is stable enough to become the default managed-run log experience.
+- Existing runs remain observable during deployment transitions.
+- The frontend and backend can be deployed independently for a short window without catastrophic breakage.
+- Historical runs still work, even if they render a degraded timeline.
 
 ---
 
-## Cross-phase engineering checklist
+## Phase 7 — Hardening, performance, and operational rollout
 
-### Backend
+### Goal
 
-- [ ] Launcher uses direct subprocess pipe capture for all managed runs.
-- [ ] Supervisor owns draining, durability, diagnostics, and live fan-out via shared cross-process transport.
-- [ ] Observability APIs are MoonMind-owned and artifact-backed.
-- [ ] Live streaming is optional and never authoritative.
-- [x] Legacy terminal/session models are deprecated for managed-run observability.
+Make the session-aware timeline robust enough to be the default managed-run observability experience.
 
-### Frontend
+### Tasks
 
-- [ ] Live Logs is a native log viewer, not a terminal emulator.
-- [ ] Stdout, Stderr, Diagnostics, and Artifacts are separate operator surfaces.
-- [ ] Connection lifecycle follows panel-open and tab-visibility behavior.
-- [ ] Ended runs remain fully inspectable without live transport.
-- [ ] Thin SSE-only assumptions in current task detail UI are removed or replaced.
+- Add backend tests for:
+  - session event publication
+  - reset boundary publication
+  - dual live + historical reconstruction
+  - missing partial continuity artifacts
+  - ended-run reloads
+- Add frontend tests for:
+  - boundary rendering
+  - session snapshot header
+  - fallback from structured history to merged text
+  - reconnect after visibility change
+  - mixed stdout/stderr/system/session ordering
+- Load test:
+  - large merged histories
+  - long-running live streams
+  - runs with many boundary/system/session rows
+- Instrument the observability system itself:
+  - event journal write failures
+  - SSE disconnect rates
+  - journal read latency
+  - summary endpoint latency
+  - timeline render performance on large datasets
+- Validate auth and ownership checks for all new structured history surfaces.
+- Define rollback behavior:
+  - disable structured history endpoint usage in UI
+  - fall back to current merged-tail behavior
+- Remove the feature flag only after internal Codex-managed runs look stable.
 
-### Architecture boundaries
+### Exit criteria
 
-- [ ] Logging is separated from intervention.
-- [ ] OAuth remains the only place where `xterm.js` is required.
-- [ ] Durable artifacts remain the source of truth.
-- [ ] Live stream transport is cross-process; API-local singleton memory is not used as the architecture boundary.
+- The UI remains responsive for large timelines.
+- Operators can reliably observe active and completed Codex-managed runs.
+- Reset boundaries and session lifecycle are consistently visible in both live and historical views.
+- The new timeline path is safe to enable by default.
 
 ---
 
-## Suggested implementation order
+## 7. Smallest safe PR sequence
 
-1. Phase 0 — doc alignment (**this pass**)
-2. Phase 2 fully consumed — artifact-first UI baseline (Mission Control calls observability APIs)
-3. Phase 3 pre-step — choose and document cross-process transport
-4. Phase 3 — real producer-to-stream plumbing (supervisor emits; API consumes from shared transport)
-5. Phase 4 — live-follow integration in Mission Control
-6. Phase 5 + Phase 6 — cleanup of legacy assumptions and session migration
-7. Phase 7 — hardening and rollout
+1. **Contract PR**
+   - add `RunObservabilityEvent`
+   - update `docs/tmp/009-LiveLogsPlan.md`
+   - keep current payload readers working
 
-This order gives Mission Control a usable artifact-backed viewer before SSE live follow is fully complete.
+2. **Summary PR**
+   - enrich `/observability-summary` with session snapshot fields
 
----
+3. **Session-plane producer PR**
+   - emit `session` rows for start/resume/turn/clear events
+   - emit explicit reset-boundary rows
 
-## Definition of done
+4. **Structured-history PR**
+   - persist/read observability events
+   - add `/observability/events`
 
-The Live Logs implementation is done when all of the following are true:
+5. **Frontend model PR**
+   - replace `LogLine` with timeline rows
+   - still render mostly like today
 
-- [x] Every managed run produces durable stdout, stderr, and diagnostics artifacts.
-- [x] Mission Control can display artifact-backed log tails and diagnostics for completed runs.
-- [x] Mission Control can live-follow active runs through MoonMind-owned streaming fed by actual supervised runtime output.
-- [x] Managed-run log viewing no longer depends on `tmate`, `web_ro`, or terminal embedding.
-- [x] Intervention is separate from logging in both UI and backend contracts.
-- [x] `xterm.js` remains limited to OAuth/interactive auth terminal flows.
-- [x] Legacy session-based observability for managed-run logs has been removed or cleanly deprecated.
-- [x] The live stream transport works across the supervisor-to-API process boundary.
+6. **Frontend UX PR**
+   - boundary banners
+   - session snapshot header
+   - continuity artifact links
+
+7. **Viewer-hardening PR**
+   - `react-virtuoso`
+   - `anser`
+
+8. **Cleanup PR**
+   - remove old-only assumptions
+   - simplify continuity-panel duplication
+
+## 8. Definition of done
+
+This migration is done when all of the following are true:
+
+- Live Logs still works for today’s active and completed runs.
+- Codex-managed runs surface session identity in summary and timeline.
+- `clear_session` produces an explicit epoch-boundary row in both live and historical views.
+- The main operator experience is a unified timeline, not separate mental models for logs and continuity.
+- Session continuity artifacts remain available as durable drill-down evidence.
+- The viewer is virtualized and ANSI-aware.
+- Large-log and long-session behavior has been tested and is operationally acceptable.

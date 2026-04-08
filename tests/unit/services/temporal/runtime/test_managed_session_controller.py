@@ -630,6 +630,7 @@ async def test_controller_summary_and_publication_read_from_durable_record(
             stdoutArtifactRef="sess-1/stdout.log",
             stderrArtifactRef="sess-1/stderr.log",
             diagnosticsRef="sess-1/diagnostics.json",
+            observabilityEventsRef="sess-1/observability.events.jsonl",
             latestSummaryRef="sess-1/session.summary.json",
             latestCheckpointRef="sess-1/session.step_checkpoint.json",
             latestControlEventRef="sess-1/session.control_event.epoch-2.json",
@@ -669,10 +670,12 @@ async def test_controller_summary_and_publication_read_from_durable_record(
     assert summary.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert summary.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
     assert summary.metadata["stdoutArtifactRef"] == "sess-1/stdout.log"
+    assert summary.metadata["observabilityEventsRef"] == "sess-1/observability.events.jsonl"
     assert publication.published_artifact_refs == (
         "sess-1/stdout.log",
         "sess-1/stderr.log",
         "sess-1/diagnostics.json",
+        "sess-1/observability.events.jsonl",
         "sess-1/session.summary.json",
         "sess-1/session.step_checkpoint.json",
         "sess-1/session.control_event.epoch-2.json",
@@ -681,6 +684,7 @@ async def test_controller_summary_and_publication_read_from_durable_record(
     assert publication.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
     assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
+    assert publication.metadata["observabilityEventsRef"] == "sess-1/observability.events.jsonl"
 
 
 @pytest.mark.asyncio
@@ -722,6 +726,7 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
         stdoutArtifactRef="sess-1/stdout.log",
         stderrArtifactRef="sess-1/stderr.log",
         diagnosticsRef="sess-1/diagnostics.json",
+        observabilityEventsRef="sess-1/observability.events.jsonl",
         latestSummaryRef="sess-1/session.summary.json",
         latestCheckpointRef="sess-1/session.step_checkpoint.json",
         startedAt="2026-04-06T12:00:00Z",
@@ -752,9 +757,11 @@ async def test_controller_publication_uses_snapshot_without_stopping_supervision
         "sess-1/stdout.log",
         "sess-1/stderr.log",
         "sess-1/diagnostics.json",
+        "sess-1/observability.events.jsonl",
         "sess-1/session.summary.json",
         "sess-1/session.step_checkpoint.json",
     )
+    assert publication.metadata["observabilityEventsRef"] == "sess-1/observability.events.jsonl"
 
 
 @pytest.mark.asyncio

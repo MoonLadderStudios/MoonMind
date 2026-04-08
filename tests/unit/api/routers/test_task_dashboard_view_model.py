@@ -322,6 +322,32 @@ def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> Non
     assert config["features"]["logStreamingEnabled"] is False
 
 
+def test_build_runtime_config_session_timeline_rollout_defaults_off(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "off",
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["liveLogsSessionTimelineEnabled"] is False
+    assert config["features"]["liveLogsSessionTimelineRollout"] == "off"
+
+
+def test_build_runtime_config_session_timeline_rollout_is_exposed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "codex_managed",
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["liveLogsSessionTimelineEnabled"] is True
+    assert config["features"]["liveLogsSessionTimelineRollout"] == "codex_managed"
+
+
 def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
     config = build_runtime_config("/tasks")
     assert "liveSession" not in config["sources"]["temporal"]

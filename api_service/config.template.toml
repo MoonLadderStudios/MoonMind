@@ -23,3 +23,6 @@ moonmind_severity_floor_default = "high"
 [feature_flags]
 # Disable the Task Preset Catalog (UI + API) when required.
 disable_task_template_catalog = false
+# Rollout scope for the session-aware Live Logs timeline contract:
+# off | internal | codex_managed | all_managed
+live_logs_session_timeline_rollout = "off"

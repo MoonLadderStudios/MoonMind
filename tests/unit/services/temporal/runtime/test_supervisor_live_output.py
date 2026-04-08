@@ -60,6 +60,8 @@ def _make_supervisor(
 
 
 def _save_record(store: ManagedRunStore, run_id: str) -> ManagedRunRecord:
+    workspace_path = store.store_root.parent / "workspace" / run_id
+    workspace_path.mkdir(parents=True, exist_ok=True)
     record = ManagedRunRecord(
         run_id=run_id,
         agent_id="test-agent",
@@ -67,6 +69,7 @@ def _save_record(store: ManagedRunStore, run_id: str) -> ManagedRunRecord:
         status="launching",
         pid=12345,
         started_at=datetime.now(tz=UTC),
+        workspace_path=str(workspace_path),
     )
     store.save(record)
     return record
@@ -197,6 +200,11 @@ async def test_supervise_captures_stdout_normal_process(tmp_path: Path):
     stdout_artifact = storage.resolve_storage_path(f"{run_id}/stdout.log")
     assert stdout_artifact.exists()
     assert "live-output-works" in stdout_artifact.read_text()
+    assert result.observability_events_ref == f"{run_id}/observability.events.jsonl"
+    journal = storage.resolve_storage_path(result.observability_events_ref)
+    assert journal.exists()
+    payload = journal.read_text(encoding="utf-8")
+    assert '"stream":"stdout"' in payload
 
 
 # ---------------------------------------------------------------------------

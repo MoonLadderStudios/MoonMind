@@ -659,6 +659,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             agent_id=agent_id,
             managed_run_id=managed_run_id,
             binding=binding,
+            locator=locator,
+            active_turn_id=active_turn_id,
             result=result,
             status=status,
             started_at=started_at,
@@ -672,6 +674,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         agent_id: str,
         managed_run_id: str | None,
         binding: CodexManagedSessionBinding | None,
+        locator: Mapping[str, Any],
+        active_turn_id: str | None,
         result: Mapping[str, Any],
         status: AgentRunState,
         started_at: datetime,
@@ -715,6 +719,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     return ref
                 if normalized_kind == "diagnostics" and "diagnostics" in lowered:
                     return ref
+                if (
+                    normalized_kind == "observability"
+                    and "observability.events" in lowered
+                ):
+                    return ref
             return fallback
 
         runtime_id = self._runtime_id or "codex_cli"
@@ -724,6 +733,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             if binding is not None
             else (existing.workspace_path if existing is not None else None)
         )
+        container_id = str(locator.get("containerId") or "").strip() or None
+        thread_id = str(locator.get("threadId") or "").strip() or None
         record = ManagedRunRecord(
             runId=record_key,
             workflowId=self._workflow_id,
@@ -754,10 +765,28 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     fallback=existing.diagnostics_ref if existing is not None else None,
                 ),
             ),
+            observabilityEventsRef=_artifact_ref(
+                session_artifact_metadata.get("observabilityEventsRef"),
+                fallback=(
+                    _infer_runtime_artifact_ref(
+                        "observability",
+                        fallback=(
+                            existing.observability_events_ref
+                            if existing is not None
+                            else None
+                        ),
+                    )
+                ),
+            ),
             errorMessage=summary if status != "completed" else None,
             failureClass=result.get("failureClass"),
             providerErrorCode=_artifact_ref(result.get("providerErrorCode")),
             liveStreamCapable=False,
+            sessionId=binding.session_id if binding is not None else None,
+            sessionEpoch=binding.session_epoch if binding is not None else None,
+            containerId=container_id or (existing.container_id if existing is not None else None),
+            threadId=thread_id or (existing.thread_id if existing is not None else None),
+            activeTurnId=active_turn_id or (existing.active_turn_id if existing is not None else None),
         )
         self._run_store.save(record)
 

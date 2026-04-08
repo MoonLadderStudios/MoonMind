@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import AsyncIterator
 
-from moonmind.schemas.agent_runtime_models import LiveLogChunk
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 
 
 class SpoolLogPublisher:
@@ -16,10 +16,9 @@ class SpoolLogPublisher:
         # Ensure the filename is absolute or relative to a known path.
         self._spool_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def publish(self, chunk: LiveLogChunk) -> None:
-        """Append a JSON-serialized LiveLogChunk to the spool file."""
-        # We write each chunk as a JSON Lines payload
-        payload = chunk.model_dump_json(by_alias=True)
+    def publish(self, chunk: RunObservabilityEvent) -> None:
+        """Append a JSON-serialized observability event to the spool file."""
+        payload = chunk.model_dump_json(by_alias=True, exclude_none=True)
         # Using open with 'a' guarantees O_APPEND semantics.
         # This allows multiple writers (if any) to safely append on POSIX,
         # but in our architecture, only the single supervisor writes to it.
@@ -43,7 +42,7 @@ class SpoolLogReader:
         since_sequence: int = 0,
         *,
         start_at_end: bool = False,
-    ) -> AsyncIterator[LiveLogChunk]:
+    ) -> AsyncIterator[RunObservabilityEvent]:
         """Asynchronously follow the spool file, yielding new chunks.
 
         If since_sequence is provided, any chunk with sequence <= since_sequence
@@ -72,7 +71,7 @@ class SpoolLogReader:
 
                 try:
                     payload = json.loads(line)
-                    chunk = LiveLogChunk.model_validate(payload)
+                    chunk = RunObservabilityEvent.model_validate(payload)
                 except Exception:
                     # Ignore corrupted line
                     continue

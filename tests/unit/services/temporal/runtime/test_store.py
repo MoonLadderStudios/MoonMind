@@ -16,7 +16,17 @@ def _make_record(run_id: str = "test-run-1", status: str = "running") -> Managed
 
 def test_save_and_load_round_trip(tmp_path):
     store = ManagedRunStore(tmp_path)
-    record = _make_record().model_copy(update={"workflow_id": "mm:wf-1"})
+    record = _make_record().model_copy(
+        update={
+            "workflow_id": "mm:wf-1",
+            "observability_events_ref": "test-run-1/observability.events.jsonl",
+            "session_id": "sess-1",
+            "session_epoch": 2,
+            "container_id": "ctr-1",
+            "thread_id": "thread-2",
+            "active_turn_id": "turn-7",
+        }
+    )
     store.save(record)
 
     loaded = store.load("test-run-1")
@@ -26,6 +36,12 @@ def test_save_and_load_round_trip(tmp_path):
     assert loaded.runtime_id == "codex-cli"
     assert loaded.status == "running"
     assert loaded.workflow_id == "mm:wf-1"
+    assert loaded.observability_events_ref == "test-run-1/observability.events.jsonl"
+    assert loaded.session_id == "sess-1"
+    assert loaded.session_epoch == 2
+    assert loaded.container_id == "ctr-1"
+    assert loaded.thread_id == "thread-2"
+    assert loaded.active_turn_id == "turn-7"
 
 
 def test_load_missing_returns_none(tmp_path):

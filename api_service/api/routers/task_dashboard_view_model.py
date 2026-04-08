@@ -219,6 +219,12 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
                 not in ("0", "false", "no", "off")
             ),
+            "liveLogsSessionTimelineEnabled": bool(
+                settings.feature_flags.live_logs_session_timeline_enabled
+            ),
+            "liveLogsSessionTimelineRollout": str(
+                settings.feature_flags.live_logs_session_timeline_rollout
+            ),
         },
         "system": {
             **system_metadata,

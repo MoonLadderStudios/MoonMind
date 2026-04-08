@@ -152,6 +152,12 @@ class ManagedSessionSupervisor:
         status: str,
         error_message: str | None,
     ) -> CodexManagedSessionRecord:
+        observability_events_ref = await asyncio.to_thread(
+            self._log_streamer.persist_observability_events,
+            run_id=record.task_run_id,
+            workspace_path=record.workspace_path,
+            artifact_job_id=record.session_id,
+        )
         stdout_bytes, stderr_bytes = self._read_spool_bytes(record)
         _, stdout_ref = self._artifact_storage.write_artifact(
             job_id=record.session_id,
@@ -210,6 +216,7 @@ class ManagedSessionSupervisor:
             stdout_artifact_ref=stdout_ref,
             stderr_artifact_ref=stderr_ref,
             diagnostics_ref=diagnostics_ref,
+            observability_events_ref=observability_events_ref,
             latest_summary_ref=summary_ref,
             latest_checkpoint_ref=checkpoint_ref,
             last_log_offset=len(stdout_bytes) + len(stderr_bytes),
