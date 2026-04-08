@@ -18,7 +18,7 @@ class SpoolLogPublisher:
 
     def publish(self, chunk: RunObservabilityEvent) -> None:
         """Append a JSON-serialized observability event to the spool file."""
-        payload = chunk.model_dump_json(exclude_none=True)
+        payload = chunk.model_dump_json(by_alias=True, exclude_none=True)
         # Using open with 'a' guarantees O_APPEND semantics.
         # This allows multiple writers (if any) to safely append on POSIX,
         # but in our architecture, only the single supervisor writes to it.

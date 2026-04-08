@@ -483,7 +483,7 @@ def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | Non
         chunk = RunObservabilityEvent.model_validate(payload)
     except Exception:
         return None
-    return chunk.model_dump(mode="json", exclude_none=True)
+    return chunk.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 def _iter_diagnostics_observability_events(
@@ -742,6 +742,45 @@ def _iter_historical_artifact_events(
         )
 
 
+def _load_task_run_observability_events(
+    *,
+    record: object,
+    session_record: CodexManagedSessionRecord | None,
+    limit: int,
+) -> list[dict[str, object]]:
+    workspace_path = getattr(record, "workspace_path", None)
+    started_at = getattr(record, "started_at", None)
+
+    events: list[dict[str, object]] = []
+    artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
+    event_journal_path = _resolve_safe_artifact_path(
+        getattr(record, "observability_events_ref", None),
+        artifacts_root,
+    )
+    raw_record_run_id = getattr(record, "run_id", None)
+    record_run_id = (
+        raw_record_run_id.strip()
+        if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
+        else None
+    )
+    if event_journal_path is not None:
+        events.extend(_iter_event_journal(event_journal_path, run_id=record_run_id))
+    elif _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
+        for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at):
+            normalized = _normalize_live_event(payload)
+            if normalized is not None:
+                events.append(normalized)
+    else:
+        events.extend(
+            _iter_historical_artifact_events(
+                record,
+                session_record,
+                limit_per_stream=limit,
+            )
+        )
+    return events
+
+
 def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     sequence = _coerce_sequence(payload.get("sequence"))
     timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
@@ -977,37 +1016,13 @@ async def get_task_run_observability_events(
         )
     await _require_observability_access(record, _user)
 
-    workspace_path = getattr(record, "workspace_path", None)
-    started_at = getattr(record, "started_at", None)
     session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
-
-    events: list[dict[str, object]] = []
-    artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
-    event_journal_path = _resolve_safe_artifact_path(
-        getattr(record, "observability_events_ref", None),
-        artifacts_root,
+    events = await asyncio.to_thread(
+        _load_task_run_observability_events,
+        record=record,
+        session_record=session_record,
+        limit=limit,
     )
-    raw_record_run_id = getattr(record, "run_id", None)
-    record_run_id = (
-        raw_record_run_id.strip()
-        if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
-        else None
-    )
-    if event_journal_path is not None:
-        events.extend(_iter_event_journal(event_journal_path, run_id=record_run_id))
-    elif _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
-        for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at):
-            normalized = _normalize_live_event(payload)
-            if normalized is not None:
-                events.append(normalized)
-    else:
-        events.extend(
-            _iter_historical_artifact_events(
-                record,
-                session_record,
-                limit_per_stream=limit,
-            )
-        )
 
     events.sort(key=_event_sort_key)
     truncated = len(events) > limit
@@ -1088,7 +1103,7 @@ async def stream_task_run_live_logs(
             ):
                 if await request.is_disconnected():
                     break
-                json_str = chunk.model_dump_json(exclude_none=True)
+                json_str = chunk.model_dump_json(by_alias=True, exclude_none=True)
                 yield f"data: {json_str}\n\n".encode("utf-8")
                 
                 # Check terminal status once every few chunks if possible or dynamically,

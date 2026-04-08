@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import inspect
-from typing import Any
-from pathlib import Path
+import json
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.observability.transport import SpoolLogPublisher
@@ -22,6 +23,7 @@ from moonmind.workflows.temporal.runtime.output_parser import (
 # produce long lines (base64, JSON blobs, our large-output tests) never
 # trigger LimitOverrunError.
 _STREAM_CHUNK_SIZE = 65536
+_ARTIFACT_COPY_CHUNK_SIZE = 1024 * 1024
 
 
 class RuntimeLogStreamer:
@@ -223,7 +225,7 @@ class RuntimeLogStreamer:
             metadata=dict(metadata or {}),
         )
         self._observability_events_by_run.setdefault(run_id, []).append(
-            chunk.model_dump(mode="json", exclude_none=True)
+            chunk.model_dump(mode="json", by_alias=True, exclude_none=True)
         )
         self._publish_observability_chunk(
             workspace_path=workspace_path,
@@ -284,16 +286,35 @@ class RuntimeLogStreamer:
         if not normalized_workspace:
             return None
         spool_path = Path(normalized_workspace) / "live_streams.spool"
-        if not spool_path.is_file():
+        storage_ref = f"{artifact_job_id or run_id}/observability.events.jsonl"
+        try:
+            if not spool_path.is_file():
+                return None
+            if spool_path.stat().st_size <= 0:
+                return None
+            resolve_storage_path = getattr(self._storage, "resolve_storage_path", None)
+            if callable(resolve_storage_path):
+                target_path = Path(resolve_storage_path(storage_ref))
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with spool_path.open("rb") as source, target_path.open("wb") as target:
+                    shutil.copyfileobj(
+                        source,
+                        target,
+                        length=_ARTIFACT_COPY_CHUNK_SIZE,
+                    )
+                return storage_ref
+
+            with spool_path.open("rb") as handle:
+                data = handle.read()
+            if not data:
+                return None
+            _, storage_ref = self._storage.write_artifact(
+                job_id=artifact_job_id or run_id,
+                artifact_name="observability.events.jsonl",
+                data=data,
+            )
+        except OSError:
             return None
-        data = spool_path.read_bytes()
-        if not data:
-            return None
-        _, storage_ref = self._storage.write_artifact(
-            job_id=artifact_job_id or run_id,
-            artifact_name="observability.events.jsonl",
-            data=data,
-        )
         return storage_ref
 
     async def stream_and_parse(

@@ -493,7 +493,8 @@ class ManagedRunSupervisor:
                 events=events,
                 observability_events=observability_events,
             )
-            observability_events_ref = self._log_streamer.persist_observability_events(
+            observability_events_ref = await asyncio.to_thread(
+                self._log_streamer.persist_observability_events,
                 run_id=run_id,
                 workspace_path=record.workspace_path if record else None,
             )

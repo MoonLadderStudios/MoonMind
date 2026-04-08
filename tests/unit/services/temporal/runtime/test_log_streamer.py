@@ -350,6 +350,12 @@ def test_emit_observability_event_publishes_session_metadata(streamer):
     assert published_chunk.thread_id == "thread-2"
     assert published_chunk.metadata["reason"] == "operator_reset"
 
+    persisted_events = log_streamer.consume_observability_events("run-session-event")
+    assert persisted_events[0]["runId"] == "run-session-event"
+    assert persisted_events[0]["sessionId"] == "sess-1"
+    assert persisted_events[0]["sessionEpoch"] == 2
+    assert "session_id" not in persisted_events[0]
+
 
 def test_persist_observability_events_promotes_spool_to_artifact(
     streamer,
@@ -395,6 +401,30 @@ def test_persist_observability_events_promotes_spool_to_artifact(
     assert ref == "run-journal/observability.events.jsonl"
     persisted = storage.resolve_storage_path(ref).read_text(encoding="utf-8")
     assert persisted == spool_payload + "\n"
+
+
+def test_persist_observability_events_returns_none_on_io_error(
+    streamer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_streamer, _ = streamer
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    spool_path = workspace_path / "live_streams.spool"
+    spool_path.write_text("{}", encoding="utf-8")
+
+    def _raise_io_error(*args: object, **kwargs: object) -> object:
+        raise OSError("disk error")
+
+    monkeypatch.setattr(Path, "open", _raise_io_error)
+
+    ref = log_streamer.persist_observability_events(
+        run_id="run-journal",
+        workspace_path=str(workspace_path),
+    )
+
+    assert ref is None
 
 
 def test_emit_system_annotation_keeps_annotations_out_of_observability_events(streamer):

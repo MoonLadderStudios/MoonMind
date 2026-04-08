@@ -859,6 +859,10 @@ def test_get_task_run_observability_events_reads_structured_spool_history(
     assert [event["sequence"] for event in body["events"]] == [10, 11]
     assert body["events"][1]["stream"] == "session"
     assert body["events"][1]["kind"] == "session_reset_boundary"
+    assert body["events"][1]["sessionId"] == "sess:wf-task-1:codex_cli"
+    assert body["events"][1]["sessionEpoch"] == 2
+    assert body["events"][1]["threadId"] == "thread-2"
+    assert "session_id" not in body["events"][1]
 
 
 def test_get_task_run_observability_events_prefers_persisted_event_artifact(
@@ -932,6 +936,10 @@ def test_get_task_run_observability_events_prefers_persisted_event_artifact(
     body = response.json()
     assert [event["sequence"] for event in body["events"]] == [5, 6]
     assert body["events"][1]["kind"] == "reset_boundary_published"
+    assert body["events"][0]["runId"] == "run-1"
+    assert body["events"][1]["sessionId"] == "sess-1"
+    assert body["events"][1]["sessionEpoch"] == 2
+    assert "run_id" not in body["events"][0]
 
 
 def test_load_task_run_session_record_uses_targeted_standard_paths(

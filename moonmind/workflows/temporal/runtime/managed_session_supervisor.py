@@ -152,7 +152,8 @@ class ManagedSessionSupervisor:
         status: str,
         error_message: str | None,
     ) -> CodexManagedSessionRecord:
-        observability_events_ref = self._log_streamer.persist_observability_events(
+        observability_events_ref = await asyncio.to_thread(
+            self._log_streamer.persist_observability_events,
             run_id=record.task_run_id,
             workspace_path=record.workspace_path,
             artifact_job_id=record.session_id,
