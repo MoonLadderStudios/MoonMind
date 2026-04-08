@@ -302,3 +302,112 @@ def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "steps" not in latest_memo
     assert "progress" not in latest_memo
     assert "checks" not in latest_memo
+
+
+def test_run_groups_child_lineage_and_evidence_into_step_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-agent",
+                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "inputs": {"title": "Delegate agent"},
+            }
+        ],
+        dependency_map={"delegate-agent": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "delegate-agent",
+        updated_at=now,
+        summary="Launching child runtime",
+    )
+    workflow._record_step_result_evidence(
+        "delegate-agent",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "childWorkflowId": "wf-child-1",
+                "childRunId": "run-child-1",
+                "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+                "outputSummaryRef": "art_summary_1",
+                "outputAgentResultRef": "art_primary_1",
+                "stdoutArtifactRef": "art_stdout_1",
+                "stderrArtifactRef": "art_stderr_1",
+                "mergedLogArtifactRef": "art_merged_1",
+                "diagnosticsRef": "art_diag_1",
+                "providerSnapshotRef": "art_provider_1",
+                "outputRefs": [
+                    "art_stdout_1",
+                    "art_stderr_1",
+                    "art_diag_1",
+                    "art_primary_1",
+                ],
+            },
+        },
+        updated_at=now,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+
+    assert step["refs"] == {
+        "childWorkflowId": "wf-child-1",
+        "childRunId": "run-child-1",
+        "taskRunId": "550e8400-e29b-41d4-a716-446655440000",
+    }
+    assert step["artifacts"] == {
+        "outputSummary": "art_summary_1",
+        "outputPrimary": "art_primary_1",
+        "runtimeStdout": "art_stdout_1",
+        "runtimeStderr": "art_stderr_1",
+        "runtimeMergedLogs": "art_merged_1",
+        "runtimeDiagnostics": "art_diag_1",
+        "providerSnapshot": "art_provider_1",
+    }
+
+
+def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "run-tests",
+                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                "inputs": {"title": "Run tests"},
+            }
+        ],
+        dependency_map={"run-tests": []},
+        updated_at=now,
+    )
+    workflow._record_step_result_evidence(
+        "run-tests",
+        execution_result={
+            "status": "FAILED",
+            "outputs": {
+                "outputRefs": [
+                    "art_stdout_1",
+                    "art_primary_1",
+                    "art_secondary_1",
+                ],
+                "stdoutArtifactRef": "art_stdout_1",
+                "diagnosticsRef": "art_diag_1",
+            },
+        },
+        updated_at=now,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+
+    assert step["artifacts"]["outputPrimary"] == "art_primary_1"
+    assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
+    assert step["artifacts"]["runtimeDiagnostics"] == "art_diag_1"

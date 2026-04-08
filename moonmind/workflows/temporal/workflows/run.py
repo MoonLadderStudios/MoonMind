@@ -625,6 +625,94 @@ class MoonMindRunWorkflow:
             return
         self._sync_progress_snapshot(updated_at=updated_at)
 
+    def _step_attempt_for(self, logical_step_id: str) -> int | None:
+        for row in self._step_ledger_rows:
+            if row.get("logicalStepId") == logical_step_id:
+                attempt = row.get("attempt")
+                if isinstance(attempt, bool):
+                    return None
+                if isinstance(attempt, (int, float)):
+                    return int(attempt)
+                return None
+        return None
+
+    def _record_step_result_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        execution_result: Any,
+        updated_at: datetime,
+    ) -> None:
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return
+
+        def _output_ref(*keys: str) -> str | None:
+            for key in keys:
+                value = outputs.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return None
+
+        output_refs_raw = outputs.get("outputRefs")
+        if not isinstance(output_refs_raw, list):
+            output_refs_raw = outputs.get("output_refs")
+        output_refs = [
+            str(item).strip()
+            for item in (output_refs_raw or [])
+            if isinstance(item, str) and item.strip()
+        ]
+
+        refs = {
+            "childWorkflowId": _output_ref("childWorkflowId", "child_workflow_id"),
+            "childRunId": _output_ref("childRunId", "child_run_id"),
+            "taskRunId": _output_ref("taskRunId", "task_run_id"),
+        }
+        artifacts = {
+            "outputSummary": _output_ref("outputSummaryRef", "output_summary_ref"),
+            "outputPrimary": _output_ref(
+                "outputPrimaryRef",
+                "output_primary_ref",
+                "outputAgentResultRef",
+                "output_agent_result_ref",
+            ),
+            "runtimeStdout": _output_ref("stdoutArtifactRef", "stdout_artifact_ref"),
+            "runtimeStderr": _output_ref("stderrArtifactRef", "stderr_artifact_ref"),
+            "runtimeMergedLogs": _output_ref(
+                "mergedLogArtifactRef",
+                "merged_log_artifact_ref",
+                "logArtifactRef",
+                "log_artifact_ref",
+            ),
+            "runtimeDiagnostics": _output_ref("diagnosticsRef", "diagnostics_ref"),
+            "providerSnapshot": _output_ref(
+                "providerSnapshotRef",
+                "provider_snapshot_ref",
+            ),
+        }
+
+        if artifacts["outputPrimary"] is None:
+            reserved_refs = {
+                value
+                for value in artifacts.values()
+                if isinstance(value, str) and value.strip()
+            }
+            fallback_primary = next(
+                (ref for ref in output_refs if ref not in reserved_refs),
+                None,
+            )
+            if fallback_primary is not None:
+                artifacts["outputPrimary"] = fallback_primary
+
+        if not self._try_update_step_row(
+            logical_step_id,
+            updated_at=updated_at,
+            refs=refs,
+            artifacts=artifacts,
+        ):
+            return
+        self._sync_progress_snapshot(updated_at=updated_at)
+
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
@@ -1575,6 +1663,11 @@ class MoonMindRunWorkflow:
                             "plan node execution result is missing required status field"
                         )
                     break
+                self._record_step_result_evidence(
+                    node_id,
+                    execution_result=execution_result,
+                    updated_at=workflow.now(),
+                )
                 if result_status != "COMPLETED":
                     failure_message = self._activity_result_failure_message(
                         execution_result
@@ -2431,6 +2524,26 @@ class MoonMindRunWorkflow:
                 else {}
             )
             moonmind_payload.update(bundle_payload)
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
+
+        step_attempt = self._step_attempt_for(node_id)
+        if step_attempt is not None:
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["stepLedger"] = {
+                "logicalStepId": node_id,
+                "attempt": step_attempt,
+                "scope": "step",
+            }
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 

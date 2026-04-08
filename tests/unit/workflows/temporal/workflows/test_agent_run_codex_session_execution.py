@@ -215,6 +215,9 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     assert run.run_id == "managed-session-run-1"
     assert result.summary == "Session-backed Codex step completed."
     assert result.metadata["resultSource"] == "codex-session-adapter"
+    assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
+    assert result.metadata["childRunId"] == "run-1"
+    assert result.metadata["taskRunId"] == "wf-task-1"
     assert result.metadata["managedSession"]["sessionId"] == "sess:wf-task-1:codex_cli"
     assert [name for name, _payload in routed_calls] == [
         "agent_runtime.load_session_snapshot",
@@ -310,6 +313,7 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
     assert len(managed_requests) == 1
     assert managed_requests[0].managed_session is None
     assert result.summary == "Managed adapter path"
+    assert result.metadata["taskRunId"] == "managed-run-1"
     assert [name for name, _payload in routed_calls] == [
         "agent_runtime.fetch_result",
         "agent_runtime.publish_artifacts",

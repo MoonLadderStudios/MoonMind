@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -28,6 +29,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
 )
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
@@ -217,6 +219,85 @@ async def test_publish_artifacts_none_input_returns_none() -> None:
     activities = TemporalAgentRuntimeActivities()
     result = await activities.agent_runtime_publish_artifacts(None)
     assert result is None
+
+
+async def test_publish_artifacts_stamps_step_metadata_when_context_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_metadata: list[dict[str, object] | None] = []
+
+    async def fake_write_json_artifact(
+        _service: object,
+        *,
+        principal: str,
+        payload: object,
+        execution_ref: object = None,
+        metadata_json: dict[str, object] | None = None,
+    ) -> SimpleNamespace:
+        del principal, payload, execution_ref
+        captured_metadata.append(metadata_json)
+        return SimpleNamespace(artifact_id=f"art_{len(captured_metadata)}")
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_write_json_artifact",
+        fake_write_json_artifact,
+    )
+
+    activities = TemporalAgentRuntimeActivities(artifact_service=object())
+    result = await activities.agent_runtime_publish_artifacts(
+        AgentRunResult(
+            summary="done",
+            metadata={
+                "moonmind": {
+                    "stepLedger": {
+                        "logicalStepId": "delegate-agent",
+                        "attempt": 2,
+                        "scope": "step",
+                    }
+                }
+            },
+        )
+    )
+
+    assert isinstance(result, AgentRunResult)
+    assert len(captured_metadata) == 2
+    assert captured_metadata[0]["step_id"] == "delegate-agent"
+    assert captured_metadata[0]["attempt"] == 2
+    assert captured_metadata[0]["scope"] == "step"
+    assert captured_metadata[1]["step_id"] == "delegate-agent"
+
+
+async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
+    tmp_path: Path,
+) -> None:
+    store = _make_store(tmp_path)
+    store.save(
+        ManagedRunRecord(
+            runId="550e8400-e29b-41d4-a716-446655440000",
+            workflowId="wf-parent-1",
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(tz=UTC),
+            stdoutArtifactRef="art_stdout_1",
+            stderrArtifactRef="art_stderr_1",
+            mergedLogArtifactRef="art_merged_1",
+            diagnosticsRef="art_diag_1",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    result = await activities.agent_runtime_fetch_result(
+        {"run_id": "550e8400-e29b-41d4-a716-446655440000", "agent_id": "codex_cli"}
+    )
+
+    assert isinstance(result, AgentRunResult)
+    assert result.metadata["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
+    assert result.metadata["stdoutArtifactRef"] == "art_stdout_1"
+    assert result.metadata["stderrArtifactRef"] == "art_stderr_1"
+    assert result.metadata["mergedLogArtifactRef"] == "art_merged_1"
+    assert result.metadata["diagnosticsRef"] == "art_diag_1"
 
 
 # ---------------------------------------------------------------------------

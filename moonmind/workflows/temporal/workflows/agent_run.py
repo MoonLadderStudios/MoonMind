@@ -131,6 +131,34 @@ def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
     ).strip()
     return selected_skill or None
 
+
+def _request_step_ledger_context(
+    request: AgentExecutionRequest,
+) -> dict[str, Any] | None:
+    """Return compact step-ledger context carried from the parent workflow."""
+
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    moonmind = metadata_map.get("moonmind")
+    moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
+    raw_context = moonmind_map.get("stepLedger")
+    if not isinstance(raw_context, Mapping):
+        return None
+
+    logical_step_id = str(raw_context.get("logicalStepId") or "").strip()
+    if not logical_step_id:
+        return None
+
+    context: dict[str, Any] = {"logicalStepId": logical_step_id}
+    attempt = raw_context.get("attempt")
+    if isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
+        context["attempt"] = int(attempt)
+    scope = str(raw_context.get("scope") or "").strip()
+    if scope:
+        context["scope"] = scope
+    return context
+
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     return f"auth-profile-manager:{runtime_id}"
 
@@ -312,23 +340,46 @@ class MoonMindAgentRun:
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
         )
 
-    @staticmethod
-    def _merge_managed_session_metadata(
+    def _enrich_result_metadata(
+        self,
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult | None,
     ) -> AgentRunResult | None:
-        if result is None or request.managed_session is None:
+        if result is None:
             return result
+
         metadata = dict(result.metadata or {})
-        metadata["managedSession"] = request.managed_session.model_dump(
-            mode="json",
-            by_alias=True,
-        )
-        if request.instruction_ref:
-            metadata.setdefault("instructionRef", request.instruction_ref)
-        if request.resolved_skillset_ref:
-            metadata.setdefault("resolvedSkillsetRef", request.resolved_skillset_ref)
+        metadata.setdefault("childWorkflowId", workflow.info().workflow_id)
+        metadata.setdefault("childRunId", workflow.info().run_id)
+
+        task_run_id = ""
+        if request.managed_session is not None:
+            task_run_id = str(request.managed_session.task_run_id or "").strip()
+            metadata["managedSession"] = request.managed_session.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+            if request.instruction_ref:
+                metadata.setdefault("instructionRef", request.instruction_ref)
+            if request.resolved_skillset_ref:
+                metadata.setdefault("resolvedSkillsetRef", request.resolved_skillset_ref)
+        elif request.agent_kind == "managed":
+            task_run_id = str(self.run_id or "").strip()
+
+        if task_run_id:
+            metadata.setdefault("taskRunId", task_run_id)
+
+        step_ledger_context = _request_step_ledger_context(request)
+        if step_ledger_context is not None:
+            moonmind_payload = (
+                metadata.get("moonmind")
+                if isinstance(metadata.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["stepLedger"] = step_ledger_context
+            metadata["moonmind"] = moonmind_payload
+
         return result.model_copy(update={"metadata": metadata})
 
     @staticmethod
@@ -1489,7 +1540,7 @@ class MoonMindAgentRun:
                 if manager_handle and request.execution_profile_ref:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
 
-                self.final_result = self._merge_managed_session_metadata(
+                self.final_result = self._enrich_result_metadata(
                     request=request,
                     result=self.final_result,
                 )

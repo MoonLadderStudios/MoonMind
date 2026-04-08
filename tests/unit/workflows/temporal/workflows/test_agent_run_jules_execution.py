@@ -107,6 +107,8 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
     assert all(name != "integration.jules.send_message" for name, _ in routed_calls)
     assert run.run_id == "new-session-1"
     assert result.failure_class is None
+    assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
+    assert result.metadata["childRunId"] == "run-1"
 
 
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
