@@ -96,6 +96,8 @@ def test_agent_workspaces_init_avoids_recursive_permission_repair():
     command = init_service.get("command", "")
     assert "set -e" in command
     assert "chown -R" not in command
+    assert "$$dir" in command
+    assert '"$dir"' not in command
     for expected_dir in (
         "/work/agent_jobs",
         "/work/agent_jobs/artifacts",
