@@ -99,6 +99,9 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    shape_launch_github_auth_environment,
+)
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 
 
@@ -2726,18 +2729,10 @@ class TemporalAgentRuntimeActivities:
     ) -> LaunchCodexManagedSessionRequest:
         """Resolve runtime-only auth immediately before remote session launch."""
 
-        environment = dict(request.environment)
-        ambient_github_token = str(os.environ.get("GITHUB_TOKEN", "")).strip()
-        if ambient_github_token and not str(
-            environment.get("GITHUB_TOKEN", "")
-        ).strip():
-            environment["GITHUB_TOKEN"] = ambient_github_token
-        github_token = await ManagedRuntimeLauncher._resolve_github_token_for_launch(
-            environment
+        environment = await shape_launch_github_auth_environment(
+            request.environment,
+            ambient_github_token=os.environ.get("GITHUB_TOKEN"),
         )
-        if github_token:
-            environment["GITHUB_TOKEN"] = github_token
-            environment.setdefault("GIT_TERMINAL_PROMPT", "0")
         return request.model_copy(update={"environment": environment})
 
     async def agent_runtime_launch_session(
@@ -2754,7 +2749,13 @@ class TemporalAgentRuntimeActivities:
             model_type=LaunchCodexManagedSessionRequest,
         )
         validated = await self._shape_launch_session_request(validated)
-        response = await controller.launch_session(validated)
+        try:
+            response = await controller.launch_session(validated)
+        except Exception as exc:
+            detail = self._sanitize_operator_summary(str(exc)) or "managed session launch failed"
+            raise TemporalActivityRuntimeError(
+                f"agent_runtime.launch_session failed: {detail}"
+            ) from exc
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.launch_session",

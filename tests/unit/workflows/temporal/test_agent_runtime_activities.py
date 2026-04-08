@@ -29,6 +29,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
+    LaunchCodexManagedSessionRequest,
 )
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal import client as temporal_client_module
@@ -446,6 +447,38 @@ async def test_launch_session_injects_github_token_from_managed_secret_store(
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.environment["GITHUB_TOKEN"] == "ghp-managed-secret"
     assert launched_request.environment["GIT_TERMINAL_PROMPT"] == "0"
+
+
+async def test_launch_session_redacts_github_token_in_failure_details() -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        side_effect=RuntimeError(
+            "docker run -e GITHUB_TOKEN=ghp_inline_secret_token_12345678901234567890 failed"
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="agent_runtime\\.launch_session failed:",
+    ) as exc_info:
+        await activities.agent_runtime_launch_session(
+            {
+                "taskRunId": "task-1",
+                "sessionId": "sess-1",
+                "threadId": "thread-1",
+                "workspacePath": "/work/task/repo",
+                "sessionWorkspacePath": "/work/task/session",
+                "artifactSpoolPath": "/work/task/artifacts",
+                "codexHomePath": "/work/task/codex-home",
+                "imageRef": "moonmind:latest",
+                "environment": {"PATH": "/usr/bin"},
+            }
+        )
+
+    message = str(exc_info.value)
+    assert "ghp_inline_secret_token_12345678901234567890" not in message
+    assert "[REDACTED]" in message
 
 
 async def test_load_session_snapshot_queries_session_workflow_via_client_boundary(
@@ -1307,7 +1340,7 @@ async def test_agent_runtime_launch_session_temporal_boundary(
     captured_request: dict[str, Any] = {}
 
     async def _capture_launch_session(
-        request: Any,
+        request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         captured_request["request"] = request
         return CodexManagedSessionHandle(

@@ -28,6 +28,7 @@ from moonmind.schemas.managed_session_models import (
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
+from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
 from .managed_session_store import ManagedSessionStore
 from .managed_session_supervisor import ManagedSessionSupervisor
@@ -36,6 +37,9 @@ from .managed_session_supervisor import ManagedSessionSupervisor
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+_SENSITIVE_ENV_KEY_PATTERN = re.compile(
+    r"(?i)(?:token|secret|password|key|credential|auth)"
+)
 
 
 class CommandRunner(Protocol):
@@ -77,6 +81,10 @@ def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixP
     if not normalized.is_absolute():
         raise RuntimeError(f"{field_name} must be an absolute path: {value}")
     return normalized
+
+
+def _is_sensitive_env_key(key: str) -> bool:
+    return bool(_SENSITIVE_ENV_KEY_PATTERN.search(key))
 
 
 class DockerCodexManagedSessionController:
@@ -251,6 +259,50 @@ class DockerCodexManagedSessionController:
         self._matches_locator(record, locator)
         return record
 
+    @staticmethod
+    def _command_secrets(
+        command: Sequence[str],
+        *,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> list[str]:
+        secrets: list[str] = []
+
+        def _append_assignment(assignment: str) -> None:
+            if "=" not in assignment:
+                return
+            key, value = assignment.split("=", 1)
+            if _is_sensitive_env_key(key) and value:
+                secrets.append(value)
+
+        for index, part in enumerate(command):
+            if part in {"-e", "--env"} and index + 1 < len(command):
+                _append_assignment(command[index + 1])
+                continue
+            if part.startswith("--env="):
+                _append_assignment(part[len("--env="):])
+
+        for key, value in (extra_env or {}).items():
+            if _is_sensitive_env_key(str(key)) and value:
+                secrets.append(str(value))
+
+        return secrets
+
+    @classmethod
+    def _scrub_command_failure(
+        cls,
+        command: Sequence[str],
+        detail: str,
+        *,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> tuple[str, str]:
+        redactor = SecretRedactor.from_environ(
+            placeholder="[REDACTED]",
+            extra_secrets=cls._command_secrets(command, extra_env=extra_env),
+        )
+        rendered_command = scrub_github_tokens(redactor.scrub(" ".join(command)))
+        rendered_detail = scrub_github_tokens(redactor.scrub(detail))
+        return rendered_command, rendered_detail
+
     async def _remove_container(
         self,
         container_identifier: str,
@@ -279,8 +331,13 @@ class DockerCodexManagedSessionController:
             env=env,
         )
         if returncode != 0:
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                stderr.strip() or stdout.strip(),
+                extra_env=extra_env,
+            )
             raise RuntimeError(
-                f"{' '.join(command)} failed with exit code {returncode}: {stderr.strip() or stdout.strip()}"
+                f"{rendered_command} failed with exit code {returncode}: {rendered_detail}"
             )
         return stdout, stderr
 
@@ -290,8 +347,12 @@ class DockerCodexManagedSessionController:
     ) -> tuple[str, str]:
         returncode, stdout, stderr = await self._command_runner(tuple(command))
         if returncode != 0:
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                stderr.strip() or stdout.strip(),
+            )
             raise RuntimeError(
-                f"{' '.join(command)} failed with exit code {returncode}: {stderr.strip() or stdout.strip()}"
+                f"{rendered_command} failed with exit code {returncode}: {rendered_detail}"
             )
         return stdout, stderr
 
