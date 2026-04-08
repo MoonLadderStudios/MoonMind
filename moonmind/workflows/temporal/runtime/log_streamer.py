@@ -32,10 +32,15 @@ class RuntimeLogStreamer:
         self.publisher = publisher
         self._sequence_counter = 0
         self._annotations_by_run: dict[str, list[dict[str, Any]]] = {}
+        self._observability_events_by_run: dict[str, list[dict[str, Any]]] = {}
 
     def _next_sequence(self) -> int:
         self._sequence_counter += 1
         return self._sequence_counter
+
+    @staticmethod
+    def _current_timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     async def stream_to_artifact(
         self,
@@ -92,9 +97,10 @@ class RuntimeLogStreamer:
                     obj = LiveLogChunk(
                         sequence=self._next_sequence(),
                         stream=stream_name,  # type: ignore
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        timestamp=self._current_timestamp(),
                         text=text_content,
                         offset=current_offset,
+                        kind=f"{stream_name}_chunk",
                     )
                     live_publisher.publish(obj)
                 except Exception:
@@ -153,31 +159,101 @@ class RuntimeLogStreamer:
             return
 
         sequence = self._next_sequence()
+        timestamp = self._current_timestamp()
         annotation_record = {
             "annotation_type": annotation_type or metadata.get("annotation_type", "system"),
             "text": text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp,
             "sequence": sequence,
             "metadata": metadata,
         }
         self._annotations_by_run.setdefault(run_id, []).append(annotation_record)
+        self._observability_events_by_run.setdefault(run_id, []).append(
+            {
+                "sequence": sequence,
+                "timestamp": timestamp,
+                "stream": "system",
+                "text": text,
+                "kind": "system_annotation",
+                "metadata": metadata,
+            }
+        )
 
-        live_publisher = self.publisher
-        if live_publisher is None and workspace_path:
-            live_publisher = SpoolLogPublisher(workspace_path=workspace_path)
-
-        if live_publisher is None:
-            return
-
-        try:
-            obj = LiveLogChunk(
+        self._publish_observability_chunk(
+            workspace_path=workspace_path,
+            chunk=LiveLogChunk(
                 sequence=sequence,
                 stream="system",
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=timestamp,
                 text=text,
                 offset=None,
-            )
-            live_publisher.publish(obj)
+                kind="system_annotation",
+                metadata=metadata,
+            ),
+        )
+
+    def emit_observability_event(
+        self,
+        *,
+        run_id: str,
+        workspace_path: str | None,
+        stream: str,
+        text: str,
+        kind: str | None = None,
+        offset: int | None = None,
+        session_id: str | None = None,
+        session_epoch: int | None = None,
+        container_id: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        active_turn_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a structured observability event into the shared live stream."""
+        normalized_text = str(text or "").strip()
+        if not normalized_text:
+            return
+        timestamp = self._current_timestamp()
+        sequence = self._next_sequence()
+        chunk = LiveLogChunk(
+            sequence=sequence,
+            stream=stream,  # type: ignore[arg-type]
+            timestamp=timestamp,
+            text=normalized_text,
+            offset=offset,
+            kind=kind,
+            session_id=session_id,
+            session_epoch=session_epoch,
+            container_id=container_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            active_turn_id=active_turn_id,
+            metadata=dict(metadata or {}),
+        )
+        self._observability_events_by_run.setdefault(run_id, []).append(
+            chunk.model_dump(mode="json", exclude_none=True)
+        )
+        self._publish_observability_chunk(
+            workspace_path=workspace_path,
+            chunk=chunk,
+        )
+
+    def _publish_observability_chunk(
+        self,
+        *,
+        workspace_path: str | None,
+        chunk: LiveLogChunk,
+    ) -> None:
+        live_publisher = self.publisher
+        if live_publisher is None and workspace_path:
+            try:
+                live_publisher = SpoolLogPublisher(workspace_path=workspace_path)
+            except Exception:
+                return
+        if live_publisher is None:
+            return
+        try:
+            live_publisher.publish(chunk)
         except Exception:
             # Failures in observability publishing are non-fatal for runtime control.
             return
@@ -186,6 +262,11 @@ class RuntimeLogStreamer:
         """Return and clear persisted in-memory supervisor annotations for a run."""
         annotations = self._annotations_by_run.pop(run_id, None)
         return list(annotations or [])
+
+    def consume_observability_events(self, run_id: str) -> list[dict[str, Any]]:
+        """Return and clear persisted in-memory observability events for a run."""
+        events = self._observability_events_by_run.pop(run_id, None)
+        return list(events or [])
 
     async def stream_and_parse(
         self,
@@ -268,6 +349,7 @@ class RuntimeLogStreamer:
         annotations: list[dict] | None = None,
         parsed_output: ParsedOutput | None = None,
         events: list[dict] | None = None,
+        observability_events: list[dict] | None = None,
     ) -> str:
         """Write a diagnostics JSON bundle and return the storage reference."""
         diagnostics: dict[str, Any] = {
@@ -279,6 +361,8 @@ class RuntimeLogStreamer:
             diagnostics["annotations"] = annotations
         if events is not None:
             diagnostics["events"] = events
+        if observability_events is not None:
+            diagnostics["observability_events"] = observability_events
         if parsed_output is not None:
             diagnostics["parsed_output"] = {
                 "has_structured_output": parsed_output.has_structured_output,

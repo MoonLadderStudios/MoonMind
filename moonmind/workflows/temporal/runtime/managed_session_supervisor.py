@@ -62,6 +62,32 @@ class ManagedSessionSupervisor:
                 total += path.stat().st_size
         return total
 
+    def emit_session_event(
+        self,
+        *,
+        record: CodexManagedSessionRecord,
+        text: str,
+        kind: str,
+        turn_id: str | None = None,
+        active_turn_id: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Publish one session-aware observability row into the run-level stream."""
+        self._log_streamer.emit_observability_event(
+            run_id=record.task_run_id,
+            workspace_path=record.workspace_path,
+            stream="session",
+            text=text,
+            kind=kind,
+            session_id=record.session_id,
+            session_epoch=record.session_epoch,
+            container_id=record.container_id,
+            thread_id=record.thread_id,
+            turn_id=turn_id,
+            active_turn_id=active_turn_id if active_turn_id is not None else record.active_turn_id,
+            metadata=dict(metadata or {}),
+        )
+
     async def _watch(self, session_id: str) -> None:
         stop_event = self._stop_events[session_id]
         while not stop_event.is_set():
@@ -144,6 +170,7 @@ class ManagedSessionSupervisor:
             log_refs={"stdout": stdout_ref, "stderr": stderr_ref},
             annotations=[],
             events=[],
+            observability_events=self._log_streamer.consume_observability_events(record.session_id),
         )
         summary_ref = self._write_json_artifact(
             job_id=record.session_id,
@@ -261,6 +288,40 @@ class ManagedSessionSupervisor:
                 + "\n"
             ).encode("utf-8"),
         )[1]
+        self.emit_session_event(
+            record=record,
+            kind="session_cleared",
+            text=(
+                f"Session cleared. Epoch {previous_record.session_epoch} -> "
+                f"{record.session_epoch}; thread {previous_record.thread_id} -> {record.thread_id}."
+            ),
+            metadata={
+                "action": action,
+                "reason": reason,
+                "previousSessionEpoch": previous_record.session_epoch,
+                "newSessionEpoch": record.session_epoch,
+                "previousThreadId": previous_record.thread_id,
+                "newThreadId": record.thread_id,
+                "controlEventRef": control_ref,
+            },
+        )
+        self.emit_session_event(
+            record=record,
+            kind="session_reset_boundary",
+            text=(
+                f"Epoch boundary reached. Session {record.session_id} is now on "
+                f"epoch {record.session_epoch} thread {record.thread_id}."
+            ),
+            metadata={
+                "action": action,
+                "reason": reason,
+                "previousSessionEpoch": previous_record.session_epoch,
+                "newSessionEpoch": record.session_epoch,
+                "previousThreadId": previous_record.thread_id,
+                "newThreadId": record.thread_id,
+                "resetBoundaryRef": boundary_ref,
+            },
+        )
         return await self._store.update(
             record.session_id,
             latest_control_event_ref=control_ref,

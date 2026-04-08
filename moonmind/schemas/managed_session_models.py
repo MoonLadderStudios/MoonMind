@@ -331,6 +331,7 @@ class CodexManagedSessionRecord(BaseModel):
     latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
     latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
     latest_reset_boundary_ref: str | None = Field(None, alias="latestResetBoundaryRef")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
     last_log_offset: int | None = Field(None, alias="lastLogOffset", ge=0)
     last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
@@ -393,6 +394,11 @@ class CodexManagedSessionRecord(BaseModel):
                 self.latest_reset_boundary_ref,
                 field_name="latestResetBoundaryRef",
             )
+        if self.active_turn_id is not None:
+            self.active_turn_id = require_non_blank(
+                self.active_turn_id,
+                field_name="activeTurnId",
+            )
         if self.error_message is not None:
             self.error_message = require_non_blank(
                 self.error_message,
@@ -412,7 +418,7 @@ class CodexManagedSessionRecord(BaseModel):
             sessionEpoch=self.session_epoch,
             containerId=self.container_id,
             threadId=self.thread_id,
-            activeTurnId=None,
+            activeTurnId=self.active_turn_id,
         )
 
     def published_artifact_refs(self) -> tuple[str, ...]:

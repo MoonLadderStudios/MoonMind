@@ -7,6 +7,7 @@ import json
 import os
 import posixpath
 import re
+import inspect
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
@@ -211,6 +212,7 @@ class DockerCodexManagedSessionController:
             taskRunId=request.task_run_id,
             containerId=handle.session_state.container_id,
             threadId=handle.session_state.thread_id,
+            activeTurnId=handle.session_state.active_turn_id,
             runtimeId="codex_cli",
             imageRef=handle.image_ref or request.image_ref,
             controlUrl=handle.control_url or f"docker-exec://{handle.session_state.container_id}",
@@ -358,6 +360,29 @@ class DockerCodexManagedSessionController:
             error_message=None,
         )
 
+    async def _emit_session_event(
+        self,
+        *,
+        record: CodexManagedSessionRecord,
+        text: str,
+        kind: str,
+        turn_id: str | None = None,
+        active_turn_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        if self._session_supervisor is None:
+            return
+        emit_result = self._session_supervisor.emit_session_event(
+            record=record,
+            text=text,
+            kind=kind,
+            turn_id=turn_id,
+            active_turn_id=active_turn_id,
+            metadata=dict(metadata or {}),
+        )
+        if inspect.isawaitable(emit_result):
+            await emit_result
+
     async def _container_exists(self, container_id: str) -> bool:
         returncode, stdout, stderr = await self._command_runner(
             (
@@ -441,6 +466,15 @@ class DockerCodexManagedSessionController:
             self._session_store.save(record)
             if self._session_supervisor is not None:
                 await self._session_supervisor.start(record)
+                await self._emit_session_event(
+                    record=record,
+                    kind="session_started",
+                    text=(
+                        f"Session started. Epoch {record.session_epoch} "
+                        f"thread {record.thread_id}."
+                    ),
+                    metadata={"action": "start_session"},
+                )
         return handle
 
     async def session_status(
@@ -478,10 +512,34 @@ class DockerCodexManagedSessionController:
                 session_epoch=response.session_state.session_epoch,
                 container_id=response.session_state.container_id,
                 thread_id=response.session_state.thread_id,
+                active_turn_id=response.session_state.active_turn_id,
                 status=self._record_status_from_turn_status(response.status),
                 updated_at=datetime.now(tz=UTC),
                 error_message=self._turn_error_message(response),
             )
+            if self._session_supervisor is not None:
+                record = self._session_store.load(request.session_id)
+                if record is not None:
+                    await self._emit_session_event(
+                        record=record,
+                        kind="turn_started",
+                        text=f"Turn started: {response.turn_id}.",
+                        turn_id=response.turn_id,
+                        active_turn_id=response.turn_id,
+                        metadata={"action": "send_turn"},
+                    )
+                    if response.status == "completed":
+                        await self._emit_session_event(
+                            record=record,
+                            kind="turn_completed",
+                            text=f"Turn completed: {response.turn_id}.",
+                            turn_id=response.turn_id,
+                            active_turn_id=record.active_turn_id,
+                            metadata={
+                                "action": "send_turn",
+                                "assistantText": response.metadata.get("assistantText"),
+                            },
+                        )
         return response
 
     async def steer_turn(
@@ -514,10 +572,24 @@ class DockerCodexManagedSessionController:
                 session_epoch=response.session_state.session_epoch,
                 container_id=response.session_state.container_id,
                 thread_id=response.session_state.thread_id,
+                active_turn_id=response.session_state.active_turn_id,
                 status=self._record_status_from_turn_status(response.status),
                 updated_at=datetime.now(tz=UTC),
                 error_message=self._turn_error_message(response),
             )
+            if self._session_supervisor is not None and response.status == "interrupted":
+                record = self._session_store.load(request.session_id)
+                if record is not None:
+                    await self._emit_session_event(
+                        record=record,
+                        kind="turn_interrupted",
+                        text=f"Turn interrupted: {response.turn_id}.",
+                        turn_id=response.turn_id,
+                        metadata={
+                            "action": "interrupt_turn",
+                            "reason": response.metadata.get("reason"),
+                        },
+                    )
         return response
 
     async def clear_session(
@@ -543,6 +615,7 @@ class DockerCodexManagedSessionController:
                 session_epoch=handle.session_state.session_epoch,
                 container_id=handle.session_state.container_id,
                 thread_id=handle.session_state.thread_id,
+                active_turn_id=handle.session_state.active_turn_id,
                 image_ref=handle.image_ref or previous_record.image_ref,
                 control_url=handle.control_url or previous_record.control_url,
                 status=self._record_status_from_handle_status(handle.status),
@@ -580,6 +653,19 @@ class DockerCodexManagedSessionController:
         )
         if self._session_store is not None:
             if self._session_supervisor is not None:
+                record = self._session_store.load(request.session_id)
+                if record is not None:
+                    await self._session_store.update(
+                        request.session_id,
+                        active_turn_id=None,
+                    )
+                    refreshed = self._session_store.load(request.session_id) or record
+                    await self._emit_session_event(
+                        record=refreshed,
+                        kind="system_annotation",
+                        text=f"Session terminated: {request.session_id}.",
+                        metadata={"action": "terminate_session"},
+                    )
                 await self._session_supervisor.finalize(
                     request.session_id,
                     status="terminated",
@@ -588,6 +674,7 @@ class DockerCodexManagedSessionController:
                 await self._session_store.update(
                     request.session_id,
                     status="terminated",
+                    active_turn_id=None,
                     updated_at=datetime.now(tz=UTC),
                 )
         return handle

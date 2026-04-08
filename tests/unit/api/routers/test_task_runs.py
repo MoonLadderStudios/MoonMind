@@ -141,6 +141,30 @@ def test_get_observability_summary_includes_live_stream_fields_for_active_run(
     assert body["liveStreamStatus"] == "available"
 
 
+def test_get_observability_summary_includes_session_snapshot(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._load_task_run_session_record",
+            return_value=_build_session_record(),
+        ):
+            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    snapshot = response.json()["summary"]["sessionSnapshot"]
+    assert snapshot["sessionId"] == "sess:wf-task-1:codex_cli"
+    assert snapshot["sessionEpoch"] == 2
+    assert snapshot["threadId"] == "thread-2"
+
+
 def test_get_observability_summary_live_stream_ended_for_terminal_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -744,6 +768,57 @@ def test_get_task_run_diagnostics_uses_supported_artifact_root_layouts(
 # ---------------------------------------------------------------------------
 
 # Tests removed due to an AnyIO test transport deadlock with fake streaming generators
+
+
+def test_get_task_run_observability_events_reads_structured_spool_history(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "live_streams.spool").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "sequence": 10,
+                        "stream": "stdout",
+                        "text": "stdout line\n",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "stdout_chunk",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "sequence": 11,
+                        "stream": "session",
+                        "text": "Epoch boundary reached.",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "session_reset_boundary",
+                        "session_id": "sess:wf-task-1:codex_cli",
+                        "session_epoch": 2,
+                        "thread_id": "thread-2",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(workspace_path)
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["truncated"] is False
+    assert [event["sequence"] for event in body["events"]] == [10, 11]
+    assert body["events"][1]["stream"] == "session"
+    assert body["events"][1]["kind"] == "session_reset_boundary"
 
 
 def _build_session_record() -> CodexManagedSessionRecord:

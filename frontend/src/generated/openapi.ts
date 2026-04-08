@@ -1246,6 +1246,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-runs/{task_run_id}/artifact-sessions/{session_id}/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Control Task Run Artifact Session */
+        post: operations["control_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-runs/{id}/observability/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Run Observability Events
+         * @description Return structured observability history for one task run.
+         */
+        get: operations["get_task_run_observability_events_api_task_runs__id__observability_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-runs/{id}/logs/stream": {
         parameters: {
             query?: never;
@@ -2174,6 +2211,33 @@ export interface components {
             content_type?: string | null;
             /** Encryption */
             encryption: string;
+        };
+        /**
+         * ArtifactSessionControlRequest
+         * @description Operator control request for one task-scoped artifact session.
+         */
+        ArtifactSessionControlRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "send_follow_up" | "clear_session";
+            /** Message */
+            message?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * ArtifactSessionControlResponse
+         * @description Control response envelope with the refreshed session projection.
+         */
+        ArtifactSessionControlResponse: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "send_follow_up" | "clear_session";
+            projection: components["schemas"]["ArtifactSessionProjectionModel"];
         };
         /**
          * ArtifactSessionGroupModel
@@ -8100,6 +8164,105 @@ export interface operations {
                 content?: never;
             };
             /** @description Session projection not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    control_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_run_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactSessionControlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSessionControlResponse"];
+                };
+            };
+            /** @description You do not have permission to access this task run */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session projection not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The managed session cannot accept this control action */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_run_observability_events_api_task_runs__id__observability_events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Observability record not found for this task run */
             404: {
                 headers: {
                     [name: string]: unknown;

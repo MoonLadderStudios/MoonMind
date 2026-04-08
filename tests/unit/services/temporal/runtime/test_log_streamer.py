@@ -318,6 +318,35 @@ async def test_stream_to_artifact_calls_publisher(streamer):
     assert combined_text == "chunk1\nchunk2\n"
 
 
+def test_emit_observability_event_publishes_session_metadata(streamer):
+    log_streamer, _ = streamer
+    mock_publisher = Mock()
+    log_streamer.publisher = mock_publisher
+
+    log_streamer.emit_observability_event(
+        run_id="run-session-event",
+        workspace_path=None,
+        stream="session",
+        text="Session cleared.",
+        kind="session_reset_boundary",
+        session_id="sess-1",
+        session_epoch=2,
+        container_id="ctr-1",
+        thread_id="thread-2",
+        turn_id="turn-7",
+        active_turn_id=None,
+        metadata={"reason": "operator_reset"},
+    )
+
+    published_chunk = mock_publisher.publish.call_args[0][0]
+    assert published_chunk.stream == "session"
+    assert published_chunk.kind == "session_reset_boundary"
+    assert published_chunk.session_id == "sess-1"
+    assert published_chunk.session_epoch == 2
+    assert published_chunk.thread_id == "thread-2"
+    assert published_chunk.metadata["reason"] == "operator_reset"
+
+
 @pytest.mark.asyncio
 async def test_stream_and_parse_uses_one_global_sequence_across_streams(tmp_path):
     from unittest.mock import Mock
