@@ -271,6 +271,11 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     )
     monkeypatch.setattr(
         settings.temporal_dashboard,
+        "detail_endpoint",
+        "/gateway/api/executions/{workflowId}",
+    )
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
         "artifact_download_endpoint",
         "/api/temporal/artifacts/{artifactId}/download",
     )
@@ -286,6 +291,10 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         "debugFieldsEnabled": True,
     }
     assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"
+    assert (
+        config["sources"]["temporal"]["steps"]
+        == "/gateway/api/executions/{workflowId}/steps"
+    )
     assert (
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/temporal/artifacts/{artifactId}/download"

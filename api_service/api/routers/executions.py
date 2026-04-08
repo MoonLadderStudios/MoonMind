@@ -538,7 +538,9 @@ def _serialize_execution(
     pr_url = _extract_execution_pr_url(memo, search_attributes, params)
     is_admin = _is_execution_admin(user)
     steps_href = (
-        f"/api/executions/{record.workflow_id}/steps"
+        settings.temporal_dashboard.steps_endpoint.replace(
+            "{workflowId}", record.workflow_id
+        )
         if workflow_type_value == "MoonMind.Run"
         else None
     )
@@ -779,7 +781,7 @@ async def _load_execution_step_ledger(
             workflow_id,
             "get_step_ledger",
         )
-    except Exception as exc:
+    except RPCError as exc:
         logger.warning(
             "Failed to query execution step ledger for %s: %s",
             workflow_id,
@@ -804,9 +806,9 @@ async def _load_execution_step_ledger(
             exc_info=True,
         )
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
-                "code": "invalid_execution_query",
+                "code": "invalid_execution_query_payload",
                 "message": "Execution step ledger query returned an invalid payload.",
             },
         ) from exc

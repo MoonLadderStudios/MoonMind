@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
     _get_service,
@@ -1341,6 +1342,16 @@ def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
     assert payload["progress"] is None
 
 
+def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "detail_endpoint",
+        "/gateway/api/executions/{workflowId}",
+    )
+    payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
+    assert payload["stepsHref"] == "/gateway/api/executions/mm:wf-1/steps"
+
+
 def test_describe_execution_does_not_query_progress_for_manifest_workflows() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -1420,6 +1431,41 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["runScope"] == "latest"
     assert payload["steps"][0]["attempt"] == 2
     assert payload["steps"][0]["refs"]["taskRunId"] == "task-run-1"
+
+
+def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        error=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None),
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "temporal_unavailable"
+
+
+def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(app, ledger={})
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "invalid_execution_query_payload"
 
 
 def test_get_execution_steps_rejects_unsupported_workflow_types() -> None:
