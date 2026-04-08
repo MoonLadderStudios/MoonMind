@@ -37,8 +37,10 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
+    _derive_pr_resolver_failure,
     _current_time,
     _generate_run_id,
+    _is_generic_process_exit_summary,
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
@@ -310,10 +312,35 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         pr_resolver_expected: bool = False,
     ) -> AgentRunResult:
-        del pr_resolver_expected
         state = self._load_run_state(run_id)
         if state is not None:
-            return state.result
+            result = state.result
+            if self._run_store is not None and pr_resolver_expected:
+                record = self._run_store.load(run_id)
+                if record is not None:
+                    failure_class = result.failure_class
+                    summary = str(result.summary or "").strip()
+                    derived_failure_class, derived_summary = (
+                        _derive_pr_resolver_failure(record.workspace_path)
+                    )
+                    if derived_failure_class is not None:
+                        should_apply_derived = False
+                        if record.status == "completed" and failure_class is None:
+                            should_apply_derived = True
+                        elif (
+                            record.status == "failed"
+                            and failure_class in {None, "execution_error"}
+                            and _is_generic_process_exit_summary(summary)
+                        ):
+                            should_apply_derived = True
+                        if should_apply_derived:
+                            result = result.model_copy(
+                                update={
+                                    "failure_class": derived_failure_class,
+                                    "summary": derived_summary or summary,
+                                }
+                            )
+            return result
         return AgentRunResult(
             summary="Codex managed-session result not found.",
             failureClass="execution_error",
