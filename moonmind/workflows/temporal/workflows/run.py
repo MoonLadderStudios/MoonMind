@@ -590,15 +590,21 @@ class MoonMindRunWorkflow:
         waiting_reason: str | None,
         summary: str | None = None,
         attention_required: bool = False,
+        refs: Mapping[str, Any] | None = None,
+        artifacts: Mapping[str, Any] | None = None,
     ) -> None:
-        if not self._try_update_step_row(
-            logical_step_id,
-            updated_at=updated_at,
-            status=status,
-            summary=summary,
-            waiting_reason=waiting_reason,
-            attention_required=attention_required,
-        ):
+        update_kwargs: dict[str, Any] = {
+            "updated_at": updated_at,
+            "status": status,
+            "summary": summary,
+            "waiting_reason": waiting_reason,
+            "attention_required": attention_required,
+        }
+        if refs is not None:
+            update_kwargs["refs"] = refs
+        if artifacts is not None:
+            update_kwargs["artifacts"] = artifacts
+        if not self._try_update_step_row(logical_step_id, **update_kwargs):
             return
         self._sync_progress_snapshot(updated_at=updated_at)
 
@@ -654,14 +660,22 @@ class MoonMindRunWorkflow:
                     return value.strip()
             return None
 
-        output_refs_raw = outputs.get("outputRefs")
-        if not isinstance(output_refs_raw, list):
-            output_refs_raw = outputs.get("output_refs")
-        output_refs = [
-            str(item).strip()
-            for item in (output_refs_raw or [])
-            if isinstance(item, str) and item.strip()
-        ]
+        def _output_ref_list(*keys: str) -> list[str]:
+            for key in keys:
+                value = outputs.get(key)
+                if isinstance(value, (list, tuple)):
+                    return [
+                        item.strip()
+                        for item in value
+                        if isinstance(item, str) and item.strip()
+                    ]
+            return []
+
+        output_refs = _output_ref_list("outputRefs", "output_refs")
+        agent_result_ref = _output_ref(
+            "outputAgentResultRef",
+            "output_agent_result_ref",
+        )
 
         refs = {
             "childWorkflowId": _output_ref("childWorkflowId", "child_workflow_id"),
@@ -673,8 +687,6 @@ class MoonMindRunWorkflow:
             "outputPrimary": _output_ref(
                 "outputPrimaryRef",
                 "output_primary_ref",
-                "outputAgentResultRef",
-                "output_agent_result_ref",
             ),
             "runtimeStdout": _output_ref("stdoutArtifactRef", "stdout_artifact_ref"),
             "runtimeStderr": _output_ref("stderrArtifactRef", "stderr_artifact_ref"),
@@ -703,6 +715,8 @@ class MoonMindRunWorkflow:
             )
             if fallback_primary is not None:
                 artifacts["outputPrimary"] = fallback_primary
+            elif agent_result_ref is not None:
+                artifacts["outputPrimary"] = agent_result_ref
 
         if not self._try_update_step_row(
             logical_step_id,
@@ -1551,6 +1565,7 @@ class MoonMindRunWorkflow:
                             updated_at=workflow.now(),
                             waiting_reason="Awaiting child workflow progress",
                             summary=f"Awaiting child workflow for {tool_name}",
+                            refs={"childWorkflowId": child_workflow_id},
                         )
                         try:
                             child_result = await workflow.execute_child_workflow(
