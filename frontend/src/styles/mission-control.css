@@ -134,21 +134,22 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 0.18rem 0.56rem;
+  padding: 0.12rem 0.4rem;
   border-radius: 999px;
-  background: rgb(var(--mm-muted) / 0.12);
+  background: rgba(255, 255, 255, 0.06);
   white-space: nowrap;
   line-height: 1.2;
   margin-left: auto;
-  opacity: 0.72;
+  opacity: 0.45;
 }
 
 .version-badge-value {
   font-family: "IBM Plex Mono", "Fira Code", monospace;
-  font-size: 0.66rem;
-  font-weight: 600;
-  color: rgb(var(--mm-muted) / 0.95);
+  font-size: 0.62rem;
+  font-weight: 400;
+  color: rgb(var(--mm-muted) / 0.8);
   letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .theme-toggle {
