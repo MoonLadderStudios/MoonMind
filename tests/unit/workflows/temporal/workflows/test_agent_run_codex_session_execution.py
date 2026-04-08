@@ -72,6 +72,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     run = MoonMindAgentRun()
     routed_calls: list[tuple[str, Any]] = []
     session_adapter_requests: list[AgentExecutionRequest] = []
+    loaded_snapshots: list[dict[str, Any]] = []
 
     _configure_workflow_runtime(monkeypatch)
 
@@ -80,11 +81,14 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
             raise AssertionError("ManagedAgentAdapter should not be used for managedSession requests")
 
     class _FakeCodexSessionAdapter:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
+        def __init__(self, **kwargs: Any) -> None:
+            self._load_session_snapshot = kwargs["load_session_snapshot"]
 
         async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
             session_adapter_requests.append(request)
+            loaded_snapshots.append(
+                await self._load_session_snapshot(request.managed_session.workflow_id)
+            )
             return AgentRunHandle(
                 runId="managed-session-run-1",
                 agentKind="managed",
@@ -127,23 +131,6 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
         async def signal(self, signal_name: str, payload: Any) -> None:
             return None
 
-        async def query(self, query_name: str) -> dict[str, Any]:
-            return {
-                "binding": {
-                    "workflowId": "wf-task-1:session:codex_cli",
-                    "taskRunId": "wf-task-1",
-                    "sessionId": "sess:wf-task-1:codex_cli",
-                    "sessionEpoch": 1,
-                    "runtimeId": "codex_cli",
-                    "executionProfileRef": "codex-default",
-                },
-                "status": "active",
-                "containerId": None,
-                "threadId": None,
-                "activeTurnId": None,
-                "terminationRequested": False,
-            }
-
     async def fake_ensure_manager_and_signal(
         manager_id: str,
         runtime_id: str,
@@ -169,6 +156,22 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
         **_kwargs: Any,
     ) -> Any:
         routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": {
+                    "workflowId": "wf-task-1:session:codex_cli",
+                    "taskRunId": "wf-task-1",
+                    "sessionId": "sess:wf-task-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex-default",
+                },
+                "status": "active",
+                "containerId": None,
+                "threadId": None,
+                "activeTurnId": None,
+                "terminationRequested": False,
+            }
         if activity_name == "agent_runtime.publish_artifacts":
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
@@ -188,11 +191,31 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     result = await run.run(_managed_session_request())
 
     assert session_adapter_requests[0].managed_session is not None
+    assert loaded_snapshots == [
+        {
+            "binding": {
+                "workflowId": "wf-task-1:session:codex_cli",
+                "taskRunId": "wf-task-1",
+                "sessionId": "sess:wf-task-1:codex_cli",
+                "sessionEpoch": 1,
+                "runtimeId": "codex_cli",
+                "executionProfileRef": "codex-default",
+            },
+            "status": "active",
+            "containerId": None,
+            "threadId": None,
+            "activeTurnId": None,
+            "terminationRequested": False,
+        }
+    ]
     assert run.run_id == "managed-session-run-1"
     assert result.summary == "Session-backed Codex step completed."
     assert result.metadata["resultSource"] == "codex-session-adapter"
     assert result.metadata["managedSession"]["sessionId"] == "sess:wf-task-1:codex_cli"
-    assert [name for name, _payload in routed_calls] == ["agent_runtime.publish_artifacts"]
+    assert [name for name, _payload in routed_calls] == [
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.publish_artifacts",
+    ]
 
 
 async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(

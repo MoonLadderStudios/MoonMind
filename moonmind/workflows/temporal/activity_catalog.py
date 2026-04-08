@@ -762,6 +762,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(
+            activity_type="agent_runtime.load_session_snapshot",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 90),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.publish_artifacts",
             family="agent_runtime",
             capability_class="agent_runtime",

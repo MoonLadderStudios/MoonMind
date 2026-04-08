@@ -919,8 +919,14 @@ class MoonMindAgentRun:
                         )
 
                         async def _load_session_snapshot(workflow_id: str) -> dict[str, Any]:
-                            handle = workflow.get_external_workflow_handle(workflow_id)
-                            return await handle.query("get_status")
+                            return await self._execute_routed_activity(
+                                "agent_runtime.load_session_snapshot",
+                                request.managed_session.model_dump(
+                                    mode="json",
+                                    by_alias=True,
+                                ),
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
 
                         async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
                             await session_handle.signal("attach_runtime_handles", payload)

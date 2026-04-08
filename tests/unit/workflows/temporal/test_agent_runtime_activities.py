@@ -22,10 +22,13 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionBinding,
     CodexManagedSessionHandle,
+    CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
 )
+from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
@@ -274,6 +277,56 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
+
+
+async def test_load_session_snapshot_queries_session_workflow_via_client_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_handle = AsyncMock()
+    workflow_handle.query = AsyncMock(
+        return_value=CodexManagedSessionSnapshot(
+            binding=CodexManagedSessionBinding(
+                workflowId="wf-task-1:session:codex_cli",
+                taskRunId="wf-task-1",
+                sessionId="sess:wf-task-1:codex_cli",
+                sessionEpoch=1,
+                runtimeId="codex_cli",
+                executionProfileRef="codex-default",
+            ),
+            status="active",
+            containerId="ctr-1",
+            threadId="thread-1",
+            activeTurnId=None,
+            terminationRequested=False,
+        ).model_dump(mode="json", by_alias=True)
+    )
+    class _FakeTemporalClientAdapter:
+        async def get_workflow_handle(self, workflow_id: str) -> AsyncMock:
+            assert workflow_id == "wf-task-1:session:codex_cli"
+            return workflow_handle
+
+    monkeypatch.setattr(
+        temporal_client_module,
+        "TemporalClientAdapter",
+        _FakeTemporalClientAdapter,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_load_session_snapshot(
+        {
+            "workflowId": "wf-task-1:session:codex_cli",
+            "taskRunId": "wf-task-1",
+            "sessionId": "sess:wf-task-1:codex_cli",
+            "sessionEpoch": 1,
+            "runtimeId": "codex_cli",
+            "executionProfileRef": "codex-default",
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionSnapshot)
+    assert result.binding.workflow_id == "wf-task-1:session:codex_cli"
+    assert result.container_id == "ctr-1"
+    workflow_handle.query.assert_awaited_once_with("get_status")
 
 
 async def test_session_status_delegates_to_remote_session_controller() -> None:

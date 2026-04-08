@@ -51,9 +51,11 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionBinding,
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
+    CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     FetchCodexManagedSessionSummaryRequest,
@@ -356,6 +358,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "agent_runtime.launch_session": ("agent_runtime", "agent_runtime_launch_session"),
+    "agent_runtime.load_session_snapshot": (
+        "agent_runtime",
+        "agent_runtime_load_session_snapshot",
+    ),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
     "integration.codex_cloud.fetch_result": (
@@ -2670,6 +2676,28 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.launch_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_load_session_snapshot(
+        self,
+        request: Mapping[str, Any] | CodexManagedSessionBinding | None = None,
+        /,
+    ) -> CodexManagedSessionSnapshot:
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.load_session_snapshot",
+            model_type=CodexManagedSessionBinding,
+        )
+        handle = await TemporalClientAdapter().get_workflow_handle(
+            validated.workflow_id
+        )
+        response = await handle.query("get_status")
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.load_session_snapshot",
+            model_type=CodexManagedSessionSnapshot,
         )
 
     async def agent_runtime_session_status(
