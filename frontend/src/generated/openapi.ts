@@ -1263,6 +1263,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/task-runs/{id}/observability/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Run Observability Events
+         * @description Return structured observability history for one task run.
+         */
+        get: operations["get_task_run_observability_events_api_task_runs__id__observability_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-runs/{id}/logs/stream": {
         parameters: {
             query?: never;
@@ -8202,6 +8222,48 @@ export interface operations {
             };
             /** @description The managed session cannot accept this control action */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_run_observability_events_api_task_runs__id__observability_events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Observability record not found for this task run */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

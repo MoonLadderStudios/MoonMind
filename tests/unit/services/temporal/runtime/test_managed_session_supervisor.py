@@ -131,6 +131,39 @@ async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    log_streamer = RuntimeLogStreamer(artifact_storage)
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=log_streamer,
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+
+    supervisor.emit_session_event(
+        record=record,
+        text="Session cleared.",
+        kind="session_cleared",
+        metadata={"reason": "operator_reset"},
+    )
+
+    snapshot = await supervisor.publish_snapshot("sess-1")
+    diagnostics_payload = json.loads(
+        artifact_storage.resolve_storage_path(snapshot.diagnostics_ref).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert diagnostics_payload["observability_events"][0]["stream"] == "session"
+    assert diagnostics_payload["observability_events"][0]["kind"] == "session_cleared"
+    assert diagnostics_payload["observability_events"][0]["metadata"]["reason"] == "operator_reset"
+
+
+@pytest.mark.asyncio
 async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundary_refs(
     tmp_path: Path,
 ) -> None:

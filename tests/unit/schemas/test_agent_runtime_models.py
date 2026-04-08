@@ -305,7 +305,10 @@ def test_build_canonical_result_maps_provider_fields_into_metadata() -> None:
     }
 
 def test_live_log_chunk_requires_valid_stream() -> None:
-    with pytest.raises(ValidationError, match="Input should be 'stdout', 'stderr' or 'system'"):
+    with pytest.raises(
+        ValidationError,
+        match="Input should be 'stdout', 'stderr', 'system' or 'session'",
+    ):
         LiveLogChunk(sequence=1, stream="invalid_stream", text="test\n", timestamp="2026-03-31T00:00:00Z")
 
 def test_live_log_chunk_accepts_valid_data() -> None:

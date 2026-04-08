@@ -590,18 +590,68 @@ class ManagedRunRecord(BaseModel):
                 
         return self
 
+ObservabilityEventKind = Literal[
+    "stdout_chunk",
+    "stderr_chunk",
+    "system_annotation",
+    "session_started",
+    "turn_started",
+    "turn_completed",
+    "turn_interrupted",
+    "session_cleared",
+    "session_reset_boundary",
+    "approval_requested",
+    "approval_resolved",
+    "summary_published",
+    "checkpoint_published",
+]
+
+
 class LiveLogChunk(BaseModel):
     """A single atomic chunk of live log output pushed over the stream."""
 
     model_config = ConfigDict(populate_by_name=True, frozen=True)
 
     sequence: int = Field(..., description="Monotonically increasing sequence number")
-    stream: Literal["stdout", "stderr", "system"] = Field(
+    stream: Literal["stdout", "stderr", "system", "session"] = Field(
         ..., description="Standard output, standard error, or system event log"
     )
     timestamp: str = Field(..., description="ISO-8601 formatted timestamp")
     text: str = Field(..., description="Decoded output text buffer content")
     offset: int | None = Field(None, description="Global byte offset of this chunk")
+    kind: ObservabilityEventKind | None = Field(
+        None,
+        description="Optional structured observability event kind",
+    )
+    session_id: str | None = Field(
+        None,
+        description="Managed-session id when the event is session-scoped",
+    )
+    session_epoch: int | None = Field(
+        None,
+        ge=1,
+        description="Managed-session epoch when the event is session-scoped",
+    )
+    container_id: str | None = Field(
+        None,
+        description="Managed-session container id when available",
+    )
+    thread_id: str | None = Field(
+        None,
+        description="Managed-session logical thread id when available",
+    )
+    turn_id: str | None = Field(
+        None,
+        description="Managed-session turn id when available",
+    )
+    active_turn_id: str | None = Field(
+        None,
+        description="Currently active managed-session turn id when available",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional structured metadata for the event row",
+    )
 
 
 class ProviderCapabilityDescriptor(BaseModel):

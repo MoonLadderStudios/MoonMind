@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -24,6 +25,8 @@ from moonmind.schemas.temporal_artifact_models import (
     ArtifactSessionGroupModel,
     ArtifactSessionProjectionModel,
 )
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.schemas.agent_runtime_models import LiveLogChunk
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
@@ -39,6 +42,8 @@ from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
 from moonmind.observability.transport import SpoolLogReader
 
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])
+
+_HISTORICAL_EVENT_CHUNK_SIZE = 65536
 
 
 # Live Session legacy endpoints removed in Phase 6. Use /observability-summary and /logs/stream.
@@ -268,6 +273,53 @@ def _task_run_session_workflow_id(*, task_run_id: str, runtime_id: str) -> str:
     return f"{task_run_id}:session:{runtime_id}"
 
 
+def _load_task_run_session_record(task_run_id: str) -> CodexManagedSessionRecord | None:
+    store_root = Path(_get_managed_session_store_root())
+    if not store_root.exists():
+        return None
+
+    targeted_paths = list(store_root.glob(f"sess:{task_run_id}:*.json"))
+    candidate_paths = targeted_paths if targeted_paths else store_root.rglob("*.json")
+
+    best_record: CodexManagedSessionRecord | None = None
+    best_updated_at: datetime | None = None
+    for path in candidate_paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            record = CodexManagedSessionRecord(**payload)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            continue
+        if record.task_run_id != task_run_id:
+            continue
+        candidate_updated_at = record.updated_at or record.started_at
+        if best_record is None or (
+            candidate_updated_at is not None
+            and (best_updated_at is None or candidate_updated_at > best_updated_at)
+        ):
+            best_record = record
+            best_updated_at = candidate_updated_at
+    return best_record
+
+
+def _build_session_snapshot(
+    record: CodexManagedSessionRecord | None,
+) -> dict[str, object] | None:
+    if record is None:
+        return None
+    return {
+        "sessionId": record.session_id,
+        "sessionEpoch": record.session_epoch,
+        "containerId": record.container_id,
+        "threadId": record.thread_id,
+        "activeTurnId": record.active_turn_id,
+        "status": record.status,
+        "latestSummaryRef": record.latest_summary_ref,
+        "latestCheckpointRef": record.latest_checkpoint_ref,
+        "latestControlEventRef": record.latest_control_event_ref,
+        "latestResetBoundaryRef": record.latest_reset_boundary_ref,
+    }
+
+
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
         return
@@ -294,16 +346,24 @@ def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]
 
 def _coerce_utc_datetime(value: object) -> datetime | None:
     if isinstance(value, datetime):
-        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return (value if value.tzinfo is not None else value.replace(tzinfo=UTC)).astimezone(
+            UTC
+        )
 
     if not value:
         return None
 
+    raw_value = str(value).strip()
+    if raw_value.endswith("Z"):
+        raw_value = f"{raw_value[:-1]}+00:00"
+
     try:
-        parsed = datetime.fromisoformat(str(value).strip())
+        parsed = datetime.fromisoformat(raw_value)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return (parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)).astimezone(
+        UTC
+    )
 
 
 def _iter_run_spool_chunks(
@@ -376,6 +436,270 @@ def _iter_file_chunks(path: Path, *, chunk_size: int = 8192) -> Iterator[bytes]:
             if not chunk:
                 break
             yield chunk.encode("utf-8")
+
+
+def _iter_text_chunks(
+    path: Path,
+    *,
+    chunk_size: int = _HISTORICAL_EVENT_CHUNK_SIZE,
+) -> Iterator[str]:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+
+def _read_json_payload(path: Path | None) -> dict[str, object] | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _coerce_sequence(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | None:
+    try:
+        chunk = LiveLogChunk.model_validate(payload)
+    except Exception:
+        return None
+    return chunk.model_dump(mode="json", exclude_none=True)
+
+
+def _iter_diagnostics_observability_events(
+    diagnostics_path: Path | None,
+) -> Iterator[dict[str, object]]:
+    diagnostics = _read_json_payload(diagnostics_path)
+    if diagnostics is None:
+        return
+
+    seen_system_annotations: set[tuple[object, object, object]] = set()
+    observed_events = diagnostics.get("observability_events")
+    if isinstance(observed_events, list):
+        for raw_event in observed_events:
+            if not isinstance(raw_event, dict):
+                continue
+            normalized = _normalize_live_event(raw_event)
+            if normalized is not None:
+                if normalized.get("kind") == "system_annotation":
+                    seen_system_annotations.add(
+                        (
+                            normalized.get("sequence"),
+                            normalized.get("timestamp"),
+                            normalized.get("text"),
+                        )
+                    )
+                yield normalized
+
+    annotations = diagnostics.get("annotations")
+    if not isinstance(annotations, list):
+        return
+
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            continue
+        normalized = _normalize_live_event(
+            {
+                "sequence": annotation.get("sequence") or 0,
+                "timestamp": annotation.get("timestamp")
+                or datetime.now(tz=UTC).isoformat(),
+                "stream": "system",
+                "text": str(annotation.get("text") or ""),
+                "kind": "system_annotation",
+                "metadata": annotation.get("metadata") or {},
+            }
+        )
+        if normalized is None:
+            continue
+        dedupe_key = (
+            normalized.get("sequence"),
+            normalized.get("timestamp"),
+            normalized.get("text"),
+        )
+        if dedupe_key in seen_system_annotations:
+            continue
+        yield normalized
+
+
+def _iter_text_artifact_events(
+    ref: str | None,
+    artifacts_root: Path,
+    *,
+    stream: str,
+    kind: str,
+    timestamp: str | None,
+    limit_per_stream: int | None,
+) -> Iterator[dict[str, object]]:
+    artifact_path = _resolve_safe_artifact_path(ref, artifacts_root)
+    if artifact_path is None:
+        return
+
+    chunk_events: deque[dict[str, object]] = deque(maxlen=limit_per_stream)
+    offset = 0
+    normalized_timestamp = timestamp or datetime.now(tz=UTC).isoformat()
+    try:
+        for text_chunk in _iter_text_chunks(artifact_path):
+            normalized = _normalize_live_event(
+                {
+                    "sequence": 0,
+                    "timestamp": normalized_timestamp,
+                    "stream": stream,
+                    "text": text_chunk,
+                    "offset": offset,
+                    "kind": kind,
+                }
+            )
+            offset += len(text_chunk.encode("utf-8", errors="replace"))
+            if normalized is not None:
+                chunk_events.append(normalized)
+    except OSError:
+        return
+
+    yield from chunk_events
+
+
+def _build_session_artifact_event(
+    *,
+    kind: str,
+    text: str,
+    timestamp: str | None,
+    session_record: CodexManagedSessionRecord,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    if isinstance(timestamp, datetime):
+        normalized_timestamp = timestamp.isoformat()
+    else:
+        normalized_timestamp = str(timestamp or (session_record.updated_at or session_record.started_at).isoformat())
+    payload = {
+        "sequence": 0,
+        "timestamp": normalized_timestamp,
+        "stream": "session",
+        "text": text,
+        "kind": kind,
+        "session_id": session_record.session_id,
+        "session_epoch": session_record.session_epoch,
+        "container_id": session_record.container_id,
+        "thread_id": session_record.thread_id,
+        "active_turn_id": session_record.active_turn_id,
+        "metadata": metadata or {},
+    }
+    normalized = _normalize_live_event(payload)
+    if normalized is None:
+        raise ValueError("failed to normalize session artifact event")
+    return normalized
+
+
+def _iter_historical_artifact_events(
+    record: object,
+    session_record: CodexManagedSessionRecord | None,
+    *,
+    limit_per_stream: int | None = None,
+) -> Iterator[dict[str, object]]:
+    artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
+    diagnostics_path = _resolve_safe_artifact_path(
+        getattr(record, "diagnostics_ref", None),
+        artifacts_root,
+    )
+    yield from _iter_diagnostics_observability_events(diagnostics_path)
+
+    stdout_timestamp = getattr(record, "started_at", None)
+    if isinstance(stdout_timestamp, datetime):
+        stdout_timestamp = stdout_timestamp.isoformat()
+    yield from _iter_text_artifact_events(
+        getattr(record, "stdout_artifact_ref", None),
+        artifacts_root,
+        stream="stdout",
+        kind="stdout_chunk",
+        timestamp=stdout_timestamp,
+        limit_per_stream=limit_per_stream,
+    )
+
+    stderr_timestamp = getattr(record, "started_at", None)
+    if isinstance(stderr_timestamp, datetime):
+        stderr_timestamp = stderr_timestamp.isoformat()
+    yield from _iter_text_artifact_events(
+        getattr(record, "stderr_artifact_ref", None),
+        artifacts_root,
+        stream="stderr",
+        kind="stderr_chunk",
+        timestamp=stderr_timestamp,
+        limit_per_stream=limit_per_stream,
+    )
+
+    if session_record is None:
+        return
+
+    yield _build_session_artifact_event(
+        kind="session_started",
+        text=(
+            f"Session started. Epoch {session_record.session_epoch} "
+            f"thread {session_record.thread_id}."
+        ),
+        timestamp=session_record.started_at.isoformat(),
+        session_record=session_record,
+        metadata={"status": session_record.status},
+    )
+
+    control_payload = _read_json_payload(
+        _resolve_safe_artifact_path(session_record.latest_control_event_ref, artifacts_root)
+    )
+    if control_payload is not None:
+        action = str(control_payload.get("action") or "").strip().lower()
+        if action == "clear_session":
+            yield _build_session_artifact_event(
+                kind="session_cleared",
+                text=(
+                    f"Session cleared. Epoch {control_payload.get('previousSessionEpoch')} "
+                    f"-> {control_payload.get('newSessionEpoch')}; thread "
+                    f"{control_payload.get('previousThreadId')} -> {control_payload.get('newThreadId')}."
+                ),
+                timestamp=str(control_payload.get("recordedAt") or ""),
+                session_record=session_record,
+                metadata={**control_payload, "artifactRef": session_record.latest_control_event_ref},
+            )
+
+    boundary_payload = _read_json_payload(
+        _resolve_safe_artifact_path(session_record.latest_reset_boundary_ref, artifacts_root)
+    )
+    if boundary_payload is not None:
+        yield _build_session_artifact_event(
+            kind="session_reset_boundary",
+            text=(
+                f"Epoch boundary reached. Session {session_record.session_id} is now on "
+                f"epoch {boundary_payload.get('sessionEpoch')} thread {boundary_payload.get('threadId')}."
+            ),
+            timestamp=str(boundary_payload.get("recordedAt") or ""),
+            session_record=session_record,
+            metadata={**boundary_payload, "artifactRef": session_record.latest_reset_boundary_ref},
+        )
+
+    for kind, ref_attr, label in (
+        ("summary_published", session_record.latest_summary_ref, "Session summary published."),
+        ("checkpoint_published", session_record.latest_checkpoint_ref, "Session checkpoint published."),
+    ):
+        artifact_path = _resolve_safe_artifact_path(ref_attr, artifacts_root)
+        if artifact_path is None:
+            continue
+        yield _build_session_artifact_event(
+            kind=kind,
+            text=label,
+            timestamp=(session_record.updated_at or session_record.started_at).isoformat(),
+            session_record=session_record,
+            metadata={"artifactRef": ref_attr},
+        )
+
+
+def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
+    sequence = _coerce_sequence(payload.get("sequence"))
+    timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
+    return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
 
 
 def _iter_artifact_fallback_content(
@@ -485,8 +809,10 @@ async def get_observability_summary(
         live_stream_status = "unavailable"
 
     base = record.model_dump(by_alias=True)
+    session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
     base["supportsLiveStreaming"] = supports_live
     base["liveStreamStatus"] = live_stream_status
+    base["sessionSnapshot"] = _build_session_snapshot(session_record)
     return {"summary": base}
 
 
@@ -581,6 +907,59 @@ async def control_task_run_artifact_session(
     if projection is None:
         _session_projection_not_found()
     return ArtifactSessionControlResponse(action=payload.action, projection=projection)
+
+
+@router.get(
+    "/{id}/observability/events",
+    response_model=dict,
+    responses={
+        404: {"description": "Observability record not found for this task run"},
+    },
+)
+async def get_task_run_observability_events(
+    id: UUID,
+    limit: int = Query(default=500, ge=1, le=5000),
+    _user: User = Depends(get_current_user()),
+) -> dict:
+    """Return structured observability history for one task run."""
+    store = ManagedRunStore(_get_agent_runtime_store_root())
+    record = await asyncio.to_thread(store.load, str(id))
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Observability record not found for this task run",
+        )
+    await _require_observability_access(record, _user)
+
+    workspace_path = getattr(record, "workspace_path", None)
+    started_at = getattr(record, "started_at", None)
+    session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
+
+    events: list[dict[str, object]] = []
+    if _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
+        for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at):
+            normalized = _normalize_live_event(payload)
+            if normalized is not None:
+                events.append(normalized)
+    else:
+        events.extend(
+            _iter_historical_artifact_events(
+                record,
+                session_record,
+                limit_per_stream=limit,
+            )
+        )
+
+    events.sort(key=_event_sort_key)
+    truncated = len(events) > limit
+    if truncated:
+        events = events[-limit:]
+
+    return {
+        "events": events,
+        "truncated": truncated,
+        "sessionSnapshot": _build_session_snapshot(session_record),
+    }
 
 
 @router.get(

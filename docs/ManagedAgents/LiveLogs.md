@@ -13,6 +13,7 @@ For managed agent runs, live visibility should be based on:
 
 * durable stdout/stderr artifact capture
 * structured diagnostics
+* continuity-aware session/control boundary artifacts when the runtime exposes a managed session plane
 * optional MoonMind-owned live log streaming to Mission Control
 * explicit intervention controls separate from logging
 
@@ -20,7 +21,7 @@ With this design:
 
 * **OAuth** uses `xterm.js` plus a MoonMind PTY/WebSocket bridge because OAuth is an interactive terminal flow
 * **managed run logs** do **not** use `xterm.js` and do **not** use terminal embedding
-* Mission Control shows logs through a MoonMind-native React log viewer backed by MoonMind APIs and artifacts, implemented with `react-virtuoso` for virtualized rendering, `anser` for ANSI parsing, TanStack Query for retrieval state, and SSE via `EventSource` for live follow mode.
+* Mission Control shows logs through a MoonMind-native React log viewer backed by MoonMind APIs and artifacts, implemented as a continuity-aware observability timeline with TanStack Query for retrieval state and SSE via `EventSource` for live follow mode.
 
 This keeps logging deterministic, persistent, auditable, and independent from interactive terminal transport.
 
@@ -65,6 +66,7 @@ Every managed run should produce:
 * durable stdout artifact
 * durable stderr artifact
 * durable diagnostics artifact
+* durable continuity/control-boundary artifacts when a managed session plane is active
 * structured run state and summary metadata
 * optional live streaming through MoonMind APIs
 
@@ -135,11 +137,14 @@ Behavior:
 
 * initially loads the most recent tail from MoonMind APIs — **initial visible content must not depend on SSE success**
 * upgrades to a live stream when the run is active and live streaming is supported
-* shows stream origin per line or chunk (`stdout`, `stderr`, `system`)
+* shows stream origin per line or chunk (`stdout`, `stderr`, `system`, `session`)
+* renders session lifecycle boundaries, thread swaps, and epoch resets as explicit timeline rows rather than burying them inside plain system text
 * can reconnect from last known sequence or offset — resume is best-effort; artifacts are the durable fallback
 * falls back to artifact tail if live streaming is unavailable — stream errors must transition to artifact-backed mode rather than leaving the panel blank
 * stops streaming when collapsed or when the tab is backgrounded
 * **ended runs never attempt live stream connection**; the final artifact-backed tail is always available
+
+When a managed session plane is active, the Live Logs panel should also expose the current bounded session snapshot (`session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id` when present) so the operator sees continuity state and runtime output in one place.
 
 ## 5.3 Stdout and Stderr panels
 
@@ -183,6 +188,7 @@ Components:
 * supervisor
 * log capture pipeline
 * diagnostics builder
+* session-plane observability publisher
 * live log stream publisher
 * Mission Control log APIs
 * artifact-backed log retrieval

@@ -230,6 +230,52 @@ const ArtifactSessionControlResponseSchema = z.object({
   projection: ArtifactSessionProjectionSchema,
 });
 
+const SessionSnapshotSchema = z
+  .object({
+    sessionId: z.string(),
+    sessionEpoch: z.number(),
+    containerId: z.string(),
+    threadId: z.string(),
+    activeTurnId: z.string().nullable().optional(),
+    status: z.string().optional(),
+    latestSummaryRef: z.string().nullable().optional(),
+    latestCheckpointRef: z.string().nullable().optional(),
+    latestControlEventRef: z.string().nullable().optional(),
+    latestResetBoundaryRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const ObservabilitySummarySchema = z.object({
+  supportsLiveStreaming: z.boolean().default(false),
+  liveStreamStatus: z.string().default('unavailable'),
+  status: z.string().default(''),
+  sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+});
+
+const ObservabilityEventSchema = z
+  .object({
+    sequence: z.number(),
+    timestamp: z.string(),
+    stream: z.enum(['stdout', 'stderr', 'system', 'session']),
+    text: z.string(),
+    offset: z.number().nullable().optional(),
+    kind: z.string().nullable().optional(),
+    session_id: z.string().nullable().optional(),
+    session_epoch: z.number().nullable().optional(),
+    container_id: z.string().nullable().optional(),
+    thread_id: z.string().nullable().optional(),
+    turn_id: z.string().nullable().optional(),
+    active_turn_id: z.string().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+
+const ObservabilityEventsResponseSchema = z.object({
+  events: z.array(ObservabilityEventSchema).default([]),
+  truncated: z.boolean().default(false),
+  sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+});
+
 const ArtifactListSchema = z.object({
   artifacts: z
     .array(
@@ -547,7 +593,7 @@ async function controlArtifactSession(
 async function fetchObservabilitySummary(
   apiBase: string,
   taskRunId: string,
-): Promise<{ supportsLiveStreaming: boolean; liveStreamStatus: string; status: string } | null> {
+): Promise<z.infer<typeof ObservabilitySummarySchema> | null> {
   const resp = await fetch(
     `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
     { credentials: 'include' },
@@ -557,12 +603,22 @@ async function fetchObservabilitySummary(
     throw buildObservabilityRequestError(resp.status);
   }
   const body = (await resp.json()) as { summary: Record<string, unknown> };
-  const s = body.summary;
-  return {
-    supportsLiveStreaming: Boolean(s.supportsLiveStreaming),
-    liveStreamStatus: String(s.liveStreamStatus ?? 'unavailable'),
-    status: String(s.status ?? ''),
-  };
+  return ObservabilitySummarySchema.parse(body.summary);
+}
+
+async function fetchObservabilityEvents(
+  apiBase: string,
+  taskRunId: string,
+): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
+  const resp = await fetch(
+    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability/events`,
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
+  return ObservabilityEventsResponseSchema.parse(await resp.json());
 }
 
 const TERMINAL_RUN_STATUSES = new Set([
@@ -589,10 +645,22 @@ function usePageVisibility() {
   return isVisible;
 }
 
-type LogLine = {
+type ObservabilityEvent = z.infer<typeof ObservabilityEventSchema>;
+type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
+type TimelineStream = 'stdout' | 'stderr' | 'system' | 'session' | 'unknown';
+type TimelineRow = {
   id: string;
   text: string;
-  stream: 'stdout' | 'stderr' | 'system' | 'unknown';
+  stream: TimelineStream;
+  kind: string | null;
+  sequence: number | null;
+  timestamp: string | null;
+  sessionId: string | null;
+  sessionEpoch: number | null;
+  threadId: string | null;
+  turnId: string | null;
+  metadata: Record<string, unknown>;
+  rowType: 'line' | 'boundary';
 };
 
 function splitLogText(content: string): string[] {
@@ -619,17 +687,59 @@ function copyTextToClipboard(text: string): void {
   }
 }
 
-function parseArtifactToLines(content: string): LogLine[] {
+function parseArtifactToRows(content: string): TimelineRow[] {
   const lines = splitLogText(content);
-  let currentStream: LogLine['stream'] = 'unknown';
+  let currentStream: TimelineStream = 'unknown';
 
   return lines.map((line, i) => {
     if (line.startsWith('--- stdout ---')) currentStream = 'stdout';
     else if (line.startsWith('--- stderr ---')) currentStream = 'stderr';
     else if (line.startsWith('--- system ---')) currentStream = 'system';
+    else if (line.startsWith('--- session ---')) currentStream = 'session';
 
-    return { id: `artifact-${i}`, text: line, stream: currentStream };
+    return {
+      id: `artifact-${i}`,
+      text: line,
+      stream: currentStream,
+      kind: null,
+      sequence: null,
+      timestamp: null,
+      sessionId: null,
+      sessionEpoch: null,
+      threadId: null,
+      turnId: null,
+      metadata: {},
+      rowType: 'line',
+    };
   });
+}
+
+function eventToTimelineRows(event: ObservabilityEvent): TimelineRow[] {
+  const stream = event.stream as TimelineStream;
+  const rowType = event.kind === 'session_reset_boundary' ? 'boundary' : 'line';
+  const lines = splitLogText(event.text);
+  const sourceLines = lines.length > 0 ? lines : [event.text];
+  return sourceLines.map((line, index) => ({
+    id: `${event.sequence}-${index}-${event.kind ?? 'event'}`,
+    text: line,
+    stream,
+    kind: event.kind ?? null,
+    sequence: event.sequence,
+    timestamp: event.timestamp ?? null,
+    sessionId: event.session_id ?? null,
+    sessionEpoch: event.session_epoch ?? null,
+    threadId: event.thread_id ?? null,
+    turnId: event.turn_id ?? null,
+    metadata: event.metadata ?? {},
+    rowType,
+  }));
+}
+
+function mapEventsToTimelineRows(
+  payload: z.infer<typeof ObservabilityEventsResponseSchema> | null | undefined,
+): TimelineRow[] {
+  if (!payload) return [];
+  return payload.events.flatMap((event) => eventToTimelineRows(event));
 }
 
 function LiveLogsPanel({
@@ -643,13 +753,14 @@ function LiveLogsPanel({
   isTerminal: boolean;
   autoExpand?: boolean;
 }) {
-  const [logContent, setLogContent] = useState<LogLine[]>([]);
+  const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const [expanded, setExpanded] = useState(false);
   const isVisible = usePageVisibility();
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const isTerminalRef = useRef(isTerminal);
+  const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
   useEffect(() => {
@@ -678,11 +789,24 @@ function LiveLogsPanel({
     staleTime: 1000 * 10,
   });
 
-  // Query for the artifact-backed tail (runs after summary resolves)
+  const historyQuery = useQuery({
+    queryKey: ['task-run-observability-events', taskRunId],
+    queryFn: () => fetchObservabilityEvents(apiBase, taskRunId),
+    enabled: !!taskRunId && expanded && summaryQuery.isSuccess,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const historyUnavailable = historyQuery.isError || historyQuery.data === null;
+
+  // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
     queryKey: ['task-run-tail', taskRunId],
     queryFn: () => fetchMergedTail(apiBase, taskRunId),
-    enabled: !!taskRunId && expanded && summaryQuery.isSuccess,
+    enabled:
+      !!taskRunId &&
+      expanded &&
+      summaryQuery.isSuccess &&
+      historyUnavailable,
     staleTime: Infinity,
     retry: false,
   });
@@ -693,37 +817,79 @@ function LiveLogsPanel({
       setViewerState('starting');
       return;
     }
-    if (tailQuery.isError) {
+    if (historyQuery.isError && tailQuery.isError) {
       setViewerState('error');
-    } else if (summaryQuery.isSuccess && tailQuery.isSuccess) {
+    } else if (
+      summaryQuery.isSuccess &&
+      (historyQuery.isSuccess || tailQuery.isSuccess)
+    ) {
       const summary = summaryQuery.data;
-      const runIsTerminal = isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+      const runIsTerminal =
+        isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
       const supportsStreaming = summary?.supportsLiveStreaming ?? false;
 
       if (!supportsStreaming) {
-        setViewerState(tailQuery.data ? 'ended' : 'not_available');
+        setViewerState(
+          (historyQuery.data?.events.length ?? 0) > 0 || Boolean(tailQuery.data)
+            ? 'ended'
+            : 'not_available',
+        );
       } else if (runIsTerminal) {
         setViewerState('ended');
       }
     }
-  }, [expanded, summaryQuery.isSuccess, summaryQuery.data, tailQuery.isError, tailQuery.isSuccess, tailQuery.data]);
+  }, [
+    expanded,
+    historyQuery.data,
+    historyQuery.isError,
+    historyQuery.isSuccess,
+    summaryQuery.data,
+    summaryQuery.isSuccess,
+    tailQuery.data,
+    tailQuery.isError,
+    tailQuery.isSuccess,
+  ]);
 
-  // Sync tail content into the local log buffer when tail fetch completes.
   useEffect(() => {
-    if (tailQuery.isSuccess && tailQuery.data) {
-      setLogContent((prev) => {
-        if (lastSeqRef.current !== null) return prev;
-        return parseArtifactToLines(tailQuery.data);
-      });
+    if (summaryQuery.data?.sessionSnapshot) {
+      setSessionSnapshot(summaryQuery.data.sessionSnapshot);
     }
-  }, [tailQuery.isSuccess, tailQuery.data]);
+  }, [summaryQuery.data]);
+
+  // Sync structured history into the local timeline when history fetch completes.
+  useEffect(() => {
+    if (historyQuery.isSuccess) {
+      const rows = mapEventsToTimelineRows(historyQuery.data);
+      const sequences = historyQuery.data?.events
+        .map((event) => event.sequence)
+        .filter((sequence) => Number.isFinite(sequence));
+      if (lastSeqRef.current === null) {
+        setLogContent(rows);
+      }
+      lastSeqRef.current = sequences && sequences.length > 0 ? Math.max(...sequences) : null;
+      if (historyQuery.data?.sessionSnapshot) {
+        setSessionSnapshot(historyQuery.data.sessionSnapshot);
+      }
+    }
+  }, [historyQuery.data, historyQuery.isSuccess]);
+
+  // Sync legacy merged-text fallback only when structured history is unavailable.
+  useEffect(() => {
+    if (tailQuery.isSuccess && tailQuery.data && historyUnavailable) {
+      if (lastSeqRef.current === null) {
+        setLogContent(parseArtifactToRows(tailQuery.data));
+      }
+    }
+  }, [historyUnavailable, tailQuery.data, tailQuery.isSuccess]);
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
-    if (!taskRunId || !expanded || !summaryQuery.isSuccess || !tailQuery.isSuccess || !isVisible) return;
+    if (!taskRunId || !expanded || !summaryQuery.isSuccess || !isVisible) return;
+    if (!historyQuery.isSuccess && !tailQuery.isSuccess) return;
 
     const summary = summaryQuery.data;
-    const runIsTerminal = isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+    const runIsTerminal =
+      isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
     const supportsStreaming = summary?.supportsLiveStreaming ?? false;
 
     if (runIsTerminal || !supportsStreaming) return;
@@ -743,18 +909,29 @@ function LiveLogsPanel({
     const handleLogChunk = (event: MessageEvent) => {
       if (cancelled) return;
       try {
-        const data = JSON.parse(event.data) as { sequence: number; text: string; stream?: string };
+        const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
         lastSeqRef.current = data.sequence;
 
         setLogContent((prev) => {
-          const lines = splitLogText(data.text);
-          const mapped: LogLine[] = lines.map((l, i) => ({
-            id: `live-${data.sequence}-${i}`,
-            text: l,
-            stream: (data.stream as LogLine['stream']) || 'unknown',
-          }));
-          return [...prev, ...mapped];
+          return [...prev, ...eventToTimelineRows(data)];
         });
+        if (data.session_id && data.session_epoch) {
+          const nextSessionId = data.session_id;
+          const nextSessionEpoch = data.session_epoch;
+          setSessionSnapshot((prev) => ({
+            ...(prev ?? {
+              sessionId: nextSessionId,
+              sessionEpoch: nextSessionEpoch,
+              containerId: data.container_id ?? '',
+              threadId: data.thread_id ?? '',
+            }),
+            sessionId: nextSessionId,
+            sessionEpoch: nextSessionEpoch,
+            containerId: data.container_id ?? prev?.containerId ?? '',
+            threadId: data.thread_id ?? prev?.threadId ?? '',
+            activeTurnId: data.active_turn_id ?? prev?.activeTurnId ?? null,
+          }));
+        }
       } catch {
         // ignore malformed events
       }
@@ -778,7 +955,16 @@ function LiveLogsPanel({
         esRef.current = null;
       }
     };
-  }, [apiBase, taskRunId, expanded, isVisible, summaryQuery.isSuccess, summaryQuery.data, tailQuery.isSuccess]);
+  }, [
+    apiBase,
+    expanded,
+    historyQuery.isSuccess,
+    isVisible,
+    summaryQuery.data,
+    summaryQuery.isSuccess,
+    tailQuery.isSuccess,
+    taskRunId,
+  ]);
 
   // Close the stream once the task reaches a terminal state.
   useEffect(() => {
@@ -814,6 +1000,14 @@ function LiveLogsPanel({
 
   const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`;
   const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
+  const sessionBadges = sessionSnapshot
+    ? [
+        ['Session', sessionSnapshot.sessionId],
+        ['Epoch', String(sessionSnapshot.sessionEpoch)],
+        ['Thread', sessionSnapshot.threadId],
+        ['Active Turn', sessionSnapshot.activeTurnId ?? null],
+      ].filter(([, value]) => value) as Array<[string, string]>
+    : [];
 
   return (
     <details
@@ -844,6 +1038,15 @@ function LiveLogsPanel({
         <p className="small">
           Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
         </p>
+        {sessionBadges.length > 0 ? (
+          <div className="actions">
+            {sessionBadges.map(([label, value]) => (
+              <span key={`${label}-${value}`} className="card">
+                <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
           <div
             style={{
@@ -863,25 +1066,45 @@ function LiveLogsPanel({
               <div>{emptyLabel}</div>
             ) : (
               logContent.map((line) => (
-                <div
-                  key={line.id}
-                  data-stream={line.stream}
-                  style={{
-                    borderLeft:
-                      line.stream === 'stdout'
-                        ? '2px solid #3b82f6'
-                        : line.stream === 'stderr'
-                          ? '2px solid #ef4444'
-                          : line.stream === 'system'
-                            ? '2px solid #22c55e'
-                            : '2px solid transparent',
-                    paddingLeft: '6px',
-                    // dim system messages
-                    opacity: line.stream === 'system' ? 0.7 : 1,
-                  }}
-                >
-                  {line.text}
-                </div>
+                line.rowType === 'boundary' ? (
+                  <div
+                    key={line.id}
+                    data-stream={line.stream}
+                    data-kind={line.kind ?? undefined}
+                    style={{
+                      margin: '0.35rem 0',
+                      padding: '0.5rem 0.75rem',
+                      border: '1px solid #f59e0b',
+                      background: 'rgba(245, 158, 11, 0.12)',
+                      color: '#fde68a',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    {line.text}
+                  </div>
+                ) : (
+                  <div
+                    key={line.id}
+                    data-stream={line.stream}
+                    data-kind={line.kind ?? undefined}
+                    style={{
+                      borderLeft:
+                        line.stream === 'stdout'
+                          ? '2px solid #3b82f6'
+                          : line.stream === 'stderr'
+                            ? '2px solid #ef4444'
+                            : line.stream === 'system'
+                              ? '2px solid #22c55e'
+                              : line.stream === 'session'
+                                ? '2px solid #f59e0b'
+                                : '2px solid transparent',
+                      paddingLeft: '6px',
+                      opacity: line.stream === 'system' ? 0.7 : 1,
+                    }}
+                  >
+                    {line.text}
+                  </div>
+                )
               ))
             )}
           </div>
