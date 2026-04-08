@@ -39,6 +39,11 @@ from .managed_session_supervisor import ManagedSessionSupervisor
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+_MANAGED_SESSION_CONTAINER_UID = 1000
+_MANAGED_SESSION_CONTAINER_GID = 1000
+_MANAGED_SESSION_CONTAINER_USER = (
+    f"{_MANAGED_SESSION_CONTAINER_UID}:{_MANAGED_SESSION_CONTAINER_GID}"
+)
 _SENSITIVE_ENV_KEY_PATTERN = re.compile(
     r"(?i)(?:token|secret|password|key|credential|auth)"
 )
@@ -424,6 +429,7 @@ class DockerCodexManagedSessionController:
             clone_command.extend(["--branch", branch, "--single-branch"])
         clone_command.extend([source, str(workspace_path)])
         await self._run_git_host_command(clone_command)
+        self._normalize_container_path_ownership((workspace_path,))
 
     @staticmethod
     def _branch_missing_checkout_failure(detail: str) -> bool:
@@ -448,9 +454,14 @@ class DockerCodexManagedSessionController:
         workspace_path = Path(request.workspace_path)
         session_workspace_path = Path(request.session_workspace_path)
         artifact_spool_path = Path(request.artifact_spool_path)
+        created_paths: list[Path] = []
 
-        session_workspace_path.mkdir(parents=True, exist_ok=True)
-        artifact_spool_path.mkdir(parents=True, exist_ok=True)
+        if not session_workspace_path.exists():
+            session_workspace_path.mkdir(parents=True, exist_ok=True)
+            created_paths.append(session_workspace_path)
+        if not artifact_spool_path.exists():
+            artifact_spool_path.mkdir(parents=True, exist_ok=True)
+            created_paths.append(artifact_spool_path)
 
         repository = str(
             request.workspace_spec.get("repository")
@@ -469,11 +480,14 @@ class DockerCodexManagedSessionController:
                     workspace_path=workspace_path,
                     request=request,
                 )
+            self._normalize_container_path_ownership(created_paths)
             return
 
         if not repository:
             workspace_path.parent.mkdir(parents=True, exist_ok=True)
             workspace_path.mkdir(parents=True, exist_ok=True)
+            created_paths.append(workspace_path)
+            self._normalize_container_path_ownership(created_paths)
             return
 
         await self._clone_workspace(
@@ -485,6 +499,7 @@ class DockerCodexManagedSessionController:
             workspace_path=workspace_path,
             request=request,
         )
+        self._normalize_container_path_ownership(created_paths)
 
     async def _ensure_target_branch(
         self,
@@ -555,6 +570,31 @@ class DockerCodexManagedSessionController:
                 "-b",
                 target_branch,
             ]
+        )
+
+    @staticmethod
+    def _normalize_container_path_ownership(paths: Sequence[Path]) -> None:
+        geteuid = getattr(os, "geteuid", None)
+        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+            return
+        for path in paths:
+            if not path.exists():
+                continue
+            DockerCodexManagedSessionController._chown_path(path)
+            for root, dirnames, filenames in os.walk(path):
+                root_path = Path(root)
+                for dirname in dirnames:
+                    DockerCodexManagedSessionController._chown_path(root_path / dirname)
+                for filename in filenames:
+                    DockerCodexManagedSessionController._chown_path(root_path / filename)
+
+    @staticmethod
+    def _chown_path(path: Path) -> None:
+        os.chown(
+            path,
+            _MANAGED_SESSION_CONTAINER_UID,
+            _MANAGED_SESSION_CONTAINER_GID,
+            follow_symlinks=False,
         )
 
     async def _invoke_json(
@@ -702,6 +742,8 @@ class DockerCodexManagedSessionController:
             "-d",
             "--name",
             container_name,
+            "--user",
+            _MANAGED_SESSION_CONTAINER_USER,
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
             "--mount",
