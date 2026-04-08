@@ -7,6 +7,7 @@ import json
 import os
 import posixpath
 import re
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
@@ -36,6 +37,7 @@ from .managed_session_supervisor import ManagedSessionSupervisor
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+_GIT_COMMAND_LOCALE = {"LC_ALL": "C", "LANG": "C"}
 
 
 class CommandRunner(Protocol):
@@ -287,13 +289,94 @@ class DockerCodexManagedSessionController:
     async def _run_host_command(
         self,
         command: Sequence[str],
+        *,
+        extra_env: Mapping[str, str] | None = None,
     ) -> tuple[str, str]:
-        returncode, stdout, stderr = await self._command_runner(tuple(command))
+        env = None
+        if extra_env:
+            env = {str(key): str(value) for key, value in extra_env.items()}
+        returncode, stdout, stderr = await self._command_runner(tuple(command), env=env)
         if returncode != 0:
             raise RuntimeError(
                 f"{' '.join(command)} failed with exit code {returncode}: {stderr.strip() or stdout.strip()}"
             )
         return stdout, stderr
+
+    async def _run_git_host_command(
+        self,
+        command: Sequence[str],
+    ) -> tuple[str, str]:
+        return await self._run_host_command(command, extra_env=_GIT_COMMAND_LOCALE)
+
+    async def _git_command_result(
+        self,
+        command: Sequence[str],
+    ) -> tuple[int, str, str]:
+        return await self._command_runner(
+            tuple(command),
+            env=dict(_GIT_COMMAND_LOCALE),
+        )
+
+    async def _workspace_is_git_repository(self, *, workspace_path: Path) -> bool:
+        returncode, stdout, _stderr = await self._git_command_result(
+            [
+                "git",
+                "-C",
+                str(workspace_path),
+                "rev-parse",
+                "--is-inside-work-tree",
+            ]
+        )
+        return returncode == 0 and stdout.strip() == "true"
+
+    async def _remove_workspace_path(self, *, workspace_path: Path) -> None:
+        if not workspace_path.exists():
+            return
+        if workspace_path.is_dir():
+            shutil.rmtree(workspace_path)
+            return
+        workspace_path.unlink()
+
+    async def _clone_workspace(
+        self,
+        *,
+        workspace_path: Path,
+        request: LaunchCodexManagedSessionRequest,
+        repository: str,
+    ) -> None:
+        workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        await self._remove_workspace_path(workspace_path=workspace_path)
+
+        from .launcher import ManagedRuntimeLauncher
+
+        source = ManagedRuntimeLauncher._resolve_repository_source(repository)
+        branch = str(
+            request.workspace_spec.get("startingBranch")
+            or request.workspace_spec.get("branch")
+            or ""
+        ).strip()
+
+        clone_command = ["git", "clone"]
+        if branch:
+            clone_command.extend(["--branch", branch, "--single-branch"])
+        clone_command.extend([source, str(workspace_path)])
+        await self._run_git_host_command(clone_command)
+
+    @staticmethod
+    def _branch_missing_checkout_failure(detail: str) -> bool:
+        normalized = detail.lower()
+        return (
+            "did not match any file(s) known to git" in normalized
+            or "pathspec" in normalized
+        )
+
+    @staticmethod
+    def _remote_branch_missing_failure(detail: str) -> bool:
+        normalized = detail.lower()
+        return (
+            "couldn't find remote ref" in normalized
+            or "remote ref does not exist" in normalized
+        )
 
     async def _ensure_workspace_paths(
         self,
@@ -313,31 +396,28 @@ class DockerCodexManagedSessionController:
         ).strip()
         if workspace_path.exists():
             if repository:
+                if not await self._workspace_is_git_repository(workspace_path=workspace_path):
+                    await self._clone_workspace(
+                        workspace_path=workspace_path,
+                        request=request,
+                        repository=repository,
+                    )
                 await self._ensure_target_branch(
                     workspace_path=workspace_path,
                     request=request,
                 )
             return
 
-        workspace_path.parent.mkdir(parents=True, exist_ok=True)
         if not repository:
+            workspace_path.parent.mkdir(parents=True, exist_ok=True)
             workspace_path.mkdir(parents=True, exist_ok=True)
             return
 
-        from .launcher import ManagedRuntimeLauncher
-
-        source = ManagedRuntimeLauncher._resolve_repository_source(repository)
-        branch = str(
-            request.workspace_spec.get("startingBranch")
-            or request.workspace_spec.get("branch")
-            or ""
-        ).strip()
-
-        clone_command = ["git", "clone"]
-        if branch:
-            clone_command.extend(["--branch", branch, "--single-branch"])
-        clone_command.extend([source, str(workspace_path)])
-        await self._run_host_command(clone_command)
+        await self._clone_workspace(
+            workspace_path=workspace_path,
+            request=request,
+            repository=repository,
+        )
         await self._ensure_target_branch(
             workspace_path=workspace_path,
             request=request,
@@ -360,22 +440,50 @@ class DockerCodexManagedSessionController:
             "checkout",
             target_branch,
         )
-        returncode, stdout, stderr = await self._command_runner(checkout_command)
+        returncode, stdout, stderr = await self._git_command_result(checkout_command)
         if returncode == 0:
             return
 
-        failure_detail = (stderr or stdout).lower()
-        branch_missing = (
-            "did not match any file(s) known to git" in failure_detail
-            or "pathspec" in failure_detail
-        )
-        if not branch_missing:
+        failure_detail = stderr or stdout
+        if not self._branch_missing_checkout_failure(failure_detail):
             raise RuntimeError(
                 f"{' '.join(checkout_command)} failed with exit code {returncode}: "
                 f"{stderr.strip() or stdout.strip()}"
             )
 
-        await self._run_host_command(
+        fetch_command = [
+            "git",
+            "-C",
+            str(workspace_path),
+            "fetch",
+            "origin",
+            target_branch,
+        ]
+        fetch_returncode, fetch_stdout, fetch_stderr = await self._git_command_result(
+            fetch_command
+        )
+        if fetch_returncode == 0:
+            await self._run_git_host_command(
+                [
+                    "git",
+                    "-C",
+                    str(workspace_path),
+                    "checkout",
+                    "-B",
+                    target_branch,
+                    f"origin/{target_branch}",
+                ]
+            )
+            return
+
+        fetch_detail = fetch_stderr or fetch_stdout
+        if not self._remote_branch_missing_failure(fetch_detail):
+            raise RuntimeError(
+                f"{' '.join(fetch_command)} failed with exit code {fetch_returncode}: "
+                f"{fetch_stderr.strip() or fetch_stdout.strip()}"
+            )
+
+        await self._run_git_host_command(
             [
                 "git",
                 "-C",
