@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.workflows.temporal.runtime import log_streamer as log_streamer_module
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.output_parser import (
@@ -340,12 +341,60 @@ def test_emit_observability_event_publishes_session_metadata(streamer):
     )
 
     published_chunk = mock_publisher.publish.call_args[0][0]
+    assert isinstance(published_chunk, RunObservabilityEvent)
+    assert published_chunk.run_id == "run-session-event"
     assert published_chunk.stream == "session"
     assert published_chunk.kind == "session_reset_boundary"
     assert published_chunk.session_id == "sess-1"
     assert published_chunk.session_epoch == 2
     assert published_chunk.thread_id == "thread-2"
     assert published_chunk.metadata["reason"] == "operator_reset"
+
+
+def test_persist_observability_events_promotes_spool_to_artifact(
+    streamer,
+    tmp_path: Path,
+) -> None:
+    log_streamer, storage = streamer
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    spool_path = workspace_path / "live_streams.spool"
+    spool_payload = "\n".join(
+        [
+            json.dumps(
+                {
+                    "runId": "run-journal",
+                    "sequence": 1,
+                    "stream": "stdout",
+                    "text": "hello\n",
+                    "timestamp": "2026-04-08T00:00:00Z",
+                    "kind": "stdout_chunk",
+                }
+            ),
+            json.dumps(
+                {
+                    "runId": "run-journal",
+                    "sequence": 2,
+                    "stream": "session",
+                    "text": "Session started.",
+                    "timestamp": "2026-04-08T00:00:01Z",
+                    "kind": "session_started",
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                }
+            ),
+        ]
+    )
+    spool_path.write_text(spool_payload + "\n", encoding="utf-8")
+
+    ref = log_streamer.persist_observability_events(
+        run_id="run-journal",
+        workspace_path=str(workspace_path),
+    )
+
+    assert ref == "run-journal/observability.events.jsonl"
+    persisted = storage.resolve_storage_path(ref).read_text(encoding="utf-8")
+    assert persisted == spool_payload + "\n"
 
 
 def test_emit_system_annotation_keeps_annotations_out_of_observability_events(streamer):

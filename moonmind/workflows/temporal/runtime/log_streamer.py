@@ -6,10 +6,10 @@ import asyncio
 import json
 import inspect
 from typing import Any
-
+from pathlib import Path
 from datetime import datetime, timezone
 
-from moonmind.schemas.agent_runtime_models import LiveLogChunk
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.observability.transport import SpoolLogPublisher
 from moonmind.workflows.temporal.runtime.output_parser import (
     ParsedOutput,
@@ -93,7 +93,8 @@ class RuntimeLogStreamer:
             
             if live_publisher is not None:
                 try:
-                    obj = LiveLogChunk(
+                    obj = RunObservabilityEvent(
+                        run_id=run_id,
                         sequence=self._next_sequence(),
                         stream=stream_name,  # type: ignore
                         timestamp=self._current_timestamp(),
@@ -170,7 +171,8 @@ class RuntimeLogStreamer:
 
         self._publish_observability_chunk(
             workspace_path=workspace_path,
-            chunk=LiveLogChunk(
+            chunk=RunObservabilityEvent(
+                run_id=run_id,
                 sequence=sequence,
                 stream="system",
                 timestamp=timestamp,
@@ -204,7 +206,8 @@ class RuntimeLogStreamer:
             return
         timestamp = self._current_timestamp()
         sequence = self._next_sequence()
-        chunk = LiveLogChunk(
+        chunk = RunObservabilityEvent(
+            run_id=run_id,
             sequence=sequence,
             stream=stream,  # type: ignore[arg-type]
             timestamp=timestamp,
@@ -245,7 +248,7 @@ class RuntimeLogStreamer:
         self,
         *,
         workspace_path: str | None,
-        chunk: LiveLogChunk,
+        chunk: RunObservabilityEvent,
     ) -> None:
         try:
             live_publisher = self._resolve_live_publisher(workspace_path)
@@ -268,6 +271,30 @@ class RuntimeLogStreamer:
         """Return and clear persisted in-memory observability events for a run."""
         events = self._observability_events_by_run.pop(run_id, None)
         return list(events or [])
+
+    def persist_observability_events(
+        self,
+        *,
+        run_id: str,
+        workspace_path: str | None,
+        artifact_job_id: str | None = None,
+    ) -> str | None:
+        """Persist the workspace spool JSONL as a durable artifact when available."""
+        normalized_workspace = str(workspace_path or "").strip()
+        if not normalized_workspace:
+            return None
+        spool_path = Path(normalized_workspace) / "live_streams.spool"
+        if not spool_path.is_file():
+            return None
+        data = spool_path.read_bytes()
+        if not data:
+            return None
+        _, storage_ref = self._storage.write_artifact(
+            job_id=artifact_job_id or run_id,
+            artifact_name="observability.events.jsonl",
+            data=data,
+        )
+        return storage_ref
 
     async def stream_and_parse(
         self,

@@ -493,6 +493,10 @@ class ManagedRunSupervisor:
                 events=events,
                 observability_events=observability_events,
             )
+            observability_events_ref = self._log_streamer.persist_observability_events(
+                run_id=run_id,
+                workspace_path=record.workspace_path if record else None,
+            )
 
             record = self._store.update_status(
                 run_id,
@@ -506,6 +510,7 @@ class ManagedRunSupervisor:
                 failure_class=failure_class,
                 provider_error_code=exit_result.provider_error_code,
                 error_message=error_message,
+                observability_events_ref=observability_events_ref,
             )
 
             # Fire completion callback (best-effort, never crashes the supervisor).

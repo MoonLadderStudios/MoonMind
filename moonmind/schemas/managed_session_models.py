@@ -327,6 +327,10 @@ class CodexManagedSessionRecord(BaseModel):
     stdout_artifact_ref: str | None = Field(None, alias="stdoutArtifactRef")
     stderr_artifact_ref: str | None = Field(None, alias="stderrArtifactRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    observability_events_ref: str | None = Field(
+        None,
+        alias="observabilityEventsRef",
+    )
     latest_summary_ref: str | None = Field(None, alias="latestSummaryRef")
     latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
     latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
@@ -373,6 +377,11 @@ class CodexManagedSessionRecord(BaseModel):
             self.diagnostics_ref = require_non_blank(
                 self.diagnostics_ref,
                 field_name="diagnosticsRef",
+            )
+        if self.observability_events_ref is not None:
+            self.observability_events_ref = require_non_blank(
+                self.observability_events_ref,
+                field_name="observabilityEventsRef",
             )
         if self.latest_summary_ref is not None:
             self.latest_summary_ref = require_non_blank(

@@ -26,7 +26,7 @@ from moonmind.schemas.temporal_artifact_models import (
     ArtifactSessionProjectionModel,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
-from moonmind.schemas.agent_runtime_models import LiveLogChunk
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
@@ -320,6 +320,19 @@ def _build_session_snapshot(
     }
 
 
+def _build_record_session_snapshot(record: object) -> dict[str, object] | None:
+    session_id = str(getattr(record, "session_id", "") or "").strip()
+    if not session_id:
+        return None
+    return {
+        "sessionId": session_id,
+        "sessionEpoch": getattr(record, "session_epoch", None),
+        "containerId": getattr(record, "container_id", None),
+        "threadId": getattr(record, "thread_id", None),
+        "activeTurnId": getattr(record, "active_turn_id", None),
+    }
+
+
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
         return
@@ -467,7 +480,7 @@ def _coerce_sequence(value: object) -> int | None:
 
 def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | None:
     try:
-        chunk = LiveLogChunk.model_validate(payload)
+        chunk = RunObservabilityEvent.model_validate(payload)
     except Exception:
         return None
     return chunk.model_dump(mode="json", exclude_none=True)
@@ -526,6 +539,39 @@ def _iter_diagnostics_observability_events(
         if dedupe_key in seen_system_annotations:
             continue
         yield normalized
+
+
+def _iter_event_journal(
+    event_path: Path | None,
+    *,
+    run_id: str | None = None,
+) -> Iterator[dict[str, object]]:
+    if event_path is None or not event_path.is_file():
+        return
+    normalized_run_id = str(run_id or "").strip() or None
+    try:
+        with event_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                normalized = _normalize_live_event(payload)
+                if normalized is None:
+                    continue
+                payload_run_id = str(
+                    normalized.get("run_id") or normalized.get("runId") or ""
+                ).strip()
+                if normalized_run_id and payload_run_id and payload_run_id != normalized_run_id:
+                    continue
+                yield normalized
+    except OSError:
+        return
 
 
 def _iter_text_artifact_events(
@@ -812,7 +858,7 @@ async def get_observability_summary(
     session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
     base["supportsLiveStreaming"] = supports_live
     base["liveStreamStatus"] = live_stream_status
-    base["sessionSnapshot"] = _build_session_snapshot(session_record)
+    base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
     return {"summary": base}
 
 
@@ -936,7 +982,20 @@ async def get_task_run_observability_events(
     session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
 
     events: list[dict[str, object]] = []
-    if _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
+    artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
+    event_journal_path = _resolve_safe_artifact_path(
+        getattr(record, "observability_events_ref", None),
+        artifacts_root,
+    )
+    raw_record_run_id = getattr(record, "run_id", None)
+    record_run_id = (
+        raw_record_run_id.strip()
+        if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
+        else None
+    )
+    if event_journal_path is not None:
+        events.extend(_iter_event_journal(event_journal_path, run_id=record_run_id))
+    elif _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
         for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at):
             normalized = _normalize_live_event(payload)
             if normalized is not None:
@@ -1029,7 +1088,7 @@ async def stream_task_run_live_logs(
             ):
                 if await request.is_disconnected():
                     break
-                json_str = chunk.model_dump_json(by_alias=True)
+                json_str = chunk.model_dump_json(exclude_none=True)
                 yield f"data: {json_str}\n\n".encode("utf-8")
                 
                 # Check terminal status once every few chunks if possible or dynamically,
