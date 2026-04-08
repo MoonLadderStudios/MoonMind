@@ -23,6 +23,7 @@ def _write_fake_app_server(
     *,
     emit_completion: bool = True,
     fail_thread_resume: bool = False,
+    resume_requires_existing_rollout_path: bool = False,
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
 ) -> Path:
@@ -46,6 +47,7 @@ import sys
 INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
+RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -113,6 +115,25 @@ for line in sys.stdin:
         }) + "\\n")
         sys.stdout.flush()
     elif method == "thread/resume":
+        thread_path = message["params"].get("path")
+        if RESUME_REQUIRES_EXISTING_ROLLOUT_PATH:
+            if not thread_path:
+                sys.stdout.write(json.dumps({
+                    "id": msg_id,
+                    "error": {"code": -32600, "message": "thread not found"},
+                }) + "\\n")
+                sys.stdout.flush()
+                continue
+            if not os.path.isfile(thread_path):
+                sys.stdout.write(json.dumps({
+                    "id": msg_id,
+                    "error": {
+                        "code": -32600,
+                        "message": f"failed to load rollout `{thread_path}`: No such file or directory (os error 2)",
+                    },
+                }) + "\\n")
+                sys.stdout.flush()
+                continue
         if FAIL_THREAD_RESUME:
             sys.stdout.write(json.dumps({
                 "id": msg_id,
@@ -120,7 +141,6 @@ for line in sys.stdin:
             }) + "\\n")
             sys.stdout.flush()
             continue
-        thread_path = message["params"].get("path")
         if thread_path is not None:
             assert str(thread_path).endswith("vendor-thread-1.jsonl")
         sys.stdout.write(json.dumps({
@@ -216,6 +236,10 @@ __COMPLETION_BLOCK__
             repr(str(codex_home_record_path) if codex_home_record_path is not None else ""),
         )
         .replace("__FAIL_THREAD_RESUME__", "True" if fail_thread_resume else "False")
+        .replace(
+            "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
+            "True" if resume_requires_existing_rollout_path else "False",
+        )
         .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )
@@ -285,7 +309,7 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     )
     assert state_payload["logicalThreadId"] == "logical-thread-1"
     assert state_payload["vendorThreadId"] == "vendor-thread-1"
-    assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
+    assert "vendorThreadPath" not in state_payload
 
 
 def test_runtime_send_turn_returns_completed_response_with_assistant_text(
@@ -403,6 +427,47 @@ def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
         )
     )
     assert updated_state["vendorThreadId"] == "vendor-thread-1"
+
+
+def test_runtime_send_turn_ignores_missing_vendor_thread_path_from_state(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(
+        tmp_path,
+        resume_requires_existing_rollout_path=True,
+    )
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["vendorThreadPath"] = "/tmp/vendor-thread-1.jsonl"
+    state_path.write_text(json.dumps(state_payload) + "\n", encoding="utf-8")
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state["vendorThreadId"] == "vendor-thread-1"
+    assert updated_state["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
 
 
 def test_runtime_clear_session_rotates_logical_thread_and_epoch(tmp_path: Path) -> None:

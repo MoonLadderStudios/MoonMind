@@ -448,15 +448,26 @@ class CodexManagedSessionRuntime:
             return None
         return str(matches[-1])
 
+    @staticmethod
+    def _normalized_thread_path(path_value: str | None) -> str | None:
+        normalized = str(path_value or "").strip()
+        return normalized or None
+
+    def _existing_thread_path(self, path_value: str | None) -> str | None:
+        normalized = self._normalized_thread_path(path_value)
+        if normalized is None:
+            return None
+        return normalized if Path(normalized).is_file() else None
+
     def _resume_thread(
         self,
         *,
         client: CodexAppServerRpcClient,
         state: CodexSessionRuntimeState,
     ) -> str:
-        thread_path = state.vendor_thread_path or self._find_vendor_thread_path(
-            state.vendor_thread_id
-        )
+        thread_path = self._existing_thread_path(
+            state.vendor_thread_path
+        ) or self._find_vendor_thread_path(state.vendor_thread_id)
         params: dict[str, Any] = {"threadId": state.vendor_thread_id}
         if thread_path:
             params["path"] = thread_path
@@ -479,8 +490,8 @@ class CodexManagedSessionRuntime:
                 "codex app-server thread/resume returned a blank thread id"
             )
         state.vendor_thread_id = vendor_thread_id
-        state.vendor_thread_path = (
-            str(thread_payload.get("path") or thread_path or "").strip() or None
+        state.vendor_thread_path = self._normalized_thread_path(
+            thread_payload.get("path") or thread_path
         )
         return vendor_thread_id
 
@@ -498,7 +509,7 @@ class CodexManagedSessionRuntime:
         vendor_thread_id = str(thread_payload.get("id") or "").strip()
         if not vendor_thread_id:
             raise RuntimeError("codex app-server thread/start returned a blank thread id")
-        vendor_thread_path = str(thread_payload.get("path") or "").strip() or None
+        vendor_thread_path = self._existing_thread_path(thread_payload.get("path"))
 
         state = CodexSessionRuntimeState(
             sessionId=request.session_id,
@@ -666,7 +677,7 @@ class CodexManagedSessionRuntime:
         vendor_thread_id = str(thread_payload.get("id") or "").strip()
         if not vendor_thread_id:
             raise RuntimeError("codex app-server thread/start returned a blank thread id")
-        vendor_thread_path = str(thread_payload.get("path") or "").strip() or None
+        vendor_thread_path = self._existing_thread_path(thread_payload.get("path"))
 
         state.session_epoch += 1
         state.logical_thread_id = request.new_thread_id
