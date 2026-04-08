@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
@@ -18,12 +19,15 @@ from api_service.db.models import User
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactMetadataModel,
     ArtifactRefModel,
+    ArtifactSessionControlRequest,
+    ArtifactSessionControlResponse,
     ArtifactSessionGroupModel,
     ArtifactSessionProjectionModel,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
@@ -58,6 +62,11 @@ def _get_managed_session_store_root() -> str:
 
 def _get_agent_runtime_artifacts_root() -> str:
     return str(managed_runtime_artifact_root())
+
+
+@lru_cache(maxsize=1)
+def get_temporal_client_adapter() -> TemporalClientAdapter:
+    return TemporalClientAdapter()
 
 
 def _enum_value(value: object) -> object:
@@ -253,6 +262,10 @@ async def _build_task_run_artifact_session_projection(
         latest_control_event_ref=await _artifact_ref(record.latest_control_event_ref),
         latest_reset_boundary_ref=await _artifact_ref(record.latest_reset_boundary_ref),
     )
+
+
+def _task_run_session_workflow_id(*, task_run_id: str, runtime_id: str) -> str:
+    return f"{task_run_id}:session:{runtime_id}"
 
 
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
@@ -500,6 +513,74 @@ async def get_task_run_artifact_session(
     if projection is None:
         _session_projection_not_found()
     return projection
+
+
+@router.post(
+    "/{task_run_id}/artifact-sessions/{session_id}/control",
+    response_model=ArtifactSessionControlResponse,
+    responses={
+        403: {"description": "You do not have permission to access this task run"},
+        404: {"description": "Session projection not found for this task run"},
+        409: {"description": "The managed session cannot accept this control action"},
+    },
+)
+async def control_task_run_artifact_session(
+    task_run_id: str,
+    session_id: str,
+    payload: ArtifactSessionControlRequest,
+    _user: User = Depends(get_current_user()),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+) -> ArtifactSessionControlResponse:
+    await _require_task_run_access(task_run_id, _user)
+    store = ManagedSessionStore(_get_managed_session_store_root())
+    try:
+        record = await asyncio.to_thread(store.load, session_id)
+    except ValueError:
+        record = None
+    if record is None or record.task_run_id != task_run_id:
+        _session_projection_not_found()
+    if record.status in {"terminated", "degraded", "failed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This managed session is not available for control actions.",
+        )
+
+    client = get_temporal_client_adapter()
+    workflow_id = _task_run_session_workflow_id(
+        task_run_id=task_run_id,
+        runtime_id=record.runtime_id,
+    )
+    if payload.action == "send_follow_up":
+        await client.update_workflow(
+            workflow_id,
+            "SendFollowUp",
+            {
+                "message": payload.message,
+                **({"reason": payload.reason} if payload.reason else {}),
+            },
+        )
+    elif payload.action == "clear_session":
+        await client.update_workflow(
+            workflow_id,
+            "ClearSession",
+            {
+                **({"reason": payload.reason} if payload.reason else {}),
+            },
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported session control action: {payload.action}",
+        )
+
+    projection = await _build_task_run_artifact_session_projection(
+        task_run_id=task_run_id,
+        session_id=session_id,
+        service=artifact_service,
+    )
+    if projection is None:
+        _session_projection_not_found()
+    return ArtifactSessionControlResponse(action=payload.action, projection=projection)
 
 
 @router.get(

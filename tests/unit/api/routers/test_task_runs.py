@@ -1019,3 +1019,126 @@ def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -
         response.json()["detail"]
         == "You do not have permission to access this task run or its session projection."
     )
+
+
+def test_post_task_run_artifact_session_control_routes_send_follow_up_and_returns_projection(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, artifact_service = client
+    record = _build_session_record()
+
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == "service:task_runs"
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+    client_adapter = AsyncMock()
+    client_adapter.update_workflow.return_value = {"accepted": True}
+
+    with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
+        with patch("api_service.api.routers.task_runs.get_temporal_client_adapter", return_value=client_adapter):
+            response = test_client.post(
+                "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json={
+                    "action": "send_follow_up",
+                    "message": "Continue reusing the current session.",
+                    "reason": "Operator clarification",
+                },
+            )
+
+    assert response.status_code == 200
+    client_adapter.update_workflow.assert_awaited_once_with(
+        "wf-task-1:session:codex_cli",
+        "SendFollowUp",
+        {
+            "message": "Continue reusing the current session.",
+            "reason": "Operator clarification",
+        },
+    )
+    body = response.json()
+    assert body["action"] == "send_follow_up"
+    assert body["projection"]["session_epoch"] == 2
+    assert body["projection"]["latest_summary_ref"]["artifact_id"] == "art_summary"
+    assert body["projection"]["latest_checkpoint_ref"]["artifact_id"] == "art_checkpoint"
+
+
+def test_post_task_run_artifact_session_control_routes_clear_session_and_returns_projection(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, artifact_service = client
+    record = _build_session_record().model_copy(
+        update={
+            "session_epoch": 3,
+            "thread_id": "thread-3",
+            "latest_control_event_ref": "art_control",
+            "latest_reset_boundary_ref": "art_reset",
+        }
+    )
+
+    artifact_payloads = {
+        "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
+        "art_stderr": _build_artifact("art_stderr", "runtime.stderr", label="stderr"),
+        "art_diag": _build_artifact("art_diag", "runtime.diagnostics", label="diagnostics"),
+        "art_summary": _build_artifact("art_summary", "session.summary", label="summary"),
+        "art_checkpoint": _build_artifact("art_checkpoint", "session.step_checkpoint", label="checkpoint"),
+        "art_control": _build_artifact("art_control", "session.control_event", label="control"),
+        "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
+    }
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == "service:task_runs"
+        return artifact_payloads[artifact_id]
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+    client_adapter = AsyncMock()
+    client_adapter.update_workflow.return_value = {"accepted": True}
+
+    with patch("api_service.api.routers.task_runs.ManagedSessionStore.load", return_value=record):
+        with patch("api_service.api.routers.task_runs.get_temporal_client_adapter", return_value=client_adapter):
+            response = test_client.post(
+                "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json={
+                    "action": "clear_session",
+                    "reason": "Reset stale context",
+                },
+            )
+
+    assert response.status_code == 200
+    client_adapter.update_workflow.assert_awaited_once_with(
+        "wf-task-1:session:codex_cli",
+        "ClearSession",
+        {
+            "reason": "Reset stale context",
+        },
+    )
+    body = response.json()
+    assert body["action"] == "clear_session"
+    assert body["projection"]["session_epoch"] == 3
+    assert body["projection"]["latest_control_event_ref"]["artifact_id"] == "art_control"
+    assert body["projection"]["latest_reset_boundary_ref"]["artifact_id"] == "art_reset"
+
+
+def test_post_task_run_artifact_session_control_rejects_blank_follow_up_message(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _artifact_service = client
+
+    response = test_client.post(
+        "/api/task-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+        json={
+            "action": "send_follow_up",
+            "message": "   ",
+        },
+    )
+
+    assert response.status_code == 422
