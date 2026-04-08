@@ -103,38 +103,42 @@ body {
   flex: 1 1 auto;
 }
 
-.masthead-controls {
+.masthead-title-row {
   display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
-  flex: 0 0 auto;
-  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .version-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  justify-content: flex-end;
+  gap: 0.5rem;
   padding: 0.25rem 0.6rem;
   border-radius: 0.35rem;
   background: rgb(var(--mm-accent) / 0.1);
   border: 1px solid rgb(var(--mm-accent) / 0.25);
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: rgb(var(--mm-accent) / 0.95);
-  letter-spacing: 0.02em;
   white-space: nowrap;
   line-height: 1.4;
+  margin-left: auto;
 }
 
-.version-badge::before {
-  content: "version";
+.version-badge-label {
   font-size: 0.65rem;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: rgb(var(--mm-accent) / 0.7);
+}
+
+.version-badge-value {
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgb(var(--mm-accent) / 0.95);
+  letter-spacing: 0.02em;
 }
 
 .theme-toggle {
@@ -1134,9 +1138,13 @@ button.secondary:hover {
     flex-direction: column;
   }
 
-  .masthead-controls {
+  .masthead-title-row {
     width: 100%;
-    justify-content: flex-start;
+    align-items: flex-start;
+  }
+
+  .version-badge {
+    margin-left: 0;
   }
 
   .grid-2 {

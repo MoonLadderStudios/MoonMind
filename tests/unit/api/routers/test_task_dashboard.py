@@ -270,6 +270,7 @@ def test_react_shell_renders_build_metadata_with_accurate_labels(
 
     assert response.status_code == 200
     assert 'title="Build version"' in response.text
+    assert '<span class="version-badge-label">Version</span>' in response.text
     assert "build-2026.04.07" in response.text
     assert 'title="Codex CLI version"' in response.text
     assert "0.105.0" in response.text
