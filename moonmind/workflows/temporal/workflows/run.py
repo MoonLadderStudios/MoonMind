@@ -39,11 +39,20 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
+        ExecutionProgressModel,
+        StepLedgerSnapshotModel,
         normalize_dependency_ids,
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
+from moonmind.workflows.temporal.step_ledger import (
+    build_initial_step_rows,
+    build_progress_summary,
+    build_step_ledger_snapshot,
+    refresh_ready_steps,
+    update_step_row,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
@@ -208,6 +217,7 @@ class MoonMindRunWorkflow:
         self._last_step_id: Optional[str] = None
         self._last_step_summary: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
+        self._active_step_id: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int = 0
@@ -262,6 +272,21 @@ class MoonMindRunWorkflow:
         self._active_agent_id: Optional[str] = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
+        self._step_ledger_rows: list[dict[str, Any]] = []
+        self._progress_snapshot: dict[str, Any] = {
+            "total": 0,
+            "pending": 0,
+            "ready": 0,
+            "running": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": None,
+            "updatedAt": "1970-01-01T00:00:00+00:00",
+        }
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -435,6 +460,115 @@ class MoonMindRunWorkflow:
                 "plan edges contain at least one cycle; execution order is undefined"
             )
         return [payload_by_id[node_id] for node_id in ordered_node_ids]
+
+    def _plan_dependency_map(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+        edges: tuple[Any, ...],
+    ) -> dict[str, list[str]]:
+        dependency_map = {
+            str(node.get("id") or "").strip(): []
+            for node in ordered_nodes
+            if str(node.get("id") or "").strip()
+        }
+        for edge in edges:
+            from_node = str(getattr(edge, "from_node", "") or "").strip()
+            to_node = str(getattr(edge, "to_node", "") or "").strip()
+            if to_node in dependency_map and from_node:
+                dependency_map[to_node].append(from_node)
+        return dependency_map
+
+    def _sync_progress_snapshot(self, *, updated_at: datetime) -> None:
+        self._progress_snapshot = build_progress_summary(
+            self._step_ledger_rows,
+            updated_at=updated_at,
+        )
+
+    def _initialize_step_ledger(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+        dependency_map: dict[str, list[str]],
+        updated_at: datetime,
+    ) -> None:
+        self._step_ledger_rows = build_initial_step_rows(
+            ordered_nodes=ordered_nodes,
+            dependency_map=dependency_map,
+            updated_at=updated_at,
+        )
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _mark_step_running(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        summary: str | None = None,
+    ) -> None:
+        self._active_step_id = logical_step_id
+        update_step_row(
+            self._step_ledger_rows,
+            logical_step_id,
+            updated_at=updated_at,
+            status="running",
+            summary=summary,
+            waiting_reason=None,
+            attention_required=False,
+            increment_attempt=True,
+            set_started_at=True,
+        )
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _mark_step_waiting(
+        self,
+        logical_step_id: str,
+        *,
+        status: str,
+        updated_at: datetime,
+        waiting_reason: str | None,
+        summary: str | None = None,
+        attention_required: bool = False,
+    ) -> None:
+        update_step_row(
+            self._step_ledger_rows,
+            logical_step_id,
+            updated_at=updated_at,
+            status=status,
+            summary=summary,
+            waiting_reason=waiting_reason,
+            attention_required=attention_required,
+        )
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _mark_step_terminal(
+        self,
+        logical_step_id: str,
+        *,
+        status: str,
+        updated_at: datetime,
+        summary: str | None = None,
+        last_error: str | None | object = None,
+    ) -> None:
+        update_kwargs: dict[str, Any] = {
+            "updated_at": updated_at,
+            "status": status,
+            "summary": summary,
+        }
+        if last_error is not None:
+            update_kwargs["last_error"] = last_error
+        update_step_row(
+            self._step_ledger_rows,
+            logical_step_id,
+            **update_kwargs,
+        )
+        if self._active_step_id == logical_step_id:
+            self._active_step_id = None
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
+        refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
+        self._sync_progress_snapshot(updated_at=updated_at)
 
     def _dependency_ids_from_parameters(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
@@ -1159,6 +1293,15 @@ class MoonMindRunWorkflow:
             ordered_nodes = await self._bundle_ordered_nodes_for_execution(
                 ordered_nodes
             )
+        dependency_map = self._plan_dependency_map(
+            ordered_nodes=ordered_nodes,
+            edges=plan_definition.edges,
+        )
+        self._initialize_step_ledger(
+            ordered_nodes=ordered_nodes,
+            dependency_map=dependency_map,
+            updated_at=workflow.now(),
+        )
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         failure_mode = plan_definition.policy.failure_mode
@@ -1227,6 +1370,12 @@ class MoonMindRunWorkflow:
                 f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
             )
             self._update_memo()
+            self._refresh_step_readiness(updated_at=workflow.now())
+            self._mark_step_running(
+                node_id,
+                updated_at=workflow.now(),
+                summary=self._summary,
+            )
 
             system_retries = 0
             while system_retries <= 3:
@@ -1249,6 +1398,13 @@ class MoonMindRunWorkflow:
                             )
                         self._active_agent_child_workflow_id = child_workflow_id
                         self._active_agent_id = request.agent_id
+                        self._mark_step_waiting(
+                            node_id,
+                            status="awaiting_external",
+                            updated_at=workflow.now(),
+                            waiting_reason="Awaiting child workflow progress",
+                            summary=f"Awaiting child workflow for {tool_name}",
+                        )
                         try:
                             child_result = await workflow.execute_child_workflow(
                                 "MoonMind.AgentRun",
@@ -1261,6 +1417,13 @@ class MoonMindRunWorkflow:
                             self._active_agent_id = None
                         execution_result = self._map_agent_run_result(child_result)
                     except Exception:
+                        self._mark_step_terminal(
+                            node_id,
+                            status="failed",
+                            updated_at=workflow.now(),
+                            summary=f"{tool_name} failed",
+                            last_error="execution_error",
+                        )
                         if failure_mode == "FAIL_FAST":
                             raise
                         result_status = "FAILED"
@@ -1328,6 +1491,13 @@ class MoonMindRunWorkflow:
                             **self._execute_kwargs_for_route(route),
                         )
                     except Exception:
+                        self._mark_step_terminal(
+                            node_id,
+                            status="failed",
+                            updated_at=workflow.now(),
+                            summary=f"{tool_name} failed",
+                            last_error="execution_error",
+                        )
                         if failure_mode == "FAIL_FAST":
                             raise
                         result_status = "FAILED"
@@ -1356,13 +1526,32 @@ class MoonMindRunWorkflow:
                         and tool_type == "agent_runtime"
                     )
                     if retryable and system_retries < 3:
+                        self._mark_step_terminal(
+                            node_id,
+                            status="failed",
+                            updated_at=workflow.now(),
+                            summary=f"{tool_name} failed",
+                            last_error=failure_message,
+                        )
                         system_retries += 1
                         self._get_logger().info(
                             f"Retrying plan node {node_id} after {failure_message} "
                             f"(attempt {system_retries} of 3)"
                         )
+                        self._mark_step_running(
+                            node_id,
+                            updated_at=workflow.now(),
+                            summary=self._summary,
+                        )
                         continue
 
+                    self._mark_step_terminal(
+                        node_id,
+                        status="failed",
+                        updated_at=workflow.now(),
+                        summary=f"{tool_name} failed",
+                        last_error=failure_message,
+                    )
                     if failure_mode == "FAIL_FAST":
                         detail = (
                             f" with error '{failure_message}'"
@@ -1379,6 +1568,15 @@ class MoonMindRunWorkflow:
             if result_status is None or result_status != "COMPLETED":
                 continue
 
+            self._mark_step_terminal(
+                node_id,
+                status="succeeded",
+                updated_at=workflow.now(),
+                summary=self._get_from_result(execution_result, "summary")
+                or self._summary,
+                last_error=None,
+            )
+            self._refresh_step_readiness(updated_at=workflow.now())
             self._record_execution_context(
                 node_id=node_id,
                 execution_result=execution_result,
@@ -3434,3 +3632,22 @@ class MoonMindRunWorkflow:
             "awaiting_external": self._awaiting_external,
             "waiting_reason": self._waiting_reason,
         }
+
+    @workflow.query
+    def get_progress(self) -> dict[str, Any]:
+        return ExecutionProgressModel.model_validate(self._progress_snapshot).model_dump(
+            by_alias=True,
+            mode="json",
+        )
+
+    @workflow.query
+    def get_step_ledger(self) -> dict[str, Any]:
+        snapshot = build_step_ledger_snapshot(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            rows=self._step_ledger_rows,
+        )
+        return StepLedgerSnapshotModel.model_validate(snapshot).model_dump(
+            by_alias=True,
+            mode="json",
+        )
