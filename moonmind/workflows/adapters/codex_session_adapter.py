@@ -42,6 +42,9 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
+from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+    append_managed_codex_runtime_note,
+)
 
 
 SessionSnapshotLoader = Callable[
@@ -487,20 +490,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
     ) -> str:
-        workspace_path = Path(self._workspace_path_for_request(binding=binding, request=request))
-        if str(request.instruction_ref or "").strip():
-            from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
-                CodexCliStrategy,
-            )
-
-            await CodexCliStrategy().prepare_workspace(workspace_path, request)
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
-            return instruction_ref
+            return append_managed_codex_runtime_note(instruction_ref)
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
-            return instructions
+            return append_managed_codex_runtime_note(instructions)
         raise ValueError("CodexSessionAdapter requires instructionRef or parameters.instructions")
 
     def _require_binding(self, request: AgentExecutionRequest) -> CodexManagedSessionBinding:
@@ -542,6 +538,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
             environment=environment,
+            workspaceSpec=(
+                dict(request.workspace_spec)
+                if isinstance(request.workspace_spec, dict)
+                else {}
+            ),
         )
         handle = await self._coerce_handle(self._launch_session(launch_request))
         await self._attach_runtime_handles(

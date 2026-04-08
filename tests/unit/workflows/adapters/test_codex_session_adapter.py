@@ -284,6 +284,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert launch_request.artifact_spool_path.endswith(f"{binding.task_run_id}/artifacts")
     assert launch_request.codex_home_path.endswith(f"{binding.task_run_id}/.moonmind/codex-home")
     assert launch_request.image_ref == "ghcr.io/moonladderstudios/moonmind:latest"
+    assert launch_request.workspace_spec == {"workspacePath": str(workspace_path)}
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
     assert send_turn_calls[0].input_refs == ("artifact:input-1",)

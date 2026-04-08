@@ -489,6 +489,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
     env_file:
       - .env
     volumes:
@@ -521,8 +523,11 @@ services:
         condition: service_completed_successfully
       gemini-auth-init:
         condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
     networks:
       - local-network
+      - docker-proxy-network
     restart: unless-stopped
 
   temporal-worker-integrations:
@@ -646,8 +651,10 @@ services:
     environment:
       INFO: 1
       CONTAINERS: 1
+      EXEC: 1
       IMAGES: 1
       NETWORKS: 1
+      POST: 1
       VOLUMES: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
