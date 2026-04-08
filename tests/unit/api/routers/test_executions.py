@@ -27,6 +27,10 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
+from moonmind.schemas.temporal_models import (
+    ExecutionProgressModel,
+    StepLedgerSnapshotModel,
+)
 
 
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNamespace:
@@ -216,6 +220,69 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "execution_forbidden"
     mock_service.list_executions.assert_not_awaited()
+
+
+def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
+    progress = ExecutionProgressModel.model_validate(
+        {
+            "total": 1,
+            "pending": 0,
+            "ready": 0,
+            "running": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Prepare workspace",
+            "updatedAt": "2026-04-07T12:00:00Z",
+        }
+    )
+    snapshot = StepLedgerSnapshotModel.model_validate(
+        {
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "prepare",
+                    "order": 1,
+                    "title": "Prepare workspace",
+                    "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+                    "dependsOn": [],
+                    "status": "succeeded",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    "attempt": 1,
+                    "startedAt": "2026-04-07T12:00:00Z",
+                    "updatedAt": "2026-04-07T12:00:00Z",
+                    "summary": "Workspace prepared",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": None,
+                    },
+                    "artifacts": {
+                        "outputSummary": None,
+                        "outputPrimary": None,
+                        "runtimeStdout": None,
+                        "runtimeStderr": None,
+                        "runtimeMergedLogs": None,
+                        "runtimeDiagnostics": None,
+                        "providerSnapshot": None,
+                    },
+                    "lastError": None,
+                }
+            ],
+        }
+    )
+
+    assert progress.model_dump(by_alias=True, mode="json")["awaitingExternal"] == 0
+    dumped_snapshot = snapshot.model_dump(by_alias=True, mode="json")
+    assert dumped_snapshot["runScope"] == "latest"
+    assert dumped_snapshot["steps"][0]["logicalStepId"] == "prepare"
 
 
 def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> None:
