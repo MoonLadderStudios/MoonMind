@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from pathlib import Path
+from typing import Mapping
 
 from sqlalchemy import select
 
@@ -22,6 +25,8 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
     "GITHUB_TOKEN",
     "GITHUB_PAT",
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def resolve_managed_github_token_from_store() -> str | None:
@@ -48,6 +53,73 @@ async def resolve_managed_github_token_from_store() -> str | None:
             if candidate:
                 return candidate
     return None
+
+
+async def resolve_github_token_for_launch(
+    environment: Mapping[str, str] | None = None,
+) -> str | None:
+    """Resolve the GitHub token used for launch-time auth seeding.
+
+    Precedence is:
+    1. Existing ``GITHUB_TOKEN`` already present in the launch environment.
+    2. Explicit ``settings.github.github_token_secret_ref``.
+    3. Managed secret store fallback (well-known GitHub token slugs).
+    """
+
+    launch_environment = environment or {}
+    token = str(launch_environment.get("GITHUB_TOKEN", "")).strip()
+    if token:
+        return token
+
+    from moonmind.config.settings import settings as _mm_settings
+
+    secret_ref = str(
+        getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
+    ).strip()
+    if secret_ref:
+        try:
+            return await resolve_managed_api_key_reference(secret_ref)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "Failed to resolve GitHub token secret ref for managed runtime launch",
+                exc_info=True,
+            )
+
+    try:
+        return await resolve_managed_github_token_from_store()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "Failed to resolve GitHub token from managed secrets store",
+            exc_info=True,
+        )
+        return None
+
+
+async def shape_launch_github_auth_environment(
+    environment: Mapping[str, str] | None = None,
+    *,
+    ambient_github_token: str | None = None,
+) -> dict[str, str]:
+    """Return launch env with GitHub auth seeded using explicit precedence."""
+
+    shaped_environment = {
+        str(key): str(value) for key, value in (environment or {}).items()
+    }
+    ambient_token = str(ambient_github_token or "").strip()
+
+    if ambient_token and not str(shaped_environment.get("GITHUB_TOKEN", "")).strip():
+        shaped_environment["GITHUB_TOKEN"] = ambient_token
+
+    github_token = await resolve_github_token_for_launch(shaped_environment)
+    if github_token:
+        shaped_environment["GITHUB_TOKEN"] = github_token
+        shaped_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
+
+    return shaped_environment
 
 
 async def resolve_managed_api_key_reference(ref: str) -> str:
@@ -128,6 +200,8 @@ async def resolve_managed_api_key_reference(ref: str) -> str:
 
 
 __all__ = [
+    "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
     "resolve_managed_github_token_from_store",
+    "shape_launch_github_auth_environment",
 ]

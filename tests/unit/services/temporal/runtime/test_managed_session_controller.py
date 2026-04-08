@@ -244,6 +244,55 @@ async def test_controller_launch_clones_workspace_before_starting_container(
 
 
 @pytest.mark.asyncio
+async def test_controller_launch_redacts_github_token_from_command_failures(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"GITHUB_TOKEN": "ghp_inline_secret_token_12345678901234567890"},
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return (
+                1,
+                "",
+                "docker run rejected GITHUB_TOKEN=ghp_inline_secret_token_12345678901234567890",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.launch_session(request)
+
+    message = str(exc_info.value)
+    assert "ghp_inline_secret_token_12345678901234567890" not in message
+    assert "[REDACTED]" in message
+
+
+@pytest.mark.asyncio
 async def test_controller_launch_creates_target_branch_when_remote_branch_missing(
     tmp_path: Path,
 ) -> None:
