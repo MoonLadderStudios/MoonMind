@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api_service.api.routers import task_runs as task_runs_router
 from api_service.api.routers.task_runs import router
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.auth_providers import get_current_user
@@ -819,6 +820,132 @@ def test_get_task_run_observability_events_reads_structured_spool_history(
     assert [event["sequence"] for event in body["events"]] == [10, 11]
     assert body["events"][1]["stream"] == "session"
     assert body["events"][1]["kind"] == "session_reset_boundary"
+
+
+def test_load_task_run_session_record_uses_targeted_standard_paths(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    managed_sessions = tmp_path / "managed_sessions"
+    managed_sessions.mkdir()
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+
+    older = _build_session_record().model_copy(
+        update={
+            "session_id": "sess:wf-task-1:codex_cli",
+            "updated_at": datetime(2026, 4, 8, 0, 0, tzinfo=UTC),
+        }
+    )
+    newer = _build_session_record().model_copy(
+        update={
+            "session_id": "sess:wf-task-1:codex_cli-2",
+            "updated_at": datetime(2026, 4, 8, 1, 0, tzinfo=UTC),
+        }
+    )
+    (managed_sessions / "sess:wf-task-1:codex_cli.json").write_text(
+        json.dumps(older.model_dump(mode="json", by_alias=True)),
+        encoding="utf-8",
+    )
+    (managed_sessions / "sess:wf-task-1:codex_cli-2.json").write_text(
+        json.dumps(newer.model_dump(mode="json", by_alias=True)),
+        encoding="utf-8",
+    )
+
+    with patch("pathlib.Path.rglob", side_effect=AssertionError("unexpected recursive scan")):
+        record = task_runs_router._load_task_run_session_record("wf-task-1")
+
+    assert record is not None
+    assert record.session_id == "sess:wf-task-1:codex_cli-2"
+
+
+def test_iter_diagnostics_observability_events_dedupes_system_annotations(tmp_path) -> None:
+    diagnostics_path = tmp_path / "diagnostics.json"
+    diagnostics_path.write_text(
+        json.dumps(
+            {
+                "observability_events": [
+                    {
+                        "sequence": 7,
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "stream": "system",
+                        "text": "Session reset",
+                        "kind": "system_annotation",
+                    }
+                ],
+                "annotations": [
+                    {
+                        "sequence": 7,
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "text": "Session reset",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    events = list(task_runs_router._iter_diagnostics_observability_events(diagnostics_path))
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "system_annotation"
+
+
+def test_event_sort_key_uses_timestamp_before_sequence() -> None:
+    later_sequenced = {
+        "sequence": 1,
+        "timestamp": "2026-04-08T00:00:02Z",
+        "stream": "system",
+        "text": "later",
+        "kind": "system_annotation",
+    }
+    earlier_unsequenced = {
+        "sequence": 0,
+        "timestamp": "2026-04-08T00:00:01Z",
+        "stream": "stdout",
+        "text": "earlier",
+        "kind": "stdout_chunk",
+    }
+
+    ordered = sorted(
+        [later_sequenced, earlier_unsequenced],
+        key=task_runs_router._event_sort_key,
+    )
+
+    assert ordered[0]["text"] == "earlier"
+
+
+def test_iter_historical_artifact_events_chunks_large_logs_and_keeps_tail(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+
+    stdout_text = ("A" * 65536) + ("B" * 65536) + ("C" * 65536)
+    (artifacts_root / "run").mkdir()
+    (artifacts_root / "run" / "stdout.log").write_text(stdout_text, encoding="utf-8")
+
+    record = SimpleNamespace(
+        diagnostics_ref=None,
+        stdout_artifact_ref="run/stdout.log",
+        stderr_artifact_ref=None,
+        started_at=datetime(2026, 4, 8, 0, 0, tzinfo=UTC),
+    )
+
+    events = list(
+        task_runs_router._iter_historical_artifact_events(
+            record,
+            None,
+            limit_per_stream=2,
+        )
+    )
+
+    assert len(events) == 2
+    assert all(event["kind"] == "stdout_chunk" for event in events)
+    assert events[0]["offset"] > 0
+    assert events[0]["text"] == "B" * 65536
+    assert events[1]["text"] == "C" * 65536
 
 
 def _build_session_record() -> CodexManagedSessionRecord:

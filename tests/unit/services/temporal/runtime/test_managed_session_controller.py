@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -54,6 +54,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
+    session_supervisor.emit_session_event = Mock()
     request = LaunchCodexManagedSessionRequest(
         taskRunId="task-1",
         sessionId="sess-1",
@@ -199,6 +200,7 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
     )
     commands: list[tuple[str, ...]] = []
     session_supervisor = AsyncMock()
+    session_supervisor.emit_session_event = Mock()
 
     async def _publish_reset_artifacts(
         *,

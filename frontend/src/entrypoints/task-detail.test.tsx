@@ -1380,6 +1380,35 @@ describe('LiveLogsPanel', () => {
     expect(MockEventSource.instances.length).toBe(0);
   });
 
+  it('falls back to merged logs when structured history returns 404', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => noStreamSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({ ok: false, status: 404 } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => 'merged fallback line\n',
+        } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => expect(screen.getByText(/merged fallback line/)).toBeTruthy());
+    expect(MockEventSource.instances.length).toBe(0);
+  });
+
   it('closes stream and shows Stream ended when task transitions to terminal', async () => {
     let currentExecution = activeExecution;
     let currentSummary = activeSummary;

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from moonmind.workflows.temporal.runtime import log_streamer as log_streamer_module
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.output_parser import (
     GeminiCliOutputParser,
@@ -345,6 +346,61 @@ def test_emit_observability_event_publishes_session_metadata(streamer):
     assert published_chunk.session_epoch == 2
     assert published_chunk.thread_id == "thread-2"
     assert published_chunk.metadata["reason"] == "operator_reset"
+
+
+def test_emit_system_annotation_keeps_annotations_out_of_observability_events(streamer):
+    log_streamer, _ = streamer
+
+    log_streamer.emit_system_annotation(
+        run_id="run-annotations",
+        workspace_path=None,
+        text="Supervisor started.",
+        annotation_type="run_started",
+    )
+
+    annotations = log_streamer.consume_annotations("run-annotations")
+    observability_events = log_streamer.consume_observability_events("run-annotations")
+
+    assert len(annotations) == 1
+    assert annotations[0]["annotation_type"] == "run_started"
+    assert observability_events == []
+
+
+def test_observability_publish_reuses_one_spool_publisher_per_workspace(
+    streamer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_streamer, _ = streamer
+    created_publishers: list[object] = []
+
+    class _FakePublisher:
+        def __init__(self, workspace_path: str) -> None:
+            self.workspace_path = workspace_path
+            self.published: list[object] = []
+            created_publishers.append(self)
+
+        def publish(self, chunk: object) -> None:
+            self.published.append(chunk)
+
+    monkeypatch.setattr(log_streamer_module, "SpoolLogPublisher", _FakePublisher)
+
+    log_streamer.emit_observability_event(
+        run_id="run-cache",
+        workspace_path="/tmp/workspace",
+        stream="session",
+        text="event one",
+        kind="session_started",
+    )
+    log_streamer.emit_observability_event(
+        run_id="run-cache",
+        workspace_path="/tmp/workspace",
+        stream="session",
+        text="event two",
+        kind="session_started",
+    )
+
+    assert len(created_publishers) == 1
+    assert len(created_publishers[0].published) == 2
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,7 @@ class RuntimeLogStreamer:
         self._sequence_counter = 0
         self._annotations_by_run: dict[str, list[dict[str, Any]]] = {}
         self._observability_events_by_run: dict[str, list[dict[str, Any]]] = {}
+        self._spool_publishers_by_workspace: dict[str, SpoolLogPublisher] = {}
 
     def _next_sequence(self) -> int:
         self._sequence_counter += 1
@@ -71,9 +72,7 @@ class RuntimeLogStreamer:
         # Carry-over buffer for incomplete lines when the parser is active.
         _line_buf: str = ""
         current_offset: int = 0
-        live_publisher = self.publisher
-        if live_publisher is None and workspace_path:
-            live_publisher = SpoolLogPublisher(workspace_path=workspace_path)
+        live_publisher = self._resolve_live_publisher(workspace_path)
 
         while True:
             chunk = await reader.read(_STREAM_CHUNK_SIZE)
@@ -168,16 +167,6 @@ class RuntimeLogStreamer:
             "metadata": metadata,
         }
         self._annotations_by_run.setdefault(run_id, []).append(annotation_record)
-        self._observability_events_by_run.setdefault(run_id, []).append(
-            {
-                "sequence": sequence,
-                "timestamp": timestamp,
-                "stream": "system",
-                "text": text,
-                "kind": "system_annotation",
-                "metadata": metadata,
-            }
-        )
 
         self._publish_observability_chunk(
             workspace_path=workspace_path,
@@ -238,18 +227,30 @@ class RuntimeLogStreamer:
             chunk=chunk,
         )
 
+    def _resolve_live_publisher(
+        self,
+        workspace_path: str | None,
+    ) -> Any | None:
+        if self.publisher is not None:
+            return self.publisher
+        if not workspace_path:
+            return None
+        publisher = self._spool_publishers_by_workspace.get(workspace_path)
+        if publisher is None:
+            publisher = SpoolLogPublisher(workspace_path=workspace_path)
+            self._spool_publishers_by_workspace[workspace_path] = publisher
+        return publisher
+
     def _publish_observability_chunk(
         self,
         *,
         workspace_path: str | None,
         chunk: LiveLogChunk,
     ) -> None:
-        live_publisher = self.publisher
-        if live_publisher is None and workspace_path:
-            try:
-                live_publisher = SpoolLogPublisher(workspace_path=workspace_path)
-            except Exception:
-                return
+        try:
+            live_publisher = self._resolve_live_publisher(workspace_path)
+        except Exception:
+            return
         if live_publisher is None:
             return
         try:

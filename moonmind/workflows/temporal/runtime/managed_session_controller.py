@@ -7,7 +7,6 @@ import json
 import os
 import posixpath
 import re
-import inspect
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
@@ -372,7 +371,7 @@ class DockerCodexManagedSessionController:
     ) -> None:
         if self._session_supervisor is None:
             return
-        emit_result = self._session_supervisor.emit_session_event(
+        self._session_supervisor.emit_session_event(
             record=record,
             text=text,
             kind=kind,
@@ -380,8 +379,6 @@ class DockerCodexManagedSessionController:
             active_turn_id=active_turn_id,
             metadata=dict(metadata or {}),
         )
-        if inspect.isawaitable(emit_result):
-            await emit_result
 
     async def _container_exists(self, container_id: str) -> bool:
         returncode, stdout, stderr = await self._command_runner(

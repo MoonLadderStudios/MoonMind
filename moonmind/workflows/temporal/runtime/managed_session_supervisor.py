@@ -170,7 +170,7 @@ class ManagedSessionSupervisor:
             log_refs={"stdout": stdout_ref, "stderr": stderr_ref},
             annotations=[],
             events=[],
-            observability_events=self._log_streamer.consume_observability_events(record.session_id),
+            observability_events=self._log_streamer.consume_observability_events(record.task_run_id),
         )
         summary_ref = self._write_json_artifact(
             job_id=record.session_id,

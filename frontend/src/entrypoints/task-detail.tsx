@@ -796,6 +796,7 @@ function LiveLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
+  const historyUnavailable = historyQuery.isError || historyQuery.data === null;
 
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
@@ -805,7 +806,7 @@ function LiveLogsPanel({
       !!taskRunId &&
       expanded &&
       summaryQuery.isSuccess &&
-      historyQuery.isError,
+      historyUnavailable,
     staleTime: Infinity,
     retry: false,
   });
@@ -874,12 +875,12 @@ function LiveLogsPanel({
 
   // Sync legacy merged-text fallback only when structured history is unavailable.
   useEffect(() => {
-    if (tailQuery.isSuccess && tailQuery.data && historyQuery.isError) {
+    if (tailQuery.isSuccess && tailQuery.data && historyUnavailable) {
       if (lastSeqRef.current === null) {
         setLogContent(parseArtifactToRows(tailQuery.data));
       }
     }
-  }, [historyQuery.isError, tailQuery.data, tailQuery.isSuccess]);
+  }, [historyUnavailable, tailQuery.data, tailQuery.isSuccess]);
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
