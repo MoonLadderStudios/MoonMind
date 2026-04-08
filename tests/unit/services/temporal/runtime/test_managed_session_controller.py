@@ -130,7 +130,95 @@ async def test_controller_launches_container_and_returns_typed_handle(
 
 
 @pytest.mark.asyncio
+async def test_controller_launch_normalizes_created_paths_for_container_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    commands: list[tuple[str, ...]] = []
+    chown_calls: list[tuple[Path, int, int, bool]] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        chown_calls.append((Path(path), uid, gid, follow_symlinks))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        _fake_chown,
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    chowned_paths = {path for path, _uid, _gid, _follow_symlinks in chown_calls}
+    assert {
+        Path(request.workspace_path),
+        Path(request.session_workspace_path),
+        Path(request.artifact_spool_path),
+    } <= chowned_paths
+    assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
+    assert all(follow_symlinks is False for _path, _uid, _gid, follow_symlinks in chown_calls)
+    assert commands[1][:2] == ("docker", "run")
+
+
+@pytest.mark.asyncio
 async def test_controller_launch_clones_workspace_before_starting_container(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
@@ -149,6 +237,26 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         },
     )
     commands: list[tuple[str, ...]] = []
+    chown_calls: list[tuple[Path, int, int, bool]] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        chown_calls.append((Path(path), uid, gid, follow_symlinks))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        _fake_chown,
+    )
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -161,6 +269,8 @@ async def test_controller_launch_clones_workspace_before_starting_container(
             return 1, "", "No such container"
         if command[:2] == ("git", "clone"):
             Path(request.workspace_path).mkdir(parents=True, exist_ok=True)
+            tracked_file = Path(request.workspace_path) / "README.md"
+            tracked_file.write_text("content", encoding="utf-8")
             return 0, "", ""
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
@@ -201,6 +311,11 @@ async def test_controller_launch_clones_workspace_before_starting_container(
     assert Path(request.workspace_path).exists()
     assert Path(request.session_workspace_path).exists()
     assert Path(request.artifact_spool_path).exists()
+    chowned_paths = {path for path, _uid, _gid, _follow_symlinks in chown_calls}
+    assert Path(request.workspace_path) in chowned_paths
+    assert Path(request.workspace_path, "README.md") in chowned_paths
+    assert Path(request.session_workspace_path) in chowned_paths
+    assert Path(request.artifact_spool_path) in chowned_paths
 
 
 @pytest.mark.asyncio

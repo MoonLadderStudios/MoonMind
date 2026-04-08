@@ -94,7 +94,8 @@ def test_agent_workspaces_init_avoids_recursive_permission_repair():
     ), "agent-workspaces-init service is missing from docker-compose.yaml"
 
     command = init_service.get("command", "")
-    assert "chown -R 1000:1000 /work/agent_jobs" not in command
+    assert "set -e" in command
+    assert "chown -R" not in command
     for expected_dir in (
         "/work/agent_jobs",
         "/work/agent_jobs/artifacts",
