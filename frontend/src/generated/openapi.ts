@@ -820,6 +820,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Describe Execution Steps */
+        get: operations["describe_execution_steps_api_executions__workflow_id__steps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}": {
         parameters: {
             query?: never;
@@ -3118,6 +3135,7 @@ export interface components {
             taskId: string;
             /** Taskrunid */
             taskRunId?: string | null;
+            progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Namespace */
             namespace: string;
             /** Workflowid */
@@ -3256,6 +3274,8 @@ export interface components {
              * Format: date-time
              */
             createdAt: string;
+            /** Stepshref */
+            stepsHref?: string | null;
             integration?: components["schemas"]["IntegrationStateModel"] | null;
             /**
              * Latestrunview
@@ -3317,6 +3337,69 @@ export interface components {
             staleState: boolean;
             /** Refreshedat */
             refreshedAt?: string | null;
+        };
+        /**
+         * ExecutionProgressModel
+         * @description Bounded latest-run progress summary derived from workflow-owned step state.
+         */
+        ExecutionProgressModel: {
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Pending
+             * @default 0
+             */
+            pending: number;
+            /**
+             * Ready
+             * @default 0
+             */
+            ready: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Awaitingexternal
+             * @default 0
+             */
+            awaitingExternal: number;
+            /**
+             * Reviewing
+             * @default 0
+             */
+            reviewing: number;
+            /**
+             * Succeeded
+             * @default 0
+             */
+            succeeded: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Canceled
+             * @default 0
+             */
+            canceled: number;
+            /** Currentsteptitle */
+            currentStepTitle?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
         };
         /**
          * ExecutionRefreshEnvelope
@@ -4481,6 +4564,125 @@ export interface components {
             };
             /** Payloadartifactref */
             payloadArtifactRef?: string | null;
+        };
+        /**
+         * StepLedgerArtifactsModel
+         * @description Stable semantic artifact slots for step evidence.
+         */
+        StepLedgerArtifactsModel: {
+            /** Outputsummary */
+            outputSummary?: string | null;
+            /** Outputprimary */
+            outputPrimary?: string | null;
+            /** Runtimestdout */
+            runtimeStdout?: string | null;
+            /** Runtimestderr */
+            runtimeStderr?: string | null;
+            /** Runtimemergedlogs */
+            runtimeMergedLogs?: string | null;
+            /** Runtimediagnostics */
+            runtimeDiagnostics?: string | null;
+            /** Providersnapshot */
+            providerSnapshot?: string | null;
+        };
+        /**
+         * StepLedgerCheckModel
+         * @description Structured step-level review or check result.
+         */
+        StepLedgerCheckModel: {
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary?: string | null;
+            /**
+             * Retrycount
+             * @default 0
+             */
+            retryCount: number;
+            /** Artifactref */
+            artifactRef?: string | null;
+        };
+        /**
+         * StepLedgerRefsModel
+         * @description Stable ref slots for child workflow and task-run linkage.
+         */
+        StepLedgerRefsModel: {
+            /** Childworkflowid */
+            childWorkflowId?: string | null;
+            /** Childrunid */
+            childRunId?: string | null;
+            /** Taskrunid */
+            taskRunId?: string | null;
+        };
+        /**
+         * StepLedgerRowModel
+         * @description Current/latest attempt state for one logical step in the active run.
+         */
+        StepLedgerRowModel: {
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Order */
+            order: number;
+            /** Title */
+            title: string;
+            /** Tool */
+            tool?: {
+                [key: string]: unknown;
+            };
+            /** Dependson */
+            dependsOn?: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "ready" | "running" | "awaiting_external" | "reviewing" | "succeeded" | "failed" | "skipped" | "canceled";
+            /** Waitingreason */
+            waitingReason?: string | null;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
+            /**
+             * Attempt
+             * @default 0
+             */
+            attempt: number;
+            /** Startedat */
+            startedAt?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Summary */
+            summary?: string | null;
+            /** Checks */
+            checks?: components["schemas"]["StepLedgerCheckModel"][];
+            refs?: components["schemas"]["StepLedgerRefsModel"];
+            artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
+            /** Lasterror */
+            lastError?: string | null;
+        };
+        /**
+         * StepLedgerSnapshotModel
+         * @description Latest-run step-ledger query payload.
+         */
+        StepLedgerSnapshotModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /**
+             * Runscope
+             * @default latest
+             * @constant
+             */
+            runScope: "latest";
+            /** Steps */
+            steps?: components["schemas"]["StepLedgerRowModel"][];
         };
         /** StoryDraft */
         StoryDraft: {
@@ -7238,6 +7440,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"] | components["schemas"]["ScheduleCreatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_execution_steps_api_executions__workflow_id__steps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepLedgerSnapshotModel"];
                 };
             };
             /** @description Validation Error */

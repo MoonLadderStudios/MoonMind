@@ -193,6 +193,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "list": temporal_dashboard.list_endpoint,
                 "create": temporal_dashboard.create_endpoint,
                 "detail": temporal_dashboard.detail_endpoint,
+                "steps": "/api/executions/{workflowId}/steps",
                 "update": temporal_dashboard.update_endpoint,
                 "manifestStatus": "/api/executions/{workflowId}/manifest-status",
                 "manifestNodes": "/api/executions/{workflowId}/manifest-nodes",

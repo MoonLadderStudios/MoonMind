@@ -55,6 +55,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["temporal"]["list"] == "/api/executions"
     assert config["sources"]["temporal"]["create"] == "/api/executions"
     assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
+    assert config["sources"]["temporal"]["steps"] == "/api/executions/{workflowId}/steps"
     assert (
         config["sources"]["temporal"]["update"] == "/api/executions/{workflowId}/update"
     )

@@ -133,6 +133,20 @@ async def fetch_workflow_execution(
     return await handle.describe()
 
 
+async def query_workflow(
+    client: Client,
+    workflow_id: str,
+    query_name: str,
+    arg: Any = None,
+) -> Any:
+    """Execute a query against the latest run for ``workflow_id``."""
+
+    handle = client.get_workflow_handle(workflow_id)
+    if arg is None:
+        return await handle.query(query_name)
+    return await handle.query(query_name, arg)
+
+
 class TemporalClientAdapter:
     """Adapter for communicating with the Temporal server."""
 
