@@ -18,11 +18,11 @@ Last updated: 2026-04-08
 
 MoonMind should treat **Live Logs** as a **session-aware observability timeline**, not as an embedded terminal session and not as a thin tail of `stdout` and `stderr` alone.
 
-For managed agent runs, the canonical operator experience should be based on:
-- durable `stdout` artifact capture
-- durable `stderr` artifact capture
-- durable diagnostics artifacts
-- durable session continuity artifacts
+For managed agent runs, live visibility should be based on:
+
+- durable `stdout` and `stderr` artifact capture
+- structured diagnostics
+- durable session continuity and control-boundary artifacts when the runtime exposes a managed session plane
 - bounded workflow metadata
 - optional MoonMind-owned live streaming to Mission Control
 - explicit intervention controls that remain separate from logging
@@ -89,6 +89,7 @@ The source of truth remains:
 MoonMind should adopt these rules:
 
 1. **Managed run observability is artifact-first, MoonMind-owned, and session-aware.**
+   Every managed run should produce durable stdout/stderr artifacts, a diagnostics artifact, continuity and control-boundary artifacts when a managed session plane is active, structured run metadata, and optional live streaming through MoonMind APIs.
 2. **Live Logs is a projection over a normalized run observability model.**
 3. **Logging is not intervention.** The Live Logs panel is passive observation only.
 4. **`xterm.js` is reserved for OAuth and other interactive terminal flows, not for managed run logs.**

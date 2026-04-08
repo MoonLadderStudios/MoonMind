@@ -41,13 +41,29 @@ class MockEventSource {
     this.onopen?.(new Event('open'));
   }
 
-  triggerLogChunk(data: { sequence: number; stream: string; text: string }) {
-    const event = new MessageEvent('log_chunk', { data: JSON.stringify(data) });
+  triggerLogChunk(
+    data: { sequence: number; stream: string; text: string; timestamp?: string; kind?: string },
+  ) {
+    const event = new MessageEvent('log_chunk', {
+      data: JSON.stringify({
+        timestamp: '2026-04-08T00:00:00Z',
+        ...data,
+      }),
+    });
     for (const listener of this.listeners.get('log_chunk') ?? []) listener(event);
   }
 
-  triggerMessage(data: { sequence: number; stream: string; text: string }) {
-    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(data) }));
+  triggerMessage(
+    data: { sequence: number; stream: string; text: string; timestamp?: string; kind?: string },
+  ) {
+    this.onmessage?.(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          timestamp: '2026-04-08T00:00:00Z',
+          ...data,
+        }),
+      }),
+    );
   }
 
   triggerError() {
@@ -1192,10 +1208,68 @@ describe('LiveLogsPanel', () => {
     summary: object,
     tailContent: string = '',
   ) {
+    const buildHistoryPayload = () => {
+      const lines = tailContent.split('\n');
+      const events: Array<{ sequence: number; timestamp: string; stream: string; text: string }> = [];
+      let currentStream = 'stdout';
+      let sequence = 1;
+      let buffer: string[] = [];
+
+      const flushBuffer = () => {
+        if (buffer.length === 0) return;
+        events.push({
+          sequence,
+          timestamp: `2026-04-08T00:00:${String(sequence).padStart(2, '0')}Z`,
+          stream: currentStream,
+          text: `${buffer.join('\n')}\n`,
+        });
+        sequence += 1;
+        buffer = [];
+      };
+
+      for (const line of lines) {
+        if (line === '--- stdout ---') {
+          flushBuffer();
+          currentStream = 'stdout';
+          continue;
+        }
+        if (line === '--- stderr ---') {
+          flushBuffer();
+          currentStream = 'stderr';
+          continue;
+        }
+        if (line === '--- system ---') {
+          flushBuffer();
+          currentStream = 'system';
+          continue;
+        }
+        if (line.length === 0) continue;
+        buffer.push(line);
+      }
+      flushBuffer();
+
+      if (events.length === 0 && tailContent) {
+        events.push({
+          sequence: 1,
+          timestamp: '2026-04-08T00:00:01Z',
+          stream: 'stdout',
+          text: tailContent,
+        });
+      }
+
+      return { events, truncated: false };
+    };
+
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
         return Promise.resolve({ ok: true, json: async () => summary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => buildHistoryPayload(),
+        } as Response);
       }
       if (url.includes('/logs/merged')) {
         return Promise.resolve({
@@ -1306,6 +1380,35 @@ describe('LiveLogsPanel', () => {
     expect(MockEventSource.instances.length).toBe(0);
   });
 
+  it('falls back to merged logs when structured history returns 404', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => noStreamSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({ ok: false, status: 404 } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => 'merged fallback line\n',
+        } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => expect(screen.getByText(/merged fallback line/)).toBeTruthy());
+    expect(MockEventSource.instances.length).toBe(0);
+  });
+
   it('closes stream and shows Stream ended when task transitions to terminal', async () => {
     let currentExecution = activeExecution;
     let currentSummary = activeSummary;
@@ -1313,6 +1416,9 @@ describe('LiveLogsPanel', () => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
         return Promise.resolve({ ok: true, json: async () => currentSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
       }
       if (url.includes('/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
@@ -1456,6 +1562,75 @@ describe('LiveLogsPanel', () => {
     expect(systemLine?.getAttribute('data-stream')).toBe('system');
   });
 
+  it('renders session reset boundaries as explicit timeline rows with session badges', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'session',
+                text: 'Epoch boundary reached. Session sess:wf-task-1:codex_cli is now on epoch 2 thread thread-2.',
+                kind: 'session_reset_boundary',
+                session_id: 'sess:wf-task-1:codex_cli',
+                session_epoch: 2,
+                thread_id: 'thread-2',
+              },
+            ],
+            truncated: false,
+            sessionSnapshot: {
+              sessionId: 'sess:wf-task-1:codex_cli',
+              sessionEpoch: 2,
+              containerId: 'ctr-1',
+              threadId: 'thread-2',
+              activeTurnId: null,
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Epoch boundary reached/)).toBeTruthy();
+      expect(screen.getByText('sess:wf-task-1:codex_cli')).toBeTruthy();
+      expect(screen.getByText('thread-2')).toBeTruthy();
+    });
+
+    const boundaryRow = screen.getByText(/Epoch boundary reached/).closest('div');
+    expect(boundaryRow?.getAttribute('data-kind')).toBe('session_reset_boundary');
+    expect(boundaryRow?.getAttribute('data-stream')).toBe('session');
+  });
+
   it('renders Stdout, Stderr, and Diagnostics panels', async () => {
     // Setup fetch mock to also return stdout, stderr, and diagnostics
     const stdoutContent = 'stdout line 1\nstdout line 2';
@@ -1467,6 +1642,7 @@ describe('LiveLogsPanel', () => {
       if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => stdoutContent } as Response);
       if (url.includes('/logs/stderr')) return Promise.resolve({ ok: true, text: async () => stderrContent } as Response);
       if (url.includes('/diagnostics')) return Promise.resolve({ ok: true, text: async () => diagnosticsContent } as Response);
+      if (url.includes('/observability/events')) return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
       if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => '' } as Response);
       if (url.includes('/observability-summary')) return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
       if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -1513,6 +1689,22 @@ describe('LiveLogsPanel', () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => 'stdout data' } as Response);
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'stdout',
+                text: 'live log data\n',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
       if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => 'live log data' } as Response);
       if (url.includes('/observability-summary')) return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
       return Promise.resolve({
@@ -1566,6 +1758,22 @@ describe('LiveLogsPanel', () => {
       const url = String(input);
       if (url.includes('/logs/stdout')) return Promise.resolve({ ok: true, text: async () => 'stdout data' } as Response);
       if (url.includes('/diagnostics')) return Promise.resolve({ ok: true, text: async () => '{"diag":true}' } as Response);
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'stdout',
+                text: 'live log data\n',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
       if (url.includes('/logs/merged')) return Promise.resolve({ ok: true, text: async () => 'live log data' } as Response);
       if (url.includes('/observability-summary')) {
         return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
@@ -1620,6 +1828,22 @@ describe('LiveLogsPanel', () => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
         return Promise.resolve({ ok: true, json: async () => activeSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'stdout',
+                text: 'attached tail\n',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
       }
       if (url.includes('/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'attached tail\n' } as unknown as Response);
