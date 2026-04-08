@@ -157,6 +157,50 @@ class ManagedSessionSupervisor:
         )
         return ref
 
+    @staticmethod
+    def _summary_payload(
+        *,
+        record: CodexManagedSessionRecord,
+        status: str,
+        stdout_ref: str,
+        stderr_ref: str,
+        diagnostics_ref: str | None,
+        error_message: str | None,
+    ) -> dict[str, object]:
+        return {
+            "sessionId": record.session_id,
+            "sessionEpoch": record.session_epoch,
+            "containerId": record.container_id,
+            "threadId": record.thread_id,
+            "status": status,
+            "stdoutArtifactRef": stdout_ref,
+            "stderrArtifactRef": stderr_ref,
+            "diagnosticsRef": diagnostics_ref,
+            "errorMessage": error_message,
+        }
+
+    @staticmethod
+    def _checkpoint_payload(
+        *,
+        record: CodexManagedSessionRecord,
+        status: str,
+        stdout_ref: str,
+        stderr_ref: str,
+        diagnostics_ref: str | None,
+    ) -> dict[str, object]:
+        return {
+            "sessionState": record.session_state().model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+            "status": status,
+            "runtimeArtifacts": {
+                "stdout": stdout_ref,
+                "stderr": stderr_ref,
+                "diagnostics": diagnostics_ref,
+            },
+            "recordUpdatedAt": datetime.now(tz=UTC).isoformat(),
+        }
+
     async def _publish_record(
         self,
         record: CodexManagedSessionRecord,
@@ -175,45 +219,29 @@ class ManagedSessionSupervisor:
             artifact_name="stderr.log",
             data=stderr_bytes,
         )
-        diagnostics_ref = self._log_streamer.collect_diagnostics(
-            run_id=record.session_id,
-            exit_code=None,
-            duration_seconds=0.0,
-            log_refs={"stdout": stdout_ref, "stderr": stderr_ref},
-            annotations=[],
-            events=[],
-            observability_events=self._log_streamer.consume_observability_events(record.task_run_id),
-        )
+        observability_events = self._log_streamer.consume_observability_events(record.task_run_id)
         summary_ref = self._write_json_artifact(
             job_id=record.session_id,
             artifact_name="session.summary.json",
-            payload={
-                "sessionId": record.session_id,
-                "sessionEpoch": record.session_epoch,
-                "containerId": record.container_id,
-                "threadId": record.thread_id,
-                "status": status,
-                "stdoutArtifactRef": stdout_ref,
-                "stderrArtifactRef": stderr_ref,
-                "diagnosticsRef": diagnostics_ref,
-                "errorMessage": error_message,
-            },
+            payload=self._summary_payload(
+                record=record,
+                status=status,
+                stdout_ref=stdout_ref,
+                stderr_ref=stderr_ref,
+                diagnostics_ref=None,
+                error_message=error_message,
+            ),
         )
         checkpoint_ref = self._write_json_artifact(
             job_id=record.session_id,
             artifact_name="session.step_checkpoint.json",
-            payload={
-                "sessionState": record.session_state().model_dump(
-                    mode="json", by_alias=True, exclude_none=True
-                ),
-                "status": status,
-                "runtimeArtifacts": {
-                    "stdout": stdout_ref,
-                    "stderr": stderr_ref,
-                    "diagnostics": diagnostics_ref,
-                },
-                "recordUpdatedAt": datetime.now(tz=UTC).isoformat(),
-            },
+            payload=self._checkpoint_payload(
+                record=record,
+                status=status,
+                stdout_ref=stdout_ref,
+                stderr_ref=stderr_ref,
+                diagnostics_ref=None,
+            ),
         )
         self.emit_session_event(
             record=record,
@@ -226,6 +254,41 @@ class ManagedSessionSupervisor:
             kind="checkpoint_published",
             text=f"Session checkpoint published for {record.session_id}.",
             metadata={"checkpointRef": checkpoint_ref, "status": status},
+        )
+        observability_events.extend(
+            self._log_streamer.consume_observability_events(record.task_run_id)
+        )
+        diagnostics_ref = self._log_streamer.collect_diagnostics(
+            run_id=record.session_id,
+            exit_code=None,
+            duration_seconds=0.0,
+            log_refs={"stdout": stdout_ref, "stderr": stderr_ref},
+            annotations=[],
+            events=[],
+            observability_events=observability_events,
+        )
+        summary_ref = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name="session.summary.json",
+            payload=self._summary_payload(
+                record=record,
+                status=status,
+                stdout_ref=stdout_ref,
+                stderr_ref=stderr_ref,
+                diagnostics_ref=diagnostics_ref,
+                error_message=error_message,
+            ),
+        )
+        checkpoint_ref = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name="session.step_checkpoint.json",
+            payload=self._checkpoint_payload(
+                record=record,
+                status=status,
+                stdout_ref=stdout_ref,
+                stderr_ref=stderr_ref,
+                diagnostics_ref=diagnostics_ref,
+            ),
         )
         observability_events_ref = await asyncio.to_thread(
             self._log_streamer.persist_observability_events,

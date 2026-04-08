@@ -161,6 +161,13 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert diagnostics_payload["observability_events"][0]["stream"] == "session"
     assert diagnostics_payload["observability_events"][0]["kind"] == "session_cleared"
     assert diagnostics_payload["observability_events"][0]["metadata"]["reason"] == "operator_reset"
+    assert [
+        event["kind"] for event in diagnostics_payload["observability_events"]
+    ] == [
+        "session_cleared",
+        "summary_published",
+        "checkpoint_published",
+    ]
     assert snapshot.observability_events_ref == "sess-1/observability.events.jsonl"
     journal = artifact_storage.resolve_storage_path(snapshot.observability_events_ref)
     assert journal.exists()
@@ -168,6 +175,7 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert '"stream":"session"' in journal_text
     assert '"kind":"summary_published"' in journal_text
     assert '"kind":"checkpoint_published"' in journal_text
+    assert log_streamer.consume_observability_events(record.task_run_id) == []
 
 
 @pytest.mark.asyncio

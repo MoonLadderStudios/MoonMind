@@ -351,6 +351,7 @@ async def test_controller_session_status_emits_session_resumed_event(
             imageRef="img",
             controlUrl="docker-exec://ctr-1",
             status="ready",
+            activeTurnId="turn-stale",
             workspacePath="/work/repo",
             sessionWorkspacePath="/work/session",
             artifactSpoolPath="/work/artifacts",
@@ -373,7 +374,7 @@ async def test_controller_session_status_emits_session_resumed_event(
                     "sessionEpoch": 1,
                     "containerId": "ctr-1",
                     "threadId": "thread-1",
-                    "activeTurnId": None,
+                    "activeTurnId": "turn-fresh",
                 },
                 "status": "ready",
                 "imageRef": "img",
@@ -402,7 +403,11 @@ async def test_controller_session_status_emits_session_resumed_event(
 
     emitted_call = session_supervisor.emit_session_event.call_args
     assert emitted_call.kwargs["kind"] == "session_resumed"
+    assert emitted_call.kwargs["active_turn_id"] == "turn-fresh"
     assert emitted_call.kwargs["metadata"] == {"action": "resume_session"}
+    refreshed = store.load("sess-1")
+    assert refreshed is not None
+    assert refreshed.active_turn_id == "turn-fresh"
 
 
 @pytest.mark.asyncio
@@ -469,7 +474,7 @@ async def test_controller_steer_turn_emits_normalized_session_annotation(
             threadId="thread-1",
             turnId="turn-1",
             instructions="Revise the plan",
-            metadata={"reason": "operator_steer"},
+            metadata={"reason": "operator_steer", "action": "override_attempt"},
         )
     )
 
