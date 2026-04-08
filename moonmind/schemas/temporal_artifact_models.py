@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,7 @@ from moonmind.core.artifacts import (
     TemporalArtifactRedactionLevel,
     TemporalArtifactUploadMode,
 )
+from moonmind.schemas._validation import require_non_blank
 
 
 class ArtifactRefModel(BaseModel):
@@ -219,6 +220,33 @@ class ArtifactSessionProjectionModel(BaseModel):
     latest_checkpoint_ref: Optional[ArtifactRefModel] = None
     latest_control_event_ref: Optional[ArtifactRefModel] = None
     latest_reset_boundary_ref: Optional[ArtifactRefModel] = None
+
+
+class ArtifactSessionControlRequest(BaseModel):
+    """Operator control request for one task-scoped artifact session."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["send_follow_up", "clear_session"]
+    message: str | None = None
+    reason: str | None = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.message is not None:
+            self.message = require_non_blank(self.message, field_name="message")
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
+        if self.action == "send_follow_up" and self.message is None:
+            raise ValueError("message is required when action=send_follow_up")
+
+
+class ArtifactSessionControlResponse(BaseModel):
+    """Control response envelope with the refreshed session projection."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["send_follow_up", "clear_session"]
+    projection: ArtifactSessionProjectionModel
 
 
 class PresignDownloadResponse(BaseModel):
