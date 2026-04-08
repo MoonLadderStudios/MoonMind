@@ -16,6 +16,7 @@ from moonmind.schemas.managed_session_models import (
     LaunchCodexManagedSessionRequest,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
+    SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
@@ -234,10 +235,12 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         workspaceSpec={
             "repository": "MoonLadderStudios/MoonMind",
             "startingBranch": "dependabot/pip/requests-2.33.1",
+            "targetBranch": "codex/session-fix",
         },
     )
     commands: list[tuple[str, ...]] = []
     chown_calls: list[tuple[Path, int, int, bool]] = []
+    git_envs: list[dict[str, str] | None] = []
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
@@ -265,12 +268,21 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         commands.append(command)
+        if command[0] == "git":
+            git_envs.append(env)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
         if command[:2] == ("git", "clone"):
             Path(request.workspace_path).mkdir(parents=True, exist_ok=True)
             tracked_file = Path(request.workspace_path) / "README.md"
             tracked_file.write_text("content", encoding="utf-8")
+            return 0, "", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "checkout"):
+            if command[4:] == ("codex/session-fix",):
+                return 1, "", "error: pathspec 'codex/session-fix' did not match any file(s) known to git"
+            if command[4:] == ("-B", "codex/session-fix", "origin/codex/session-fix"):
+                return 0, "", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "fetch"):
             return 0, "", ""
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
@@ -308,6 +320,36 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         "https://github.com/MoonLadderStudios/MoonMind.git" in commands[0]
     )
     assert request.workspace_path in commands[0]
+    assert commands[1] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "codex/session-fix",
+    )
+    assert commands[2] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "fetch",
+        "origin",
+        "codex/session-fix",
+    )
+    assert commands[3] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "-B",
+        "codex/session-fix",
+        "origin/codex/session-fix",
+    )
+    assert git_envs == [
+        {"LC_ALL": "C", "LANG": "C"},
+        {"LC_ALL": "C", "LANG": "C"},
+        {"LC_ALL": "C", "LANG": "C"},
+        {"LC_ALL": "C", "LANG": "C"},
+    ]
     assert Path(request.workspace_path).exists()
     assert Path(request.session_workspace_path).exists()
     assert Path(request.artifact_spool_path).exists()
@@ -316,6 +358,280 @@ async def test_controller_launch_clones_workspace_before_starting_container(
     assert Path(request.workspace_path, "README.md") in chowned_paths
     assert Path(request.session_workspace_path) in chowned_paths
     assert Path(request.artifact_spool_path) in chowned_paths
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_creates_target_branch_when_remote_branch_missing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "mm:task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "dependabot/pip/requests-2.33.1",
+            "targetBranch": "codex/session-fix",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("git", "clone"):
+            Path(request.workspace_path).mkdir(parents=True, exist_ok=True)
+            return 0, "", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "checkout"):
+            if command[4:] == ("codex/session-fix",):
+                return 1, "", "error: pathspec 'codex/session-fix' did not match any file(s) known to git"
+            if command[4:] == ("-b", "codex/session-fix"):
+                return 0, "", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "fetch"):
+            return 128, "", "fatal: couldn't find remote ref codex/session-fix"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    assert commands[2] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "fetch",
+        "origin",
+        "codex/session-fix",
+    )
+    assert commands[3] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "-b",
+        "codex/session-fix",
+    )
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_reuses_existing_workspace_and_checks_out_target_branch(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "main",
+            "targetBranch": "codex/session-fix",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:5] == (
+            "git",
+            "-C",
+            request.workspace_path,
+            "rev-parse",
+            "--is-inside-work-tree",
+        ):
+            return 0, "true\n", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "checkout"):
+            if command[4:] == ("codex/session-fix",):
+                return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    assert all(command[:2] != ("git", "clone") for command in commands)
+    assert commands[0] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "rev-parse",
+        "--is-inside-work-tree",
+    )
+    assert commands[1] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "codex/session-fix",
+    )
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_reclones_invalid_workspace_before_target_checkout(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    stale_file = workspace_path / "stale.txt"
+    stale_file.write_text("stale")
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "main",
+            "targetBranch": "codex/session-fix",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:5] == (
+            "git",
+            "-C",
+            request.workspace_path,
+            "rev-parse",
+            "--is-inside-work-tree",
+        ):
+            return 128, "", "fatal: not a git repository"
+        if command[:2] == ("git", "clone"):
+            assert not stale_file.exists()
+            Path(request.workspace_path).mkdir(parents=True, exist_ok=True)
+            return 0, "", ""
+        if command[:4] == ("git", "-C", request.workspace_path, "checkout"):
+            if command[4:] == ("codex/session-fix",):
+                return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    assert commands[0] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "rev-parse",
+        "--is-inside-work-tree",
+    )
+    assert commands[1][:2] == ("git", "clone")
+    assert commands[2] == (
+        "git",
+        "-C",
+        request.workspace_path,
+        "checkout",
+        "codex/session-fix",
+    )
 
 
 @pytest.mark.asyncio
@@ -452,6 +768,158 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
 
 
 @pytest.mark.asyncio
+async def test_controller_session_status_emits_session_resumed_event(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            activeTurnId="turn-stale",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+    session_supervisor.emit_session_event = Mock()
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "session_status" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": "turn-fresh",
+                },
+                "status": "ready",
+                "imageRef": "img",
+                "controlUrl": "docker-exec://ctr-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+    )
+
+    await controller.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+        )
+    )
+
+    emitted_call = session_supervisor.emit_session_event.call_args
+    assert emitted_call.kwargs["kind"] == "session_resumed"
+    assert emitted_call.kwargs["active_turn_id"] == "turn-fresh"
+    assert emitted_call.kwargs["metadata"] == {"action": "resume_session"}
+    refreshed = store.load("sess-1")
+    assert refreshed is not None
+    assert refreshed.active_turn_id == "turn-fresh"
+
+
+@pytest.mark.asyncio
+async def test_controller_steer_turn_emits_normalized_session_annotation(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="busy",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+    session_supervisor.emit_session_event = Mock()
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "steer_turn" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": "turn-1",
+                },
+                "turnId": "turn-1",
+                "status": "running",
+                "metadata": {},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+    )
+
+    await controller.steer_turn(
+        SteerCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            turnId="turn-1",
+            instructions="Revise the plan",
+            metadata={"reason": "operator_steer", "action": "override_attempt"},
+        )
+    )
+
+    emitted_call = session_supervisor.emit_session_event.call_args
+    assert emitted_call.kwargs["kind"] == "system_annotation"
+    assert emitted_call.kwargs["turn_id"] == "turn-1"
+    assert emitted_call.kwargs["metadata"] == {
+        "action": "steer_turn",
+        "reason": "operator_steer",
+    }
+
+
+@pytest.mark.asyncio
 async def test_controller_clear_and_terminate_preserve_container_boundary(
     tmp_path: Path,
 ) -> None:
@@ -563,6 +1031,12 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
     assert publish_kwargs["record"].session_epoch == 2
     assert publish_kwargs["record"].thread_id == "logical-thread-2"
     assert terminated.status == "terminated"
+    emitted_call = session_supervisor.emit_session_event.call_args
+    assert emitted_call.kwargs["kind"] == "session_terminated"
+    assert emitted_call.kwargs["metadata"] == {
+        "action": "terminate_session",
+        "reason": None,
+    }
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
 
 
@@ -674,6 +1148,77 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
     assert summary.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
     assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_tolerates_event_publication_failure(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+    session_supervisor.emit_session_event = Mock(
+        side_effect=RuntimeError("publisher unavailable")
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "completed",
+                "metadata": {"assistantText": "OK"},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+    )
+
+    response = await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
 
 
 @pytest.mark.asyncio
