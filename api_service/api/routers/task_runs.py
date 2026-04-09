@@ -792,7 +792,7 @@ def _filter_observability_events(
     filtered: list[dict[str, object]] = []
     for event in events:
         sequence = _coerce_sequence(event.get("sequence"))
-        if since is not None and sequence is not None and sequence <= since:
+        if since is not None and sequence is not None and sequence > 0 and sequence <= since:
             continue
         stream = str(event.get("stream") or "").strip()
         if streams and stream not in streams:
@@ -1059,7 +1059,7 @@ async def get_task_run_observability_events(
     events.sort(key=_event_sort_key)
     truncated = len(events) > limit
     if truncated:
-        events = events[-limit:]
+        events = events[:limit]
 
     return {
         "events": events,

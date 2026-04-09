@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-04-08  
-**Feature**: [spec.md](/mnt/d/code/MoonMind/specs/141-live-logs-history-events/spec.md)
+**Feature**: [spec.md](../spec.md)
 
 ## Content Quality
 

@@ -1091,6 +1091,88 @@ def test_get_task_run_observability_events_applies_since_stream_and_kind_filters
     assert all(event["stream"] == "session" for event in body["events"])
 
 
+def test_get_task_run_observability_events_limits_to_oldest_matching_rows_after_since(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": sequence,
+                        "stream": "stdout",
+                        "text": f"event-{sequence}\n",
+                        "timestamp": f"2026-04-08T00:00:0{sequence - 5}Z",
+                        "kind": "stdout_chunk",
+                    }
+                )
+                for sequence in (6, 7, 8, 9)
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/task-runs/{uuid4()}/observability/events?since=5&limit=2"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["truncated"] is True
+    assert [event["sequence"] for event in body["events"]] == [6, 7]
+
+
+def test_get_task_run_observability_events_keeps_artifact_fallback_rows_when_since_is_present(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "stdout.log").write_text("artifact stdout\n", encoding="utf-8")
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = None
+    mock_record.diagnostics_ref = None
+    mock_record.stdout_artifact_ref = "run-1/stdout.log"
+    mock_record.stderr_artifact_ref = None
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/task-runs/{uuid4()}/observability/events?since=5"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["kind"] for event in body["events"]] == ["stdout_chunk"]
+    assert body["events"][0]["sequence"] == 0
+    assert body["events"][0]["text"] == "artifact stdout\n"
+
+
 def test_get_task_run_observability_events_uses_record_snapshot_when_session_record_missing(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
