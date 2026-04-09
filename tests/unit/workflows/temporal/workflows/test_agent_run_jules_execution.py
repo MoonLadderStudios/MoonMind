@@ -265,6 +265,7 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     )
     assert fetch_payload["publish_mode"] == "pr"
     assert fetch_payload["commit_message"] == "Use producer commit text"
+    assert fetch_payload["target_branch"] == "main"
 
 
 async def test_agent_run_managed_preserves_task_scoped_session_metadata(
@@ -414,7 +415,7 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
         payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
     )
     assert fetch_payload == {
-        "run_id": "managed-session-run-2",
+        "run_id": "wf-run-1",
         "agent_id": "codex_cli",
     }
     assert result.metadata["managedSession"] == {

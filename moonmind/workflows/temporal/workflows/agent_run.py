@@ -96,6 +96,9 @@ STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
+MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
+    "agent-run-managed-session-fetch-result-activity-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -385,6 +388,108 @@ class MoonMindAgentRun:
     @staticmethod
     def _uses_codex_session_adapter(request: AgentExecutionRequest) -> bool:
         return request.agent_kind == "managed" and request.managed_session is not None
+
+    @staticmethod
+    def _request_workspace_starting_branch(
+        request: AgentExecutionRequest,
+    ) -> str | None:
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, Mapping)
+            else {}
+        )
+        branch = str(
+            workspace_spec.get("startingBranch")
+            or workspace_spec.get("branch")
+            or ""
+        ).strip()
+        return branch or None
+
+    def _build_managed_fetch_result_activity_input(
+        self,
+        request: AgentExecutionRequest,
+    ) -> dict[str, Any]:
+        params = request.parameters if isinstance(request.parameters, Mapping) else {}
+        raw_publish_mode = params.get("publishMode")
+        publish_mode = (
+            str(raw_publish_mode).strip().lower()
+            if isinstance(raw_publish_mode, str) and raw_publish_mode.strip()
+            else "none"
+        )
+
+        run_id = str(self.run_id or "").strip()
+        if request.managed_session is not None:
+            run_id = str(request.managed_session.task_run_id).strip()
+
+        activity_input: dict[str, Any] = {
+            "run_id": run_id,
+            "agent_id": request.agent_id,
+        }
+        if publish_mode != "none":
+            activity_input["publish_mode"] = publish_mode
+
+        raw_commit_message = params.get("commitMessage")
+        if isinstance(raw_commit_message, str) and raw_commit_message.strip():
+            activity_input["commit_message"] = raw_commit_message.strip()
+
+        target_branch = str(
+            params.get("publishBaseBranch")
+            or self._request_workspace_starting_branch(request)
+            or ""
+        ).strip()
+        if target_branch:
+            activity_input["target_branch"] = target_branch
+
+        if _request_selected_skill(request) == "pr-resolver":
+            activity_input["pr_resolver_expected"] = True
+        return activity_input
+
+    async def _fetch_managed_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        adapter: AgentAdapter,
+        uses_codex_session_adapter: bool,
+        use_managed_status_activity: bool,
+    ) -> AgentRunResult:
+        if uses_codex_session_adapter:
+            if workflow.patched(MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID):
+                result_payload = await self._execute_routed_activity(
+                    "agent_runtime.fetch_result",
+                    self._build_managed_fetch_result_activity_input(request),
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                )
+                return (
+                    AgentRunResult(**result_payload)
+                    if isinstance(result_payload, dict)
+                    else result_payload
+                )
+
+            return await adapter.fetch_result(
+                self.run_id,
+                pr_resolver_expected=(
+                    _request_selected_skill(request) == "pr-resolver"
+                ),
+            )
+
+        if use_managed_status_activity:
+            result_payload = await self._execute_routed_activity(
+                "agent_runtime.fetch_result",
+                self._build_managed_fetch_result_activity_input(request),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            return (
+                AgentRunResult(**result_payload)
+                if isinstance(result_payload, dict)
+                else result_payload
+            )
+
+        return await adapter.fetch_result(
+            self.run_id,
+            pr_resolver_expected=(
+                _request_selected_skill(request) == "pr-resolver"
+            ),
+        )
 
     async def _ensure_manager_and_signal(
         self,
@@ -1095,46 +1200,11 @@ class MoonMindAgentRun:
                         uses_codex_session_adapter
                         and handle.status in _TERMINAL_RUN_STATUSES
                     ):
-                        raw_publish_mode = (request.parameters or {}).get("publishMode")
-                        publish_mode = (
-                            str(raw_publish_mode).strip().lower()
-                            if isinstance(raw_publish_mode, str)
-                            and raw_publish_mode.strip()
-                            else "none"
-                        )
-                        params = request.parameters or {}
-                        target_branch = (
-                            params.get("publishBaseBranch") or params.get("startingBranch")
-                        )
-                        activity_input: dict[str, Any] = {
-                            "run_id": self.run_id,
-                            "agent_id": request.agent_id,
-                        }
-                        if publish_mode != "none":
-                            activity_input["publish_mode"] = publish_mode
-                        raw_commit_message = (request.parameters or {}).get(
-                            "commitMessage"
-                        )
-                        if (
-                            isinstance(raw_commit_message, str)
-                            and raw_commit_message.strip()
-                        ):
-                            activity_input["commit_message"] = (
-                                raw_commit_message.strip()
-                            )
-                        if target_branch:
-                            activity_input["target_branch"] = target_branch
-                        if _request_selected_skill(request) == "pr-resolver":
-                            activity_input["pr_resolver_expected"] = True
-                        result_payload = await self._execute_routed_activity(
-                            "agent_runtime.fetch_result",
-                            activity_input,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        )
-                        self.final_result = (
-                            AgentRunResult(**result_payload)
-                            if isinstance(result_payload, dict)
-                            else result_payload
+                        self.final_result = await self._fetch_managed_result(
+                            request=request,
+                            adapter=adapter,
+                            uses_codex_session_adapter=uses_codex_session_adapter,
+                            use_managed_status_activity=use_managed_status_activity,
                         )
                         skip_poll_and_fetch = True
 
@@ -1388,52 +1458,12 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
-                        if uses_codex_session_adapter or use_managed_status_activity:
-                            raw_publish_mode = (request.parameters or {}).get("publishMode")
-                            publish_mode = str(raw_publish_mode).strip().lower() if isinstance(raw_publish_mode, str) and raw_publish_mode.strip() else "none"
-                            params = request.parameters or {}
-                            target_branch = params.get("publishBaseBranch") or params.get("startingBranch")
-
-                            activity_input: dict[str, Any] = {
-                                "run_id": self.run_id,
-                                "agent_id": request.agent_id,
-                            }
-                            if publish_mode != "none":
-                                activity_input["publish_mode"] = publish_mode
-                            raw_commit_message = (request.parameters or {}).get(
-                                "commitMessage"
-                            )
-                            if (
-                                isinstance(raw_commit_message, str)
-                                and raw_commit_message.strip()
-                            ):
-                                activity_input["commit_message"] = (
-                                    raw_commit_message.strip()
-                                )
-                            if target_branch:
-                                activity_input["target_branch"] = target_branch
-                            if _request_selected_skill(request) == "pr-resolver":
-                                activity_input["pr_resolver_expected"] = True
-
-                            result_payload = await self._execute_routed_activity(
-                                "agent_runtime.fetch_result",
-                                activity_input,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
-                            )
-                            self.final_result = (
-                                AgentRunResult(**result_payload)
-                                if isinstance(result_payload, dict)
-                                else result_payload
-                            )
-                        else:
-                            # Managed agent legacy path.
-                            self.final_result = await adapter.fetch_result(
-                                self.run_id,
-                                pr_resolver_expected=(
-                                    _request_selected_skill(request) == "pr-resolver"
-                                ),
-                            )
+                        self.final_result = await self._fetch_managed_result(
+                            request=request,
+                            adapter=adapter,
+                            uses_codex_session_adapter=uses_codex_session_adapter,
+                            use_managed_status_activity=use_managed_status_activity,
+                        )
 
                 if (
                     request.agent_kind == "external"

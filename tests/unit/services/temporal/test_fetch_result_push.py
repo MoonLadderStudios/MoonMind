@@ -573,6 +573,25 @@ class TestPushWorkspaceBranch:
         assert "git-credential-moonmind" in gitconfig_text
         assert str(workspace.resolve()) in gitconfig_text
 
+    def test_workspace_command_env_logs_bootstrap_failures(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        with patch(
+            "pathlib.Path.mkdir",
+            side_effect=OSError("read-only filesystem"),
+        ), patch(
+            "moonmind.workflows.temporal.activity_runtime.logger.warning"
+        ) as warning_mock:
+            env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        assert env["PATH"] == "/usr/bin"
+        assert "GIT_CONFIG_GLOBAL" not in env
+        warning_mock.assert_called_once()
+        assert warning_mock.call_args.args[1] == str(workspace)
+
     @pytest.mark.asyncio
     async def test_push_revlist_failure_falls_through(self):
         """When rev-list --count raises, we fall through to 'pushed' (safe default)."""

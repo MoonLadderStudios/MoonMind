@@ -3593,7 +3593,14 @@ class TemporalAgentRuntimeActivities:
             support_gitconfig.write_text("".join(git_config_lines), encoding="utf-8")
             support_gitconfig.chmod(0o600)
         except OSError:
-            pass
+            logger.warning(
+                "Failed to bootstrap workspace-local git support files for workspace %s "
+                "(support_root=%s, gitconfig=%s)",
+                workspace,
+                support_root,
+                support_gitconfig,
+                exc_info=True,
+            )
 
         if support_bin.exists():
             existing_path = str(env.get("PATH") or "").strip()
