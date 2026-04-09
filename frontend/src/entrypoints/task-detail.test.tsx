@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
@@ -5,16 +6,24 @@ import { expandRouteTemplate, getSessionProjectionRefetchInterval, TaskDetailPag
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
+type MockVirtuosoRow = { id: string };
+type MockVirtuosoProps<Row = MockVirtuosoRow> = {
+  data?: Row[];
+  computeItemKey?: (index: number, row: Row) => string;
+  itemContent: (index: number, row: Row) => ReactNode;
+  initialItemCount?: number;
+};
+
 const { virtuosoPropsSpy } = vi.hoisted(() => ({
   virtuosoPropsSpy: vi.fn(),
 }));
 
 vi.mock('react-virtuoso', () => ({
-  Virtuoso: (props: any) => {
+  Virtuoso: (props: MockVirtuosoProps) => {
     virtuosoPropsSpy(props);
     return (
       <div data-testid="mock-virtuoso">
-        {(props.data ?? []).map((row: any, index: number) => {
+        {(props.data ?? []).map((row, index) => {
           const key = props.computeItemKey ? props.computeItemKey(index, row) : index;
           return <div key={String(key)}>{props.itemContent(index, row)}</div>;
         })}
