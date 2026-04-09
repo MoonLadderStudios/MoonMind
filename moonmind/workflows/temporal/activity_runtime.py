@@ -3536,6 +3536,65 @@ class TemporalAgentRuntimeActivities:
         support_root = Path(workspace).resolve().parent / ".moonmind"
         support_bin = support_root / "bin"
         support_gitconfig = support_root / "gitconfig"
+        github_token = str(env.get("GITHUB_TOKEN", "")).strip()
+        git_helper_path = support_bin / "git-credential-moonmind"
+        helper_command: str | None = None
+
+        try:
+            support_root.mkdir(parents=True, exist_ok=True)
+            support_bin.mkdir(parents=True, exist_ok=True)
+            if github_token:
+                helper_script = (
+                    "#!/usr/bin/env python3\n"
+                    "import os\n"
+                    "import sys\n"
+                    "\n"
+                    "operation = str(sys.argv[1] if len(sys.argv) > 1 else '').strip().lower()\n"
+                    "if operation not in {'get', 'fill'}:\n"
+                    "    raise SystemExit(0)\n"
+                    "\n"
+                    "request = {}\n"
+                    "for raw_line in sys.stdin:\n"
+                    "    line = raw_line.rstrip('\\n')\n"
+                    "    if not line:\n"
+                    "        break\n"
+                    "    key, _, value = line.partition('=')\n"
+                    "    request[key] = value\n"
+                    "\n"
+                    "host = str(request.get('host') or '').strip().lower()\n"
+                    "protocol = str(request.get('protocol') or '').strip().lower()\n"
+                    "if host != 'github.com' or (protocol and protocol != 'https'):\n"
+                    "    raise SystemExit(0)\n"
+                    "\n"
+                    "token = str(os.environ.get('GITHUB_TOKEN', '')).strip()\n"
+                    "if not token:\n"
+                    "    raise SystemExit(0)\n"
+                    "\n"
+                    "sys.stdout.write('username=x-access-token\\n')\n"
+                    "sys.stdout.write(f'password={token}\\n\\n')\n"
+                    "sys.stdout.flush()\n"
+                )
+                git_helper_path.write_text(helper_script, encoding="utf-8")
+                git_helper_path.chmod(0o700)
+                helper_command = shlex.quote(str(git_helper_path))
+
+            git_config_lines = [
+                "# moonmind-runtime-git-config\n",
+                "[safe]\n",
+                f'\tdirectory = "{Path(workspace).resolve()}"\n',
+            ]
+            if helper_command is not None:
+                git_config_lines.extend(
+                    [
+                        "[credential]\n",
+                        f"\thelper = !{helper_command}\n",
+                    ]
+                )
+            support_gitconfig.write_text("".join(git_config_lines), encoding="utf-8")
+            support_gitconfig.chmod(0o600)
+        except OSError:
+            pass
+
         if support_bin.exists():
             existing_path = str(env.get("PATH") or "").strip()
             env["PATH"] = (

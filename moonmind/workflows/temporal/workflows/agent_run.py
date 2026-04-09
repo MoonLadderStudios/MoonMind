@@ -1095,7 +1095,47 @@ class MoonMindAgentRun:
                         uses_codex_session_adapter
                         and handle.status in _TERMINAL_RUN_STATUSES
                     ):
-                        self.final_result = await adapter.fetch_result(handle.run_id)
+                        raw_publish_mode = (request.parameters or {}).get("publishMode")
+                        publish_mode = (
+                            str(raw_publish_mode).strip().lower()
+                            if isinstance(raw_publish_mode, str)
+                            and raw_publish_mode.strip()
+                            else "none"
+                        )
+                        params = request.parameters or {}
+                        target_branch = (
+                            params.get("publishBaseBranch") or params.get("startingBranch")
+                        )
+                        activity_input: dict[str, Any] = {
+                            "run_id": self.run_id,
+                            "agent_id": request.agent_id,
+                        }
+                        if publish_mode != "none":
+                            activity_input["publish_mode"] = publish_mode
+                        raw_commit_message = (request.parameters or {}).get(
+                            "commitMessage"
+                        )
+                        if (
+                            isinstance(raw_commit_message, str)
+                            and raw_commit_message.strip()
+                        ):
+                            activity_input["commit_message"] = (
+                                raw_commit_message.strip()
+                            )
+                        if target_branch:
+                            activity_input["target_branch"] = target_branch
+                        if _request_selected_skill(request) == "pr-resolver":
+                            activity_input["pr_resolver_expected"] = True
+                        result_payload = await self._execute_routed_activity(
+                            "agent_runtime.fetch_result",
+                            activity_input,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
+                        self.final_result = (
+                            AgentRunResult(**result_payload)
+                            if isinstance(result_payload, dict)
+                            else result_payload
+                        )
                         skip_poll_and_fetch = True
 
                 elif request.agent_kind == "external":
@@ -1348,9 +1388,7 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
-                        if uses_codex_session_adapter:
-                            self.final_result = await adapter.fetch_result(self.run_id)
-                        elif use_managed_status_activity:
+                        if uses_codex_session_adapter or use_managed_status_activity:
                             raw_publish_mode = (request.parameters or {}).get("publishMode")
                             publish_mode = str(raw_publish_mode).strip().lower() if isinstance(raw_publish_mode, str) and raw_publish_mode.strip() else "none"
                             params = request.parameters or {}

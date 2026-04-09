@@ -271,6 +271,7 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
 
     _configure_workflow_runtime(monkeypatch)
 
@@ -300,7 +301,10 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
             )
 
         async def fetch_result(self, run_id: str) -> AgentRunResult:
-            return AgentRunResult(summary="Managed success", metadata={})
+            raise AssertionError(
+                "Terminal managed-session runs should fetch results through "
+                "agent_runtime.fetch_result"
+            )
 
     async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
         run.completion_event.set()
@@ -354,6 +358,9 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.fetch_result":
+            return {"summary": "Managed success", "metadata": {}}
         if activity_name == "agent_runtime.publish_artifacts":
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
@@ -403,6 +410,13 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
         )
     )
 
+    fetch_payload = next(
+        payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
+    )
+    assert fetch_payload == {
+        "run_id": "managed-session-run-2",
+        "agent_id": "codex_cli",
+    }
     assert result.metadata["managedSession"] == {
         "workflowId": "wf-run-1:session:codex_cli",
         "taskRunId": "wf-run-1",

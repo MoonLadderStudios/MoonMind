@@ -110,9 +110,9 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
             )
 
         async def fetch_result(self, run_id: str) -> AgentRunResult:
-            return AgentRunResult(
-                summary="Session-backed Codex step completed.",
-                metadata={"resultSource": "codex-session-adapter"},
+            raise AssertionError(
+                "Terminal managed-session runs should fetch results through "
+                "agent_runtime.fetch_result"
             )
 
         async def cancel(self, run_id: str) -> AgentRunStatus:
@@ -175,6 +175,11 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
                 "activeTurnId": None,
                 "terminationRequested": False,
             }
+        if activity_name == "agent_runtime.fetch_result":
+            return {
+                "summary": "Session-backed Codex step completed.",
+                "metadata": {"resultSource": "agent-runtime-fetch-result"},
+            }
         if activity_name == "agent_runtime.publish_artifacts":
             return payload
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
@@ -214,17 +219,22 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     ]
     assert run.run_id == "managed-session-run-1"
     assert result.summary == "Session-backed Codex step completed."
-    assert result.metadata["resultSource"] == "codex-session-adapter"
+    assert result.metadata["resultSource"] == "agent-runtime-fetch-result"
     assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
     assert result.metadata["childRunId"] == "run-1"
     assert result.metadata["taskRunId"] == "wf-task-1"
     assert result.metadata["managedSession"]["sessionId"] == "sess:wf-task-1:codex_cli"
     assert [name for name, _payload in routed_calls] == [
         "agent_runtime.load_session_snapshot",
+        "agent_runtime.fetch_result",
         "agent_runtime.publish_artifacts",
     ]
     assert routed_calls[0][1]["workflowId"] == "wf-task-1:session:override"
     assert routed_calls[0][1]["taskRunId"] == "wf-task-1"
+    assert routed_calls[1][1] == {
+        "run_id": "managed-session-run-1",
+        "agent_id": "codex",
+    }
 
 
 async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
