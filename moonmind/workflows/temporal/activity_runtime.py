@@ -3581,44 +3581,48 @@ class TemporalAgentRuntimeActivities:
         ]
 
     @staticmethod
-    def _parse_git_status_paths(status_output: str) -> tuple[str, ...]:
-        """Extract changed paths from `git status --porcelain` output."""
+    def _parse_git_status_paths(status_output: bytes) -> tuple[str, ...]:
+        """Extract changed paths from `git status --porcelain=v1 -z` output."""
 
-        def _split_rename_paths(
-            entry: str,
-            *,
-            is_renamed: bool,
-        ) -> tuple[str, ...]:
-            if not is_renamed or " -> " not in entry:
-                return (entry,)
-            try:
-                tokens = tuple(shlex.split(entry))
-            except ValueError:
-                return (entry,)
-            if len(tokens) == 3 and tokens[1] == "->":
-                return (tokens[0], tokens[2])
-            return (entry,)
+        def _decode_path(path_bytes: bytes) -> str:
+            return os.fsdecode(path_bytes)
 
-        def _normalize_path(path_text: str) -> str:
-            text = str(path_text or "").strip()
-            if text.startswith('"') and text.endswith('"') and len(text) >= 2:
-                return text[1:-1]
-            return text
+        raw_output = bytes(status_output or b"")
+        if not raw_output:
+            return ()
 
+        entries = raw_output.split(b"\0")
         paths: list[str] = []
-        for raw_line in str(status_output or "").splitlines():
-            line = raw_line.rstrip()
-            if len(line) < 4:
+        index = 0
+        while index < len(entries):
+            record = entries[index]
+            if not record:
+                index += 1
                 continue
-            status = line[:2]
-            is_renamed = ("R" in status) or ("C" in status)
-            entry = line[3:].strip()
-            if not entry:
-                continue
-            for path in _split_rename_paths(entry, is_renamed=is_renamed):
-                normalized_path = _normalize_path(path)
-                if normalized_path:
-                    paths.append(normalized_path)
+            if len(record) < 4 or record[2:3] != b" ":
+                raise ValueError(f"unexpected git status record: {record!r}")
+
+            status = record[:2].decode("ascii", errors="strict")
+            path_bytes = record[3:]
+            if not path_bytes:
+                raise ValueError(f"missing path in git status record: {record!r}")
+            paths.append(_decode_path(path_bytes))
+
+            if "R" in status or "C" in status:
+                index += 1
+                if index >= len(entries):
+                    raise ValueError(
+                        f"missing original path for git rename/copy record: {record!r}"
+                    )
+                original_path_bytes = entries[index]
+                if not original_path_bytes:
+                    raise ValueError(
+                        f"missing original path for git rename/copy record: {record!r}"
+                    )
+                paths.append(_decode_path(original_path_bytes))
+
+            index += 1
+
         return tuple(dict.fromkeys(paths))
 
     @staticmethod
@@ -3738,7 +3742,11 @@ class TemporalAgentRuntimeActivities:
 
         status_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "status", "--porcelain", "--untracked-files=all",
+                workspace,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -3756,15 +3764,20 @@ class TemporalAgentRuntimeActivities:
                 "push_error": f"could not inspect workspace changes: {detail}",
             }
 
-        status_text = status_stdout.decode("utf-8", errors="replace")
-        if not status_text.strip():
+        if not status_stdout:
             return {}
 
-        changed_paths = tuple(
-            path
-            for path in self._parse_git_status_paths(status_text)
-            if not self._should_exclude_publish_path(path)
-        )
+        try:
+            changed_paths = tuple(
+                path
+                for path in self._parse_git_status_paths(status_stdout)
+                if not self._should_exclude_publish_path(path)
+            )
+        except ValueError as exc:
+            return {
+                "push_status": "failed",
+                "push_error": f"could not parse workspace changes: {exc}",
+            }
         if not changed_paths:
             return {}
 

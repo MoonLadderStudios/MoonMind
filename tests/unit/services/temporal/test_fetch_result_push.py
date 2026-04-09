@@ -88,6 +88,28 @@ def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
     assert gh_env["PATH"].startswith(str(workspace.parent / ".moonmind" / "bin"))
 
 
+def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() -> None:
+    status_output = (
+        b'M  "quoted-looking.txt"\0'
+        b'?? na\xc3\xafve.txt\0'
+        b"R  renamed path.txt\0old path.txt\0"
+    )
+
+    paths = TemporalAgentRuntimeActivities._parse_git_status_paths(status_output)
+
+    assert paths == (
+        '"quoted-looking.txt"',
+        "naïve.txt",
+        "renamed path.txt",
+        "old path.txt",
+    )
+
+
+def test_parse_git_status_paths_rejects_truncated_rename_record() -> None:
+    with pytest.raises(ValueError, match="missing original path"):
+        TemporalAgentRuntimeActivities._parse_git_status_paths(b"R  renamed path.txt\0")
+
+
 # ---------------------------------------------------------------------------
 # _push_workspace_branch
 # ---------------------------------------------------------------------------
@@ -453,7 +475,7 @@ class TestPushWorkspaceBranch:
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(
-                    return_value=(b" M api_service/main.py\n?? tests/new_test.py\n", b"")
+                    return_value=(b" M api_service/main.py\0?? tests/new_test.py\0", b"")
                 )
                 proc.returncode = 0
             elif call_count == 3:  # git add -A with runtime exclusions
@@ -509,7 +531,7 @@ class TestPushWorkspaceBranch:
                 proc.communicate = AsyncMock(return_value=(b"auto-dirty123\n", b""))
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
-                proc.communicate = AsyncMock(return_value=(b" M api_service/main.py\n", b""))
+                proc.communicate = AsyncMock(return_value=(b" M api_service/main.py\0", b""))
                 proc.returncode = 0
             elif call_count == 3:  # git add -A
                 proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -547,7 +569,7 @@ class TestPushWorkspaceBranch:
                 proc.communicate = AsyncMock(return_value=(b"auto-claude123\n", b""))
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
-                proc.communicate = AsyncMock(return_value=(b"?? CLAUDE.md\n", b""))
+                proc.communicate = AsyncMock(return_value=(b"?? CLAUDE.md\0", b""))
                 proc.returncode = 0
             elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -582,7 +604,10 @@ class TestPushWorkspaceBranch:
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(
-                    return_value=(b" M moonmind/workflows/temporal/activity_runtime.py\n", b"")
+                    return_value=(
+                        b" M moonmind/workflows/temporal/activity_runtime.py\0",
+                        b"",
+                    )
                 )
                 proc.returncode = 0
             elif call_count == 3:  # git add -A for changed paths only
