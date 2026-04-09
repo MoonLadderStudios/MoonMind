@@ -90,6 +90,14 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/artifacts/{artifactId}/download"
     )
+    assert config["sources"]["taskRuns"]["observabilitySummary"] == "/api/task-runs/{taskRunId}/observability-summary"
+    assert config["sources"]["taskRuns"]["logsStream"] == "/api/task-runs/{taskRunId}/logs/stream"
+    assert config["sources"]["taskRuns"]["logsStdout"] == "/api/task-runs/{taskRunId}/logs/stdout"
+    assert config["sources"]["taskRuns"]["logsStderr"] == "/api/task-runs/{taskRunId}/logs/stderr"
+    assert config["sources"]["taskRuns"]["logsMerged"] == "/api/task-runs/{taskRunId}/logs/merged"
+    assert config["sources"]["taskRuns"]["diagnostics"] == "/api/task-runs/{taskRunId}/diagnostics"
+    assert config["sources"]["taskRuns"]["artifactSession"] == "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}"
+    assert config["sources"]["taskRuns"]["artifactSessionControl"] == "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control"
     assert "speckit" not in config["sources"]
     assert "orchestrator" not in config["sources"]
     assert "externalRuns" not in config["sources"]

@@ -205,6 +205,17 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
                 "artifactDownload": temporal_dashboard.artifact_download_endpoint,
             },
+            "taskRuns": {
+                "observabilitySummary": "/api/task-runs/{taskRunId}/observability-summary",
+                "observabilityEvents": "/api/task-runs/{taskRunId}/observability/events",
+                "logsStream": "/api/task-runs/{taskRunId}/logs/stream",
+                "logsStdout": "/api/task-runs/{taskRunId}/logs/stdout",
+                "logsStderr": "/api/task-runs/{taskRunId}/logs/stderr",
+                "logsMerged": "/api/task-runs/{taskRunId}/logs/merged",
+                "diagnostics": "/api/task-runs/{taskRunId}/diagnostics",
+                "artifactSession": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}",
+                "artifactSessionControl": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control",
+            },
 
         },
         "features": {
