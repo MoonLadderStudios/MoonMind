@@ -405,6 +405,42 @@ def test_runtime_send_turn_accepts_item_completed_notification_contract(
     assert response.metadata["assistantText"] == "OK"
 
 
+def test_runtime_send_turn_completes_via_thread_read_without_notification(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+    )
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "OK"
+
+
 def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
     tmp_path: Path,
 ) -> None:
