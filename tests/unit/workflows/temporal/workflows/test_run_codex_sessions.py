@@ -122,11 +122,11 @@ async def test_run_terminates_active_task_scoped_codex_session(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    signal_calls: list[tuple[str, Any]] = []
+    update_calls: list[tuple[str, Any]] = []
 
     class _FakeHandle:
-        async def signal(self, signal_name: str, payload: Any = None) -> None:
-            signal_calls.append((signal_name, payload))
+        async def execute_update(self, update_name: str, payload: Any = None) -> None:
+            update_calls.append((update_name, payload))
 
     workflow._codex_session_handle = _FakeHandle()
     workflow._codex_session_binding = CodexManagedSessionBinding(
@@ -140,11 +140,10 @@ async def test_run_terminates_active_task_scoped_codex_session(
 
     await workflow._terminate_task_scoped_sessions(reason="success")
 
-    assert signal_calls == [
+    assert update_calls == [
         (
-            "control_action",
+            "TerminateSession",
             {
-                "action": "terminate_session",
                 "reason": "success",
             },
         )

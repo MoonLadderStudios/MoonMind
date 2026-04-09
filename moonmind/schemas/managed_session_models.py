@@ -527,31 +527,63 @@ class CodexManagedSessionWorkflowInput(BaseModel):
         return self
 
 
-class CodexManagedSessionControlRequest(BaseModel):
-    """Control payload applied to the task-scoped Codex session workflow."""
+class CodexManagedSessionSendFollowUpRequest(BaseModel):
+    """Typed workflow update request for sending a follow-up turn."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    action: ManagedSessionControlAction = Field(..., alias="action")
+    message: NonBlankStr = Field(..., alias="message")
     reason: str | None = Field(None, alias="reason")
-    container_id: str | None = Field(None, alias="containerId")
-    thread_id: str | None = Field(None, alias="threadId")
-    active_turn_id: str | None = Field(None, alias="activeTurnId")
 
     @model_validator(mode="after")
-    def _normalize(self) -> "CodexManagedSessionControlRequest":
+    def _normalize(self) -> "CodexManagedSessionSendFollowUpRequest":
         if self.reason is not None:
             self.reason = require_non_blank(self.reason, field_name="reason")
-        if self.container_id is not None:
-            self.container_id = require_non_blank(
-                self.container_id, field_name="containerId"
-            )
-        if self.thread_id is not None:
-            self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
-        if self.active_turn_id is not None:
-            self.active_turn_id = require_non_blank(
-                self.active_turn_id, field_name="activeTurnId"
-            )
+        return self
+
+
+class CodexManagedSessionInterruptRequest(BaseModel):
+    """Typed workflow update request for interrupting an active turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    reason: str | None = Field(None, alias="reason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionInterruptRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
+        return self
+
+
+class CodexManagedSessionSteerRequest(BaseModel):
+    """Typed workflow update request for steering an active turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    message: NonBlankStr = Field(..., alias="message")
+    reason: str | None = Field(None, alias="reason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionSteerRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
+        return self
+
+
+class CodexManagedSessionWorkflowControlRequest(BaseModel):
+    """Typed workflow update request for clear/cancel/terminate operations."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    reason: str | None = Field(None, alias="reason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionWorkflowControlRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
         return self
 
 
@@ -577,15 +609,18 @@ __all__ = [
     "CodexManagedSessionArtifactsPublication",
     "CodexManagedSessionBinding",
     "CodexManagedSessionClearRequest",
-    "CodexManagedSessionControlRequest",
     "CodexManagedSessionHandle",
+    "CodexManagedSessionInterruptRequest",
     "CodexManagedSessionLocator",
     "CodexManagedSessionPlaneContract",
     "CodexManagedSessionRecord",
+    "CodexManagedSessionSendFollowUpRequest",
     "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
+    "CodexManagedSessionSteerRequest",
     "CodexManagedSessionSummary",
     "CodexManagedSessionTurnResponse",
+    "CodexManagedSessionWorkflowControlRequest",
     "CodexManagedSessionWorkflowInput",
     "CodexManagedSessionWorkflowStatus",
     "FetchCodexManagedSessionSummaryRequest",

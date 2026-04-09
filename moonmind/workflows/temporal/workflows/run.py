@@ -2030,10 +2030,9 @@ class MoonMindRunWorkflow:
         binding = self._codex_session_binding
         try:
             if handle is not None and binding is not None:
-                await handle.signal(
-                    "control_action",
+                await handle.execute_update(
+                    "TerminateSession",
                     {
-                        "action": "terminate_session",
                         "reason": reason,
                     },
                 )
