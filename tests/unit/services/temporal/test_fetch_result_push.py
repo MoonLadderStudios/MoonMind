@@ -157,6 +157,51 @@ class TestPushWorkspaceBranch:
         assert result["push_status"] == "protected_branch"
 
     @pytest.mark.asyncio
+    async def test_push_recovers_detached_head_to_explicit_head_branch(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        captured_checkout_args = None
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count, captured_checkout_args
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # checkout -B feature branch
+                captured_checkout_args = args
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recover-detached-head",
+            )
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "feature/recover-detached-head"
+        assert captured_checkout_args is not None
+        assert captured_checkout_args[-3:] == (
+            "checkout",
+            "-B",
+            "feature/recover-detached-head",
+        )
+
+    @pytest.mark.asyncio
     async def test_push_protected_target_branch(self):
         """target_branch is included in the protected set."""
         store = _make_mock_store()
