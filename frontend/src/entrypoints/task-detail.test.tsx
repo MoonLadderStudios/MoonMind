@@ -2,7 +2,12 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
-import { expandRouteTemplate, getSessionProjectionRefetchInterval, TaskDetailPage } from './task-detail';
+import {
+  expandRouteTemplate,
+  getSessionProjectionRefetchInterval,
+  normalizeObservabilityEvent,
+  TaskDetailPage,
+} from './task-detail';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -69,7 +74,7 @@ class MockEventSource {
   }
 
   triggerLogChunk(
-    data: { sequence: number; stream: string; text: string; timestamp?: string; kind?: string },
+    data: Record<string, unknown> & { sequence: number; stream: string; text: string; timestamp?: string; kind?: string },
   ) {
     const event = new MessageEvent('log_chunk', {
       data: JSON.stringify({
@@ -81,7 +86,7 @@ class MockEventSource {
   }
 
   triggerMessage(
-    data: { sequence: number; stream: string; text: string; timestamp?: string; kind?: string },
+    data: Record<string, unknown> & { sequence: number; stream: string; text: string; timestamp?: string; kind?: string },
   ) {
     this.onmessage?.(
       new MessageEvent('message', {
@@ -1993,6 +1998,14 @@ describe('LiveLogsPanel', () => {
     state: 'succeeded',
     rawState: 'succeeded',
   };
+  const codexExecution = {
+    ...activeExecution,
+    targetRuntime: 'codex_cli',
+  };
+  const geminiExecution = {
+    ...activeExecution,
+    targetRuntime: 'gemini_cli',
+  };
   const sessionTimelinePayload: BootPayload = {
     page: 'task-detail',
     apiBase: '/api',
@@ -2001,6 +2014,45 @@ describe('LiveLogsPanel', () => {
         features: {
           logStreamingEnabled: true,
           liveLogsSessionTimelineEnabled: true,
+        },
+      },
+    },
+  };
+  const codexManagedRolloutPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: {
+          logStreamingEnabled: true,
+          liveLogsSessionTimelineEnabled: true,
+          liveLogsSessionTimelineRollout: 'codex_managed',
+        },
+      },
+    },
+  };
+  const allManagedRolloutPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: {
+          logStreamingEnabled: true,
+          liveLogsSessionTimelineEnabled: true,
+          liveLogsSessionTimelineRollout: 'all_managed',
+        },
+      },
+    },
+  };
+  const rolloutOffPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: {
+          logStreamingEnabled: true,
+          liveLogsSessionTimelineEnabled: true,
+          liveLogsSessionTimelineRollout: 'off',
         },
       },
     },
@@ -2184,7 +2236,7 @@ describe('LiveLogsPanel', () => {
 
     // After fetch sequence completes, SSE is created and can be opened
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-    const es = MockEventSource.instances[0]!;
+    const es = MockEventSource.instances.at(-1)!;
 
     act(() => es.triggerOpen());
     await waitFor(() => expect(screen.getByText(/Connected/)).toBeTruthy());
@@ -2210,7 +2262,7 @@ describe('LiveLogsPanel', () => {
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-    const es = MockEventSource.instances[0]!;
+    const es = MockEventSource.instances.at(-1)!;
 
     act(() => es.triggerOpen());
     act(() => es.triggerLogChunk({ sequence: 0, stream: 'stdout', text: 'live line\n' }));
@@ -2322,7 +2374,7 @@ describe('LiveLogsPanel', () => {
     fireEvent.click(await screen.findByText('Live Logs'));
 
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-    const es = MockEventSource.instances[0]!;
+    const es = MockEventSource.instances.at(-1)!;
     act(() => es.triggerOpen());
 
     // Transition to terminal state on next poll
@@ -2759,6 +2811,171 @@ describe('LiveLogsPanel', () => {
 
     expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
     expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+  });
+
+  it('enables the session timeline for codex managed runs when rollout is codex_managed', async () => {
+    mockFetchSequence(codexExecution, activeSummary, 'codex rollout line\n');
+    renderWithClient(<TaskDetailPage payload={codexManagedRolloutPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/codex rollout line/)).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-legacy-viewer')).toBeNull();
+  });
+
+  it('keeps non-codex runs on the legacy viewer when rollout is codex_managed', async () => {
+    mockFetchSequence(geminiExecution, activeSummary, 'gemini rollout line\n');
+    renderWithClient(<TaskDetailPage payload={codexManagedRolloutPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/gemini rollout line/)).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+  });
+
+  it('enables the session timeline for managed runs when rollout is all_managed', async () => {
+    mockFetchSequence(geminiExecution, activeSummary, 'all managed line\n');
+    renderWithClient(<TaskDetailPage payload={allManagedRolloutPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/all managed line/)).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-legacy-viewer')).toBeNull();
+  });
+
+  it('prefers the legacy viewer when rollout is off even if the boolean flag is true', async () => {
+    mockFetchSequence(codexExecution, activeSummary, 'rollout off line\n');
+    renderWithClient(<TaskDetailPage payload={rolloutOffPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/rollout off line/)).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+  });
+
+  it('falls back to merged logs when structured history succeeds with zero events', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => endedSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => 'empty history fallback line\n',
+        } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/empty history fallback line/)).toBeTruthy();
+    });
+  });
+
+  it('derives session badges from camelCase historical event metadata', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'session',
+                kind: 'turn_started',
+                text: 'Camel case turn started',
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 5,
+                containerId: 'ctr-camel',
+                threadId: 'thread-camel',
+                activeTurnId: 'turn-camel',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => codexExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText('sess:wf-task-1:codex_cli')).toBeTruthy();
+      expect(screen.getByText('ctr-camel')).toBeTruthy();
+      expect(screen.getByText('thread-camel')).toBeTruthy();
+      expect(screen.getByText('turn-camel')).toBeTruthy();
+    });
+  });
+
+  it('normalizes camelCase observability event metadata into the canonical session fields', () => {
+    expect(
+      normalizeObservabilityEvent({
+        sequence: 11,
+        timestamp: '2026-04-08T00:00:11Z',
+        stream: 'session',
+        text: 'Camel case SSE turn started',
+        kind: 'turn_started',
+        sessionId: 'sess:wf-task-1:codex_cli',
+        sessionEpoch: 6,
+        containerId: 'ctr-live-camel',
+        threadId: 'thread-live-camel',
+        activeTurnId: 'turn-live-camel',
+      }),
+    ).toMatchObject({
+      session_id: 'sess:wf-task-1:codex_cli',
+      session_epoch: 6,
+      container_id: 'ctr-live-camel',
+      thread_id: 'thread-live-camel',
+      active_turn_id: 'turn-live-camel',
+    });
   });
 
   it('renders the timeline viewer with ANSI-aware output when the session timeline feature flag is enabled', async () => {

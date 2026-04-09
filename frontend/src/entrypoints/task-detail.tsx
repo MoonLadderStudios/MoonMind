@@ -25,8 +25,57 @@ type DashboardConfig = {
   };
 };
 
+type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'all_managed';
+
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
 const SESSION_PROJECTION_POLL_MS = 5000;
+
+function normalizeLiveLogsSessionTimelineRollout(
+  value: string | null | undefined,
+): LiveLogsSessionTimelineRollout | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (
+    normalized === 'off'
+    || normalized === 'internal'
+    || normalized === 'codex_managed'
+    || normalized === 'all_managed'
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function isCodexManagedRuntime(runtimeId: string | null | undefined): boolean {
+  const normalized = String(runtimeId || '').trim().toLowerCase();
+  return normalized === 'codex' || normalized === 'codex_cli';
+}
+
+function shouldEnableSessionTimelineViewer({
+  config,
+  targetRuntime,
+  taskRunId,
+}: {
+  config: DashboardConfig | undefined;
+  targetRuntime: string | null | undefined;
+  taskRunId: string | null | undefined;
+}): boolean {
+  const rollout = normalizeLiveLogsSessionTimelineRollout(
+    config?.features?.liveLogsSessionTimelineRollout,
+  );
+  if (rollout === 'off') {
+    return false;
+  }
+  if (rollout === 'internal') {
+    return true;
+  }
+  if (rollout === 'codex_managed') {
+    return isCodexManagedRuntime(targetRuntime);
+  }
+  if (rollout === 'all_managed') {
+    return Boolean(String(taskRunId || '').trim());
+  }
+  return config?.features?.liveLogsSessionTimelineEnabled === true;
+}
 
 export function getSessionProjectionRefetchInterval(
   isTerminal: boolean,
@@ -258,7 +307,7 @@ const ObservabilitySummarySchema = z.object({
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
 });
 
-const ObservabilityEventSchema = z
+const RawObservabilityEventSchema = z
   .object({
     sequence: z.number(),
     timestamp: z.string(),
@@ -266,15 +315,43 @@ const ObservabilityEventSchema = z
     text: z.string(),
     offset: z.number().nullable().optional(),
     kind: z.string().nullable().optional(),
+    sessionId: z.string().nullable().optional(),
     session_id: z.string().nullable().optional(),
+    sessionEpoch: z.number().nullable().optional(),
     session_epoch: z.number().nullable().optional(),
+    containerId: z.string().nullable().optional(),
     container_id: z.string().nullable().optional(),
+    threadId: z.string().nullable().optional(),
     thread_id: z.string().nullable().optional(),
+    turnId: z.string().nullable().optional(),
     turn_id: z.string().nullable().optional(),
+    activeTurnId: z.string().nullable().optional(),
     active_turn_id: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough();
+
+export function normalizeObservabilityEvent(event: z.infer<typeof RawObservabilityEventSchema>) {
+  return {
+    sequence: event.sequence,
+    timestamp: event.timestamp,
+    stream: event.stream,
+    text: event.text,
+    offset: event.offset ?? null,
+    kind: event.kind ?? null,
+    session_id: event.session_id ?? event.sessionId ?? null,
+    session_epoch: event.session_epoch ?? event.sessionEpoch ?? null,
+    container_id: event.container_id ?? event.containerId ?? null,
+    thread_id: event.thread_id ?? event.threadId ?? null,
+    turn_id: event.turn_id ?? event.turnId ?? null,
+    active_turn_id: event.active_turn_id ?? event.activeTurnId ?? null,
+    metadata: event.metadata ?? {},
+  };
+}
+
+const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =>
+  normalizeObservabilityEvent(event),
+);
 
 const ObservabilityEventsResponseSchema = z.object({
   events: z.array(ObservabilityEventSchema).default([]),
@@ -1544,7 +1621,9 @@ function LiveLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
+  const historyRows = useMemo(() => mapEventsToTimelineRows(historyQuery.data), [historyQuery.data]);
   const historyUnavailable = historyQuery.isError || historyQuery.data === null;
+  const historyEmpty = historyQuery.isSuccess && historyRows.length === 0;
 
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
@@ -1554,7 +1633,7 @@ function LiveLogsPanel({
       !!taskRunId &&
       expanded &&
       summaryQuery.isSuccess &&
-      historyUnavailable,
+      (historyUnavailable || historyEmpty),
     staleTime: Infinity,
     retry: false,
   });
@@ -1578,7 +1657,7 @@ function LiveLogsPanel({
 
       if (!supportsStreaming) {
         setViewerState(
-          (historyQuery.data?.events.length ?? 0) > 0 || Boolean(tailQuery.data)
+          historyRows.length > 0 || Boolean(tailQuery.data)
             ? 'ended'
             : 'not_available',
         );
@@ -1607,12 +1686,11 @@ function LiveLogsPanel({
   // Sync structured history into the local timeline when history fetch completes.
   useEffect(() => {
     if (historyQuery.isSuccess) {
-      const rows = mapEventsToTimelineRows(historyQuery.data);
       const sequences = historyQuery.data?.events
         .map((event) => event.sequence)
         .filter((sequence) => Number.isFinite(sequence));
-      if (lastSeqRef.current === null) {
-        setLogContent(rows);
+      if (lastSeqRef.current === null && historyRows.length > 0) {
+        setLogContent(historyRows);
       }
       lastSeqRef.current = sequences && sequences.length > 0 ? Math.max(...sequences) : null;
       if (historyQuery.data?.sessionSnapshot) {
@@ -1626,16 +1704,16 @@ function LiveLogsPanel({
         }
       }
     }
-  }, [historyQuery.data, historyQuery.isSuccess]);
+  }, [historyQuery.data, historyQuery.isSuccess, historyRows]);
 
   // Sync legacy merged-text fallback only when structured history is unavailable.
   useEffect(() => {
-    if (tailQuery.isSuccess && tailQuery.data && historyUnavailable) {
+    if (tailQuery.isSuccess && tailQuery.data && (historyUnavailable || historyEmpty)) {
       if (lastSeqRef.current === null) {
         setLogContent(parseArtifactToRows(tailQuery.data));
       }
     }
-  }, [historyUnavailable, tailQuery.data, tailQuery.isSuccess]);
+  }, [historyEmpty, historyUnavailable, tailQuery.data, tailQuery.isSuccess]);
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
@@ -2384,7 +2462,6 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
-  const sessionTimelineEnabled = cfg?.features?.liveLogsSessionTimelineEnabled === true;
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
@@ -2420,6 +2497,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
   const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
   const resolvedTaskRunId = explicitTaskRunId;
+  const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
+    config: cfg,
+    targetRuntime: execution?.targetRuntime,
+    taskRunId: resolvedTaskRunId,
+  });
   const previousTaskRunIdRef = useRef(resolvedTaskRunId);
   const [showTaskRunAttachNotice, setShowTaskRunAttachNotice] = useState(false);
 
