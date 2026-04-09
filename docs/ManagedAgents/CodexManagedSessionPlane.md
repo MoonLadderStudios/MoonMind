@@ -2,7 +2,7 @@
 
 Status: Desired state
 Owners: MoonMind Platform
-Last updated: 2026-04-06
+Last updated: 2026-04-09
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
@@ -63,6 +63,8 @@ The managed session plane is the task-scoped Codex runtime environment:
 - continuity reused across steps within the same task only
 
 The session plane is a continuity and performance cache. It is not durable truth.
+
+Managed-session steps may invoke **control-plane tools** that launch separate workload containers as described in [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md). Those workload containers remain outside session identity: they do not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or `active_turn_id`, and they do not replace the task-scoped session container.
 
 ## 3. Protocol
 

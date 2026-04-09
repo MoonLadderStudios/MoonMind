@@ -11,6 +11,7 @@ Tracker rules:
 ## Current trackers
 
 - `Api-ExecutionsApiContract.md`
+- `ManagedAgents-DockerOutOfDocker.md`
 - `Tasks-SkillAndPlanContracts.md`
 - `Temporal-ManagedAndExternalAgentExecutionModel.md`
 - `Temporal-RunHistoryAndRerunSemantics.md`

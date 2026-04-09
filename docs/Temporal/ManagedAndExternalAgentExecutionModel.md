@@ -3,7 +3,7 @@
 **Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md`](../tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md)
 
 Status: **Implemented** (runtime live; contract hardening in progress)
-Last updated: 2026-04-04
+Last updated: 2026-04-09
 Related:
 - [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
@@ -51,6 +51,8 @@ This document does **not** define:
 - source precedence rules across built-in, deployment, repo, and local skills
 - ordinary one-shot LLM activity behavior (`mm.activity.llm`)
 - generic executable tool contracts outside true agent runtime execution
+
+Docker-backed workload tools are ordinary executable tools. They stay on the `tool.type = "skill"` path described by [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md) and are not new `MoonMind.AgentRun` instances unless the launched runtime is itself a true managed agent runtime. [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) defines that workload-container boundary.
 
 MoonMind explicitly separates long-lived, stateful agent execution from plain one-shot model calls. True agent execution is treated as a first-class orchestration concept built around:
 
