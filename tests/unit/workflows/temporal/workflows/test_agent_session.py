@@ -6,7 +6,6 @@ import pytest
 from temporalio.common import RetryPolicy
 
 from moonmind.schemas.managed_session_models import (
-    CodexManagedSessionControlRequest,
     CodexManagedSessionWorkflowInput,
 )
 from moonmind.workflows.temporal.workflows import agent_session as agent_session_module
@@ -38,18 +37,21 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_session_module.workflow, "logger", logger)
 
 
+def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
+    payload: dict[str, object] = {
+        "taskRunId": "wf-run-1",
+        "runtimeId": "codex_cli",
+    }
+    payload.update(overrides)
+    return CodexManagedSessionWorkflowInput.model_validate(payload)
+
+
 def test_agent_session_initializes_task_scoped_codex_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow = MoonMindAgentSessionWorkflow()
     _configure_workflow_runtime(monkeypatch)
-
-    workflow._initialize_session(
-        CodexManagedSessionWorkflowInput(
-            taskRunId="wf-run-1",
-            runtimeId="codex_cli",
-            executionProfileRef="codex-default",
-        )
+    workflow = MoonMindAgentSessionWorkflow(
+        _workflow_input(executionProfileRef="codex-default")
     )
 
     status = workflow.get_status()
@@ -63,17 +65,21 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
 
-def test_agent_session_clear_control_action_bumps_epoch_and_rotates_thread(
+def test_agent_session_send_follow_up_validator_requires_runtime_handles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow = MoonMindAgentSessionWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    workflow._initialize_session(
-        CodexManagedSessionWorkflowInput(
-            taskRunId="wf-run-1",
-            runtimeId="codex_cli",
-        )
-    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    with pytest.raises(ValueError, match="runtime handles are not attached yet"):
+        workflow.validate_send_follow_up({"message": "Continue the task-scoped session."})
+
+
+def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
         {
             "containerId": "container-1",
@@ -82,40 +88,51 @@ def test_agent_session_clear_control_action_bumps_epoch_and_rotates_thread(
         }
     )
 
-    workflow.apply_control_action(
-        CodexManagedSessionControlRequest(
-            action="clear_session",
-            reason="Reset stale context",
-            threadId="thread-2",
-        ).model_dump(by_alias=True)
-    )
-
-    status = workflow.get_status()
-
-    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
-    assert status["binding"]["sessionEpoch"] == 2
-    assert status["containerId"] == "container-1"
-    assert status["threadId"] == "thread-2"
-    assert status["activeTurnId"] is None
-    assert status["lastControlAction"] == "clear_session"
-    assert status["lastControlReason"] == "Reset stale context"
+    with pytest.raises(ValueError, match="stale sessionEpoch"):
+        workflow.validate_interrupt_turn({"sessionEpoch": 2, "reason": "Stop this turn."})
 
 
-def test_agent_session_terminate_control_action_marks_termination_requested(
+def test_agent_session_interrupt_turn_validator_requires_active_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow = MoonMindAgentSessionWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    workflow._initialize_session(
-        CodexManagedSessionWorkflowInput(
-            taskRunId="wf-run-1",
-            runtimeId="codex_cli",
-        )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
     )
 
-    workflow.apply_control_action({"action": "terminate_session", "reason": "done"})
+    with pytest.raises(ValueError, match="active turn"):
+        workflow.validate_interrupt_turn({"sessionEpoch": 1, "reason": "Stop this turn."})
 
-    status = workflow.get_status()
+
+def test_agent_session_clear_session_validator_rejects_when_already_clearing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    )
+    workflow._status = AGENT_SESSION_STATUS_CLEARING
+
+    with pytest.raises(ValueError, match="already clearing"):
+        workflow.validate_clear_session({})
+
+
+@pytest.mark.asyncio
+async def test_agent_session_terminate_update_marks_termination_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    status = await workflow.terminate_session_update({"reason": "done"})
 
     assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
     assert status["terminationRequested"] is True
@@ -127,14 +144,8 @@ def test_agent_session_terminate_control_action_marks_termination_requested(
 async def test_agent_session_send_follow_up_update_executes_session_activity_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow = MoonMindAgentSessionWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    workflow._initialize_session(
-        CodexManagedSessionWorkflowInput(
-            taskRunId="wf-run-1",
-            runtimeId="codex_cli",
-        )
-    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
         {
             "containerId": "container-1",
@@ -236,14 +247,9 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
 async def test_agent_session_refresh_projection_uses_authoritative_binding_task_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow = MoonMindAgentSessionWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    workflow._initialize_session(
-        CodexManagedSessionWorkflowInput(
-            taskRunId="wf-run-1",
-            runtimeId="codex_cli",
-            sessionId="custom-session-id",
-        )
+    workflow = MoonMindAgentSessionWorkflow(
+        _workflow_input(sessionId="custom-session-id")
     )
     workflow.attach_runtime_handles(
         {
@@ -315,17 +321,110 @@ async def test_agent_session_refresh_projection_uses_authoritative_binding_task_
 
 
 @pytest.mark.asyncio
+async def test_agent_session_interrupt_turn_update_executes_session_activity_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    captured: list[str] = []
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        captured.append(activity_name)
+        if activity_name == "agent_runtime.interrupt_turn":
+            assert payload["sessionEpoch"] == 1
+            assert payload["turnId"] == "turn-1"
+            assert payload["reason"] == "Stop this turn."
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-1",
+                "status": "interrupted",
+                "outputRefs": [],
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-after-interrupt",
+                "latestCheckpointRef": "art-checkpoint-after-interrupt",
+                "latestControlEventRef": "art-control-after-interrupt",
+                "latestResetBoundaryRef": None,
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "publishedArtifactRefs": [
+                    "art-summary-after-interrupt",
+                    "art-checkpoint-after-interrupt",
+                    "art-control-after-interrupt",
+                ],
+                "latestSummaryRef": "art-summary-after-interrupt",
+                "latestCheckpointRef": "art-checkpoint-after-interrupt",
+                "latestControlEventRef": "art-control-after-interrupt",
+                "latestResetBoundaryRef": None,
+                "metadata": {},
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    result = await workflow.interrupt_turn_update(
+        {"sessionEpoch": 1, "reason": "Stop this turn."}
+    )
+
+    assert result["turnId"] == "turn-1"
+    assert result["latestControlEventRef"] == "art-control-after-interrupt"
+    assert captured == [
+        "agent_runtime.interrupt_turn",
+        "agent_runtime.fetch_session_summary",
+        "agent_runtime.publish_session_artifacts",
+    ]
+    status = workflow.get_status()
+    assert status["activeTurnId"] is None
+    assert status["lastControlAction"] == "interrupt_turn"
+    assert status["lastControlReason"] == "Stop this turn."
+
+
+@pytest.mark.asyncio
 async def test_agent_session_clear_session_update_executes_remote_clear_and_updates_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow = MoonMindAgentSessionWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    workflow._initialize_session(
-        CodexManagedSessionWorkflowInput(
-            taskRunId="wf-run-1",
-            runtimeId="codex_cli",
-        )
-    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
         {
             "containerId": "container-1",
@@ -412,8 +511,119 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
         "agent_runtime.publish_session_artifacts",
     ]
     status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
     assert status["binding"]["sessionEpoch"] == 2
     assert status["threadId"] == "thread-2"
     assert status["activeTurnId"] is None
     assert status["lastControlAction"] == "clear_session"
     assert status["lastControlReason"] == "Reset stale context"
+
+
+def test_agent_session_legacy_control_action_signal_replays_clear_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    workflow.apply_control_action(
+        {
+            "action": "clear_session",
+            "reason": "Replay old clear event",
+            "threadId": "thread-2",
+        }
+    )
+
+    status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
+    assert status["binding"]["sessionEpoch"] == 2
+    assert status["threadId"] == "thread-2"
+    assert status["activeTurnId"] is None
+    assert status["lastControlAction"] == "clear_session"
+    assert status["lastControlReason"] == "Replay old clear event"
+
+
+@pytest.mark.asyncio
+async def test_agent_session_clear_session_update_preserves_concurrent_terminating_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        if activity_name == "agent_runtime.clear_session":
+            await workflow.terminate_session_update({"reason": "Shutdown now"})
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": None,
+                },
+                "status": "ready",
+                "imageRef": "moonmind:latest",
+                "controlUrl": "http://session-control",
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-epoch-2",
+                "latestCheckpointRef": "art-checkpoint-epoch-2",
+                "latestControlEventRef": "art-control-epoch-2",
+                "latestResetBoundaryRef": "art-reset-epoch-2",
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": None,
+                },
+                "publishedArtifactRefs": [],
+                "latestSummaryRef": "art-summary-epoch-2",
+                "latestCheckpointRef": "art-checkpoint-epoch-2",
+                "latestControlEventRef": "art-control-epoch-2",
+                "latestResetBoundaryRef": "art-reset-epoch-2",
+                "metadata": {},
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    await workflow.clear_session_update({"reason": "Reset stale context"})
+
+    status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
+    assert status["terminationRequested"] is True

@@ -985,7 +985,21 @@ class MoonMindAgentRun:
                             await session_handle.signal("attach_runtime_handles", payload)
 
                         async def _apply_session_control_action(payload: dict[str, Any]) -> None:
-                            await session_handle.signal("control_action", payload)
+                            signal_payload = {
+                                key: value
+                                for key, value in payload.items()
+                                if key in {"containerId", "threadId", "activeTurnId", "sessionEpoch"}
+                            }
+                            action = payload.get("action")
+                            if action is not None:
+                                signal_payload["lastControlAction"] = action
+                            reason = payload.get("reason")
+                            if reason is not None:
+                                signal_payload["lastControlReason"] = reason
+                            await session_handle.signal(
+                                "attach_runtime_handles",
+                                signal_payload,
+                            )
 
                         async def _launch_session(request_payload: Any) -> Any:
                             return await self._execute_routed_activity(
