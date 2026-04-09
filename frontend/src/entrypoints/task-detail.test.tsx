@@ -365,7 +365,7 @@ describe('Task Detail Entrypoint', () => {
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
     ).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
 
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Summary' }).length).toBeGreaterThan(0);
@@ -461,12 +461,11 @@ describe('Task Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
     });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+    ).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/waiting for managed runtime launch to create live logs/i)).toBeTruthy();
-    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
 
     await waitFor(() => {
       expect(screen.getByText('attached after refresh')).toBeTruthy();
@@ -538,7 +537,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
 
     await waitFor(() => {
       expect(
@@ -676,7 +675,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
 
     await waitFor(() => {
       expect(screen.getByText(/live log streaming is disabled in the server dashboard config/i)).toBeTruthy();
