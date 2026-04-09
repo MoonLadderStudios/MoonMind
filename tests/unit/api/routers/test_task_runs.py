@@ -187,6 +187,27 @@ def test_get_observability_summary_emits_latency_metric(
     assert metrics.observe.call_args.kwargs["tags"] == {"stream": "livelogs"}
 
 
+def test_get_observability_summary_ignores_metrics_emitter_failures(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"runId": str(run_id), "status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs.get_metrics_emitter",
+            side_effect=ValueError("bad port"),
+        ):
+            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["runId"] == str(run_id)
+
+
 def test_get_observability_summary_uses_record_snapshot_when_session_record_missing(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1324,6 +1345,74 @@ def test_get_task_run_observability_events_emits_error_metric_on_history_failure
     )
 
 
+def test_get_task_run_observability_events_emits_error_metric_when_session_record_load_fails(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.workspace_path = "/tmp/workspace"
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    metrics = MagicMock()
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._load_task_run_session_record",
+            side_effect=RuntimeError("session boom"),
+        ):
+            with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
+                with pytest.raises(RuntimeError, match="session boom"):
+                    test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+
+    assert any(
+        call.args[0] == "livelogs.history.error"
+        and call.kwargs["tags"] == {"stream": "livelogs"}
+        for call in metrics.increment.call_args_list
+    )
+
+
+def test_get_task_run_observability_events_ignores_metrics_emitter_failures(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        json.dumps(
+            {
+                "runId": "run-1",
+                "sequence": 5,
+                "stream": "stdout",
+                "text": "persisted stdout\n",
+                "timestamp": "2026-04-08T00:00:00Z",
+                "kind": "stdout_chunk",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            with patch(
+                "api_service.api.routers.task_runs.get_metrics_emitter",
+                side_effect=ValueError("bad port"),
+            ):
+                response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    assert [event["sequence"] for event in response.json()["events"]] == [5]
+
+
 def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1359,6 +1448,38 @@ def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
     assert '"session_id"' not in response.text
 
 
+def test_stream_task_run_live_logs_ignores_metrics_emitter_failures(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+
+    async def _follow(*args, **kwargs):
+        yield RunObservabilityEvent(
+            runId="run-1",
+            sequence=11,
+            stream="stdout",
+            text="hello\n",
+            timestamp="2026-04-08T00:00:01Z",
+            kind="stdout_chunk",
+        )
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs.get_metrics_emitter",
+            side_effect=ValueError("bad port"),
+        ):
+            with patch("api_service.api.routers.task_runs.SpoolLogReader.follow", new=_follow):
+                response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream?since=10")
+
+    assert response.status_code == 200
+    assert '"text":"hello\\n"' in response.text
+
+
 def test_get_task_run_observability_events_allows_owner_access() -> None:
     owner_id = uuid4()
     app = FastAPI()
@@ -1373,6 +1494,7 @@ def test_get_task_run_observability_events_allows_owner_access() -> None:
     mock_record.workflow_id = "mm:wf-1"
     mock_record.workspace_path = "/tmp/workspace"
     mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = None
     metrics = MagicMock()
 
     with TestClient(app) as test_client:
@@ -1388,9 +1510,17 @@ def test_get_task_run_observability_events_allows_owner_access() -> None:
                     "api_service.api.routers.task_runs.get_metrics_emitter",
                     return_value=metrics,
                 ):
-                    response = test_client.get(
-                        f"/api/task-runs/{uuid4()}/observability/events"
-                    )
+                    with patch(
+                        "api_service.api.routers.task_runs._load_task_run_session_record",
+                        return_value=None,
+                    ):
+                        with patch(
+                            "api_service.api.routers.task_runs._load_task_run_observability_events",
+                            return_value=([], "artifacts"),
+                        ):
+                            response = test_client.get(
+                                f"/api/task-runs/{uuid4()}/observability/events"
+                            )
 
     assert response.status_code == 200
     assert any(
@@ -1414,6 +1544,7 @@ def test_get_task_run_observability_events_forbids_cross_owner_access_without_su
     mock_record.workflow_id = "mm:wf-1"
     mock_record.workspace_path = "/tmp/workspace"
     mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = None
     metrics = MagicMock()
 
     with TestClient(app) as test_client:

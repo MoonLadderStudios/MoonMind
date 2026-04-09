@@ -778,6 +778,9 @@ def _load_task_run_observability_events(
     record: object,
     session_record: CodexManagedSessionRecord | None,
     limit: int,
+    since: int | None = None,
+    streams: set[str] | None = None,
+    kinds: set[str] | None = None,
 ) -> tuple[list[dict[str, object]], str]:
     workspace_path = getattr(record, "workspace_path", None)
     started_at = getattr(record, "started_at", None)
@@ -795,13 +798,31 @@ def _load_task_run_observability_events(
         else None
     )
     if event_journal_path is not None:
-        events.extend(_iter_event_journal(event_journal_path, run_id=record_run_id))
+        events.extend(
+            _collect_matching_observability_events(
+                _iter_event_journal(event_journal_path, run_id=record_run_id),
+                limit=limit,
+                since=since,
+                streams=streams,
+                kinds=kinds,
+            )
+        )
         source = "journal"
     elif _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
-        for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at):
-            normalized = _normalize_live_event(payload)
-            if normalized is not None:
-                events.append(normalized)
+        normalized_events = (
+            normalized
+            for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at)
+            if (normalized := _normalize_live_event(payload)) is not None
+        )
+        events.extend(
+            _collect_matching_observability_events(
+                normalized_events,
+                limit=limit,
+                since=since,
+                streams=streams,
+                kinds=kinds,
+            )
+        )
         source = "spool"
     else:
         events.extend(
@@ -815,6 +836,49 @@ def _load_task_run_observability_events(
     return events, source
 
 
+def _event_matches_observability_filters(
+    event: dict[str, object],
+    *,
+    since: int | None = None,
+    streams: set[str] | None = None,
+    kinds: set[str] | None = None,
+) -> bool:
+    sequence = _coerce_sequence(event.get("sequence"))
+    if since is not None and sequence is not None and sequence > 0 and sequence <= since:
+        return False
+    stream = str(event.get("stream") or "").strip()
+    if streams and stream not in streams:
+        return False
+    kind = str(event.get("kind") or "").strip()
+    if kinds and kind not in kinds:
+        return False
+    return True
+
+
+def _collect_matching_observability_events(
+    events: Iterator[dict[str, object]],
+    *,
+    limit: int,
+    since: int | None = None,
+    streams: set[str] | None = None,
+    kinds: set[str] | None = None,
+) -> list[dict[str, object]]:
+    collected: list[dict[str, object]] = []
+    max_events = max(1, limit) + 1
+    for event in events:
+        if not _event_matches_observability_filters(
+            event,
+            since=since,
+            streams=streams,
+            kinds=kinds,
+        ):
+            continue
+        collected.append(event)
+        if len(collected) >= max_events:
+            break
+    return collected
+
+
 def _filter_observability_events(
     events: list[dict[str, object]],
     *,
@@ -824,14 +888,12 @@ def _filter_observability_events(
 ) -> list[dict[str, object]]:
     filtered: list[dict[str, object]] = []
     for event in events:
-        sequence = _coerce_sequence(event.get("sequence"))
-        if since is not None and sequence is not None and sequence > 0 and sequence <= since:
-            continue
-        stream = str(event.get("stream") or "").strip()
-        if streams and stream not in streams:
-            continue
-        kind = str(event.get("kind") or "").strip()
-        if kinds and kind not in kinds:
+        if not _event_matches_observability_filters(
+            event,
+            since=since,
+            streams=streams,
+            kinds=kinds,
+        ):
             continue
         filtered.append(event)
     return filtered
@@ -841,6 +903,30 @@ def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     sequence = _coerce_sequence(payload.get("sequence"))
     timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
+
+
+def _emit_livelogs_metric_increment(
+    metric: str,
+    *,
+    value: int = 1,
+    tags: dict[str, object] | None = None,
+) -> None:
+    try:
+        get_metrics_emitter().increment(metric, value=value, tags=tags)
+    except Exception:
+        return
+
+
+def _emit_livelogs_metric_observe(
+    metric: str,
+    *,
+    value: float,
+    tags: dict[str, object] | None = None,
+) -> None:
+    try:
+        get_metrics_emitter().observe(metric, value=value, tags=tags)
+    except Exception:
+        return
 
 
 def _iter_artifact_fallback_content(
@@ -933,7 +1019,6 @@ async def get_observability_summary(
             detail="Observability record not found for this task run",
         )
     await _require_observability_access(record, _user)
-    metrics = get_metrics_emitter()
     started = time.perf_counter()
 
     terminal_statuses = {"completed", "failed", "canceled", "cancelled", "timed_out"}
@@ -956,7 +1041,7 @@ async def get_observability_summary(
     base["supportsLiveStreaming"] = supports_live
     base["liveStreamStatus"] = live_stream_status
     base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
-    metrics.observe(
+    _emit_livelogs_metric_observe(
         "livelogs.summary.latency",
         value=time.perf_counter() - started,
         tags={"stream": "livelogs"},
@@ -1081,46 +1166,53 @@ async def get_task_run_observability_events(
             detail="Observability record not found for this task run",
         )
     await _require_observability_access(record, _user)
-    metrics = get_metrics_emitter()
     started = time.perf_counter()
-
-    session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
+    stream_filters = set(stream or [])
+    kind_filters = {item for item in (kind or []) if item}
     try:
+        session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
         events, source = await asyncio.to_thread(
             _load_task_run_observability_events,
             record=record,
             session_record=session_record,
             limit=limit,
+            since=since,
+            streams=stream_filters,
+            kinds=kind_filters,
         )
+        if source == "artifacts":
+            events = _filter_observability_events(
+                events,
+                since=since,
+                streams=stream_filters,
+                kinds=kind_filters,
+            )
+        events.sort(key=_event_sort_key)
+        truncated = len(events) > limit
+        if truncated:
+            events = events[:limit]
+
+        response = {
+            "events": events,
+            "truncated": truncated,
+            "sessionSnapshot": _build_session_snapshot(session_record)
+            or _build_record_session_snapshot(record),
+        }
     except Exception:
-        metrics.increment("livelogs.history.error", tags={"stream": "livelogs"})
+        _emit_livelogs_metric_increment(
+            "livelogs.history.error",
+            tags={"stream": "livelogs"},
+        )
         raise
-    events = _filter_observability_events(
-        events,
-        since=since,
-        streams=set(stream or []),
-        kinds={item for item in (kind or []) if item},
-    )
-
-    events.sort(key=_event_sort_key)
-    truncated = len(events) > limit
-    if truncated:
-        events = events[:limit]
-
     metric_tags = {"stream": "livelogs", "source": source}
-    metrics.observe(
+    _emit_livelogs_metric_observe(
         "livelogs.history.latency",
         value=time.perf_counter() - started,
         tags=metric_tags,
     )
-    metrics.increment("livelogs.history.source", tags=metric_tags)
+    _emit_livelogs_metric_increment("livelogs.history.source", tags=metric_tags)
 
-    return {
-        "events": events,
-        "truncated": truncated,
-        "sessionSnapshot": _build_session_snapshot(session_record)
-        or _build_record_session_snapshot(record),
-    }
+    return response
 
 
 @router.get(
@@ -1163,9 +1255,8 @@ async def stream_task_run_live_logs(
             detail="Live streaming is not supported for this run.",
         )
 
-    metrics = get_metrics_emitter()
     tags = {"stream": "livelogs"}
-    metrics.increment("livelogs.stream.connect", tags=tags)
+    _emit_livelogs_metric_increment("livelogs.stream.connect", tags=tags)
 
     # Use queries parameter 'since'
     since_sequence = since or 0
@@ -1201,11 +1292,11 @@ async def stream_task_run_live_logs(
         except asyncio.CancelledError:
             raise
         except Exception:
-            metrics.increment("livelogs.stream.error", tags=tags)
+            _emit_livelogs_metric_increment("livelogs.stream.error", tags=tags)
             raise
         finally:
             reader.stop()
-            metrics.increment("livelogs.stream.disconnect", tags=tags)
+            _emit_livelogs_metric_increment("livelogs.stream.disconnect", tags=tags)
 
     return StreamingResponse(
         _instrumented_generator(),
