@@ -6,7 +6,7 @@ import os
 from copy import deepcopy
 from typing import Any
 
-from moonmind.config.settings import settings
+from moonmind.config.settings import WorkflowSettings, settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.tasks.runtime_defaults import (
     DEFAULT_REPOSITORY,
@@ -121,10 +121,7 @@ def _build_live_logs_feature_config() -> dict[str, object]:
     """Build the grouped Live Logs feature flags for dashboard consumers."""
 
     return {
-        "logStreamingEnabled": bool(
-            os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
-            not in ("0", "false", "no", "off")
-        ),
+        "logStreamingEnabled": bool(WorkflowSettings(_env_file=None).log_streaming_enabled),
         "liveLogsSessionTimelineEnabled": bool(
             settings.feature_flags.live_logs_session_timeline_enabled
         ),

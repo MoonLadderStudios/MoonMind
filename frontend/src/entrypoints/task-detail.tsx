@@ -972,7 +972,7 @@ function deriveSessionSnapshotFromEvent(
     containerId: event.container_id ?? previous?.containerId ?? '',
     threadId: event.thread_id ?? previous?.threadId ?? '',
     activeTurnId: event.active_turn_id ?? previous?.activeTurnId ?? null,
-    status: event.kind ?? previous?.status,
+    status: previous?.status,
     latestSummaryRef: previous?.latestSummaryRef ?? null,
     latestCheckpointRef: previous?.latestCheckpointRef ?? null,
     latestControlEventRef: previous?.latestControlEventRef ?? null,
@@ -1510,9 +1510,9 @@ function LiveLogsPanel({
       if (historyQuery.data?.sessionSnapshot) {
         setSessionSnapshot(historyQuery.data.sessionSnapshot);
       } else {
-        const latestSessionEvent = [...(historyQuery.data?.events ?? [])]
-          .reverse()
-          .find((event) => event.session_id && typeof event.session_epoch === 'number');
+        const latestSessionEvent = (historyQuery.data?.events ?? []).findLast(
+          (event) => event.session_id && typeof event.session_epoch === 'number',
+        );
         if (latestSessionEvent) {
           setSessionSnapshot((prev) => deriveSessionSnapshotFromEvent(latestSessionEvent, prev));
         }
@@ -1703,7 +1703,6 @@ function LiveLogsPanel({
               <Virtuoso
                 style={{ height: 400 }}
                 data={logContent}
-                initialItemCount={logContent.length}
                 computeItemKey={(_, row) => row.id}
                 itemContent={(_, row) => renderTimelineRow(row, wrapLines, true)}
               />
@@ -2269,7 +2268,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
-  const sessionTimelineEnabled = cfg?.features?.liveLogsSessionTimelineEnabled !== false;
+  const sessionTimelineEnabled = cfg?.features?.liveLogsSessionTimelineEnabled === true;
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,

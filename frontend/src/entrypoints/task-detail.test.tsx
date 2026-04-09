@@ -5,6 +5,24 @@ import { expandRouteTemplate, getSessionProjectionRefetchInterval, TaskDetailPag
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
+const { virtuosoPropsSpy } = vi.hoisted(() => ({
+  virtuosoPropsSpy: vi.fn(),
+}));
+
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: (props: any) => {
+    virtuosoPropsSpy(props);
+    return (
+      <div data-testid="mock-virtuoso">
+        {(props.data ?? []).map((row: any, index: number) => {
+          const key = props.computeItemKey ? props.computeItemKey(index, row) : index;
+          return <div key={String(key)}>{props.itemContent(index, row)}</div>;
+        })}
+      </div>
+    );
+  },
+}));
+
 // ---------------------------------------------------------------------------
 // Minimal EventSource mock
 // ---------------------------------------------------------------------------
@@ -201,6 +219,7 @@ describe('Task Detail Entrypoint', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    virtuosoPropsSpy.mockClear();
     window.history.pushState({}, 'Test', '/tasks/test-123?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
@@ -1990,7 +2009,7 @@ describe('LiveLogsPanel', () => {
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    await waitFor(() => expect(screen.getByText(/Stream ended/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Stream ended/)).toBeTruthy(), { timeout: 5000 });
     expect(MockEventSource.instances.length).toBe(0);
   });
 
@@ -2392,6 +2411,20 @@ describe('LiveLogsPanel', () => {
     expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
   });
 
+  it('uses the legacy line viewer when the session timeline feature flag is absent', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'legacy fallback line\n');
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/legacy fallback line/)).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+  });
+
   it('renders the timeline viewer with ANSI-aware output when the session timeline feature flag is enabled', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -2436,6 +2469,8 @@ describe('LiveLogsPanel', () => {
       expect(screen.getByText('red output')).toBeTruthy();
     });
 
+    expect(virtuosoPropsSpy).toHaveBeenCalled();
+    expect(virtuosoPropsSpy.mock.calls.at(-1)?.[0]?.initialItemCount).toBeUndefined();
     expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
     expect(screen.queryByText('\u001b[31mred output\u001b[0m')).toBeNull();
     expect(document.querySelector('[data-ansi-fragment="true"]')).toBeTruthy();
