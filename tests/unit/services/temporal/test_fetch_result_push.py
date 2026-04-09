@@ -541,6 +541,57 @@ class TestPushWorkspaceBranch:
         assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
         assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
 
+    def test_workspace_command_env_bootstraps_git_helper_without_writing_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        support_root = workspace.parent / ".moonmind"
+        support_bin = support_root / "bin"
+        gitconfig = support_root / "gitconfig"
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token_value")
+        monkeypatch.setattr(settings.workflow, "git_user_name", "MoonMind Bot")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "moonmind@example.com"
+        )
+
+        env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        helper_path = support_bin / "git-credential-moonmind"
+        assert support_bin.is_dir()
+        assert gitconfig.is_file()
+        assert helper_path.is_file()
+        assert env["PATH"].startswith(str(support_bin))
+        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+
+        helper_text = helper_path.read_text(encoding="utf-8")
+        gitconfig_text = gitconfig.read_text(encoding="utf-8")
+        assert "ghp_test_token_value" not in helper_text
+        assert "ghp_test_token_value" not in gitconfig_text
+        assert "os.environ.get('GITHUB_TOKEN'" in helper_text
+        assert "password={token}" in helper_text
+        assert "git-credential-moonmind" in gitconfig_text
+        assert str(workspace.resolve()) in gitconfig_text
+
+    def test_workspace_command_env_logs_bootstrap_failures(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        with patch(
+            "pathlib.Path.mkdir",
+            side_effect=OSError("read-only filesystem"),
+        ), patch(
+            "moonmind.workflows.temporal.activity_runtime.logger.warning"
+        ) as warning_mock:
+            env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        assert env["PATH"] == "/usr/bin"
+        assert "GIT_CONFIG_GLOBAL" not in env
+        warning_mock.assert_called_once()
+        assert warning_mock.call_args.args[1] == str(workspace)
+
     @pytest.mark.asyncio
     async def test_push_revlist_failure_falls_through(self):
         """When rev-list --count raises, we fall through to 'pushed' (safe default)."""
