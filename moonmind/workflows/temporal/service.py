@@ -58,6 +58,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
+    TERMINAL_MANAGED_SESSION_STATUSES,
 )
 from moonmind.schemas.managed_session_models import canonical_codex_managed_runtime_id
 
@@ -1722,25 +1723,49 @@ class TemporalExecutionService:
         reason: str,
     ) -> None:
         store = ManagedSessionStore(_get_managed_session_store_root())
+        canonical_runtime_id = "codex_cli"
+        default_session_id = f"sess:{workflow_id}:{canonical_runtime_id}"
         try:
-            session_records = await asyncio.to_thread(store.list_active)
+            session_record = store.load(default_session_id)
         except Exception:
             logger.warning(
-                "Failed to read managed session store before cancel for workflow %s",
+                "Failed to load managed session record %s before cancel for workflow %s",
+                default_session_id,
                 workflow_id,
                 exc_info=True,
             )
-            return
+            session_record = None
+        else:
+            if (
+                session_record is None
+                or session_record.task_run_id != workflow_id
+                or canonical_codex_managed_runtime_id(session_record.runtime_id)
+                != canonical_runtime_id
+                or session_record.status in TERMINAL_MANAGED_SESSION_STATUSES
+            ):
+                session_record = None
 
-        session_record = next(
-            (
-                record
-                for record in session_records
-                if record.task_run_id == workflow_id
-                and canonical_codex_managed_runtime_id(record.runtime_id) == "codex_cli"
-            ),
-            None,
-        )
+        if session_record is None:
+            try:
+                session_records = await asyncio.to_thread(store.list_active)
+            except Exception:
+                logger.warning(
+                    "Failed to read managed session store before cancel for workflow %s",
+                    workflow_id,
+                    exc_info=True,
+                )
+                return
+
+            session_record = next(
+                (
+                    record
+                    for record in session_records
+                    if record.task_run_id == workflow_id
+                    and canonical_codex_managed_runtime_id(record.runtime_id)
+                    == canonical_runtime_id
+                ),
+                None,
+            )
         if session_record is None:
             return
 

@@ -195,6 +195,71 @@ async def test_agent_session_terminate_update_executes_remote_terminate_when_han
 
 
 @pytest.mark.asyncio
+async def test_agent_session_terminate_update_keeps_terminating_when_remote_terminate_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-run-1:session:codex_cli",
+            "run_id": "run-session-1",
+            "task_queue": "mm.workflow",
+        },
+    )
+    logger = type(
+        "Logger",
+        (),
+        {
+            "info": lambda *a, **k: None,
+            "warning": lambda _self, message, *args: warnings.append(message % args),
+        },
+    )()
+    monkeypatch.setattr(agent_session_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(agent_session_module.workflow, "logger", logger)
+
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del payload, kwargs
+        if activity_name == "agent_runtime.terminate_session":
+            raise RuntimeError("terminate failed")
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    status = await workflow.terminate_session_update({"reason": "done"})
+
+    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
+    assert status["terminationRequested"] is True
+    assert status["lastControlAction"] == "terminate_session"
+    assert status["lastControlReason"] == "done"
+    assert status["activeTurnId"] == "turn-1"
+    assert warnings == [
+        "Managed session terminate activity failed for sess:wf-run-1:codex_cli: "
+        "terminate failed"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_agent_session_send_follow_up_update_executes_session_activity_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

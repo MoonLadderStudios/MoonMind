@@ -145,6 +145,8 @@ _GITHUB_PR_URL_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
+# Replay-stable patch id for task-scoped Codex terminate activities during finalization.
+RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
@@ -2303,32 +2305,43 @@ class MoonMindRunWorkflow:
         binding = self._codex_session_binding
         try:
             if handle is not None and binding is not None:
-                snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                    "agent_runtime.load_session_snapshot"
-                )
-                snapshot_payload = await workflow.execute_activity(
-                    snapshot_route.activity_type,
-                    binding.model_dump(mode="json", by_alias=True),
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                    **self._execute_kwargs_for_route(snapshot_route),
-                )
-                snapshot = CodexManagedSessionSnapshot.model_validate(snapshot_payload)
-                if snapshot.container_id and snapshot.thread_id:
-                    terminate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "agent_runtime.terminate_session"
-                    )
-                    await workflow.execute_activity(
-                        terminate_route.activity_type,
-                        TerminateCodexManagedSessionRequest(
-                            sessionId=snapshot.binding.session_id,
-                            sessionEpoch=snapshot.binding.session_epoch,
-                            containerId=snapshot.container_id,
-                            threadId=snapshot.thread_id,
-                            reason=reason,
-                        ).model_dump(mode="json", by_alias=True),
-                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        **self._execute_kwargs_for_route(terminate_route),
-                    )
+                if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
+                    try:
+                        snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                            "agent_runtime.load_session_snapshot"
+                        )
+                        snapshot_payload = await workflow.execute_activity(
+                            snapshot_route.activity_type,
+                            binding.model_dump(mode="json", by_alias=True),
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            **self._execute_kwargs_for_route(snapshot_route),
+                        )
+                        snapshot = CodexManagedSessionSnapshot.model_validate(
+                            snapshot_payload
+                        )
+                        if snapshot.container_id and snapshot.thread_id:
+                            terminate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                                "agent_runtime.terminate_session"
+                            )
+                            await workflow.execute_activity(
+                                terminate_route.activity_type,
+                                TerminateCodexManagedSessionRequest(
+                                    sessionId=snapshot.binding.session_id,
+                                    sessionEpoch=snapshot.binding.session_epoch,
+                                    containerId=snapshot.container_id,
+                                    threadId=snapshot.thread_id,
+                                    reason=reason,
+                                ).model_dump(mode="json", by_alias=True),
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                **self._execute_kwargs_for_route(terminate_route),
+                            )
+                    except Exception as exc:
+                        self._get_logger().warning(
+                            "Task-scoped Codex terminate activity failed for %s; "
+                            "falling back to session signal: %s",
+                            binding.session_id,
+                            exc,
+                        )
                 await handle.signal(
                     "control_action",
                     {
