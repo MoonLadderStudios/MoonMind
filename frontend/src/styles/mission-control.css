@@ -174,6 +174,10 @@ h1 {
   line-height: 1;
 }
 
+.masthead h1 {
+  font-size: clamp(1.55rem, 2.35vw, 2.15rem);
+}
+
 .masthead-meta {
   margin: 0.25rem 0 0;
   display: flex;
