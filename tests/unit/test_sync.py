@@ -301,6 +301,94 @@ async def test_sync_execution_projection_uses_mm_updated_at_from_temporal(
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_sync_execution_projection_refreshes_canonical_summary_and_started_at(
+    tmp_path,
+):
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            created_at = datetime(2026, 4, 9, 20, 44, tzinfo=UTC)
+            started_at = datetime(2026, 4, 9, 20, 45, tzinfo=UTC)
+            updated_at = datetime(2026, 4, 9, 20, 46, tzinfo=UTC)
+            canonical = TemporalExecutionCanonicalRecord(
+                workflow_id="mm:canonical-refresh",
+                run_id="run-old",
+                namespace="moonmind",
+                workflow_type=TemporalWorkflowType.RUN,
+                owner_id="owner-1",
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.INITIALIZING,
+                close_status=None,
+                entry="run",
+                search_attributes={"mm_state": "initializing", "mm_entry": "run"},
+                memo={
+                    "title": "Task",
+                    "summary": "Execution initialized.",
+                    "taskRunId": "8b376541-53ba-4d76-a18f-8366943550ec",
+                },
+                artifact_refs=[],
+                parameters={"targetRuntime": "codex_cli"},
+                started_at=None,
+                updated_at=created_at,
+                closed_at=None,
+            )
+            session.add(canonical)
+            await session.commit()
+
+            desc = Mock(spec=WorkflowExecutionDescription)
+            desc.id = canonical.workflow_id
+            desc.run_id = "run-new"
+            desc.namespace = "moonmind"
+            desc.workflow_type = "MoonMind.Run"
+            desc.status = WorkflowExecutionStatus.RUNNING
+            desc.start_time = started_at
+            desc.execution_time = started_at
+            desc.close_time = None
+            desc.search_attributes = {
+                "mm_state": "executing",
+                "mm_entry": "run",
+                "mm_updated_at": updated_at.isoformat(),
+            }
+
+            async def _memo() -> dict[str, object]:
+                return {
+                    "entry": "run",
+                    "owner_id": "owner-1",
+                    "owner_type": "user",
+                    "title": "Task",
+                    "summary": "Launching agent...",
+                }
+
+            desc.memo = _memo
+
+            refreshed = await sync_execution_projection(session, desc)
+            await session.commit()
+            await session.refresh(refreshed)
+            await session.refresh(canonical)
+
+            assert refreshed.memo["summary"] == "Launching agent..."
+            assert _as_utc(refreshed.started_at) == started_at
+            assert canonical.run_id == "run-new"
+            assert canonical.state == MoonMindWorkflowState.EXECUTING
+            assert canonical.memo["summary"] == "Launching agent..."
+            assert canonical.memo["taskRunId"] == "8b376541-53ba-4d76-a18f-8366943550ec"
+            assert _as_utc(canonical.started_at) == started_at
+            assert _as_utc(canonical.updated_at) == updated_at
+    finally:
+        await engine.dispose()
+
+
 def test_merged_parameters_for_projection_combines_canonical_with_memo_payload():
     from types import SimpleNamespace
 

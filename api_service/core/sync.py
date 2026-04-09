@@ -343,11 +343,33 @@ async def sync_execution_projection(
     # any key present in both sources.
     projection.memo = merged_memo_for_projection(payload, canonical)
 
-    if canonical is not None and canonical.state != state_value:
-        canonical.state = state_value
-        canonical.close_status = close_status_value
-        if payload.get("closed_at") and canonical.closed_at is None:
-            canonical.closed_at = payload["closed_at"]
+    if canonical is not None:
+        canonical_temporal_metadata_missing = not payload.get("memo") and not payload.get(
+            "search_attributes"
+        )
+        for field, value in payload.items():
+            if canonical_temporal_metadata_missing and field not in (
+                "run_id",
+                "state",
+                "close_status",
+                "started_at",
+                "updated_at",
+                "closed_at",
+                "workflow_id",
+                "namespace",
+                "workflow_type",
+            ):
+                continue
+            if field == "parameters":
+                canonical.parameters = merged_parameters_for_projection(payload, canonical)
+                continue
+            if field == "memo":
+                canonical.memo = merged_memo_for_projection(payload, canonical)
+                continue
+            setattr(canonical, field, value)
+        canonical.updated_at = semantic_updated_at
+        # Preserve the Temporal semantic timestamp even when other columns change.
+        flag_modified(canonical, "updated_at")
         logger.info(
             "Synced canonical record %s: state=%s close_status=%s",
             desc.id,
