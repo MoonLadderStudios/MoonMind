@@ -18,6 +18,7 @@ type DashboardConfig = {
     logStreamingEnabled?: boolean;
     liveLogsSessionTimelineEnabled?: boolean;
     liveLogsSessionTimelineRollout?: string;
+    liveLogsStructuredHistoryEnabled?: boolean;
   };
   sources?: {
     temporal?: Record<string, string>;
@@ -75,6 +76,10 @@ function shouldEnableSessionTimelineViewer({
     return Boolean(String(taskRunId || '').trim());
   }
   return config?.features?.liveLogsSessionTimelineEnabled === true;
+}
+
+function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolean {
+  return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
 export function getSessionProjectionRefetchInterval(
@@ -1399,12 +1404,14 @@ function StepObservabilityGroup({
   apiBase,
   logStreamingEnabled,
   sessionTimelineEnabled,
+  structuredHistoryEnabled,
   row,
   routes,
 }: {
   apiBase: string;
   logStreamingEnabled: boolean;
   sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   routes: TaskRunRouteTemplates;
 }) {
@@ -1436,6 +1443,7 @@ function StepObservabilityGroup({
         autoExpand
         routes={routes}
         sessionTimelineEnabled={sessionTimelineEnabled}
+        structuredHistoryEnabled={structuredHistoryEnabled}
       />
       <StaticLogPanel
         apiBase={apiBase}
@@ -1472,6 +1480,7 @@ function StepLedgerRowCard({
   apiBase,
   logStreamingEnabled,
   sessionTimelineEnabled,
+  structuredHistoryEnabled,
   row,
   runId,
   expanded,
@@ -1482,6 +1491,7 @@ function StepLedgerRowCard({
   apiBase: string;
   logStreamingEnabled: boolean;
   sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   runId: string;
   expanded: boolean;
@@ -1554,6 +1564,7 @@ function StepLedgerRowCard({
                 apiBase={apiBase}
                 logStreamingEnabled={logStreamingEnabled}
                 sessionTimelineEnabled={sessionTimelineEnabled}
+                structuredHistoryEnabled={structuredHistoryEnabled}
                 row={row}
                 routes={routes}
               />
@@ -1580,6 +1591,7 @@ function LiveLogsPanel({
   autoExpand = false,
   routes,
   sessionTimelineEnabled,
+  structuredHistoryEnabled,
 }: {
   apiBase: string;
   taskRunId: string;
@@ -1587,6 +1599,7 @@ function LiveLogsPanel({
   autoExpand?: boolean;
   routes: TaskRunRouteTemplates;
   sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -1627,13 +1640,13 @@ function LiveLogsPanel({
   const historyQuery = useQuery({
     queryKey: ['task-run-observability-events', taskRunId],
     queryFn: () => fetchObservabilityEvents(apiBase, taskRunId, routes.observabilityEvents),
-    enabled: !!taskRunId && expanded && summaryQuery.isSuccess,
+    enabled: structuredHistoryEnabled && !!taskRunId && expanded && summaryQuery.isSuccess,
     staleTime: Infinity,
     retry: false,
   });
   const historyRows = useMemo(() => mapEventsToTimelineRows(historyQuery.data), [historyQuery.data]);
-  const historyUnavailable = historyQuery.isError || historyQuery.data === null;
-  const historyEmpty = historyQuery.isSuccess && historyRows.length === 0;
+  const historyUnavailable = !structuredHistoryEnabled || historyQuery.isError || historyQuery.data === null;
+  const historyEmpty = structuredHistoryEnabled && historyQuery.isSuccess && historyRows.length === 0;
 
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
@@ -1643,7 +1656,7 @@ function LiveLogsPanel({
       !!taskRunId &&
       expanded &&
       summaryQuery.isSuccess &&
-      (historyUnavailable || historyEmpty),
+      (!structuredHistoryEnabled || historyUnavailable || historyEmpty),
     staleTime: Infinity,
     retry: false,
   });
@@ -1654,11 +1667,11 @@ function LiveLogsPanel({
       setViewerState('starting');
       return;
     }
-    if (historyQuery.isError && tailQuery.isError) {
+    if ((structuredHistoryEnabled && historyQuery.isError && tailQuery.isError) || (!structuredHistoryEnabled && tailQuery.isError)) {
       setViewerState('error');
     } else if (
       summaryQuery.isSuccess &&
-      (historyQuery.isSuccess || tailQuery.isSuccess)
+      ((structuredHistoryEnabled && historyQuery.isSuccess) || tailQuery.isSuccess)
     ) {
       const summary = summaryQuery.data;
       const runIsTerminal =
@@ -1677,6 +1690,7 @@ function LiveLogsPanel({
     }
   }, [
     expanded,
+    structuredHistoryEnabled,
     historyQuery.data,
     historyQuery.isError,
     historyQuery.isSuccess,
@@ -1695,6 +1709,9 @@ function LiveLogsPanel({
 
   // Sync structured history into the local timeline when history fetch completes.
   useEffect(() => {
+    if (!structuredHistoryEnabled) {
+      return;
+    }
     if (historyQuery.isSuccess) {
       const sequences = historyQuery.data?.events
         .map((event) => event.sequence)
@@ -1714,21 +1731,21 @@ function LiveLogsPanel({
         }
       }
     }
-  }, [historyQuery.data, historyQuery.isSuccess, historyRows]);
+  }, [historyQuery.data, historyQuery.isSuccess, historyRows, structuredHistoryEnabled]);
 
   // Sync legacy merged-text fallback only when structured history is unavailable.
   useEffect(() => {
-    if (tailQuery.isSuccess && tailQuery.data && (historyUnavailable || historyEmpty)) {
+    if (tailQuery.isSuccess && tailQuery.data && (!structuredHistoryEnabled || historyUnavailable || historyEmpty)) {
       if (lastSeqRef.current === null) {
         setLogContent(parseArtifactToRows(tailQuery.data));
       }
     }
-  }, [historyEmpty, historyUnavailable, tailQuery.data, tailQuery.isSuccess]);
+  }, [historyEmpty, historyUnavailable, structuredHistoryEnabled, tailQuery.data, tailQuery.isSuccess]);
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
     if (!taskRunId || !expanded || !summaryQuery.isSuccess || !isVisible) return;
-    if (!historyQuery.isSuccess && !tailQuery.isSuccess) return;
+    if ((structuredHistoryEnabled && !historyQuery.isSuccess && !tailQuery.isSuccess) || (!structuredHistoryEnabled && !tailQuery.isSuccess)) return;
 
     const summary = summaryQuery.data;
     const runIsTerminal =
@@ -2472,6 +2489,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
+  const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
@@ -2951,6 +2969,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                       apiBase={payload.apiBase}
                       logStreamingEnabled={logStreamingEnabled}
                       sessionTimelineEnabled={sessionTimelineEnabled}
+                      structuredHistoryEnabled={structuredHistoryEnabled}
                       row={row}
                       runId={latestRunId}
                       expanded={Boolean(expandedSteps[row.logicalStepId])}
@@ -3222,6 +3241,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                       autoExpand={showTaskRunAttachNotice}
                       routes={taskRunRoutes}
                       sessionTimelineEnabled={sessionTimelineEnabled}
+                      structuredHistoryEnabled={structuredHistoryEnabled}
                     />
                     <StaticLogPanel
                       apiBase={payload.apiBase}

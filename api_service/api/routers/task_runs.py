@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -777,7 +778,7 @@ def _load_task_run_observability_events(
     record: object,
     session_record: CodexManagedSessionRecord | None,
     limit: int,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], str]:
     workspace_path = getattr(record, "workspace_path", None)
     started_at = getattr(record, "started_at", None)
 
@@ -795,11 +796,13 @@ def _load_task_run_observability_events(
     )
     if event_journal_path is not None:
         events.extend(_iter_event_journal(event_journal_path, run_id=record_run_id))
+        source = "journal"
     elif _spool_contains_renderable_chunks(workspace_path, started_at=started_at):
         for payload in _iter_run_spool_chunks(workspace_path, started_at=started_at):
             normalized = _normalize_live_event(payload)
             if normalized is not None:
                 events.append(normalized)
+        source = "spool"
     else:
         events.extend(
             _iter_historical_artifact_events(
@@ -808,7 +811,8 @@ def _load_task_run_observability_events(
                 limit_per_stream=limit,
             )
         )
-    return events
+        source = "artifacts"
+    return events, source
 
 
 def _filter_observability_events(
@@ -929,6 +933,8 @@ async def get_observability_summary(
             detail="Observability record not found for this task run",
         )
     await _require_observability_access(record, _user)
+    metrics = get_metrics_emitter()
+    started = time.perf_counter()
 
     terminal_statuses = {"completed", "failed", "canceled", "cancelled", "timed_out"}
     run_status = getattr(record, "status", None)
@@ -950,6 +956,11 @@ async def get_observability_summary(
     base["supportsLiveStreaming"] = supports_live
     base["liveStreamStatus"] = live_stream_status
     base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
+    metrics.observe(
+        "livelogs.summary.latency",
+        value=time.perf_counter() - started,
+        tags={"stream": "livelogs"},
+    )
     return {"summary": base}
 
 
@@ -1070,14 +1081,20 @@ async def get_task_run_observability_events(
             detail="Observability record not found for this task run",
         )
     await _require_observability_access(record, _user)
+    metrics = get_metrics_emitter()
+    started = time.perf_counter()
 
     session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
-    events = await asyncio.to_thread(
-        _load_task_run_observability_events,
-        record=record,
-        session_record=session_record,
-        limit=limit,
-    )
+    try:
+        events, source = await asyncio.to_thread(
+            _load_task_run_observability_events,
+            record=record,
+            session_record=session_record,
+            limit=limit,
+        )
+    except Exception:
+        metrics.increment("livelogs.history.error", tags={"stream": "livelogs"})
+        raise
     events = _filter_observability_events(
         events,
         since=since,
@@ -1089,6 +1106,14 @@ async def get_task_run_observability_events(
     truncated = len(events) > limit
     if truncated:
         events = events[:limit]
+
+    metric_tags = {"stream": "livelogs", "source": source}
+    metrics.observe(
+        "livelogs.history.latency",
+        value=time.perf_counter() - started,
+        tags=metric_tags,
+    )
+    metrics.increment("livelogs.history.source", tags=metric_tags)
 
     return {
         "events": events,
