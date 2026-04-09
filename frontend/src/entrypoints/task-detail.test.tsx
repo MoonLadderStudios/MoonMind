@@ -1729,6 +1729,30 @@ describe('LiveLogsPanel', () => {
     state: 'succeeded',
     rawState: 'succeeded',
   };
+  const sessionTimelinePayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: {
+          logStreamingEnabled: true,
+          liveLogsSessionTimelineEnabled: true,
+        },
+      },
+    },
+  };
+  const legacyLiveLogsPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: {
+          logStreamingEnabled: true,
+          liveLogsSessionTimelineEnabled: false,
+        },
+      },
+    },
+  };
 
   const activeSummary = {
     summary: {
@@ -2230,6 +2254,191 @@ describe('LiveLogsPanel', () => {
     const boundaryRow = screen.getByText(/Epoch boundary reached/).closest('div');
     expect(boundaryRow?.getAttribute('data-kind')).toBe('session_reset_boundary');
     expect(boundaryRow?.getAttribute('data-stream')).toBe('session');
+  });
+
+  it('renders the session-aware timeline header with container and live status when the feature flag is enabled', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: true,
+              liveStreamStatus: 'live',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 4,
+                containerId: 'ctr-99',
+                threadId: 'thread-4',
+                activeTurnId: 'turn-7',
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'session',
+                kind: 'turn_started',
+                text: 'Turn started',
+                session_id: 'sess:wf-task-1:codex_cli',
+                session_epoch: 4,
+                container_id: 'ctr-99',
+                thread_id: 'thread-4',
+                active_turn_id: 'turn-7',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText('sess:wf-task-1:codex_cli')).toBeTruthy();
+      expect(screen.getByText('4')).toBeTruthy();
+      expect(screen.getByText('ctr-99')).toBeTruthy();
+      expect(screen.getByText('thread-4')).toBeTruthy();
+      expect(screen.getByText('turn-7')).toBeTruthy();
+      expect(screen.getByText('live')).toBeTruthy();
+    });
+  });
+
+  it('renders distinct timeline row types for approval and publication events when the feature flag is enabled', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'session',
+                kind: 'approval_requested',
+                text: 'Approval requested for command execution.',
+              },
+              {
+                sequence: 2,
+                timestamp: '2026-04-08T00:00:02Z',
+                stream: 'session',
+                kind: 'summary_published',
+                text: 'Session summary artifact published.',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Approval requested for command execution/)).toBeTruthy();
+      expect(screen.getByText(/Session summary artifact published/)).toBeTruthy();
+    });
+
+    const approvalRow = screen.getByText(/Approval requested for command execution/).closest('div');
+    const publicationRow = screen.getByText(/Session summary artifact published/).closest('div');
+    expect(approvalRow?.getAttribute('data-row-type')).toBe('approval');
+    expect(publicationRow?.getAttribute('data-row-type')).toBe('publication');
+  });
+
+  it('uses the legacy line viewer when the session timeline feature flag is disabled', async () => {
+    mockFetchSequence(activeExecution, activeSummary, 'legacy fallback line\n');
+    renderWithClient(<TaskDetailPage payload={legacyLiveLogsPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/legacy fallback line/)).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+  });
+
+  it('renders the timeline viewer with ANSI-aware output when the session timeline feature flag is enabled', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'stdout',
+                text: '\u001b[31mred output\u001b[0m\n',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText('red output')).toBeTruthy();
+    });
+
+    expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy();
+    expect(screen.queryByText('\u001b[31mred output\u001b[0m')).toBeNull();
+    expect(document.querySelector('[data-ansi-fragment="true"]')).toBeTruthy();
   });
 
   it('renders Stdout, Stderr, and Diagnostics panels', async () => {

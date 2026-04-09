@@ -117,6 +117,23 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
     }
 
 
+def _build_live_logs_feature_config() -> dict[str, object]:
+    """Build the grouped Live Logs feature flags for dashboard consumers."""
+
+    return {
+        "logStreamingEnabled": bool(
+            os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
+            not in ("0", "false", "no", "off")
+        ),
+        "liveLogsSessionTimelineEnabled": bool(
+            settings.feature_flags.live_logs_session_timeline_enabled
+        ),
+        "liveLogsSessionTimelineRollout": str(
+            settings.feature_flags.live_logs_session_timeline_rollout
+        ),
+    }
+
+
 def _build_dashboard_system_metadata() -> dict[str, str | None]:
     """Return operator-facing build metadata for the dashboard shell and runtime config."""
 
@@ -227,16 +244,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
-            "logStreamingEnabled": bool(
-                os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
-                not in ("0", "false", "no", "off")
-            ),
-            "liveLogsSessionTimelineEnabled": bool(
-                settings.feature_flags.live_logs_session_timeline_enabled
-            ),
-            "liveLogsSessionTimelineRollout": str(
-                settings.feature_flags.live_logs_session_timeline_rollout
-            ),
+            **_build_live_logs_feature_config(),
         },
         "system": {
             **system_metadata,

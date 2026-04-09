@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Anser from 'anser';
+import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
@@ -14,6 +16,8 @@ type DashboardConfig = {
       debugFieldsEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
+    liveLogsSessionTimelineEnabled?: boolean;
+    liveLogsSessionTimelineRollout?: string;
   };
   sources?: {
     temporal?: Record<string, string>;
@@ -845,10 +849,12 @@ type TimelineRow = {
   timestamp: string | null;
   sessionId: string | null;
   sessionEpoch: number | null;
+  containerId: string | null;
   threadId: string | null;
   turnId: string | null;
+  activeTurnId: string | null;
   metadata: Record<string, unknown>;
-  rowType: 'line' | 'boundary';
+  rowType: 'output' | 'system' | 'session' | 'approval' | 'publication' | 'boundary' | 'fallback';
 };
 
 function splitLogText(content: string): string[] {
@@ -894,17 +900,38 @@ function parseArtifactToRows(content: string): TimelineRow[] {
       timestamp: null,
       sessionId: null,
       sessionEpoch: null,
+      containerId: null,
       threadId: null,
       turnId: null,
+      activeTurnId: null,
       metadata: {},
-      rowType: 'line',
+      rowType: 'fallback',
     };
   });
 }
 
+function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
+  if (event.kind === 'session_reset_boundary') {
+    return 'boundary';
+  }
+  if (event.stream === 'system') {
+    return 'system';
+  }
+  if (event.stream === 'session') {
+    if ((event.kind ?? '').startsWith('approval_')) {
+      return 'approval';
+    }
+    if ((event.kind ?? '').endsWith('_published')) {
+      return 'publication';
+    }
+    return 'session';
+  }
+  return 'output';
+}
+
 function eventToTimelineRows(event: ObservabilityEvent): TimelineRow[] {
   const stream = event.stream as TimelineStream;
-  const rowType = event.kind === 'session_reset_boundary' ? 'boundary' : 'line';
+  const rowType = classifyTimelineRow(event);
   const lines = splitLogText(event.text);
   const sourceLines = lines.length > 0 ? lines : [event.text];
   return sourceLines.map((line, index) => ({
@@ -916,8 +943,10 @@ function eventToTimelineRows(event: ObservabilityEvent): TimelineRow[] {
     timestamp: event.timestamp ?? null,
     sessionId: event.session_id ?? null,
     sessionEpoch: event.session_epoch ?? null,
+    containerId: event.container_id ?? null,
     threadId: event.thread_id ?? null,
     turnId: event.turn_id ?? null,
+    activeTurnId: event.active_turn_id ?? null,
     metadata: event.metadata ?? {},
     rowType,
   }));
@@ -928,6 +957,133 @@ function mapEventsToTimelineRows(
 ): TimelineRow[] {
   if (!payload) return [];
   return payload.events.flatMap((event) => eventToTimelineRows(event));
+}
+
+function deriveSessionSnapshotFromEvent(
+  event: ObservabilityEvent,
+  previous: SessionSnapshot | null,
+): SessionSnapshot | null {
+  if (!event.session_id || typeof event.session_epoch !== 'number') {
+    return previous;
+  }
+  return {
+    sessionId: event.session_id,
+    sessionEpoch: event.session_epoch,
+    containerId: event.container_id ?? previous?.containerId ?? '',
+    threadId: event.thread_id ?? previous?.threadId ?? '',
+    activeTurnId: event.active_turn_id ?? previous?.activeTurnId ?? null,
+    status: event.kind ?? previous?.status,
+    latestSummaryRef: previous?.latestSummaryRef ?? null,
+    latestCheckpointRef: previous?.latestCheckpointRef ?? null,
+    latestControlEventRef: previous?.latestControlEventRef ?? null,
+    latestResetBoundaryRef: previous?.latestResetBoundaryRef ?? null,
+  };
+}
+
+function renderAnsiFragments(text: string): ReactNode {
+  const fragments = Anser.ansiToJson(text, { json: true, remove_empty: true });
+  if (fragments.length === 0) {
+    return text;
+  }
+  return fragments.map((fragment, index) => {
+    const style: Record<string, string> = {};
+    const foreground = fragment.fg_truecolor || fragment.fg;
+    const background = fragment.bg_truecolor || fragment.bg;
+    if (foreground) {
+      style.color = foreground;
+    }
+    if (background) {
+      style.backgroundColor = background;
+    }
+    if (fragment.decorations.includes('bold')) {
+      style.fontWeight = '700';
+    }
+    if (fragment.decorations.includes('italic')) {
+      style.fontStyle = 'italic';
+    }
+    const textDecoration = [
+      fragment.decorations.includes('underline') ? 'underline' : null,
+      fragment.decorations.includes('strikethrough') ? 'line-through' : null,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (textDecoration) {
+      style.textDecoration = textDecoration;
+    }
+    return (
+      <span key={`${fragment.content}-${index}`} data-ansi-fragment="true" style={style}>
+        {fragment.content}
+      </span>
+    );
+  });
+}
+
+function renderTimelineRowText(row: TimelineRow, timelineViewerEnabled: boolean): ReactNode {
+  if (!timelineViewerEnabled) {
+    return row.text;
+  }
+  if (row.stream === 'stdout' || row.stream === 'stderr') {
+    return renderAnsiFragments(row.text);
+  }
+  return row.text;
+}
+
+function getCopyableRowText(row: TimelineRow): string {
+  if (row.stream === 'stdout' || row.stream === 'stderr') {
+    return Anser.ansiToText(row.text, { remove_empty: true });
+  }
+  return row.text;
+}
+
+function renderTimelineRow(
+  row: TimelineRow,
+  wrapLines: boolean,
+  timelineViewerEnabled: boolean,
+): ReactNode {
+  const rowClasses = [
+    'live-logs-row',
+    `live-logs-row-${row.rowType}`,
+    `live-logs-stream-${row.stream}`,
+    wrapLines ? 'is-wrapped' : 'is-unwrapped',
+  ].join(' ');
+
+  if (timelineViewerEnabled && row.rowType === 'boundary') {
+    return (
+      <div
+        key={row.id}
+        className={rowClasses}
+      >
+        <div className="live-logs-boundary-label">Session reset boundary</div>
+        <div
+          className="live-logs-row-text"
+          data-stream={row.stream}
+          data-kind={row.kind ?? undefined}
+          data-row-type={row.rowType}
+        >
+          {row.text}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      key={row.id}
+      className={rowClasses}
+    >
+      {timelineViewerEnabled && row.kind ? (
+        <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+      ) : null}
+      <div
+        className="live-logs-row-text"
+        data-stream={row.stream}
+        data-kind={row.kind ?? undefined}
+        data-row-type={row.rowType}
+      >
+        {renderTimelineRowText(row, timelineViewerEnabled)}
+      </div>
+    </div>
+  );
 }
 
 type TaskRunRouteTemplates = {
@@ -1058,11 +1214,13 @@ function StepMetadataList({
 function StepObservabilityGroup({
   apiBase,
   logStreamingEnabled,
+  sessionTimelineEnabled,
   row,
   routes,
 }: {
   apiBase: string;
   logStreamingEnabled: boolean;
+  sessionTimelineEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   routes: TaskRunRouteTemplates;
 }) {
@@ -1093,6 +1251,7 @@ function StepObservabilityGroup({
         isTerminal={stepTerminal(row.status)}
         autoExpand
         routes={routes}
+        sessionTimelineEnabled={sessionTimelineEnabled}
       />
       <StaticLogPanel
         apiBase={apiBase}
@@ -1118,6 +1277,7 @@ function StepObservabilityGroup({
 function StepLedgerRowCard({
   apiBase,
   logStreamingEnabled,
+  sessionTimelineEnabled,
   row,
   runId,
   expanded,
@@ -1126,6 +1286,7 @@ function StepLedgerRowCard({
 }: {
   apiBase: string;
   logStreamingEnabled: boolean;
+  sessionTimelineEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   runId: string;
   expanded: boolean;
@@ -1198,6 +1359,7 @@ function StepLedgerRowCard({
             <StepObservabilityGroup
               apiBase={apiBase}
               logStreamingEnabled={logStreamingEnabled}
+              sessionTimelineEnabled={sessionTimelineEnabled}
               row={row}
               routes={routes}
             />
@@ -1222,12 +1384,14 @@ function LiveLogsPanel({
   isTerminal,
   autoExpand = false,
   routes,
+  sessionTimelineEnabled,
 }: {
   apiBase: string;
   taskRunId: string;
   isTerminal: boolean;
   autoExpand?: boolean;
   routes: TaskRunRouteTemplates;
+  sessionTimelineEnabled: boolean;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -1345,6 +1509,13 @@ function LiveLogsPanel({
       lastSeqRef.current = sequences && sequences.length > 0 ? Math.max(...sequences) : null;
       if (historyQuery.data?.sessionSnapshot) {
         setSessionSnapshot(historyQuery.data.sessionSnapshot);
+      } else {
+        const latestSessionEvent = [...(historyQuery.data?.events ?? [])]
+          .reverse()
+          .find((event) => event.session_id && typeof event.session_epoch === 'number');
+        if (latestSessionEvent) {
+          setSessionSnapshot((prev) => deriveSessionSnapshotFromEvent(latestSessionEvent, prev));
+        }
       }
     }
   }, [historyQuery.data, historyQuery.isSuccess]);
@@ -1397,23 +1568,7 @@ function LiveLogsPanel({
         setLogContent((prev) => {
           return [...prev, ...eventToTimelineRows(data)];
         });
-        if (data.session_id && data.session_epoch) {
-          const nextSessionId = data.session_id;
-          const nextSessionEpoch = data.session_epoch;
-          setSessionSnapshot((prev) => ({
-            ...(prev ?? {
-              sessionId: nextSessionId,
-              sessionEpoch: nextSessionEpoch,
-              containerId: data.container_id ?? '',
-              threadId: data.thread_id ?? '',
-            }),
-            sessionId: nextSessionId,
-            sessionEpoch: nextSessionEpoch,
-            containerId: data.container_id ?? prev?.containerId ?? '',
-            threadId: data.thread_id ?? prev?.threadId ?? '',
-            activeTurnId: data.active_turn_id ?? prev?.activeTurnId ?? null,
-          }));
-        }
+        setSessionSnapshot((prev) => deriveSessionSnapshotFromEvent(data, prev));
       } catch {
         // ignore malformed events
       }
@@ -1477,7 +1632,7 @@ function LiveLogsPanel({
 
   const handleCopy = () => {
     if (logContent.length === 0) return;
-    copyTextToClipboard(logContent.map((line) => line.text).join('\n'));
+    copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
   };
 
   const downloadUrl = taskRunRoute(
@@ -1487,12 +1642,18 @@ function LiveLogsPanel({
     { taskRunId },
   );
   const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
+  const liveStatusValue =
+    summaryQuery.data?.liveStreamStatus
+    ?? sessionSnapshot?.status
+    ?? (viewerState === 'live' ? 'live' : viewerState);
   const sessionBadges = sessionSnapshot
     ? [
         ['Session', sessionSnapshot.sessionId],
         ['Epoch', String(sessionSnapshot.sessionEpoch)],
+        ['Container', sessionSnapshot.containerId],
         ['Thread', sessionSnapshot.threadId],
         ['Active Turn', sessionSnapshot.activeTurnId ?? null],
+        ['Live', liveStatusValue],
       ].filter(([, value]) => value) as Array<[string, string]>
     : [];
 
@@ -1510,11 +1671,11 @@ function LiveLogsPanel({
       >
         <span>Live Logs</span>
       </summary>
-      <div className="stack">
+      <div className="stack live-logs-panel">
         {summaryErrorMessage ? <div className="notice error">{summaryErrorMessage}</div> : null}
         {expanded ? (
-          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+          <div className="button-group live-logs-toolbar">
+            <label className="live-logs-wrap-toggle">
               <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
               <span className="small">Wrap lines</span>
             </label>
@@ -1526,75 +1687,32 @@ function LiveLogsPanel({
           Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
         </p>
         {sessionBadges.length > 0 ? (
-          <div className="actions">
+          <div className="live-logs-session-badges">
             {sessionBadges.map(([label, value]) => (
-              <span key={`${label}-${value}`} className="card">
+              <span key={`${label}-${value}`} className="card live-logs-session-badge">
                 <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
               </span>
             ))}
           </div>
         ) : null}
-        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-          <div
-            style={{
-              background: '#111',
-              color: '#e8e8e8',
-              padding: '0.75rem',
-              fontSize: '0.7rem',
-              lineHeight: 1.4,
-              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLines ? 'break-all' : 'normal',
-              borderRadius: '4px',
-              margin: 0,
-              fontFamily: 'monospace',
-            }}
-          >
-            {logContent.length === 0 ? (
-              <div>{emptyLabel}</div>
-            ) : (
-              logContent.map((line) => (
-                line.rowType === 'boundary' ? (
-                  <div
-                    key={line.id}
-                    data-stream={line.stream}
-                    data-kind={line.kind ?? undefined}
-                    style={{
-                      margin: '0.35rem 0',
-                      padding: '0.5rem 0.75rem',
-                      border: '1px solid #f59e0b',
-                      background: 'rgba(245, 158, 11, 0.12)',
-                      color: '#fde68a',
-                      borderRadius: '4px',
-                    }}
-                  >
-                    {line.text}
-                  </div>
-                ) : (
-                  <div
-                    key={line.id}
-                    data-stream={line.stream}
-                    data-kind={line.kind ?? undefined}
-                    style={{
-                      borderLeft:
-                        line.stream === 'stdout'
-                          ? '2px solid #3b82f6'
-                          : line.stream === 'stderr'
-                            ? '2px solid #ef4444'
-                            : line.stream === 'system'
-                              ? '2px solid #22c55e'
-                              : line.stream === 'session'
-                                ? '2px solid #f59e0b'
-                                : '2px solid transparent',
-                      paddingLeft: '6px',
-                      opacity: line.stream === 'system' ? 0.7 : 1,
-                    }}
-                  >
-                    {line.text}
-                  </div>
-                )
-              ))
-            )}
-          </div>
+        <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
+          {logContent.length === 0 ? (
+            <div className="live-logs-empty">{emptyLabel}</div>
+          ) : sessionTimelineEnabled ? (
+            <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
+              <Virtuoso
+                style={{ height: 400 }}
+                data={logContent}
+                initialItemCount={logContent.length}
+                computeItemKey={(_, row) => row.id}
+                itemContent={(_, row) => renderTimelineRow(row, wrapLines, true)}
+              />
+            </div>
+          ) : (
+            <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
+              {logContent.map((line) => renderTimelineRow(line, wrapLines, false))}
+            </div>
+          )}
         </div>
       </div>
     </details>
@@ -2151,6 +2269,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
+  const sessionTimelineEnabled = cfg?.features?.liveLogsSessionTimelineEnabled !== false;
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
@@ -2625,6 +2744,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                       key={row.logicalStepId}
                       apiBase={payload.apiBase}
                       logStreamingEnabled={logStreamingEnabled}
+                      sessionTimelineEnabled={sessionTimelineEnabled}
                       row={row}
                       runId={stepsQuery.data?.runId || runId}
                       expanded={Boolean(expandedSteps[row.logicalStepId])}
@@ -2894,6 +3014,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                       isTerminal={isTerminalExecution}
                       autoExpand={showTaskRunAttachNotice}
                       routes={taskRunRoutes}
+                      sessionTimelineEnabled={sessionTimelineEnabled}
                     />
                     <StaticLogPanel
                       apiBase={payload.apiBase}

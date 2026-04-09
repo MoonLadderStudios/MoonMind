@@ -367,6 +367,21 @@ def test_build_runtime_config_session_timeline_rollout_is_exposed(monkeypatch) -
     assert config["features"]["liveLogsSessionTimelineRollout"] == "codex_managed"
 
 
+def test_build_runtime_config_groups_live_logs_feature_flags(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "internal",
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["logStreamingEnabled"] is True
+    assert config["features"]["liveLogsSessionTimelineEnabled"] is True
+    assert config["features"]["liveLogsSessionTimelineRollout"] == "internal"
+
+
 def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
     config = build_runtime_config("/tasks")
     assert "liveSession" not in config["sources"]["temporal"]
