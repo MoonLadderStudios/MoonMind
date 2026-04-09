@@ -24,7 +24,7 @@ def _read(path: Path) -> str:
 def test_canonical_dood_doc_links_phase0_tracker() -> None:
     dood_text = _read(DOOD_DOC)
 
-    assert "ManagedAgents-DockerOutOfDocker.md" in dood_text
+    assert "../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md" in dood_text
     assert TRACKER.exists()
 
 

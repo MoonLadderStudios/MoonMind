@@ -9,7 +9,7 @@ Implement Phase 0 of the Docker-out-of-Docker rollout by locking the canonical a
 
 ## Technical Context
 
-**Language/Version**: Markdown documentation plus Python 3.13 for validation tests  
+**Language/Version**: Markdown documentation plus Python 3.12+ for validation tests  
 **Primary Dependencies**: pytest, repository markdown docs, `pathlib`-based file assertions  
 **Storage**: Repository files only  
 **Testing**: Focused pytest unit test followed by `./tools/test_unit.sh`  
