@@ -265,6 +265,28 @@ class TestFeatureFlagsSettings:
         with pytest.raises(ValidationError):
             FeatureFlagsSettings(_env_file=None)
 
+    def test_live_logs_structured_history_enabled_defaults_true(self, monkeypatch):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False
+        )
+        monkeypatch.delenv("LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_structured_history_enabled is True
+
+    def test_live_logs_structured_history_enabled_accepts_unprefixed_env(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False
+        )
+        monkeypatch.setenv("LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", "false")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_structured_history_enabled is False
+
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)
