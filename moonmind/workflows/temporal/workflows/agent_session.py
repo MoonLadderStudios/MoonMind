@@ -245,6 +245,75 @@ class MoonMindAgentSessionWorkflow:
             normalized_reason = str(last_control_reason).strip()
             self._last_control_reason = normalized_reason or None
 
+    @workflow.signal(name="control_action")
+    def apply_control_action(self, payload: dict[str, Any] | None = None) -> None:
+        # Preserve replay compatibility for in-flight histories that already contain
+        # legacy control_action signal events and for internal child-workflow signals.
+        payload = dict(payload or {})
+        raw_action = payload.get("action")
+        action = str(raw_action).strip() if raw_action is not None else ""
+        if not action:
+            raise ValueError("control_action requires action")
+        if action not in CODEX_MANAGED_SESSION_CONTROL_ACTIONS:
+            raise ValueError(f"Unsupported managed-session control action: {action}")
+
+        reason_value = payload.get("reason")
+        container_value = payload.get("containerId") or payload.get("container_id")
+        thread_value = payload.get("threadId") or payload.get("thread_id")
+        active_turn_value = payload.get("activeTurnId") or payload.get("active_turn_id")
+
+        reason = str(reason_value).strip() or None if reason_value is not None else None
+        container_id = (
+            str(container_value).strip() or None if container_value is not None else None
+        )
+        thread_id = str(thread_value).strip() or None if thread_value is not None else None
+        active_turn_id = (
+            str(active_turn_value).strip() or None
+            if active_turn_value is not None
+            else None
+        )
+
+        binding = self._require_binding()
+        self._last_control_action = action
+        self._last_control_reason = reason
+
+        if action == "clear_session":
+            if thread_id is None:
+                raise ValueError("clear_session requires threadId")
+            self._status = AGENT_SESSION_STATUS_CLEARING
+            if self._container_id and self._thread_id:
+                cleared = CodexManagedSessionState(
+                    sessionId=binding.session_id,
+                    sessionEpoch=binding.session_epoch,
+                    containerId=self._container_id,
+                    threadId=self._thread_id,
+                    activeTurnId=self._active_turn_id,
+                ).clear_session(new_thread_id=thread_id)
+                next_epoch = cleared.session_epoch
+                self._thread_id = cleared.thread_id
+                self._active_turn_id = cleared.active_turn_id
+            else:
+                next_epoch = binding.session_epoch + 1
+                self._thread_id = thread_id
+                self._active_turn_id = None
+            if container_id is not None:
+                self._container_id = container_id
+            self._binding = binding.model_copy(update={"session_epoch": next_epoch})
+            self._status = AGENT_SESSION_STATUS_ACTIVE
+            return
+
+        if action in {"cancel_session", "terminate_session"}:
+            self._status = AGENT_SESSION_STATUS_TERMINATING
+            self._termination_requested = True
+            return
+
+        if container_id is not None:
+            self._container_id = container_id
+        if thread_id is not None:
+            self._thread_id = thread_id
+        if active_turn_id is not None:
+            self._active_turn_id = active_turn_id
+
     @workflow.query
     def get_status(self) -> dict[str, Any]:
         snapshot = CodexManagedSessionSnapshot(
@@ -426,7 +495,8 @@ class MoonMindAgentSessionWorkflow:
                 **continuity,
             }
         finally:
-            self._status = AGENT_SESSION_STATUS_ACTIVE
+            if self._status == AGENT_SESSION_STATUS_CLEARING:
+                self._status = AGENT_SESSION_STATUS_ACTIVE
 
     @clear_session_update.validator
     def validate_clear_session(self, payload: dict[str, Any] | None = None) -> None:

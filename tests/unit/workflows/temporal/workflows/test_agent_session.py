@@ -511,8 +511,119 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
         "agent_runtime.publish_session_artifacts",
     ]
     status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
     assert status["binding"]["sessionEpoch"] == 2
     assert status["threadId"] == "thread-2"
     assert status["activeTurnId"] is None
     assert status["lastControlAction"] == "clear_session"
     assert status["lastControlReason"] == "Reset stale context"
+
+
+def test_agent_session_legacy_control_action_signal_replays_clear_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    workflow.apply_control_action(
+        {
+            "action": "clear_session",
+            "reason": "Replay old clear event",
+            "threadId": "thread-2",
+        }
+    )
+
+    status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
+    assert status["binding"]["sessionEpoch"] == 2
+    assert status["threadId"] == "thread-2"
+    assert status["activeTurnId"] is None
+    assert status["lastControlAction"] == "clear_session"
+    assert status["lastControlReason"] == "Replay old clear event"
+
+
+@pytest.mark.asyncio
+async def test_agent_session_clear_session_update_preserves_concurrent_terminating_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        if activity_name == "agent_runtime.clear_session":
+            await workflow.terminate_session_update({"reason": "Shutdown now"})
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": None,
+                },
+                "status": "ready",
+                "imageRef": "moonmind:latest",
+                "controlUrl": "http://session-control",
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-epoch-2",
+                "latestCheckpointRef": "art-checkpoint-epoch-2",
+                "latestControlEventRef": "art-control-epoch-2",
+                "latestResetBoundaryRef": "art-reset-epoch-2",
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": None,
+                },
+                "publishedArtifactRefs": [],
+                "latestSummaryRef": "art-summary-epoch-2",
+                "latestCheckpointRef": "art-checkpoint-epoch-2",
+                "latestControlEventRef": "art-control-epoch-2",
+                "latestResetBoundaryRef": "art-reset-epoch-2",
+                "metadata": {},
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    await workflow.clear_session_update({"reason": "Reset stale context"})
+
+    status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
+    assert status["terminationRequested"] is True
