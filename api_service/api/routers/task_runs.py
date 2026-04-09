@@ -709,7 +709,12 @@ def _iter_historical_artifact_events(
                 ),
                 timestamp=str(control_payload.get("recordedAt") or ""),
                 session_record=session_record,
-                metadata={**control_payload, "artifactRef": session_record.latest_control_event_ref},
+                metadata={
+                    **control_payload,
+                    "artifactRef": session_record.latest_control_event_ref,
+                    "controlEventRef": session_record.latest_control_event_ref,
+                    "resetBoundaryRef": session_record.latest_reset_boundary_ref,
+                },
             )
 
     boundary_payload = _read_json_payload(
@@ -724,12 +729,27 @@ def _iter_historical_artifact_events(
             ),
             timestamp=str(boundary_payload.get("recordedAt") or ""),
             session_record=session_record,
-            metadata={**boundary_payload, "artifactRef": session_record.latest_reset_boundary_ref},
+            metadata={
+                **boundary_payload,
+                "artifactRef": session_record.latest_reset_boundary_ref,
+                "controlEventRef": session_record.latest_control_event_ref,
+                "resetBoundaryRef": session_record.latest_reset_boundary_ref,
+            },
         )
 
-    for kind, ref_attr, label in (
-        ("summary_published", session_record.latest_summary_ref, "Session summary published."),
-        ("checkpoint_published", session_record.latest_checkpoint_ref, "Session checkpoint published."),
+    for kind, ref_attr, label, ref_key in (
+        (
+            "summary_published",
+            session_record.latest_summary_ref,
+            "Session summary published.",
+            "summaryRef",
+        ),
+        (
+            "checkpoint_published",
+            session_record.latest_checkpoint_ref,
+            "Session checkpoint published.",
+            "checkpointRef",
+        ),
     ):
         artifact_path = _resolve_safe_artifact_path(ref_attr, artifacts_root)
         if artifact_path is None:
@@ -739,7 +759,7 @@ def _iter_historical_artifact_events(
             text=label,
             timestamp=(session_record.updated_at or session_record.started_at).isoformat(),
             session_record=session_record,
-            metadata={"artifactRef": ref_attr},
+            metadata={"artifactRef": ref_attr, ref_key: ref_attr},
         )
 
 

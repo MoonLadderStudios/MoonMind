@@ -1256,6 +1256,30 @@ button.secondary:hover {
   white-space: inherit;
 }
 
+.live-logs-artifact-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.live-logs-artifact-link {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  background: rgb(255 255 255 / 0.05);
+  color: rgb(232 234 240 / 0.92);
+  font-size: 0.66rem;
+  text-decoration: none;
+}
+
+.live-logs-artifact-link:hover,
+.live-logs-artifact-link:focus-visible {
+  background: rgb(255 255 255 / 0.12);
+  border-color: rgb(255 255 255 / 0.28);
+}
+
 .step-check-details {
   display: flex;
   flex-wrap: wrap;

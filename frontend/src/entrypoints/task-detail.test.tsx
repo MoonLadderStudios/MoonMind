@@ -1573,6 +1573,104 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('explains Live Logs as timeline history and Session Continuity as durable drill-down evidence', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            logStreamingEnabled: true,
+            liveLogsSessionTimelineEnabled: true,
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      targetRuntime: 'codex_cli',
+      taskRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            task_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 2,
+            grouped_artifacts: [
+              {
+                group_key: 'continuity',
+                title: 'Continuity',
+                artifacts: [{ artifact_id: 'art-summary', status: 'complete' }],
+              },
+            ],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: null,
+            latest_control_event_ref: null,
+            latest_reset_boundary_ref: null,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={codexPayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/timeline shows what happened/i)).toBeTruthy();
+      expect(screen.getByText(/durable evidence and drill-down/i)).toBeTruthy();
+    });
+  });
+
   it('routes Session Continuity follow-up and reset controls through the task-run session control API', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
@@ -2472,6 +2570,97 @@ describe('LiveLogsPanel', () => {
     const publicationRow = screen.getByText(/Session summary artifact published/).closest('div');
     expect(approvalRow?.getAttribute('data-row-type')).toBe('approval');
     expect(publicationRow?.getAttribute('data-row-type')).toBe('publication');
+  });
+
+  it('renders inline artifact links for publication and clear-reset timeline rows', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-08T00:00:01Z',
+                stream: 'session',
+                kind: 'summary_published',
+                text: 'Session summary artifact published.',
+                metadata: {
+                  summaryRef: 'art-summary',
+                },
+              },
+              {
+                sequence: 2,
+                timestamp: '2026-04-08T00:00:02Z',
+                stream: 'session',
+                kind: 'checkpoint_published',
+                text: 'Session checkpoint artifact published.',
+                metadata: {
+                  checkpointRef: 'art-checkpoint',
+                },
+              },
+              {
+                sequence: 3,
+                timestamp: '2026-04-08T00:00:03Z',
+                stream: 'session',
+                kind: 'session_cleared',
+                text: 'Session cleared.',
+                metadata: {
+                  controlEventRef: 'art-control',
+                  resetBoundaryRef: 'art-reset',
+                },
+              },
+              {
+                sequence: 4,
+                timestamp: '2026-04-08T00:00:04Z',
+                stream: 'session',
+                kind: 'session_reset_boundary',
+                text: 'Epoch boundary reached.',
+                metadata: {
+                  controlEventRef: 'art-control',
+                  resetBoundaryRef: 'art-reset',
+                },
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: /open summary artifact/i })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /open checkpoint artifact/i })).toBeTruthy();
+      expect(screen.getAllByRole('link', { name: /open control event artifact/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('link', { name: /open reset boundary artifact/i }).length).toBeGreaterThan(0);
+    });
+
+    expect(
+      screen.getByRole('link', { name: /open summary artifact/i }).getAttribute('href'),
+    ).toBe('/api/artifacts/art-summary/download');
+    expect(
+      screen.getByRole('link', { name: /open checkpoint artifact/i }).getAttribute('href'),
+    ).toBe('/api/artifacts/art-checkpoint/download');
   });
 
   it('uses the legacy line viewer when the session timeline feature flag is disabled', async () => {
