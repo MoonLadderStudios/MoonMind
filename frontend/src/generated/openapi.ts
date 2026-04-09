@@ -8474,7 +8474,10 @@ export interface operations {
     get_task_run_observability_events_api_task_runs__id__observability_events_get: {
         parameters: {
             query?: {
+                since?: number | null;
                 limit?: number;
+                stream?: ("stdout" | "stderr" | "system" | "session")[] | null;
+                kind?: string[] | null;
             };
             header?: never;
             path: {
