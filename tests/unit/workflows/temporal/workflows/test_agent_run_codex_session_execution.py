@@ -50,7 +50,11 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _managed_session_request() -> AgentExecutionRequest:
+def _managed_session_request(
+    *,
+    parameters: dict[str, Any] | None = None,
+    workspace_spec: dict[str, Any] | None = None,
+) -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="managed",
         agentId="codex",
@@ -66,8 +70,29 @@ def _managed_session_request() -> AgentExecutionRequest:
             "runtimeId": "codex_cli",
             "executionProfileRef": "codex-default",
         },
-        parameters={"publishMode": "none"},
+        parameters=parameters if parameters is not None else {"publishMode": "none"},
+        workspaceSpec=workspace_spec if workspace_spec is not None else {},
     )
+
+
+async def test_managed_session_request_preserves_explicit_empty_inputs() -> None:
+    request = _managed_session_request(parameters={}, workspace_spec={})
+
+    assert request.parameters == {}
+    assert request.workspace_spec == {}
+
+
+async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"branch": "main", "startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input["target_branch"] == "main"
+    assert "head_branch" not in activity_input
 
 
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
@@ -347,6 +372,150 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
         "agent_runtime.fetch_result",
         "agent_runtime.publish_artifacts",
     ]
+
+
+async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError(
+                "ManagedAgentAdapter should not be used for managedSession requests"
+            )
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            return AgentRunHandle(
+                runId="managed-session-run-publish",
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="completed",
+                startedAt=agent_run_module.workflow.now(),
+            )
+
+        async def status(self, run_id: str) -> AgentRunStatus:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId="codex",
+                status="completed",
+            )
+
+        async def fetch_result(self, run_id: str) -> AgentRunResult:
+            raise AssertionError(
+                "Terminal managed-session runs should fetch results through "
+                "agent_runtime.fetch_result"
+            )
+
+        async def cancel(self, run_id: str) -> AgentRunStatus:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId="codex",
+                status="canceled",
+            )
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
+        run.completion_event.set()
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        run.slot_assigned_event.set()
+        run._assigned_profile_id = execution_profile_ref or "codex-default"
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        return 1
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.fetch_result":
+            return {"summary": "Managed publish success", "metadata": {}}
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        if activity_name == "agent_runtime.load_session_snapshot":
+            return {
+                "binding": _managed_session_request().managed_session.model_dump(
+                    mode="json",
+                    by_alias=True,
+                ),
+                "status": "active",
+                "containerId": None,
+                "threadId": None,
+                "activeTurnId": None,
+                "terminationRequested": False,
+            }
+        if activity_name == "agent_runtime.prepare_turn_instructions":
+            return "Prepared publish instructions"
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "ManagedAgentAdapter",
+        _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "CodexSessionAdapter",
+        _FakeCodexSessionAdapter,
+    )
+    monkeypatch.setattr(run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal)
+    monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(
+        _managed_session_request(
+            parameters={"publishMode": "pr"},
+            workspace_spec={
+                "startingBranch": "main",
+                "targetBranch": "feature/recover-detached-head",
+            },
+        )
+    )
+
+    assert result.summary == "Managed publish success"
+    fetch_payload = next(
+        payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
+    )
+    assert fetch_payload["publish_mode"] == "pr"
+    assert fetch_payload["target_branch"] == "main"
+    assert fetch_payload["head_branch"] == "feature/recover-detached-head"
 
 
 async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(

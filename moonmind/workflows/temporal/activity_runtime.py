@@ -3141,6 +3141,10 @@ class TemporalAgentRuntimeActivities:
             or request.get("publish_base_branch")
             or request.get("publishBaseBranch")
         ) if isinstance(request, Mapping) else None
+        head_branch = (
+            request.get("head_branch")
+            or request.get("headBranch")
+        ) if isinstance(request, Mapping) else None
 
         async def _unused_profile_fetcher(**_kwargs: Any) -> dict[str, Any]:
             return {"profiles": []}
@@ -3213,6 +3217,8 @@ class TemporalAgentRuntimeActivities:
                 push_kwargs: dict[str, Any] = {
                     "target_branch": target_branch,
                 }
+                if isinstance(head_branch, str) and head_branch.strip():
+                    push_kwargs["head_branch"] = head_branch.strip()
                 if (
                     isinstance(raw_commit_message, str)
                     and raw_commit_message.strip()
@@ -3806,6 +3812,7 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         *,
         target_branch: str | None = None,
+        head_branch: str | None = None,
         commit_message: str | None = None,
     ) -> dict[str, Any]:
         """Push the workspace branch to origin.
@@ -3848,6 +3855,50 @@ class TemporalAgentRuntimeActivities:
             protected = {"main", "master", "HEAD"}
             if target_branch:
                 protected.add(target_branch)
+            if (
+                current_branch == "HEAD"
+                and head_branch
+                and head_branch not in protected
+            ):
+                repair_proc = await asyncio.create_subprocess_exec(
+                    *self._workspace_git_command(
+                        workspace, "checkout", "-B", head_branch,
+                    ),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=command_env,
+                )
+                try:
+                    repair_stdout, repair_stderr = await asyncio.wait_for(
+                        repair_proc.communicate(), timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    repair_proc.kill()
+                    await repair_proc.wait()
+                    return {
+                        "push_status": "failed",
+                        "push_error": "detached HEAD recovery timed out after 30s",
+                        "push_branch": "HEAD",
+                    }
+                if repair_proc.returncode != 0:
+                    repair_detail = (
+                        repair_stderr.decode("utf-8", errors="replace").strip()
+                        or repair_stdout.decode("utf-8", errors="replace").strip()
+                    )
+                    return {
+                        "push_status": "failed",
+                        "push_error": (
+                            "could not recover detached HEAD onto "
+                            f"'{head_branch}': {repair_detail}"
+                        ),
+                        "push_branch": "HEAD",
+                    }
+                logger.info(
+                    "Recovered detached HEAD for run %s onto branch '%s' before push",
+                    run_id,
+                    head_branch,
+                )
+                current_branch = head_branch
             if not current_branch or current_branch in protected:
                 logger.warning(
                     "Post-agent git push skipped for run %s: "

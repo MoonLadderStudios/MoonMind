@@ -408,6 +408,21 @@ class MoonMindAgentRun:
         ).strip()
         return branch or None
 
+    @staticmethod
+    def _request_workspace_target_branch(
+        request: AgentExecutionRequest,
+    ) -> str | None:
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, Mapping)
+            else {}
+        )
+        branch = str(
+            workspace_spec.get("targetBranch")
+            or ""
+        ).strip()
+        return branch or None
+
     def _build_managed_fetch_result_activity_input(
         self,
         request: AgentExecutionRequest,
@@ -442,6 +457,14 @@ class MoonMindAgentRun:
         ).strip()
         if target_branch:
             activity_input["target_branch"] = target_branch
+
+        head_branch = str(
+            params.get("targetBranch")
+            or self._request_workspace_target_branch(request)
+            or ""
+        ).strip()
+        if head_branch:
+            activity_input["head_branch"] = head_branch
 
         if _request_selected_skill(request) == "pr-resolver":
             activity_input["pr_resolver_expected"] = True
