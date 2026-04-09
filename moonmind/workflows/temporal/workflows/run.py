@@ -789,7 +789,8 @@ class MoonMindRunWorkflow:
         if normalized == "INCONCLUSIVE":
             return "Review inconclusive; accepted execution"
         if retry_count > 0:
-            return f"Approved after {retry_count} retry"
+            retry_label = "retry" if retry_count == 1 else "retries"
+            return f"Approved after {retry_count} {retry_label}"
         return "Approved by structured review"
 
     def _review_gate_active(
@@ -797,6 +798,7 @@ class MoonMindRunWorkflow:
         *,
         approval_policy: Any,
         tool_type: str,
+        tool_name: str,
     ) -> bool:
         if approval_policy is None or not getattr(approval_policy, "enabled", False):
             return False
@@ -805,7 +807,12 @@ class MoonMindRunWorkflow:
             for value in getattr(approval_policy, "skip_tool_types", ())
             if str(value).strip()
         }
-        return tool_type not in skip_tool_types
+        normalized_tool_type = str(tool_type or "").strip().lower()
+        normalized_tool_name = str(tool_name or "").strip().lower()
+        return (
+            normalized_tool_type not in skip_tool_types
+            and normalized_tool_name not in skip_tool_types
+        )
 
     def _inject_review_feedback_into_inputs(
         self,
@@ -823,7 +830,13 @@ class MoonMindRunWorkflow:
             issues,
         )
         if tool_type == "agent_runtime":
-            for key in ("instruction", "instructionsText", "instructions_text"):
+            for key in (
+                "instructions",
+                "instructionRef",
+                "instruction",
+                "instructionsText",
+                "instructions_text",
+            ):
                 instruction = merged_inputs.get(key)
                 if isinstance(instruction, str) and instruction.strip():
                     merged_inputs[key] = build_feedback_instruction(
@@ -1632,6 +1645,7 @@ class MoonMindRunWorkflow:
             review_gate_active = self._review_gate_active(
                 approval_policy=approval_policy,
                 tool_type=tool_type,
+                tool_name=tool_name,
             )
             max_review_attempts = (
                 int(getattr(approval_policy, "max_review_attempts", 0))
@@ -1922,14 +1936,15 @@ class MoonMindRunWorkflow:
                         **self._execute_kwargs_for_route(review_route),
                     )
                 )
+                step_attempt = self._step_attempt_for(node_id) or 0
                 review_artifact_ref = await self._write_json_artifact(
                     name=(
                         "reports/review_"
-                        f"{node_id}_attempt_{self._step_attempt_for(node_id) or 0}.json"
+                        f"{node_id}_attempt_{step_attempt}.json"
                     ),
                     payload={
                         "logicalStepId": node_id,
-                        "attempt": self._step_attempt_for(node_id),
+                        "attempt": step_attempt,
                         "reviewAttempt": current_review_attempt,
                         "request": review_request.to_payload(),
                         "verdict": review_verdict.to_payload(),

@@ -801,3 +801,142 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     ]
     assert written_review_payloads[0]["verdict"]["verdict"] == "FAIL"
     assert written_review_payloads[1]["verdict"]["verdict"] == "PASS"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_in_instruction_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    written_review_payloads: list[dict[str, Any]] = []
+    child_requests: list[Any] = []
+    review_artifact_ids = iter(("art_review_1", "art_review_2"))
+    review_verdicts = iter(
+        (
+            {
+                "verdict": "FAIL",
+                "confidence": 0.84,
+                "feedback": "Add the missing validation before retrying.",
+                "issues": [],
+            },
+            {
+                "verdict": "PASS",
+                "confidence": 0.93,
+                "feedback": None,
+                "issues": [],
+            },
+        )
+    )
+
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["nodes"] = [
+        {
+            "id": "delegate-agent",
+            "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+            "inputs": {
+                "targetRuntime": "jules",
+                "instructions": "Implement the requested change.",
+            },
+            "options": {},
+        }
+    ]
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
+        if activity_type == "step.review":
+            return next(review_verdicts)
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(plan_payload).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert workflow_name == "MoonMind.AgentRun"
+        child_requests.append(request)
+        return {
+            "summary": "Agent run completed",
+            "output_refs": ["art_output_1"],
+            "failure_class": None,
+        }
+
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="wf-run-review-agent-1",
+        run_id="run-review-agent-1",
+        task_queue="mm.workflow",
+        search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["owner-1"]},
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    assert len(child_requests) == 2
+    assert child_requests[0].instruction_ref == "Implement the requested change."
+    assert "REVIEW FEEDBACK (attempt 1)" in child_requests[1].instruction_ref
+    assert (
+        "Add the missing validation before retrying."
+        in child_requests[1].instruction_ref
+    )
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["attempt"] == 2
+    assert step["status"] == "succeeded"
+    assert step["checks"] == [
+        {
+            "kind": "approval_policy",
+            "status": "passed",
+            "summary": "Approved after 1 retry",
+            "retryCount": 1,
+            "artifactRef": "art_review_2",
+        }
+    ]
+    assert written_review_payloads[0]["attempt"] == 1
+    assert written_review_payloads[1]["attempt"] == 2
