@@ -2076,6 +2076,19 @@ describe('LiveLogsPanel', () => {
       },
     },
   };
+  const structuredHistoryDisabledPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: {
+          logStreamingEnabled: true,
+          liveLogsSessionTimelineEnabled: true,
+          liveLogsStructuredHistoryEnabled: false,
+        },
+      },
+    },
+  };
 
   const activeSummary = {
     summary: {
@@ -2906,6 +2919,41 @@ describe('LiveLogsPanel', () => {
     await waitFor(() => {
       expect(screen.getByText(/empty history fallback line/)).toBeTruthy();
     });
+  });
+
+  it('skips structured history and loads merged logs when structured history is disabled', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({ ok: true, json: async () => noStreamSummary } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({ ok: false, status: 500 } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => 'rollback merged history\n',
+        } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => codexExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={structuredHistoryDisabledPayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/rollback merged history/)).toBeTruthy();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/observability/events')),
+    ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/logs/merged')),
+    ).toBe(true);
   });
 
   it('derives session badges from camelCase historical event metadata', async () => {

@@ -20,6 +20,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionTurnResponse,
 )
 from moonmind.workflows.codex_session_timeouts import (
+    DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.adapters.codex_session_adapter import CodexSessionAdapter
@@ -316,7 +317,10 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert launch_request["artifactSpoolPath"].endswith(f"{binding.task_run_id}/artifacts")
     assert launch_request["codexHomePath"].endswith(f"{binding.task_run_id}/.moonmind/codex-home")
     assert launch_request["imageRef"] == "ghcr.io/moonladderstudios/moonmind:latest"
-    assert launch_request["turnCompletionTimeoutSeconds"] == 3600
+    assert (
+        launch_request["turnCompletionTimeoutSeconds"]
+        == DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
+    )
     assert launch_request["workspaceSpec"] == {"workspacePath": str(workspace_path)}
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions

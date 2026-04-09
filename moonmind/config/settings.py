@@ -1611,6 +1611,17 @@ class FeatureFlagsSettings(BaseSettings):
             "Allowed values: off, internal, codex_managed, all_managed."
         ),
     )
+    live_logs_structured_history_enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
+            "LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
+        ),
+        description=(
+            "Enable structured historical Live Logs loading through "
+            "/observability/events. Disable to force merged-tail rollback."
+        ),
+    )
 
     task_template_catalog: bool = Field(
         True,

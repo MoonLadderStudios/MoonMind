@@ -243,7 +243,7 @@ class CodexAppServerRpcClient:
 
     def wait_for_notification(
         self,
-        method: str,
+        method: str | None,
         *,
         predicate: Callable[[Mapping[str, Any]], bool] | None = None,
         timeout_seconds: float | None = None,
@@ -258,7 +258,7 @@ class CodexAppServerRpcClient:
             deadline = time.monotonic() + effective_timeout
         while True:
             for index, notification in enumerate(self._notifications):
-                if notification.get("method") != method:
+                if method is not None and notification.get("method") != method:
                     continue
                 if predicate is not None and not predicate(notification):
                     continue
@@ -268,11 +268,12 @@ class CodexAppServerRpcClient:
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    wait_label = "notification" if method is None else f"notification {method}"
                     raise TimeoutError(
-                        f"timed out waiting for codex app-server notification {method}"
+                        f"timed out waiting for codex app-server {wait_label}"
                     )
             message = self._read_message(timeout_seconds=remaining)
-            if message.get("method") == method and (
+            if (method is None or message.get("method") == method) and (
                 predicate is None or predicate(message)
             ):
                 return message
@@ -483,6 +484,68 @@ class CodexManagedSessionRuntime:
                     return text.strip()
         return ""
 
+    @staticmethod
+    def _find_turn_payload(
+        thread_payload: Mapping[str, Any],
+        *,
+        vendor_turn_id: str,
+    ) -> Mapping[str, Any] | None:
+        thread = thread_payload.get("thread")
+        if not isinstance(thread, Mapping):
+            return None
+        turns = thread.get("turns")
+        if not isinstance(turns, list):
+            return None
+        for turn in reversed(turns):
+            if not isinstance(turn, Mapping):
+                continue
+            if str(turn.get("id") or "").strip() != vendor_turn_id:
+                continue
+            return turn
+        return None
+
+    def _wait_for_turn_completion(
+        self,
+        *,
+        client: CodexAppServerRpcClient,
+        vendor_thread_id: str,
+        vendor_turn_id: str,
+    ) -> Mapping[str, Any]:
+        deadline = time.monotonic() + self._turn_completion_timeout_seconds
+        while True:
+            thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
+            turn_payload = self._find_turn_payload(
+                thread_payload,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if isinstance(turn_payload, Mapping):
+                status = str(turn_payload.get("status") or "").strip().lower()
+                if status == "completed":
+                    return thread_payload
+                if status in {"failed", "error", "interrupted", "canceled", "cancelled"}:
+                    raise RuntimeError(
+                        f"codex app-server turn {vendor_turn_id} ended with status {status}"
+                    )
+                if turn_payload.get("error") not in (None, ""):
+                    raise RuntimeError(
+                        f"codex app-server turn {vendor_turn_id} ended with an error"
+                    )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "timed out waiting for codex app-server turn completion "
+                    f"after {self._turn_completion_timeout_seconds} seconds"
+                )
+
+            try:
+                client.wait_for_notification(
+                    None,
+                    timeout_seconds=min(1.0, remaining),
+                )
+            except TimeoutError:
+                continue
+
     def _find_vendor_thread_path(self, vendor_thread_id: str) -> str | None:
         sessions_root = self._codex_home_path / "sessions"
         if not sessions_root.is_dir():
@@ -628,21 +691,11 @@ class CodexManagedSessionRuntime:
         self._save_state(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
 
-        try:
-            client.wait_for_notification(
-                "turn/completed",
-                predicate=lambda message: (
-                    isinstance(message.get("params"), Mapping)
-                    and message["params"].get("threadId") == vendor_thread_id
-                ),
-                timeout_seconds=self._turn_completion_timeout_seconds,
-            )
-        except TimeoutError as exc:
-            raise RuntimeError(
-                "timed out waiting for codex app-server turn/completed notification "
-                f"after {self._turn_completion_timeout_seconds} seconds"
-            ) from exc
-        thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
+        thread_payload = self._wait_for_turn_completion(
+            client=client,
+            vendor_thread_id=vendor_thread_id,
+            vendor_turn_id=vendor_turn_id,
+        )
         assistant_text = self._extract_assistant_text(thread_payload)
 
         state.active_turn_id = None
