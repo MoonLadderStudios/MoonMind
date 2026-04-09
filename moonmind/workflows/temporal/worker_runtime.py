@@ -611,24 +611,38 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         dispatcher = SkillActivityDispatcher()
 
-        # Build agent_runtime dependencies (store + supervisor + launcher + session controller)
-        (
-            run_store,
-            run_supervisor,
-            run_launcher,
-            session_controller,
-        ) = _build_agent_runtime_deps()
-        reconciled = await run_supervisor.reconcile()
-        if reconciled:
-            logger.info(
-                "Reconciled %d stale managed run records during startup",
-                len(reconciled),
-            )
-        session_reconciled = await session_controller.reconcile()
-        if session_reconciled:
-            logger.info(
-                "Reconciled %d managed session records during startup",
-                len(session_reconciled),
+        run_store = None
+        run_supervisor = None
+        run_launcher = None
+        session_controller = None
+        agent_runtime_activities = None
+        if topology.fleet == AGENT_RUNTIME_FLEET:
+            # Docker-backed managed-session reconciliation only belongs on the
+            # agent_runtime fleet, which owns the required privileges.
+            (
+                run_store,
+                run_supervisor,
+                run_launcher,
+                session_controller,
+            ) = _build_agent_runtime_deps()
+            reconciled = await run_supervisor.reconcile()
+            if reconciled:
+                logger.info(
+                    "Reconciled %d stale managed run records during startup",
+                    len(reconciled),
+                )
+            session_reconciled = await session_controller.reconcile()
+            if session_reconciled:
+                logger.info(
+                    "Reconciled %d managed session records during startup",
+                    len(session_reconciled),
+                )
+            agent_runtime_activities = TemporalAgentRuntimeActivities(
+                artifact_service=artifact_service,
+                run_store=run_store,
+                run_supervisor=run_supervisor,
+                run_launcher=run_launcher,
+                session_controller=session_controller,
             )
 
         bindings = build_worker_activity_bindings(
@@ -646,13 +660,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             integration_activities=TemporalIntegrationActivities(
                 artifact_service=artifact_service
             ),
-            agent_runtime_activities=TemporalAgentRuntimeActivities(
-                artifact_service=artifact_service,
-                run_store=run_store,
-                run_supervisor=run_supervisor,
-                run_launcher=run_launcher,
-                session_controller=session_controller,
-            ),
+            agent_runtime_activities=agent_runtime_activities,
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
                 proposal_service_factory=_build_proposal_service_factory(),
