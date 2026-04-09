@@ -1256,6 +1256,13 @@ button.secondary:hover {
   white-space: inherit;
 }
 
+.step-check-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.3rem;
+}
+
 @media (max-width: 720px) {
   .step-row-card {
     padding: 0.85rem;

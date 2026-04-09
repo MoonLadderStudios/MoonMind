@@ -503,6 +503,74 @@ describe('Task Detail Entrypoint', () => {
     ).toBe(true);
   });
 
+  it('renders retry counts and review artifact refs inside the Checks section', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Review detail task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...latestStepsSnapshot,
+            steps: latestStepsSnapshot.steps.map((step) =>
+              step.logicalStepId === 'apply'
+                ? {
+                    ...step,
+                    status: 'reviewing',
+                    checks: [
+                      {
+                        kind: 'approval_policy',
+                        status: 'failed',
+                        summary: 'Reviewer requested another retry',
+                        retryCount: 2,
+                        artifactRef: 'art-review-2',
+                      },
+                    ],
+                  }
+                : step,
+            ),
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Retry count: 2')).toBeTruthy();
+      expect(screen.getByText('art-review-2')).toBeTruthy();
+      expect(screen.getAllByText('approval policy: failed')[0]).toBeTruthy();
+    });
+  });
+
   it('resolves step-level task-run routes against apiBase', async () => {
     const apiBasePayload: BootPayload = {
       ...stepsPayload,

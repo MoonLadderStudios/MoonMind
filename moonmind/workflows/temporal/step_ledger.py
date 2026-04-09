@@ -190,6 +190,40 @@ def update_step_row(
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 
 
+def upsert_step_check(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+    *,
+    kind: str,
+    status: str,
+    summary: str | None = None,
+    retry_count: int = 0,
+    artifact_ref: str | None = None,
+) -> dict[str, Any]:
+    for row in rows:
+        if row.get("logicalStepId") != logical_step_id:
+            continue
+        checks = row.get("checks")
+        if not isinstance(checks, list):
+            checks = []
+        check_payload = {
+            "kind": kind,
+            "status": status,
+            "summary": summary,
+            "retryCount": retry_count,
+            "artifactRef": artifact_ref,
+        }
+        for index, existing in enumerate(checks):
+            if isinstance(existing, Mapping) and existing.get("kind") == kind:
+                checks[index] = check_payload
+                row["checks"] = checks
+                return check_payload
+        checks.append(check_payload)
+        row["checks"] = checks
+        return check_payload
+    raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+
 def refresh_ready_steps(rows: list[dict[str, Any]], *, updated_at: datetime) -> None:
     statuses = {
         str(row.get("logicalStepId")): str(row.get("status") or "")

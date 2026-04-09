@@ -1158,6 +1158,23 @@ function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema
   );
 }
 
+function StepCheckDetails({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
+  return (
+    <div className="step-check-details">
+      {typeof check.retryCount === 'number' ? (
+        <span className="small">Retry count: {check.retryCount}</span>
+      ) : null}
+      {check.artifactRef ? (
+        <span className="small">
+          Review artifact: <code className="text-xs break-all">{check.artifactRef}</code>
+        </span>
+      ) : (
+        <span className="small">No review artifact linked yet.</span>
+      )}
+    </div>
+  );
+}
+
 function StepArtifactsList({
   artifacts,
 }: {
@@ -1347,6 +1364,7 @@ function StepLedgerRowCard({
                   <li key={`${check.kind}-${check.status}-${index}`}>
                     <StepCheckBadge check={check} />
                     {check.summary ? <span className="small"> {check.summary}</span> : null}
+                    <StepCheckDetails check={check} />
                   </li>
                 ))}
               </ul>

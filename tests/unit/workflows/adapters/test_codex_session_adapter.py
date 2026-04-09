@@ -297,6 +297,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
+    assert persisted_record.workspace_path == str(workspace_path)
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"
@@ -694,6 +695,64 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
     assert status.status == "canceled"
     assert result.failure_class == "user_error"
     assert result.summary == "Canceled Codex managed-session turn."
+
+
+async def test_save_run_state_persists_blank_workspace_path_as_none(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=AsyncMock(),
+        launch_session=AsyncMock(),
+        session_status=AsyncMock(),
+        send_turn=AsyncMock(),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(),
+        publish_remote_artifacts=AsyncMock(),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=binding.task_run_id,
+        agent_id="codex",
+        managed_run_id=binding.task_run_id,
+        binding=binding,
+        workspace_path="   ",
+        locator={
+            "sessionId": binding.session_id,
+            "sessionEpoch": binding.session_epoch,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Completed",
+            "metadata": {},
+        },
+        status="completed",
+        started_at=datetime.now(tz=UTC),
+        finished_at=datetime.now(tz=UTC),
+    )
+
+    persisted_record = run_store.load(binding.task_run_id)
+
+    assert persisted_record is not None
+    assert persisted_record.workspace_path is None
 
 
 async def test_terminate_session_uses_remote_session_control_surface(
