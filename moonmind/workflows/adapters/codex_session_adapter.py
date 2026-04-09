@@ -45,6 +45,9 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
+from moonmind.workflows.codex_session_timeouts import (
+    MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
+)
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
@@ -668,14 +671,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     ) -> int:
         timeout_policy = request.timeout_policy if isinstance(request.timeout_policy, dict) else {}
         raw_timeout = timeout_policy.get("timeout_seconds")
+        timeout_seconds: int | None = None
         if raw_timeout is not None:
             try:
                 timeout_seconds = int(float(raw_timeout))
-            except (TypeError, ValueError):
-                timeout_seconds = 0
-            if timeout_seconds > 0:
-                return timeout_seconds
-        return max(1, int(profile.default_timeout_seconds))
+            except (TypeError, ValueError, OverflowError):
+                timeout_seconds = None
+        if timeout_seconds is None or timeout_seconds < 1:
+            timeout_seconds = profile.default_timeout_seconds
+        # Keep the runtime wait budget inside the fixed Temporal activity budget.
+        return min(timeout_seconds, MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
 
     def _profile_for_launch(
         self,
@@ -700,6 +705,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             defaultModel=profile.get("default_model") or runtime_default_model,
             modelOverrides=profile.get("model_overrides") or {},
             defaultEffort=profile.get("default_effort") or runtime_default_effort,
+            defaultTimeoutSeconds=profile.get("default_timeout_seconds") or profile.get(
+                "defaultTimeoutSeconds", 3600
+            ),
             envOverrides=launch_context.delta_env_overrides,
             envTemplate=profile.get("env_template") or {},
             fileTemplates=profile.get("file_templates") or [],
