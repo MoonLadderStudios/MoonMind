@@ -151,6 +151,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
             assert describe_body["artifactRefs"] == ["artifact://input/123"]
             query_state[workflow_id] = {
                 "get_progress": {
+                    "runId": "run-query-latest",
                     "total": 2,
                     "pending": 1,
                     "ready": 0,
@@ -166,7 +167,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
                 },
                 "get_step_ledger": {
                     "workflowId": workflow_id,
-                    "runId": describe_body["runId"],
+                    "runId": "run-query-latest",
                     "runScope": "latest",
                     "steps": [
                         {
@@ -209,8 +210,11 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
             describe_response = await client.get(f"/api/executions/{workflow_id}")
             assert describe_response.status_code == 200
             describe_body = describe_response.json()
+            assert describe_body["runId"] == "run-query-latest"
+            assert describe_body["temporalRunId"] == "run-query-latest"
             assert describe_body["progress"]["running"] == 1
             assert describe_body["progress"]["currentStepTitle"] == "Run tests"
+            assert "runId" not in describe_body["progress"]
             assert describe_body["stepsHref"] == f"/api/executions/{workflow_id}/steps"
             original_temporal_run_id = describe_response.json()["temporalRunId"]
 
@@ -218,6 +222,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
             assert steps_response.status_code == 200
             steps_body = steps_response.json()
             assert steps_body["workflowId"] == workflow_id
+            assert steps_body["runId"] == "run-query-latest"
             assert steps_body["runScope"] == "latest"
             assert steps_body["steps"][0]["refs"]["taskRunId"] == "task-run-123"
 
@@ -277,6 +282,9 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
             assert rerun_response.status_code == 200
             assert rerun_response.json()["accepted"] is True
             assert rerun_response.json()["applied"] == "continue_as_new"
+            latest_rerun_run_id = rerun_response.json()["execution"]["runId"]
+            query_state[workflow_id]["get_progress"]["runId"] = latest_rerun_run_id
+            query_state[workflow_id]["get_step_ledger"]["runId"] = latest_rerun_run_id
 
             rerun_detail = await client.get(f"/api/executions/{workflow_id}")
             assert rerun_detail.status_code == 200
@@ -285,6 +293,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
             assert rerun_execution["workflowId"] == workflow_id
             assert rerun_execution["detailHref"] == f"/tasks/{workflow_id}"
             assert rerun_execution["temporalRunId"] != original_temporal_run_id
+            assert rerun_execution["temporalRunId"] == latest_rerun_run_id
 
             pause_response = await client.post(
                 f"/api/executions/{workflow_id}/signal",

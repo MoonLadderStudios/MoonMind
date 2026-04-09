@@ -155,6 +155,25 @@ def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch)
     assert progress["pending"] == 1
 
 
+def test_run_progress_query_exposes_current_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=_ordered_nodes(),
+        dependency_map=_dependency_map(),
+        updated_at=now,
+    )
+
+    progress = workflow.get_progress()
+
+    assert progress["runId"] == "run-1"
+    assert progress["total"] == 2
+
+
 def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()

@@ -743,7 +743,7 @@ async def _load_execution_progress(
     *,
     temporal_client: Client,
     workflow_id: str,
-) -> ExecutionProgressModel | None:
+) -> tuple[ExecutionProgressModel | None, str | None]:
     try:
         payload = await query_workflow(temporal_client, workflow_id, "get_progress")
     except Exception as exc:
@@ -753,13 +753,21 @@ async def _load_execution_progress(
             exc,
             exc_info=True,
         )
-        return None
+        return None, None
 
     if payload is None:
-        return None
+        return None, None
+
+    queried_run_id = None
+    if isinstance(payload, Mapping):
+        queried_run_id = (
+            _coerce_temporal_scalar(payload.get("runId"))
+            or _coerce_temporal_scalar(payload.get("run_id"))
+            or None
+        )
 
     try:
-        return ExecutionProgressModel.model_validate(payload)
+        return ExecutionProgressModel.model_validate(payload), queried_run_id
     except ValidationError as exc:
         logger.warning(
             "Invalid execution progress payload for %s: %s",
@@ -767,7 +775,7 @@ async def _load_execution_progress(
             exc,
             exc_info=True,
         )
-        return None
+        return None, None
 
 
 async def _load_execution_step_ledger(
@@ -2164,11 +2172,15 @@ async def describe_execution(
     execution = await _enrich_execution_dependencies(execution, service=service)
     execution = await _hydrate_provider_profile_metadata(execution, session)
     if execution.workflow_type == "MoonMind.Run":
-        progress = await _load_execution_progress(
+        progress, queried_run_id = await _load_execution_progress(
             temporal_client=temporal_client,
             workflow_id=canonical_workflow_id,
         )
-        execution = execution.model_copy(update={"progress": progress})
+        update: dict[str, object] = {"progress": progress}
+        if queried_run_id:
+            update["run_id"] = queried_run_id
+            update["temporal_run_id"] = queried_run_id
+        execution = execution.model_copy(update=update)
     if not execution.task_run_id:
         task_run_id = await asyncio.to_thread(
             _resolve_task_run_id_from_managed_store,

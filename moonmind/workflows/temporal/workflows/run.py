@@ -4093,10 +4093,12 @@ class MoonMindRunWorkflow:
 
     @workflow.query
     def get_progress(self) -> dict[str, Any]:
-        return ExecutionProgressModel.model_validate(self._progress_snapshot).model_dump(
+        payload = ExecutionProgressModel.model_validate(self._progress_snapshot).model_dump(
             by_alias=True,
             mode="json",
         )
+        payload["runId"] = workflow.info().run_id
+        return payload
 
     @workflow.query
     def get_step_ledger(self) -> dict[str, Any]:

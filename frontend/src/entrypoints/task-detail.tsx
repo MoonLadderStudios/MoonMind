@@ -2354,11 +2354,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     enabled: Boolean(execution?.stepsHref),
     refetchInterval: liveUpdates && execution?.stepsHref ? detailPoll : false,
   });
+  const latestRunId = stepsQuery.data?.runId || runId;
 
   const artifactsQuery = useQuery({
-    queryKey: ['task-detail-artifacts', namespace, workflowId, runId],
+    queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId],
     queryFn: async () => {
-      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(runId)}/artifacts`;
+      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts`;
       const response = await fetch(path);
       if (!response.ok) {
         throw new Error(`Artifacts: ${response.statusText}`);
@@ -2366,9 +2367,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       return ArtifactListSchema.parse(await response.json());
     },
     enabled:
-      Boolean(namespace && workflowId && runId)
+      Boolean(namespace && workflowId && latestRunId)
       && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
-    refetchInterval: liveUpdates && namespace && workflowId && runId ? detailPoll : false,
+    refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
   });
 
   const runSummaryQuery = useQuery({
@@ -2417,7 +2418,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-steps', workflowId] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, runId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
   };
 
@@ -2653,7 +2654,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.scheduledFor ? <Card label="Scheduled For">{formatWhen(execution.scheduledFor)}</Card> : null}
             <Card label="Created">{formatWhen(execution.createdAt)}</Card>
             <Card label="Latest Run">
-              <code className="text-xs break-all">{runId || '—'}</code>
+              <code className="text-xs break-all">{latestRunId || '—'}</code>
             </Card>
             {resolvedTaskRunId ? (
               <Card label="Task Run">
@@ -2741,7 +2742,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <div>
                   <h3>Steps</h3>
                   <p className="small">
-                    Latest run <code className="text-xs break-all">{stepsQuery.data?.runId || runId || '—'}</code>
+                    Latest run <code className="text-xs break-all">{latestRunId || '—'}</code>
                   </p>
                 </div>
                 {stepsQuery.data ? (
@@ -2763,7 +2764,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                       logStreamingEnabled={logStreamingEnabled}
                       sessionTimelineEnabled={sessionTimelineEnabled}
                       row={row}
-                      runId={stepsQuery.data?.runId || runId}
+                      runId={latestRunId}
                       expanded={Boolean(expandedSteps[row.logicalStepId])}
                       onToggle={() => toggleStep(row.logicalStepId)}
                       routes={taskRunRoutes}

@@ -1324,6 +1324,56 @@ def test_describe_execution_includes_latest_run_progress() -> None:
     }
 
 
+def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "runId": "run-99",
+            "total": 3,
+            "pending": 0,
+            "ready": 1,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runId"] == "run-99"
+    assert payload["temporalRunId"] == "run-99"
+    assert payload["progress"] == {
+        "total": 3,
+        "pending": 0,
+        "ready": 1,
+        "running": 1,
+        "awaitingExternal": 0,
+        "reviewing": 0,
+        "succeeded": 1,
+        "failed": 0,
+        "skipped": 0,
+        "canceled": 0,
+        "currentStepTitle": "Run tests",
+        "updatedAt": "2026-04-08T12:00:00Z",
+    }
+    assert "runId" not in payload["progress"]
+
+
 def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
     app = FastAPI()
     app.include_router(router)

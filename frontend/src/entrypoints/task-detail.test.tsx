@@ -322,6 +322,76 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('loads execution-wide artifacts against the latest run exposed by the step ledger', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Run rotation task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...latestStepsSnapshot,
+            runId: '02-run',
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/default/test-123/02-run/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.includes('/executions/default/test-123/01-run/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) =>
+          String(url).includes('/executions/default/test-123/02-run/artifacts'),
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).includes('/executions/default/test-123/01-run/artifacts'),
+      ),
+    ).toBe(false);
+  });
+
   it('expands a bound step into grouped step details and lazily attaches row-scoped observability', async () => {
     const mockExecution = {
       taskId: 'test-123',
