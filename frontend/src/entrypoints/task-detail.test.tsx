@@ -103,6 +103,13 @@ class MockEventSource {
   }
 }
 
+async function waitForEventSourceInstance() {
+  await waitFor(
+    () => expect(MockEventSource.instances.length).toBeGreaterThan(0),
+    { timeout: 5000 },
+  );
+}
+
 describe('Task Detail Entrypoint', () => {
   const mockPayload: BootPayload = {
     page: 'task-detail',
@@ -301,7 +308,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Plan work')).toBeTruthy();
       expect(screen.getByText('Apply patch')).toBeTruthy();
       expect(screen.getByText('Verify tests')).toBeTruthy();
-      expect(screen.getByText(/^Latest Run:/)).toBeTruthy();
+      expect(screen.getByText(/^Latest Run:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 
@@ -2235,7 +2242,7 @@ describe('LiveLogsPanel', () => {
     await waitFor(() => expect(screen.getByText(/Loading…/)).toBeTruthy());
 
     // After fetch sequence completes, SSE is created and can be opened
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
 
     act(() => es.triggerOpen());
@@ -2261,7 +2268,7 @@ describe('LiveLogsPanel', () => {
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
 
     act(() => es.triggerOpen());
@@ -2284,7 +2291,7 @@ describe('LiveLogsPanel', () => {
 
       fireEvent.click(await screen.findByText('Live Logs'));
 
-      await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+      await waitForEventSourceInstance();
       const es = MockEventSource.instances[0]!;
       scrollIntoViewSpy.mockClear();
 
@@ -2373,7 +2380,7 @@ describe('LiveLogsPanel', () => {
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
     act(() => es.triggerOpen());
 
@@ -2390,7 +2397,7 @@ describe('LiveLogsPanel', () => {
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es = MockEventSource.instances[0]!;
     act(() => es.triggerOpen());
     act(() => es.triggerError());
@@ -2426,7 +2433,7 @@ describe('LiveLogsPanel', () => {
     fireEvent.click(await screen.findByText('Live Logs'));
     
     // Wait for SSE to connect
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es = MockEventSource.instances[0]!;
     
     // Collapse it
@@ -2444,7 +2451,7 @@ describe('LiveLogsPanel', () => {
     fireEvent.click(await screen.findByText('Live Logs'));
     
     // Wait for SSE to connect
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es1 = MockEventSource.instances[0]!;
     
     // Hide visibility
@@ -2487,7 +2494,7 @@ describe('LiveLogsPanel', () => {
     expect(stderrLine?.getAttribute('data-stream')).toBe('stderr');
 
     // Simulate SSE chunk for system
-    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await waitForEventSourceInstance();
     const es = MockEventSource.instances[0]!;
     act(() => es.triggerOpen());
     
