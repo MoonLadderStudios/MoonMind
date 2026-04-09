@@ -12,6 +12,7 @@ import pytest
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
+from temporalio.service import RPCError
 
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import (
@@ -221,12 +222,24 @@ async def test_run_workflow_duplicate_signal_is_idempotent(
 
             # Send the same signal three times.
             payload = _make_dependency_resolved_payload("dep-dup-1")
-            await handle.signal("DependencyResolved", payload)
-            await handle.signal("DependencyResolved", payload)
-            await handle.signal("DependencyResolved", payload)
+            successful_signals = 0
+            completed_workflow_rejections = 0
+            for _ in range(3):
+                try:
+                    await handle.signal("DependencyResolved", payload)
+                    successful_signals += 1
+                except RPCError as exc:
+                    # The first signal can satisfy the dependency gate fast
+                    # enough that later duplicates race with workflow
+                    # completion in the test server.
+                    if "Completed workflow" not in str(exc):
+                        raise
+                    completed_workflow_rejections += 1
 
             result = await handle.result()
 
+    assert successful_signals >= 1
+    assert successful_signals + completed_workflow_rejections == 3
     assert result["status"] == "success"
     final_dependency_memo = next(
         memo for memo in reversed(memo_updates) if "dependencies" in memo

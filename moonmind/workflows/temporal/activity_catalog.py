@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from moonmind.config.settings import TemporalSettings, settings
+from moonmind.workflows.codex_session_timeouts import (
+    SEND_TURN_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS,
+    SEND_TURN_ACTIVITY_SCHEDULE_TO_CLOSE_SECONDS,
+    SEND_TURN_ACTIVITY_START_TO_CLOSE_SECONDS,
+)
 from moonmind.workflows.skills.skill_plan_contracts import (
     SkillDefinition,
     SkillPolicies,
@@ -804,7 +809,11 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(3600, 3900, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(
+                SEND_TURN_ACTIVITY_START_TO_CLOSE_SECONDS,
+                SEND_TURN_ACTIVITY_SCHEDULE_TO_CLOSE_SECONDS,
+                heartbeat_timeout_seconds=SEND_TURN_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS,
+            ),
             retries=_activity_retries(max_attempts=1, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
