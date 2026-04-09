@@ -439,14 +439,19 @@ function decodeTaskPathSegment(segment: string | null | undefined): string | nul
   }
 }
 
-function expandRouteTemplate(
+export function expandRouteTemplate(
   template: string | null | undefined,
   params: Record<string, string | null | undefined>,
 ): string | null {
   if (!template) return null;
-  return Object.entries(params).reduce((path, [key, value]) => {
-    return path.replaceAll(`{${key}}`, encodeURIComponent(value ?? ''));
-  }, template);
+  let path = template;
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    path = path.replaceAll(`{${key}}`, encodeURIComponent(value));
+  }
+  return path.includes('{') && path.includes('}') ? null : path;
 }
 
 function joinApiBasePath(apiBase: string, path: string): string {

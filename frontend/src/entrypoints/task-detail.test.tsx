@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
-import { getSessionProjectionRefetchInterval, TaskDetailPage } from './task-detail';
+import { expandRouteTemplate, getSessionProjectionRefetchInterval, TaskDetailPage } from './task-detail';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -204,6 +204,20 @@ describe('Task Detail Entrypoint', () => {
     window.history.pushState({}, 'Test', '/tasks/test-123?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
+  });
+
+  it('returns null for route templates with missing parameters', () => {
+    expect(
+      expandRouteTemplate('/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}', {
+        taskRunId: 'task-run-1',
+        sessionId: null,
+      }),
+    ).toBeNull();
+    expect(
+      expandRouteTemplate('/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}', {
+        taskRunId: 'task-run-1',
+      }),
+    ).toBeNull();
   });
 
   it('renders a Steps section above Timeline and Artifacts and loads steps before execution-wide artifacts', async () => {
