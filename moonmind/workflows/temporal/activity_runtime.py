@@ -2824,7 +2824,7 @@ class TemporalAgentRuntimeActivities:
         if instruction_ref:
             if not workspace_path_raw:
                 raise TemporalActivityRuntimeError(
-                    "payload.workspacePath is required when request.instructionRef is set"
+                    "payload.workspace_path or payload.workspacePath is required when request.instructionRef is set"
                 )
             from moonmind.rag.context_injection import ContextInjectionService
 

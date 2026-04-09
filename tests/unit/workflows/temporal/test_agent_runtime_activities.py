@@ -1497,6 +1497,31 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match=(
+            "payload.workspace_path or payload.workspacePath is required "
+            "when request.instructionRef is set"
+        ),
+    ):
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "instructionRef": "artifact:instructions",
+                    "parameters": {"publishMode": "none"},
+                }
+            }
+        )
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
