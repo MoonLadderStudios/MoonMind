@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -200,6 +201,41 @@ class TestPushWorkspaceBranch:
             "-B",
             "feature/recover-detached-head",
         )
+
+    @pytest.mark.asyncio
+    async def test_push_detached_head_recovery_timeout_kills_checkout(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        repair_proc = MagicMock()
+        repair_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
+        repair_proc.wait = AsyncMock(return_value=0)
+        repair_proc.kill = MagicMock()
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # rev-parse
+                proc = MagicMock()
+                proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
+                proc.returncode = 0
+                return proc
+            if call_count == 2:  # checkout -B feature branch
+                return repair_proc
+            raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recover-detached-head",
+            )
+
+        assert result["push_status"] == "failed"
+        assert result["push_branch"] == "HEAD"
+        assert result["push_error"] == "detached HEAD recovery timed out after 30s"
+        repair_proc.kill.assert_called_once_with()
+        repair_proc.wait.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_push_protected_target_branch(self):

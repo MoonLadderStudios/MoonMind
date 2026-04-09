@@ -70,9 +70,29 @@ def _managed_session_request(
             "runtimeId": "codex_cli",
             "executionProfileRef": "codex-default",
         },
-        parameters=parameters or {"publishMode": "none"},
-        workspaceSpec=workspace_spec or {},
+        parameters=parameters if parameters is not None else {"publishMode": "none"},
+        workspaceSpec=workspace_spec if workspace_spec is not None else {},
     )
+
+
+async def test_managed_session_request_preserves_explicit_empty_inputs() -> None:
+    request = _managed_session_request(parameters={}, workspace_spec={})
+
+    assert request.parameters == {}
+    assert request.workspace_spec == {}
+
+
+async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"branch": "main", "startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input["target_branch"] == "main"
+    assert "head_branch" not in activity_input
 
 
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(

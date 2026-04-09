@@ -3868,9 +3868,18 @@ class TemporalAgentRuntimeActivities:
                     stderr=asyncio.subprocess.PIPE,
                     env=command_env,
                 )
-                repair_stdout, repair_stderr = await asyncio.wait_for(
-                    repair_proc.communicate(), timeout=30,
-                )
+                try:
+                    repair_stdout, repair_stderr = await asyncio.wait_for(
+                        repair_proc.communicate(), timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    repair_proc.kill()
+                    await repair_proc.wait()
+                    return {
+                        "push_status": "failed",
+                        "push_error": "detached HEAD recovery timed out after 30s",
+                        "push_branch": "HEAD",
+                    }
                 if repair_proc.returncode != 0:
                     repair_detail = (
                         repair_stderr.decode("utf-8", errors="replace").strip()

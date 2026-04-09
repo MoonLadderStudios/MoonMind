@@ -419,7 +419,6 @@ class MoonMindAgentRun:
         )
         branch = str(
             workspace_spec.get("targetBranch")
-            or workspace_spec.get("branch")
             or ""
         ).strip()
         return branch or None
