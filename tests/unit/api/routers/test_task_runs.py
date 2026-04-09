@@ -20,6 +20,7 @@ from api_service.auth_providers import get_current_user
 from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
 from api_service.db import models as db_models
 from api_service.db.models import User
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
 
@@ -865,6 +866,67 @@ def test_get_task_run_observability_events_reads_structured_spool_history(
     assert "session_id" not in body["events"][1]
 
 
+def test_get_task_run_observability_events_filters_spool_fallback_rows(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "live_streams.spool").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "sequence": 1,
+                        "stream": "stdout",
+                        "text": "stdout line\n",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "stdout_chunk",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "sequence": 2,
+                        "stream": "session",
+                        "text": "boundary\n",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "session_reset_boundary",
+                        "session_id": "sess:wf-task-1:codex_cli",
+                        "session_epoch": 2,
+                        "thread_id": "thread-2",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "sequence": 3,
+                        "stream": "system",
+                        "text": "annotation\n",
+                        "timestamp": "2026-04-08T00:00:02Z",
+                        "kind": "system_annotation",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(workspace_path)
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(
+            f"/api/task-runs/{uuid4()}/observability/events?since=1&stream=session&kind=session_reset_boundary"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [2]
+    assert body["events"][0]["stream"] == "session"
+    assert body["events"][0]["kind"] == "session_reset_boundary"
+
+
 def test_get_task_run_observability_events_prefers_persisted_event_artifact(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -940,6 +1002,184 @@ def test_get_task_run_observability_events_prefers_persisted_event_artifact(
     assert body["events"][1]["sessionId"] == "sess-1"
     assert body["events"][1]["sessionEpoch"] == 2
     assert "run_id" not in body["events"][0]
+
+
+def test_get_task_run_observability_events_applies_since_stream_and_kind_filters(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 4,
+                        "stream": "stdout",
+                        "text": "older stdout\n",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "stdout_chunk",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 6,
+                        "stream": "session",
+                        "text": "boundary\n",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "session_reset_boundary",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 2,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 7,
+                        "stream": "session",
+                        "text": "summary\n",
+                        "timestamp": "2026-04-08T00:00:02Z",
+                        "kind": "summary_published",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 2,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 8,
+                        "stream": "session",
+                        "text": "session started\n",
+                        "timestamp": "2026-04-08T00:00:03Z",
+                        "kind": "session_started",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 2,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/task-runs/{uuid4()}/observability/events?since=5&stream=session&kind=session_reset_boundary&kind=summary_published&limit=5"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [6, 7]
+    assert {event["kind"] for event in body["events"]} == {
+        "session_reset_boundary",
+        "summary_published",
+    }
+    assert all(event["stream"] == "session" for event in body["events"])
+
+
+def test_get_task_run_observability_events_uses_record_snapshot_when_session_record_missing(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        json.dumps(
+            {
+                "runId": "run-1",
+                "sequence": 5,
+                "stream": "session",
+                "text": "summary\n",
+                "timestamp": "2026-04-08T00:00:00Z",
+                "kind": "summary_published",
+                "sessionId": "sess-1",
+                "sessionEpoch": 3,
+                "threadId": "thread-3",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+    mock_record.session_id = "sess-1"
+    mock_record.session_epoch = 3
+    mock_record.container_id = "ctr-1"
+    mock_record.thread_id = "thread-3"
+    mock_record.active_turn_id = "turn-9"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_task_run_session_record",
+                return_value=None,
+            ):
+                response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sessionSnapshot"]["sessionId"] == "sess-1"
+    assert body["sessionSnapshot"]["sessionEpoch"] == 3
+    assert body["sessionSnapshot"]["containerId"] == "ctr-1"
+    assert body["sessionSnapshot"]["threadId"] == "thread-3"
+    assert body["sessionSnapshot"]["activeTurnId"] == "turn-9"
+
+
+def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+
+    async def _follow(*args, **kwargs):
+        yield RunObservabilityEvent(
+            runId="run-1",
+            sequence=11,
+            stream="session",
+            text="boundary\n",
+            timestamp="2026-04-08T00:00:01Z",
+            kind="session_reset_boundary",
+            sessionId="sess-1",
+            sessionEpoch=2,
+            containerId="ctr-1",
+            threadId="thread-2",
+            activeTurnId="turn-3",
+        )
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch("api_service.api.routers.task_runs.SpoolLogReader.follow", new=_follow):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream?since=10")
+
+    assert response.status_code == 200
+    assert '"sessionId":"sess-1"' in response.text
+    assert '"activeTurnId":"turn-3"' in response.text
+    assert '"session_id"' not in response.text
 
 
 def test_load_task_run_session_record_uses_targeted_standard_paths(

@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
@@ -781,6 +782,28 @@ def _load_task_run_observability_events(
     return events
 
 
+def _filter_observability_events(
+    events: list[dict[str, object]],
+    *,
+    since: int | None = None,
+    streams: set[str] | None = None,
+    kinds: set[str] | None = None,
+) -> list[dict[str, object]]:
+    filtered: list[dict[str, object]] = []
+    for event in events:
+        sequence = _coerce_sequence(event.get("sequence"))
+        if since is not None and sequence is not None and sequence <= since:
+            continue
+        stream = str(event.get("stream") or "").strip()
+        if streams and stream not in streams:
+            continue
+        kind = str(event.get("kind") or "").strip()
+        if kinds and kind not in kinds:
+            continue
+        filtered.append(event)
+    return filtered
+
+
 def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     sequence = _coerce_sequence(payload.get("sequence"))
     timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
@@ -1003,7 +1026,10 @@ async def control_task_run_artifact_session(
 )
 async def get_task_run_observability_events(
     id: UUID,
+    since: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
+    stream: list[Literal["stdout", "stderr", "system", "session"]] | None = Query(default=None),
+    kind: list[str] | None = Query(default=None),
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Return structured observability history for one task run."""
@@ -1023,6 +1049,12 @@ async def get_task_run_observability_events(
         session_record=session_record,
         limit=limit,
     )
+    events = _filter_observability_events(
+        events,
+        since=since,
+        streams=set(stream or []),
+        kinds={item for item in (kind or []) if item},
+    )
 
     events.sort(key=_event_sort_key)
     truncated = len(events) > limit
@@ -1032,7 +1064,8 @@ async def get_task_run_observability_events(
     return {
         "events": events,
         "truncated": truncated,
-        "sessionSnapshot": _build_session_snapshot(session_record),
+        "sessionSnapshot": _build_session_snapshot(session_record)
+        or _build_record_session_snapshot(record),
     }
 
 
