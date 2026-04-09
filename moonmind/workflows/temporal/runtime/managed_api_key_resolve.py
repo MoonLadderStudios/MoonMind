@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from sqlalchemy import select
 
@@ -27,6 +27,22 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_secret_ref_input(
+    ref: str | Mapping[str, Any],
+    *,
+    field_name: str = "MANAGED_API_KEY_REF",
+) -> str:
+    if not isinstance(ref, str):
+        raise ValueError(
+            f"{field_name} must be a string secret reference, got {type(ref).__name__}"
+        )
+
+    stripped = ref.strip()
+    if not stripped:
+        raise ValueError(f"{field_name} is empty")
+    return stripped
 
 
 async def resolve_managed_github_token_from_store() -> str | None:
@@ -122,12 +138,14 @@ async def shape_launch_github_auth_environment(
     return shaped_environment
 
 
-async def resolve_managed_api_key_reference(ref: str) -> str:
+async def resolve_managed_api_key_reference(
+    ref: str | Mapping[str, Any],
+    *,
+    field_name: str = "MANAGED_API_KEY_REF",
+) -> str:
     """Resolve a profile api_key_ref or secret_ref into the credential string using RootSecretResolver."""
 
-    stripped = ref.strip()
-    if not stripped:
-        raise ValueError("MANAGED_API_KEY_REF is empty")
+    stripped = _normalize_secret_ref_input(ref, field_name=field_name)
         
     if "://" not in stripped:
         stripped = f"env://{stripped}"

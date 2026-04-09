@@ -481,6 +481,123 @@ async def test_launch_session_redacts_github_token_in_failure_details() -> None:
     assert "[REDACTED]" in message
 
 
+async def test_launch_session_materializes_profile_into_request_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-123")
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+    codex_home_path = tmp_path / "task-1" / ".moonmind" / "codex-home"
+
+    await activities.agent_runtime_launch_session(
+        {
+            "request": {
+                "taskRunId": "task-1",
+                "sessionId": "sess-1",
+                "threadId": "thread-1",
+                "workspacePath": str(tmp_path / "task-1" / "repo"),
+                "sessionWorkspacePath": str(tmp_path / "task-1" / "session"),
+                "artifactSpoolPath": str(tmp_path / "task-1" / "artifacts"),
+                "codexHomePath": str(codex_home_path),
+                "imageRef": "moonmind:latest",
+                "environment": {"MANAGED_ACCOUNT_LABEL": "Codex CLI via OpenRouter"},
+            },
+            "profile": {
+                "runtimeId": "codex_cli",
+                "profileId": "codex_openrouter_qwen36_plus",
+                "providerId": "openrouter",
+                "credentialSource": "secret_ref",
+                "envTemplate": {
+                    "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
+                    "OPENROUTER_API_KEY": {
+                        "from_secret_ref": "provider_api_key"
+                    },
+                },
+                "secretRefs": {
+                    "provider_api_key": "env://OPENROUTER_API_KEY"
+                },
+                "homePathOverrides": {
+                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+                },
+                "fileTemplates": [
+                    {
+                        "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                        "contentTemplate": {"model": "qwen/qwen3.6-plus:free"},
+                        "format": "toml",
+                    }
+                ],
+            },
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["OPENROUTER_API_KEY"] == "sk-or-123"
+    assert launched_request.environment["OPENAI_BASE_URL"] == "https://openrouter.ai/api/v1"
+    assert launched_request.environment["CODEX_HOME"] == str(codex_home_path)
+    assert launched_request.environment["MANAGED_ACCOUNT_LABEL"] == "Codex CLI via OpenRouter"
+    assert (codex_home_path / "config.toml").is_file()
+    assert "qwen/qwen3.6-plus:free" in (codex_home_path / "config.toml").read_text(
+        encoding="utf-8"
+    )
+
+
+async def test_launch_session_rejects_structured_secret_ref_values(
+    tmp_path: Path,
+) -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock()
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        ValueError,
+        match="profile.secretRefs.provider_api_key must be a string secret reference",
+    ):
+        await activities.agent_runtime_launch_session(
+            {
+                "request": {
+                    "taskRunId": "task-1",
+                    "sessionId": "sess-1",
+                    "threadId": "thread-1",
+                    "workspacePath": str(tmp_path / "task-1" / "repo"),
+                    "sessionWorkspacePath": str(tmp_path / "task-1" / "session"),
+                    "artifactSpoolPath": str(tmp_path / "task-1" / "artifacts"),
+                    "codexHomePath": str(
+                        tmp_path / "task-1" / ".moonmind" / "codex-home"
+                    ),
+                    "imageRef": "moonmind:latest",
+                },
+                "profile": {
+                    "runtimeId": "codex_cli",
+                    "envTemplate": {
+                        "OPENROUTER_API_KEY": {
+                            "from_secret_ref": "provider_api_key"
+                        }
+                    },
+                    "secretRefs": {
+                        "provider_api_key": {
+                            "ref": "env://OPENROUTER_API_KEY"
+                        }
+                    },
+                },
+            }
+        )
+
+    controller.launch_session.assert_not_awaited()
+
+
 async def test_load_session_snapshot_queries_session_workflow_via_client_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2072,11 +2072,159 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
     assert "--user" in run_command
     assert "1000:1000" in run_command
     assert "--mount" in run_command
-    assert (
-        "type=volume,src=codex_auth_volume,"
-        f"dst={request.codex_home_path}"
-        in run_command
+    assert not any(
+        "type=volume,src=codex_auth_volume," in arg for arg in run_command
     )
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_path() -> None:
+    workspace_root = Path("/tmp/agent_jobs")
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath=str(workspace_root / "task-1" / ".moonmind" / "codex-home"),
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    run_command = commands[1]
+    assert (
+        "type=volume,src=codex_auth_volume,dst=/home/app/.codex-auth" in run_command
+    )
+    assert (
+        f"type=volume,src=codex_auth_volume,dst={request.codex_home_path}"
+        not in run_command
+    )
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_normalizes_materialized_codex_home_for_container_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    codex_home_path = workspace_root / "task-1" / ".moonmind" / "codex-home"
+    codex_home_path.mkdir(parents=True, exist_ok=True)
+    config_path = codex_home_path / "config.toml"
+    config_path.write_text("model = 'qwen/qwen3.6-plus:free'\n", encoding="utf-8")
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath=str(codex_home_path),
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    chown_calls: list[tuple[Path, int, int, bool]] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        chown_calls.append((Path(path), uid, gid, follow_symlinks))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        _fake_chown,
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    chowned_paths = {path for path, _uid, _gid, _follow_symlinks in chown_calls}
+    assert codex_home_path.parent in chowned_paths
+    assert codex_home_path in chowned_paths
+    assert config_path in chowned_paths
+    assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
 
 
 @pytest.mark.asyncio

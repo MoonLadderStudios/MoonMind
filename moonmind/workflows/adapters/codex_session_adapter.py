@@ -16,6 +16,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunState,
     AgentRunStatus,
     ManagedRunRecord,
+    ManagedRuntimeProfile,
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -44,6 +45,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
+from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
@@ -54,7 +56,8 @@ SessionSnapshotLoader = Callable[
 SessionHandleSignaler = Callable[[dict[str, Any]], Awaitable[None]]
 SessionControlSignaler = Callable[[dict[str, Any]], Awaitable[None]]
 LaunchSessionFunc = Callable[
-    [LaunchCodexManagedSessionRequest], Awaitable[CodexManagedSessionHandle | Mapping[str, Any]]
+    [Mapping[str, Any] | LaunchCodexManagedSessionRequest],
+    Awaitable[CodexManagedSessionHandle | Mapping[str, Any]],
 ]
 SessionStatusFunc = Callable[
     [CodexManagedSessionLocator], Awaitable[CodexManagedSessionHandle | Mapping[str, Any]]
@@ -192,6 +195,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             binding=binding,
             request=request,
             environment=launch_context.delta_env_overrides,
+            profile=self._profile_for_launch(
+                runtime_id=runtime_id,
+                profile=profile,
+                launch_context=launch_context,
+            ),
         )
         locator = self._locator_from_state(
             session_state=session_handle.session_state,
@@ -585,6 +593,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
         environment: dict[str, str],
+        profile: ManagedRuntimeProfile,
     ) -> CodexManagedSessionHandle:
         snapshot = await self._load_snapshot(binding.workflow_id)
         if snapshot.container_id and snapshot.thread_id:
@@ -626,7 +635,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 else {}
             ),
         )
-        handle = await self._coerce_handle(self._launch_session(launch_request))
+        launch_payload = {
+            "request": launch_request.model_dump(mode="json", by_alias=True),
+            "profile": profile.model_dump(mode="json", by_alias=True),
+        }
+        handle = await self._coerce_handle(self._launch_session(launch_payload))
         await self._attach_runtime_handles(
             {
                 "containerId": handle.session_state.container_id,
@@ -641,6 +654,38 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    def _profile_for_launch(
+        self,
+        *,
+        runtime_id: str,
+        profile: Mapping[str, Any],
+        launch_context: ManagedProfileLaunchContext,
+    ) -> ManagedRuntimeProfile:
+        runtime_default_model, runtime_default_effort = resolve_runtime_defaults(
+            runtime_id
+        )
+        return ManagedRuntimeProfile(
+            profileId=launch_context.profile_id,
+            runtimeId=runtime_id,
+            providerId=profile.get("provider_id"),
+            providerLabel=profile.get("provider_label"),
+            authMode=profile.get("auth_mode"),
+            credentialSource=launch_context.credential_source,
+            runtimeMaterializationMode=profile.get("runtime_materialization_mode"),
+            commandBehavior=profile.get("command_behavior") or {},
+            commandTemplate=profile.get("command_template") or [],
+            defaultModel=profile.get("default_model") or runtime_default_model,
+            modelOverrides=profile.get("model_overrides") or {},
+            defaultEffort=profile.get("default_effort") or runtime_default_effort,
+            envOverrides=launch_context.delta_env_overrides,
+            envTemplate=profile.get("env_template") or {},
+            fileTemplates=profile.get("file_templates") or [],
+            homePathOverrides=profile.get("home_path_overrides") or {},
+            passthroughEnvKeys=launch_context.passthrough_env_keys,
+            clearEnvKeys=profile.get("clear_env_keys") or [],
+            secretRefs=profile.get("secret_refs") or {},
+        )
 
     async def _current_locator(
         self, binding: CodexManagedSessionBinding
