@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -59,6 +61,70 @@ def _ordered_nodes() -> list[dict]:
 
 def _dependency_map() -> dict[str, list[str]]:
     return {"prepare": [], "run-tests": ["prepare"]}
+
+
+def _approval_policy_plan_payload() -> dict[str, Any]:
+    return {
+        "plan_version": "1.0",
+        "metadata": {
+            "title": "Approval policy plan",
+            "created_at": "2026-04-08T00:00:00Z",
+            "registry_snapshot": {
+                "digest": "reg:sha256:" + ("a" * 64),
+                "artifact_ref": "artifact://registry/1",
+            },
+        },
+        "policy": {
+            "failure_mode": "FAIL_FAST",
+            "max_concurrency": 1,
+            "approval_policy": {
+                "enabled": True,
+                "max_review_attempts": 1,
+                "reviewer_model": "default",
+                "review_timeout_seconds": 120,
+                "skip_tool_types": [],
+            },
+        },
+        "nodes": [
+            {
+                "id": "apply-patch",
+                "tool": {
+                    "type": "skill",
+                    "name": "repo.apply_patch",
+                    "version": "1.0.0",
+                },
+                "inputs": {"instruction": "Apply the patch"},
+                "options": {},
+            }
+        ],
+        "edges": [],
+    }
+
+
+def _registry_payload() -> dict[str, Any]:
+    return {
+        "skills": [
+            {
+                "name": "repo.apply_patch",
+                "version": "1.0.0",
+                "description": "Apply patch",
+                "inputs": {"schema": {"type": "object"}},
+                "outputs": {"schema": {"type": "object"}},
+                "executor": {
+                    "activity_type": "mm.skill.execute",
+                    "selector": {"mode": "by_capability"},
+                },
+                "requirements": {"capabilities": ["sandbox"]},
+                "policies": {
+                    "timeouts": {
+                        "start_to_close_seconds": 1800,
+                        "schedule_to_close_seconds": 3600,
+                    },
+                    "retries": {"max_attempts": 1},
+                },
+            }
+        ]
+    }
 
 
 def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -496,3 +562,242 @@ def test_run_accepts_tuple_output_refs_and_ignores_string_values(
 
     assert step["artifacts"]["outputPrimary"] == "art_primary_1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    review_snapshots: list[dict[str, Any]] = []
+    written_review_payloads: list[dict[str, Any]] = []
+    review_artifact_ids = iter(("art_review_1",))
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
+        if activity_type == "mm.skill.execute":
+            return {
+                "status": "COMPLETED",
+                "summary": "Patch applied cleanly",
+                "outputs": {"outputSummaryRef": "art_summary_1"},
+            }
+        if activity_type == "step.review":
+            step = workflow.get_step_ledger()["steps"][0]
+            review_snapshots.append(step)
+            return {
+                "verdict": "PASS",
+                "confidence": 0.91,
+                "feedback": None,
+                "issues": [],
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(_approval_policy_plan_payload()).encode("utf-8")
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(_registry_payload()).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="wf-run-review-1",
+        run_id="run-review-1",
+        task_queue="mm.workflow",
+        search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["owner-1"]},
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    assert review_snapshots
+    assert review_snapshots[0]["status"] == "reviewing"
+    assert review_snapshots[0]["checks"] == [
+        {
+            "kind": "approval_policy",
+            "status": "pending",
+            "summary": "Structured review in progress",
+            "retryCount": 0,
+            "artifactRef": None,
+        }
+    ]
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["status"] == "succeeded"
+    assert step["checks"] == [
+        {
+            "kind": "approval_policy",
+            "status": "passed",
+            "summary": "Approved by structured review",
+            "retryCount": 0,
+            "artifactRef": "art_review_1",
+        }
+    ]
+    assert written_review_payloads[0]["verdict"]["verdict"] == "PASS"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retry_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    written_review_payloads: list[dict[str, Any]] = []
+    skill_inputs: list[dict[str, Any]] = []
+    review_artifact_ids = iter(("art_review_1", "art_review_2"))
+    review_verdicts = iter(
+        (
+            {
+                "verdict": "FAIL",
+                "confidence": 0.84,
+                "feedback": "Tests still fail because the import is missing.",
+                "issues": [
+                    {
+                        "severity": "error",
+                        "description": "Missing import",
+                        "evidence": "stderr tail",
+                    }
+                ],
+            },
+            {
+                "verdict": "PASS",
+                "confidence": 0.93,
+                "feedback": None,
+                "issues": [],
+            },
+        )
+    )
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
+        if activity_type == "mm.skill.execute":
+            invocation_payload = payload["invocation_payload"]
+            skill_inputs.append(dict(invocation_payload["inputs"]))
+            return {
+                "status": "COMPLETED",
+                "summary": "Patch applied cleanly",
+                "outputs": {"outputSummaryRef": f"art_summary_{len(skill_inputs)}"},
+            }
+        if activity_type == "step.review":
+            return next(review_verdicts)
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(_approval_policy_plan_payload()).encode("utf-8")
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(_registry_payload()).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            written_review_payloads.append(json.loads(payload.payload.decode("utf-8")))
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="wf-run-review-2",
+        run_id="run-review-2",
+        task_queue="mm.workflow",
+        search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["owner-1"]},
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    assert len(skill_inputs) == 2
+    assert "_review_feedback" not in skill_inputs[0]
+    assert skill_inputs[1]["_review_feedback"] == {
+        "attempt": 1,
+        "feedback": "Tests still fail because the import is missing.",
+        "issues": [
+            {
+                "severity": "error",
+                "description": "Missing import",
+                "evidence": "stderr tail",
+            }
+        ],
+    }
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["attempt"] == 2
+    assert step["status"] == "succeeded"
+    assert step["checks"] == [
+        {
+            "kind": "approval_policy",
+            "status": "passed",
+            "summary": "Approved after 1 retry",
+            "retryCount": 1,
+            "artifactRef": "art_review_2",
+        }
+    ]
+    assert written_review_payloads[0]["verdict"]["verdict"] == "FAIL"
+    assert written_review_payloads[1]["verdict"]["verdict"] == "PASS"

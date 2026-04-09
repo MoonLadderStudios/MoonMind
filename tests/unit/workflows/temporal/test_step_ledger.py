@@ -13,6 +13,7 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
+    upsert_step_check,
     update_step_row,
 )
 
@@ -338,6 +339,50 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
     )
 
     assert rows[0]["status"] == "succeeded"
+
+
+def test_upsert_step_check_updates_existing_review_state() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {
+                "id": "review-patch",
+                "tool": {"type": "skill", "name": "repo.review_patch", "version": "1"},
+                "inputs": {"title": "Review patch"},
+            }
+        ],
+        dependency_map={"review-patch": []},
+        updated_at=updated_at,
+    )
+
+    upsert_step_check(
+        rows,
+        "review-patch",
+        kind="approval_policy",
+        status="pending",
+        summary="Structured review in progress",
+        retry_count=0,
+        artifact_ref=None,
+    )
+    upsert_step_check(
+        rows,
+        "review-patch",
+        kind="approval_policy",
+        status="failed",
+        summary="Reviewer requested another retry",
+        retry_count=1,
+        artifact_ref="art_review_1",
+    )
+
+    assert rows[0]["checks"] == [
+        {
+            "kind": "approval_policy",
+            "status": "failed",
+            "summary": "Reviewer requested another retry",
+            "retryCount": 1,
+            "artifactRef": "art_review_1",
+        }
+    ]
     assert rows[0]["lastError"] is None
 
 

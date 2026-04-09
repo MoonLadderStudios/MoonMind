@@ -45,12 +45,19 @@ with workflow.unsafe.imports_passed_through():
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
+from moonmind.workflows.skills.approval_policy import (
+    ReviewRequest,
+    build_feedback_input,
+    build_feedback_instruction,
+    parse_review_verdict,
+)
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
     build_step_ledger_snapshot,
     refresh_ready_steps,
+    upsert_step_check,
     update_step_row,
 )
 from moonmind.workflows.temporal.activity_catalog import (
@@ -631,6 +638,38 @@ class MoonMindRunWorkflow:
             return
         self._sync_progress_snapshot(updated_at=updated_at)
 
+    def _upsert_step_check(
+        self,
+        logical_step_id: str,
+        *,
+        kind: str,
+        status: str,
+        summary: str | None = None,
+        retry_count: int = 0,
+        artifact_ref: str | None = None,
+    ) -> bool:
+        try:
+            upsert_step_check(
+                self._step_ledger_rows,
+                logical_step_id,
+                kind=kind,
+                status=status,
+                summary=summary,
+                retry_count=retry_count,
+                artifact_ref=artifact_ref,
+            )
+        except KeyError:
+            self._get_logger().warning(
+                "Skipping step-check update for unknown logical step id %s",
+                logical_step_id,
+                extra={
+                    "event": "step_check_unknown_step",
+                    "logical_step_id": logical_step_id,
+                },
+            )
+            return False
+        return True
+
     def _step_attempt_for(self, logical_step_id: str) -> int | None:
         for row in self._step_ledger_rows:
             if row.get("logicalStepId") == logical_step_id:
@@ -730,6 +769,70 @@ class MoonMindRunWorkflow:
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _bounded_review_summary(self, value: Any, *, fallback: str) -> str:
+        summary = self._coerce_text(value, max_chars=240)
+        if summary:
+            return summary
+        return fallback
+
+    def _check_status_for_review_verdict(self, verdict: str) -> str:
+        normalized = str(verdict or "").strip().upper()
+        if normalized == "PASS":
+            return "passed"
+        if normalized == "FAIL":
+            return "failed"
+        return "inconclusive"
+
+    def _accepted_review_summary(self, verdict: str, *, retry_count: int) -> str:
+        normalized = str(verdict or "").strip().upper()
+        if normalized == "INCONCLUSIVE":
+            return "Review inconclusive; accepted execution"
+        if retry_count > 0:
+            return f"Approved after {retry_count} retry"
+        return "Approved by structured review"
+
+    def _review_gate_active(
+        self,
+        *,
+        approval_policy: Any,
+        tool_type: str,
+    ) -> bool:
+        if approval_policy is None or not getattr(approval_policy, "enabled", False):
+            return False
+        skip_tool_types = {
+            str(value).strip().lower()
+            for value in getattr(approval_policy, "skip_tool_types", ())
+            if str(value).strip()
+        }
+        return tool_type not in skip_tool_types
+
+    def _inject_review_feedback_into_inputs(
+        self,
+        *,
+        tool_type: str,
+        original_inputs: Mapping[str, Any],
+        attempt: int,
+        feedback: str,
+        issues: tuple[Mapping[str, Any], ...],
+    ) -> dict[str, Any]:
+        merged_inputs = build_feedback_input(
+            original_inputs,
+            attempt,
+            feedback,
+            issues,
+        )
+        if tool_type == "agent_runtime":
+            for key in ("instruction", "instructionsText", "instructions_text"):
+                instruction = merged_inputs.get(key)
+                if isinstance(instruction, str) and instruction.strip():
+                    merged_inputs[key] = build_feedback_instruction(
+                        instruction,
+                        attempt,
+                        feedback,
+                    )
+                    break
+        return merged_inputs
 
     def _dependency_ids_from_parameters(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
@@ -1524,175 +1627,222 @@ class MoonMindRunWorkflow:
             ).strip()
             tool_version = str(selected_node.get("version") or "").strip()
             node_id = str(node.get("id") or "unknown")
-            node_inputs = dict(node.get("inputs", {}))
-
-            self._step_count = index
-            self._summary = (
-                f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
+            original_node_inputs = dict(node.get("inputs", {}))
+            approval_policy = plan_definition.policy.approval_policy
+            review_gate_active = self._review_gate_active(
+                approval_policy=approval_policy,
+                tool_type=tool_type,
             )
-            self._update_memo()
-            self._refresh_step_readiness(updated_at=workflow.now())
-            self._mark_step_running(
-                node_id,
-                updated_at=workflow.now(),
-                summary=self._summary,
+            max_review_attempts = (
+                int(getattr(approval_policy, "max_review_attempts", 0))
+                if review_gate_active
+                else 0
             )
+            review_retry_count = 0
+            previous_review_feedback: str | None = None
+            previous_review_issues: tuple[Mapping[str, Any], ...] = ()
+            result_status: str | None = None
+            execution_result: Any = None
+            accepted_execution = False
+            current_review_attempt = 1
 
-            system_retries = 0
-            while system_retries <= 3:
-                if tool_type == "agent_runtime":
-                    # --- Agent dispatch: child workflow ---
-                    try:
-                        request = self._build_agent_execution_request(
-                            node_inputs=node_inputs,
-                            node_id=node_id,
-                            tool_name=tool_name,
-                            resolved_skillset_ref=registry_snapshot_ref,
-                        )
-                        request = await self._maybe_bind_task_scoped_session(request)
-                        child_workflow_id = (
-                            f"{workflow.info().workflow_id}:agent:{node_id}"
-                        )
-                        if system_retries > 0:
-                            child_workflow_id = (
-                                f"{child_workflow_id}:retry{system_retries}"
-                            )
-                        self._active_agent_child_workflow_id = child_workflow_id
-                        self._active_agent_id = request.agent_id
-                        self._mark_step_waiting(
-                            node_id,
-                            status="awaiting_external",
-                            updated_at=workflow.now(),
-                            waiting_reason="Awaiting child workflow progress",
-                            summary=f"Awaiting child workflow for {tool_name}",
-                            refs={"childWorkflowId": child_workflow_id},
-                        )
-                        try:
-                            child_result = await workflow.execute_child_workflow(
-                                "MoonMind.AgentRun",
-                                request,
-                                id=child_workflow_id,
-                                task_queue=WORKFLOW_TASK_QUEUE,
-                            )
-                        finally:
-                            self._active_agent_child_workflow_id = None
-                            self._active_agent_id = None
-                        execution_result = self._map_agent_run_result(child_result)
-                    except Exception:
-                        self._mark_step_terminal(
-                            node_id,
-                            status="failed",
-                            updated_at=workflow.now(),
-                            summary=f"{tool_name} failed",
-                            last_error="execution_error",
-                        )
-                        if failure_mode == "FAIL_FAST":
-                            raise
-                        result_status = "FAILED"
-                        break
-
-                elif tool_type == "skill":
-                    # --- Activity dispatch: existing skill path ---
-                    if not tool_name or not tool_version:
-                        raise ValueError("plan node tool name/version is required")
-                    invocation_payload = {
-                        "id": node_id,
-                        "tool": {
-                            "type": "skill",
-                            "name": tool_name,
-                            "version": tool_version,
-                        },
-                        "skill": {"name": tool_name, "version": tool_version},
-                        "inputs": node_inputs,
-                        "options": node.get("options", {}),
-                    }
-                    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "mm.skill.execute"
-                    )
-                    if skill_definitions_by_key:
-                        skill_key = (tool_name, tool_version)
-                        if skill_key not in skill_definitions_by_key:
-                            raise ValueError(
-                                "Tool "
-                                f"'{tool_name}:{tool_version}' was not found in pinned "
-                                "registry snapshot"
-                            )
-                        route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
-                            skill_definitions_by_key[skill_key]
-                        )
-                    if route.activity_type not in {
-                        "mm.skill.execute",
-                        "mm.tool.execute",
-                    }:
-                        raise ValueError(
-                            "plan node tool executor "
-                            f"'{route.activity_type}' is unsupported by MoonMind.Run; "
-                            "expected mm.tool.execute or mm.skill.execute"
-                        )
-
-                    try:
-                        execute_payload = {
-                            "invocation_payload": invocation_payload,
-                            "principal": self._principal(),
-                            "registry_snapshot_ref": registry_snapshot_ref,
-                            "context": {
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                                "node_id": node_id,
-                            },
-                        }
-                        if workflow.patched("idempotency_key_phase3"):
-                            execute_payload["idempotency_key"] = (
-                                f"{workflow.info().workflow_id}_{node_id}_execute"
-                            )
-
-                        execution_result = await workflow.execute_activity(
-                            route.activity_type,
-                            execute_payload,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(route),
-                        )
-                    except Exception:
-                        self._mark_step_terminal(
-                            node_id,
-                            status="failed",
-                            updated_at=workflow.now(),
-                            summary=f"{tool_name} failed",
-                            last_error="execution_error",
-                        )
-                        if failure_mode == "FAIL_FAST":
-                            raise
-                        result_status = "FAILED"
-                        break
-
-                else:
-                    raise ValueError(
-                        f"unsupported plan node tool.type: '{tool_type}'; "
-                        "expected 'skill' or 'agent_runtime'"
+            while current_review_attempt <= (max_review_attempts + 1):
+                node_inputs = dict(original_node_inputs)
+                if previous_review_feedback:
+                    node_inputs = self._inject_review_feedback_into_inputs(
+                        tool_type=tool_type,
+                        original_inputs=node_inputs,
+                        attempt=review_retry_count,
+                        feedback=previous_review_feedback,
+                        issues=previous_review_issues,
                     )
 
-                result_status = self._activity_result_status(execution_result)
-                if result_status is None:
-                    if failure_mode == "FAIL_FAST":
-                        raise ValueError(
-                            "plan node execution result is missing required status field"
-                        )
-                    break
-                self._record_step_result_evidence(
-                    node_id,
-                    execution_result=execution_result,
-                    updated_at=workflow.now(),
+                self._step_count = index
+                self._summary = (
+                    f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
                 )
-                if result_status != "COMPLETED":
-                    failure_message = self._activity_result_failure_message(
-                        execution_result
-                    )
+                self._update_memo()
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._mark_step_running(
+                    node_id,
+                    updated_at=workflow.now(),
+                    summary=self._summary,
+                )
 
-                    retryable = failure_message == "system_error" or (
-                        failure_message == "execution_error"
-                        and tool_type == "agent_runtime"
+                system_retries = 0
+                while system_retries <= 3:
+                    if tool_type == "agent_runtime":
+                        # --- Agent dispatch: child workflow ---
+                        try:
+                            request = self._build_agent_execution_request(
+                                node_inputs=node_inputs,
+                                node_id=node_id,
+                                tool_name=tool_name,
+                                resolved_skillset_ref=registry_snapshot_ref,
+                            )
+                            request = await self._maybe_bind_task_scoped_session(request)
+                            child_workflow_id = (
+                                f"{workflow.info().workflow_id}:agent:{node_id}"
+                            )
+                            if system_retries > 0:
+                                child_workflow_id = (
+                                    f"{child_workflow_id}:retry{system_retries}"
+                                )
+                            self._active_agent_child_workflow_id = child_workflow_id
+                            self._active_agent_id = request.agent_id
+                            self._mark_step_waiting(
+                                node_id,
+                                status="awaiting_external",
+                                updated_at=workflow.now(),
+                                waiting_reason="Awaiting child workflow progress",
+                                summary=f"Awaiting child workflow for {tool_name}",
+                                refs={"childWorkflowId": child_workflow_id},
+                            )
+                            try:
+                                child_result = await workflow.execute_child_workflow(
+                                    "MoonMind.AgentRun",
+                                    request,
+                                    id=child_workflow_id,
+                                    task_queue=WORKFLOW_TASK_QUEUE,
+                                )
+                            finally:
+                                self._active_agent_child_workflow_id = None
+                                self._active_agent_id = None
+                            execution_result = self._map_agent_run_result(child_result)
+                        except Exception:
+                            self._mark_step_terminal(
+                                node_id,
+                                status="failed",
+                                updated_at=workflow.now(),
+                                summary=f"{tool_name} failed",
+                                last_error="execution_error",
+                            )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            result_status = "FAILED"
+                            break
+
+                    elif tool_type == "skill":
+                        # --- Activity dispatch: existing skill path ---
+                        if not tool_name or not tool_version:
+                            raise ValueError("plan node tool name/version is required")
+                        invocation_payload = {
+                            "id": node_id,
+                            "tool": {
+                                "type": "skill",
+                                "name": tool_name,
+                                "version": tool_version,
+                            },
+                            "skill": {"name": tool_name, "version": tool_version},
+                            "inputs": node_inputs,
+                            "options": node.get("options", {}),
+                        }
+                        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                            "mm.skill.execute"
+                        )
+                        if skill_definitions_by_key:
+                            skill_key = (tool_name, tool_version)
+                            if skill_key not in skill_definitions_by_key:
+                                raise ValueError(
+                                    "Tool "
+                                    f"'{tool_name}:{tool_version}' was not found in pinned "
+                                    "registry snapshot"
+                                )
+                            route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
+                                skill_definitions_by_key[skill_key]
+                            )
+                        if route.activity_type not in {
+                            "mm.skill.execute",
+                            "mm.tool.execute",
+                        }:
+                            raise ValueError(
+                                "plan node tool executor "
+                                f"'{route.activity_type}' is unsupported by MoonMind.Run; "
+                                "expected mm.tool.execute or mm.skill.execute"
+                            )
+
+                        try:
+                            execute_payload = {
+                                "invocation_payload": invocation_payload,
+                                "principal": self._principal(),
+                                "registry_snapshot_ref": registry_snapshot_ref,
+                                "context": {
+                                    "workflow_id": workflow.info().workflow_id,
+                                    "run_id": workflow.info().run_id,
+                                    "node_id": node_id,
+                                },
+                            }
+                            if workflow.patched("idempotency_key_phase3"):
+                                execute_payload["idempotency_key"] = (
+                                    f"{workflow.info().workflow_id}_{node_id}_execute"
+                                )
+
+                            execution_result = await workflow.execute_activity(
+                                route.activity_type,
+                                execute_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                **self._execute_kwargs_for_route(route),
+                            )
+                        except Exception:
+                            self._mark_step_terminal(
+                                node_id,
+                                status="failed",
+                                updated_at=workflow.now(),
+                                summary=f"{tool_name} failed",
+                                last_error="execution_error",
+                            )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            result_status = "FAILED"
+                            break
+
+                    else:
+                        raise ValueError(
+                            f"unsupported plan node tool.type: '{tool_type}'; "
+                            "expected 'skill' or 'agent_runtime'"
+                        )
+
+                    result_status = self._activity_result_status(execution_result)
+                    if result_status is None:
+                        if failure_mode == "FAIL_FAST":
+                            raise ValueError(
+                                "plan node execution result is missing required status field"
+                            )
+                        break
+                    self._record_step_result_evidence(
+                        node_id,
+                        execution_result=execution_result,
+                        updated_at=workflow.now(),
                     )
-                    if retryable and system_retries < 3:
+                    if result_status != "COMPLETED":
+                        failure_message = self._activity_result_failure_message(
+                            execution_result
+                        )
+
+                        retryable = failure_message == "system_error" or (
+                            failure_message == "execution_error"
+                            and tool_type == "agent_runtime"
+                        )
+                        if retryable and system_retries < 3:
+                            self._mark_step_terminal(
+                                node_id,
+                                status="failed",
+                                updated_at=workflow.now(),
+                                summary=f"{tool_name} failed",
+                                last_error=failure_message,
+                            )
+                            system_retries += 1
+                            self._get_logger().info(
+                                f"Retrying plan node {node_id} after {failure_message} "
+                                f"(attempt {system_retries} of 3)"
+                            )
+                            self._mark_step_running(
+                                node_id,
+                                updated_at=workflow.now(),
+                                summary=self._summary,
+                            )
+                            continue
+
                         self._mark_step_terminal(
                             node_id,
                             status="failed",
@@ -1700,39 +1850,145 @@ class MoonMindRunWorkflow:
                             summary=f"{tool_name} failed",
                             last_error=failure_message,
                         )
-                        system_retries += 1
-                        self._get_logger().info(
-                            f"Retrying plan node {node_id} after {failure_message} "
-                            f"(attempt {system_retries} of 3)"
-                        )
-                        self._mark_step_running(
-                            node_id,
-                            updated_at=workflow.now(),
-                            summary=self._summary,
-                        )
-                        continue
+                        if failure_mode == "FAIL_FAST":
+                            detail = (
+                                f" with error '{failure_message}'"
+                                if failure_message
+                                else ""
+                            )
+                            raise ValueError(
+                                f"plan node execution returned status {result_status}{detail}"
+                            )
+                        break
 
+                    break
+
+                if result_status is None or result_status != "COMPLETED":
+                    break
+
+                if not review_gate_active:
+                    accepted_execution = True
+                    break
+
+                self._mark_step_waiting(
+                    node_id,
+                    status="reviewing",
+                    updated_at=workflow.now(),
+                    waiting_reason="Awaiting structured review result",
+                    summary="Structured review in progress",
+                )
+                self._upsert_step_check(
+                    node_id,
+                    kind="approval_policy",
+                    status="pending",
+                    summary="Structured review in progress",
+                    retry_count=review_retry_count,
+                    artifact_ref=None,
+                )
+
+                review_request = ReviewRequest(
+                    node_id=node_id,
+                    step_index=index,
+                    total_steps=len(ordered_nodes),
+                    review_attempt=current_review_attempt,
+                    tool_name=tool_name,
+                    tool_version=tool_version,
+                    tool_type=tool_type,
+                    inputs=node_inputs,
+                    execution_result=(
+                        execution_result
+                        if isinstance(execution_result, Mapping)
+                        else {}
+                    ),
+                    workflow_context={
+                        "workflow_id": workflow.info().workflow_id,
+                        "run_id": workflow.info().run_id,
+                        "plan_title": plan_definition.metadata.title,
+                    },
+                    reviewer_model=str(
+                        getattr(approval_policy, "reviewer_model", "default")
+                    ),
+                    review_timeout_seconds=int(
+                        getattr(approval_policy, "review_timeout_seconds", 120)
+                    ),
+                    previous_feedback=previous_review_feedback,
+                )
+                review_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step.review")
+                review_verdict = parse_review_verdict(
+                    await workflow.execute_activity(
+                        "step.review",
+                        review_request.to_payload(),
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(review_route),
+                    )
+                )
+                review_artifact_ref = await self._write_json_artifact(
+                    name=(
+                        "reports/review_"
+                        f"{node_id}_attempt_{self._step_attempt_for(node_id) or 0}.json"
+                    ),
+                    payload={
+                        "logicalStepId": node_id,
+                        "attempt": self._step_attempt_for(node_id),
+                        "reviewAttempt": current_review_attempt,
+                        "request": review_request.to_payload(),
+                        "verdict": review_verdict.to_payload(),
+                    },
+                )
+                review_check_status = self._check_status_for_review_verdict(
+                    review_verdict.verdict
+                )
+
+                if review_verdict.verdict == "FAIL":
+                    review_retry_count += 1
+                    failed_review_summary = self._bounded_review_summary(
+                        review_verdict.feedback,
+                        fallback="Review failed; retrying step",
+                    )
+                    self._upsert_step_check(
+                        node_id,
+                        kind="approval_policy",
+                        status=review_check_status,
+                        summary=failed_review_summary,
+                        retry_count=review_retry_count,
+                        artifact_ref=review_artifact_ref,
+                    )
+                    if review_retry_count <= max_review_attempts:
+                        previous_review_feedback = (
+                            review_verdict.feedback
+                            or "Structured review requested another retry."
+                        )
+                        previous_review_issues = tuple(review_verdict.issues)
+                        current_review_attempt += 1
+                        continue
                     self._mark_step_terminal(
                         node_id,
                         status="failed",
                         updated_at=workflow.now(),
-                        summary=f"{tool_name} failed",
-                        last_error=failure_message,
+                        summary=failed_review_summary,
+                        last_error="review_failed",
                     )
                     if failure_mode == "FAIL_FAST":
-                        detail = (
-                            f" with error '{failure_message}'"
-                            if failure_message
-                            else ""
-                        )
                         raise ValueError(
-                            f"plan node execution returned status {result_status}{detail}"
+                            f"plan node review failed after {review_retry_count} retry"
                         )
                     break
 
+                self._upsert_step_check(
+                    node_id,
+                    kind="approval_policy",
+                    status=review_check_status,
+                    summary=self._accepted_review_summary(
+                        review_verdict.verdict,
+                        retry_count=review_retry_count,
+                    ),
+                    retry_count=review_retry_count,
+                    artifact_ref=review_artifact_ref,
+                )
+                accepted_execution = True
                 break
 
-            if result_status is None or result_status != "COMPLETED":
+            if not accepted_execution:
                 continue
 
             self._mark_step_terminal(
