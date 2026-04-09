@@ -1113,6 +1113,149 @@ button.secondary:hover {
   gap: 0.45rem;
 }
 
+.live-logs-panel {
+  gap: 0.75rem;
+}
+
+.live-logs-toolbar {
+  font-size: 0.9rem;
+  font-weight: 400;
+}
+
+.live-logs-wrap-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.live-logs-session-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.live-logs-session-badge {
+  padding: 0.55rem 0.7rem;
+}
+
+.live-logs-viewer-shell {
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: rgb(12 14 22);
+  color: rgb(232 234 240);
+  border: 1px solid rgb(var(--mm-border) / 0.22);
+}
+
+.live-logs-empty,
+.live-logs-legacy-viewer,
+.live-logs-viewer {
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.live-logs-empty {
+  padding: 0.85rem 0.95rem;
+  color: rgb(232 234 240 / 0.8);
+}
+
+.live-logs-legacy-viewer {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 0.6rem;
+}
+
+.live-logs-viewer .virtuoso-grid-list,
+.live-logs-viewer .virtuoso-scroller {
+  scrollbar-color: rgb(var(--mm-border) / 0.5) transparent;
+}
+
+.live-logs-row {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.45rem 0.75rem;
+  border-left: 3px solid transparent;
+}
+
+.live-logs-row.is-wrapped .live-logs-row-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.live-logs-row.is-unwrapped .live-logs-row-text {
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.live-logs-row-output.live-logs-stream-stdout {
+  border-left-color: rgb(59 130 246);
+}
+
+.live-logs-row-output.live-logs-stream-stderr {
+  border-left-color: rgb(239 68 68);
+}
+
+.live-logs-row-system {
+  border-left-color: rgb(34 197 94);
+  background: rgb(34 197 94 / 0.07);
+  color: rgb(232 234 240 / 0.84);
+}
+
+.live-logs-row-session,
+.live-logs-row-approval,
+.live-logs-row-publication {
+  border-left-color: rgb(245 158 11);
+  background: rgb(245 158 11 / 0.07);
+}
+
+.live-logs-row-approval {
+  border-left-color: rgb(99 102 241);
+  background: rgb(99 102 241 / 0.09);
+}
+
+.live-logs-row-publication {
+  border-left-color: rgb(14 165 233);
+  background: rgb(14 165 233 / 0.08);
+}
+
+.live-logs-row-boundary {
+  margin: 0.5rem 0.6rem;
+  border: 1px solid rgb(var(--mm-warn) / 0.8);
+  border-left: 4px solid rgb(var(--mm-warn));
+  border-radius: 0.7rem;
+  background: rgb(var(--mm-warn) / 0.13);
+  color: rgb(255 240 194);
+}
+
+.live-logs-boundary-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-logs-kind-chip {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.14rem 0.5rem;
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.82);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.live-logs-row-text {
+  min-width: 0;
+}
+
+.live-logs-row-text [data-ansi-fragment="true"] {
+  white-space: inherit;
+}
+
 .step-check-details {
   display: flex;
   flex-wrap: wrap;
