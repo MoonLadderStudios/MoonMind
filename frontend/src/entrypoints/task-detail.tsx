@@ -1041,6 +1041,29 @@ type TimelineArtifactLink = {
   href: string;
 };
 
+function TimelineArtifactLinks({ links }: { links: TimelineArtifactLink[] }): ReactNode {
+  if (links.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="live-logs-artifact-links">
+      {links.map((link) => (
+        <a
+          key={link.key}
+          className="live-logs-artifact-link"
+          href={link.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={link.label}
+        >
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function coerceArtifactRef(value: unknown): string | null {
   if (typeof value === 'string') {
     const normalized = value.trim();
@@ -1127,22 +1150,7 @@ function renderTimelineRow(
         >
           {row.text}
         </div>
-        {artifactLinks.length > 0 ? (
-          <div className="live-logs-artifact-links">
-            {artifactLinks.map((link) => (
-              <a
-                key={link.key}
-                className="live-logs-artifact-link"
-                href={link.href}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={link.label}
-              >
-                {link.label}
-              </a>
-            ))}
-          </div>
-        ) : null}
+        <TimelineArtifactLinks links={artifactLinks} />
       </div>
     );
   }
@@ -1163,22 +1171,7 @@ function renderTimelineRow(
       >
         {renderTimelineRowText(row, timelineViewerEnabled)}
       </div>
-      {artifactLinks.length > 0 ? (
-        <div className="live-logs-artifact-links">
-          {artifactLinks.map((link) => (
-            <a
-              key={link.key}
-              className="live-logs-artifact-link"
-              href={link.href}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={link.label}
-            >
-              {link.label}
-            </a>
-          ))}
-        </div>
-      ) : null}
+      <TimelineArtifactLinks links={artifactLinks} />
     </div>
   );
 }

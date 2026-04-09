@@ -694,12 +694,26 @@ def _iter_historical_artifact_events(
         metadata={"status": session_record.status},
     )
 
-    control_payload = _read_json_payload(
-        _resolve_safe_artifact_path(session_record.latest_control_event_ref, artifacts_root)
+    control_artifact_path = _resolve_safe_artifact_path(
+        session_record.latest_control_event_ref,
+        artifacts_root,
     )
+    reset_boundary_artifact_path = _resolve_safe_artifact_path(
+        session_record.latest_reset_boundary_ref,
+        artifacts_root,
+    )
+
+    control_payload = _read_json_payload(control_artifact_path)
     if control_payload is not None:
         action = str(control_payload.get("action") or "").strip().lower()
         if action == "clear_session":
+            control_metadata = {
+                **control_payload,
+                "artifactRef": session_record.latest_control_event_ref,
+                "controlEventRef": session_record.latest_control_event_ref,
+            }
+            if reset_boundary_artifact_path is not None:
+                control_metadata["resetBoundaryRef"] = session_record.latest_reset_boundary_ref
             yield _build_session_artifact_event(
                 kind="session_cleared",
                 text=(
@@ -709,18 +723,18 @@ def _iter_historical_artifact_events(
                 ),
                 timestamp=str(control_payload.get("recordedAt") or ""),
                 session_record=session_record,
-                metadata={
-                    **control_payload,
-                    "artifactRef": session_record.latest_control_event_ref,
-                    "controlEventRef": session_record.latest_control_event_ref,
-                    "resetBoundaryRef": session_record.latest_reset_boundary_ref,
-                },
+                metadata=control_metadata,
             )
 
-    boundary_payload = _read_json_payload(
-        _resolve_safe_artifact_path(session_record.latest_reset_boundary_ref, artifacts_root)
-    )
+    boundary_payload = _read_json_payload(reset_boundary_artifact_path)
     if boundary_payload is not None:
+        boundary_metadata = {
+            **boundary_payload,
+            "artifactRef": session_record.latest_reset_boundary_ref,
+            "resetBoundaryRef": session_record.latest_reset_boundary_ref,
+        }
+        if control_artifact_path is not None:
+            boundary_metadata["controlEventRef"] = session_record.latest_control_event_ref
         yield _build_session_artifact_event(
             kind="session_reset_boundary",
             text=(
@@ -729,12 +743,7 @@ def _iter_historical_artifact_events(
             ),
             timestamp=str(boundary_payload.get("recordedAt") or ""),
             session_record=session_record,
-            metadata={
-                **boundary_payload,
-                "artifactRef": session_record.latest_reset_boundary_ref,
-                "controlEventRef": session_record.latest_control_event_ref,
-                "resetBoundaryRef": session_record.latest_reset_boundary_ref,
-            },
+            metadata=boundary_metadata,
         )
 
     for kind, ref_attr, label, ref_key in (

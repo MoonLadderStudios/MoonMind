@@ -1451,6 +1451,89 @@ def test_iter_historical_artifact_events_preserves_specific_session_artifact_ref
     assert events_by_kind["session_reset_boundary"]["metadata"]["resetBoundaryRef"] == "art_reset"
 
 
+def test_iter_historical_artifact_events_omits_missing_reset_boundary_ref(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+
+    (artifacts_root / "art_control").write_text(
+        json.dumps(
+            {
+                "action": "clear_session",
+                "previousSessionEpoch": 1,
+                "newSessionEpoch": 2,
+                "previousThreadId": "thread-1",
+                "newThreadId": "thread-2",
+                "recordedAt": "2026-04-08T00:00:01Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = SimpleNamespace(
+        diagnostics_ref=None,
+        stdout_artifact_ref=None,
+        stderr_artifact_ref=None,
+        started_at=datetime(2026, 4, 8, 0, 0, tzinfo=UTC),
+    )
+    session_record = _build_session_record()
+
+    events = list(
+        task_runs_router._iter_historical_artifact_events(
+            record,
+            session_record,
+            limit_per_stream=20,
+        )
+    )
+    events_by_kind = {event["kind"]: event for event in events}
+
+    assert events_by_kind["session_cleared"]["metadata"]["controlEventRef"] == "art_control"
+    assert "resetBoundaryRef" not in events_by_kind["session_cleared"]["metadata"]
+
+
+def test_iter_historical_artifact_events_omits_missing_control_event_ref(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+
+    (artifacts_root / "art_reset").write_text(
+        json.dumps(
+            {
+                "sessionEpoch": 2,
+                "threadId": "thread-2",
+                "recordedAt": "2026-04-08T00:00:02Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = SimpleNamespace(
+        diagnostics_ref=None,
+        stdout_artifact_ref=None,
+        stderr_artifact_ref=None,
+        started_at=datetime(2026, 4, 8, 0, 0, tzinfo=UTC),
+    )
+    session_record = _build_session_record()
+
+    events = list(
+        task_runs_router._iter_historical_artifact_events(
+            record,
+            session_record,
+            limit_per_stream=20,
+        )
+    )
+    events_by_kind = {event["kind"]: event for event in events}
+
+    assert events_by_kind["session_reset_boundary"]["metadata"]["resetBoundaryRef"] == "art_reset"
+    assert "controlEventRef" not in events_by_kind["session_reset_boundary"]["metadata"]
+
+
 def _build_session_record() -> CodexManagedSessionRecord:
     now = datetime.now(UTC)
     return CodexManagedSessionRecord(
