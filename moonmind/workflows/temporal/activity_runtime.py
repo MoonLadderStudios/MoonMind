@@ -102,6 +102,9 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     shape_launch_github_auth_environment,
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
+from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+    append_managed_codex_runtime_note,
+)
 
 
 
@@ -382,6 +385,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.session_status": (
         "agent_runtime",
         "agent_runtime_session_status",
+    ),
+    "agent_runtime.prepare_turn_instructions": (
+        "agent_runtime",
+        "agent_runtime_prepare_turn_instructions",
     ),
     "agent_runtime.send_turn": ("agent_runtime", "agent_runtime_send_turn"),
     "agent_runtime.steer_turn": ("agent_runtime", "agent_runtime_steer_turn"),
@@ -2797,6 +2804,44 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.session_status",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_prepare_turn_instructions(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> str:
+        request_raw = payload.get("request")
+        if not isinstance(request_raw, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload.request is required for agent_runtime.prepare_turn_instructions"
+            )
+        request = AgentExecutionRequest.model_validate(dict(request_raw))
+        workspace_path_raw = str(
+            payload.get("workspace_path") or payload.get("workspacePath") or ""
+        ).strip()
+        instruction_ref = str(request.instruction_ref or "").strip()
+        if instruction_ref:
+            if not workspace_path_raw:
+                raise TemporalActivityRuntimeError(
+                    "payload.workspace_path or payload.workspacePath is required when request.instructionRef is set"
+                )
+            from moonmind.rag.context_injection import ContextInjectionService
+
+            service = ContextInjectionService()
+            await service.inject_context(
+                request=request,
+                workspace_path=Path(workspace_path_raw),
+            )
+            instruction_ref = str(request.instruction_ref or "").strip()
+            if instruction_ref:
+                return append_managed_codex_runtime_note(instruction_ref)
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        instructions = str(parameters.get("instructions") or "").strip()
+        if instructions:
+            return append_managed_codex_runtime_note(instructions)
+        raise TemporalActivityRuntimeError(
+            "request.instructionRef or request.parameters.instructions is required"
         )
 
     async def agent_runtime_send_turn(

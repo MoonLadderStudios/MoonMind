@@ -99,6 +99,9 @@ MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-bindin
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
 )
+MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
+    "agent-run-managed-session-prepare-turn-instructions-activity-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -1063,6 +1066,9 @@ class MoonMindAgentRun:
                     run_store = ManagedRunStore(_MANAGED_RUN_STORE_ROOT)
 
                     if uses_codex_session_adapter:
+                        use_prepare_turn_instructions_activity = workflow.patched(
+                            MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID
+                        )
                         if request.managed_session is None:
                             raise ApplicationError(
                                 "managedSession is required for Codex session-backed runs",
@@ -1120,6 +1126,13 @@ class MoonMindAgentRun:
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
 
+                        async def _prepare_turn_instructions(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.prepare_turn_instructions",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
                         async def _send_turn(request_payload: Any) -> Any:
                             return await self._execute_routed_activity(
                                 "agent_runtime.send_turn",
@@ -1173,6 +1186,11 @@ class MoonMindAgentRun:
                             load_session_snapshot=_load_session_snapshot,
                             launch_session=_launch_session,
                             session_status=_session_status,
+                            prepare_turn_instructions=(
+                                _prepare_turn_instructions
+                                if use_prepare_turn_instructions_activity
+                                else None
+                            ),
                             send_turn=_send_turn,
                             interrupt_turn=_interrupt_turn,
                             clear_remote_session=_clear_session,

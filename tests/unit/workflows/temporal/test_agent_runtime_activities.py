@@ -1330,6 +1330,17 @@ class AgentRuntimeSendTurnBoundaryTest:
         )
 
 
+@workflow.defn(name="AgentRuntimePrepareTurnInstructionsBoundaryTest")
+class AgentRuntimePrepareTurnInstructionsBoundaryTest:
+    @workflow.run
+    async def run(self, input_dict: dict) -> str:
+        return await workflow.execute_activity(
+            "agent_runtime.prepare_turn_instructions",
+            input_dict,
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_session_temporal_boundary(
     monkeypatch: pytest.MonkeyPatch,
@@ -1444,3 +1455,125 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
 
             assert isinstance(result, CodexManagedSessionTurnResponse)
             assert result.turn_id == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_injects_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _FakeContextInjectionService:
+        async def inject_context(
+            self,
+            *,
+            request: Any,
+            workspace_path: Path,
+        ) -> None:
+            assert workspace_path == tmp_path
+            request.instruction_ref = "Injected context instruction"
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService",
+        _FakeContextInjectionService,
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "instructionRef": "artifact:instructions",
+                "parameters": {"publishMode": "none"},
+            },
+            "workspacePath": str(tmp_path),
+        }
+    )
+
+    assert result.startswith("Injected context instruction")
+    assert "Managed Codex CLI note:" in result
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match=(
+            "payload.workspace_path or payload.workspacePath is required "
+            "when request.instructionRef is set"
+        ),
+    ):
+        await activities.agent_runtime_prepare_turn_instructions(
+            {
+                "request": {
+                    "agentKind": "managed",
+                    "agentId": "codex",
+                    "correlationId": "corr-1",
+                    "idempotencyKey": "idem-1",
+                    "instructionRef": "artifact:instructions",
+                    "parameters": {"publishMode": "none"},
+                }
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from temporalio import activity
+
+    class _FakeContextInjectionService:
+        async def inject_context(
+            self,
+            *,
+            request: Any,
+            workspace_path: Path,
+        ) -> None:
+            assert workspace_path == tmp_path
+            request.instruction_ref = "Injected context instruction"
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService",
+        _FakeContextInjectionService,
+    )
+    activities_impl = TemporalAgentRuntimeActivities()
+
+    @activity.defn(name="agent_runtime.prepare_turn_instructions")
+    async def _agent_runtime_prepare_turn_instructions_wrapper(
+        request: dict,
+    ) -> str:
+        return await activities_impl.agent_runtime_prepare_turn_instructions(request)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="boundary-test-queue-prepare-turn-instructions",
+            workflows=[AgentRuntimePrepareTurnInstructionsBoundaryTest],
+            activities=[_agent_runtime_prepare_turn_instructions_wrapper],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                AgentRuntimePrepareTurnInstructionsBoundaryTest.run,
+                {
+                    "request": {
+                        "agentKind": "managed",
+                        "agentId": "codex",
+                        "correlationId": "corr-1",
+                        "idempotencyKey": "idem-1",
+                        "instructionRef": "artifact:instructions",
+                        "parameters": {"publishMode": "none"},
+                    },
+                    "workspacePath": str(tmp_path),
+                },
+                id="boundary-test-prepare-turn-instructions",
+                task_queue="boundary-test-queue-prepare-turn-instructions",
+            )
+
+            assert result.startswith("Injected context instruction")
+            assert "Managed Codex CLI note:" in result
