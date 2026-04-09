@@ -3,7 +3,7 @@
 **Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md)
 **Status:** Desired state
 **Owners:** MoonMind Platform
-**Last updated:** 2026-04-08
+**Last updated:** 2026-04-09
 
 **Related:**
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
@@ -33,7 +33,7 @@ The goal is to let MoonMind run these workloads **against the task workspace** w
 - the **Temporal control plane** as the owner of launch, policy, cancellation, and observability
 - worker images generic and maintainable
 
-This document replaces the older framing that treated DooD mainly as a sandbox-worker trick for arbitrary heavy commands. The updated model distinguishes **managed agent session containers** from **non-agent workload containers**.
+This document replaces the older framing that treated DooD mainly as a sandbox-worker trick for arbitrary heavy commands. The updated model distinguishes **managed agent session containers** from **non-agent workload containers**. Phase 0 locks that contract here; remaining rollout work belongs in [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md).
 
 ---
 
@@ -219,7 +219,7 @@ Rules:
 - it must have best-effort termination on step cancel, timeout, or task cancel
 - it must not become a hidden long-lived background service
 
-The initial implementation emphasis should remain **one-shot workload containers**. Bounded helper containers are a valid direction, but they do not change the separation between session-plane identity and workload identity.
+The initial implementation emphasis should remain **one-shot workload containers**. Bounded helper containers remain a later phase. They are a valid direction, but they do not change the separation between session-plane identity and workload identity.
 
 ---
 
@@ -240,6 +240,8 @@ For normal specialized workloads, the preferred model is:
 5. MoonMind publishes artifacts and returns a normal `ToolResult`
 
 This keeps specialized workload containers in the **tool** world rather than pretending they are extra agent sessions.
+
+The initial DooD execution primitive is `tool.type = "skill"`. `tool.type = "agent_runtime"` remains reserved for true long-lived agent runtimes rather than ordinary workload containers.
 
 ### 7.3 Curated activity exception
 
