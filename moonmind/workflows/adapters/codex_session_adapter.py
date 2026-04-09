@@ -778,8 +778,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
         runtime_id = self._runtime_id or "codex_cli"
         summary = str(result.get("summary") or "").strip() or None
-        workspace_path = (
-            str(workspace_path or "").strip()
+        resolved_workspace_path = (
+            (str(workspace_path or "").strip() or None)
             if binding is not None
             else (existing.workspace_path if existing is not None else None)
         )
@@ -793,7 +793,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             status=status,
             startedAt=started_at,
             finishedAt=finished_at,
-            workspacePath=workspace_path,
+            workspacePath=resolved_workspace_path,
             stdoutArtifactRef=_artifact_ref(
                 session_artifact_metadata.get("stdoutArtifactRef"),
                 fallback=_infer_runtime_artifact_ref(
