@@ -1036,12 +1036,6 @@ function mapEventsToTimelineRows(
   return payload.events.flatMap((event) => eventToTimelineRows(event));
 }
 
-function hasRenderableObservabilityHistory(
-  payload: z.infer<typeof ObservabilityEventsResponseSchema> | null | undefined,
-): boolean {
-  return mapEventsToTimelineRows(payload).length > 0;
-}
-
 function deriveSessionSnapshotFromEvent(
   event: ObservabilityEvent,
   previous: SessionSnapshot | null,
@@ -1629,7 +1623,7 @@ function LiveLogsPanel({
   });
   const historyRows = useMemo(() => mapEventsToTimelineRows(historyQuery.data), [historyQuery.data]);
   const historyUnavailable = historyQuery.isError || historyQuery.data === null;
-  const historyEmpty = historyQuery.isSuccess && !hasRenderableObservabilityHistory(historyQuery.data);
+  const historyEmpty = historyQuery.isSuccess && historyRows.length === 0;
 
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
