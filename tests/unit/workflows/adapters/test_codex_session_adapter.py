@@ -297,6 +297,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
+    assert persisted_record.workspace_path == str(workspace_path)
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"

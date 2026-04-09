@@ -261,6 +261,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             agent_id=request.agent_id,
             managed_run_id=binding.task_run_id,
             binding=binding,
+            workspace_path=self._workspace_path_for_request(
+                binding=binding,
+                request=request,
+            ),
             locator=current_locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
             result=result.model_dump(mode="json", by_alias=True),
@@ -387,6 +391,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             agent_id=state.agent_id,
             managed_run_id=state.managed_run_id,
             binding=None,
+            workspace_path=None,
             locator=state.locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
             result=canceled_result.model_dump(mode="json", by_alias=True),
@@ -674,6 +679,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         agent_id: str,
         managed_run_id: str | None = None,
         binding: CodexManagedSessionBinding | None = None,
+        workspace_path: str | None = None,
         locator: Mapping[str, Any],
         active_turn_id: str | None,
         result: Mapping[str, Any],
@@ -701,6 +707,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             agent_id=agent_id,
             managed_run_id=managed_run_id,
             binding=binding,
+            workspace_path=workspace_path,
             locator=locator,
             active_turn_id=active_turn_id,
             result=result,
@@ -716,6 +723,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         agent_id: str,
         managed_run_id: str | None,
         binding: CodexManagedSessionBinding | None,
+        workspace_path: str | None,
         locator: Mapping[str, Any],
         active_turn_id: str | None,
         result: Mapping[str, Any],
@@ -771,7 +779,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         runtime_id = self._runtime_id or "codex_cli"
         summary = str(result.get("summary") or "").strip() or None
         workspace_path = (
-            str(self._session_root(binding))
+            str(workspace_path or "").strip()
             if binding is not None
             else (existing.workspace_path if existing is not None else None)
         )
