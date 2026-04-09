@@ -166,11 +166,11 @@ body {
   font-size: 0.72rem;
 }
 
-h1 {
+.masthead h1 {
   margin: 0.35rem 0 0.2rem;
   font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
   letter-spacing: 0.01em;
-  font-size: clamp(1.7rem, 3vw, 2.55rem);
+  font-size: clamp(1.5rem, 2.4vw, 2.15rem);
   line-height: 1;
 }
 
