@@ -1035,10 +1035,97 @@ function getCopyableRowText(row: TimelineRow): string {
   return row.text;
 }
 
+type TimelineArtifactLink = {
+  key: string;
+  label: string;
+  href: string;
+};
+
+function TimelineArtifactLinks({ links }: { links: TimelineArtifactLink[] }): ReactNode {
+  if (links.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="live-logs-artifact-links">
+      {links.map((link) => (
+        <a
+          key={link.key}
+          className="live-logs-artifact-link"
+          href={link.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={link.label}
+        >
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function coerceArtifactRef(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized || null;
+  }
+  if (value && typeof value === 'object') {
+    const candidate = (value as { artifactRef?: unknown; artifact_id?: unknown; artifactId?: unknown }).artifactRef
+      ?? (value as { artifactRef?: unknown; artifact_id?: unknown; artifactId?: unknown }).artifact_id
+      ?? (value as { artifactRef?: unknown; artifact_id?: unknown; artifactId?: unknown }).artifactId;
+    if (typeof candidate === 'string') {
+      const normalized = candidate.trim();
+      return normalized || null;
+    }
+  }
+  return null;
+}
+
+function buildArtifactDownloadHref(apiBase: string, artifactId: string): string {
+  return joinApiBasePath(apiBase, `/artifacts/${encodeURIComponent(artifactId)}/download`);
+}
+
+function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): TimelineArtifactLink[] {
+  const links: TimelineArtifactLink[] = [];
+  const seen = new Set<string>();
+  const addLink = (label: string, value: unknown) => {
+    const artifactId = coerceArtifactRef(value);
+    if (!artifactId) return;
+    const key = `${label}:${artifactId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    links.push({
+      key,
+      label,
+      href: buildArtifactDownloadHref(apiBase, artifactId),
+    });
+  };
+
+  if (row.kind === 'summary_published') {
+    addLink('Open summary artifact', row.metadata.summaryRef ?? row.metadata.artifactRef);
+  }
+  if (row.kind === 'checkpoint_published') {
+    addLink('Open checkpoint artifact', row.metadata.checkpointRef ?? row.metadata.artifactRef);
+  }
+  if (row.kind === 'session_cleared' || row.kind === 'session_reset_boundary') {
+    addLink(
+      'Open control event artifact',
+      row.metadata.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata.artifactRef : null),
+    );
+    addLink(
+      'Open reset boundary artifact',
+      row.metadata.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata.artifactRef : null),
+    );
+  }
+
+  return links;
+}
+
 function renderTimelineRow(
   row: TimelineRow,
   wrapLines: boolean,
   timelineViewerEnabled: boolean,
+  apiBase: string,
 ): ReactNode {
   const rowClasses = [
     'live-logs-row',
@@ -1046,6 +1133,7 @@ function renderTimelineRow(
     `live-logs-stream-${row.stream}`,
     wrapLines ? 'is-wrapped' : 'is-unwrapped',
   ].join(' ');
+  const artifactLinks = timelineViewerEnabled ? buildTimelineArtifactLinks(row, apiBase) : [];
 
   if (timelineViewerEnabled && row.rowType === 'boundary') {
     return (
@@ -1062,6 +1150,7 @@ function renderTimelineRow(
         >
           {row.text}
         </div>
+        <TimelineArtifactLinks links={artifactLinks} />
       </div>
     );
   }
@@ -1082,6 +1171,7 @@ function renderTimelineRow(
       >
         {renderTimelineRowText(row, timelineViewerEnabled)}
       </div>
+      <TimelineArtifactLinks links={artifactLinks} />
     </div>
   );
 }
@@ -1704,6 +1794,11 @@ function LiveLogsPanel({
         <p className="small">
           Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
         </p>
+        {sessionTimelineEnabled ? (
+          <p className="small">
+            Timeline shows what happened. Continuity artifacts remain the durable drill-down evidence.
+          </p>
+        ) : null}
         {sessionBadges.length > 0 ? (
           <div className="live-logs-session-badges">
             {sessionBadges.map(([label, value]) => (
@@ -1722,12 +1817,12 @@ function LiveLogsPanel({
                 style={{ height: 400 }}
                 data={logContent}
                 computeItemKey={(_, row) => row.id}
-                itemContent={(_, row) => renderTimelineRow(row, wrapLines, true)}
+                itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
               />
             </div>
           ) : (
             <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
-              {logContent.map((line) => renderTimelineRow(line, wrapLines, false))}
+              {logContent.map((line) => renderTimelineRow(line, wrapLines, false, apiBase))}
             </div>
           )}
         </div>
@@ -2158,6 +2253,9 @@ function SessionContinuityPanel({
     <section className="stack">
       <div>
         <h3>Session Continuity</h3>
+        <p className="small">
+          Continuity artifacts are durable evidence and drill-down for this session.
+        </p>
         <p className="small">
           Session <code>{projection.session_id}</code> — Epoch {projection.session_epoch}
         </p>
