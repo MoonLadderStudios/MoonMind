@@ -28,6 +28,24 @@ WORKFLOW_ENTRY_BY_TYPE = {
     TemporalWorkflowType.PROVIDER_PROFILE_MANAGER: "provider_profile",
 }
 
+CORE_TEMPORAL_SYNC_FIELDS = (
+    "run_id",
+    "state",
+    "close_status",
+    "started_at",
+    "updated_at",
+    "closed_at",
+    "workflow_id",
+    "namespace",
+    "workflow_type",
+)
+
+LOCAL_ONLY_EXECUTION_FIELDS = (
+    "create_idempotency_key",
+    "last_update_idempotency_key",
+    "last_update_response",
+)
+
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -118,14 +136,30 @@ def merged_memo_for_projection(
     return {**canonical_memo, **temporal_memo}
 
 
+def preserve_local_only_fields(payload: dict[str, Any], *records: Any) -> None:
+    """Keep DB-managed helpers when Temporal payloads omit them."""
+    for field in LOCAL_ONLY_EXECUTION_FIELDS:
+        if payload.get(field) is not None:
+            continue
+        for record in records:
+            if record is None:
+                continue
+            preserved = getattr(record, field, None)
+            if preserved is not None:
+                payload[field] = preserved
+                break
+
+
 async def map_temporal_state_to_projection(
     desc: WorkflowExecutionDescription,
 ) -> dict[str, Any]:
     """Map Temporal workflow execution description to projection payload."""
     # desc.memo() is an async coroutine in the Temporal SDK and must be awaited
+    memo_loaded = False
     try:
         raw_memo = await desc.memo()
         memo = dict(raw_memo) if raw_memo else {}
+        memo_loaded = True
     except Exception:
         logger.exception("Failed to decode Temporal memo for %s", desc.id)
         memo = {}
@@ -258,6 +292,7 @@ async def map_temporal_state_to_projection(
         "started_at": desc.execution_time or desc.start_time,
         "updated_at": canonical_updated_at,
         "closed_at": desc.close_time,
+        "_temporal_memo_loaded": memo_loaded,
     }
 
 
@@ -268,6 +303,7 @@ async def sync_execution_projection(
 ) -> TemporalExecutionRecord:
     """Upsert the Temporal workflow state to the local projection database."""
     payload = await map_temporal_state_to_projection(desc)
+    temporal_memo_loaded = bool(payload.pop("_temporal_memo_loaded", False))
 
     projection = await session.get(TemporalExecutionRecord, desc.id)
     canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
@@ -282,6 +318,8 @@ async def sync_execution_projection(
         else:
             semantic_updated_at = payload.get("started_at") or synced_at
     payload["updated_at"] = semantic_updated_at
+    preserve_local_only_fields(payload, projection, canonical)
+    temporal_metadata_missing = (not temporal_memo_loaded) or not payload.get("memo")
 
     if projection is None:
         projection = TemporalExecutionRecord(
@@ -294,19 +332,8 @@ async def sync_execution_projection(
         )
         session.add(projection)
     else:
-        temporal_metadata_missing = not payload.get("memo") and not payload.get("search_attributes")
         for field, value in payload.items():
-            if temporal_metadata_missing and field not in (
-                "run_id",
-                "state",
-                "close_status",
-                "started_at",
-                "updated_at",
-                "closed_at",
-                "workflow_id",
-                "namespace",
-                "workflow_type",
-            ):
+            if temporal_metadata_missing and field not in CORE_TEMPORAL_SYNC_FIELDS:
                 continue
             setattr(projection, field, value)
         projection.updated_at = semantic_updated_at
@@ -335,19 +362,29 @@ async def sync_execution_projection(
     # set at execution creation time and are not present in the Temporal memo.
     # The memo-derived parameters from map_temporal_state_to_projection are typically
     # empty; the canonical record is the source of truth for creation-time parameters.
-    if canonical is not None:
+    if canonical is not None or not temporal_metadata_missing:
         projection.parameters = merged_parameters_for_projection(payload, canonical)
 
     # Preserve DB-only memo keys (e.g. taskRunId written by _report_task_run_binding)
     # that are absent from Temporal's immutable workflow memo.  Temporal keys win for
     # any key present in both sources.
-    projection.memo = merged_memo_for_projection(payload, canonical)
+    if canonical is not None or not temporal_metadata_missing:
+        projection.memo = merged_memo_for_projection(payload, canonical)
 
-    if canonical is not None and canonical.state != state_value:
-        canonical.state = state_value
-        canonical.close_status = close_status_value
-        if payload.get("closed_at") and canonical.closed_at is None:
-            canonical.closed_at = payload["closed_at"]
+    if canonical is not None:
+        for field, value in payload.items():
+            if temporal_metadata_missing and field not in CORE_TEMPORAL_SYNC_FIELDS:
+                continue
+            if field == "parameters":
+                canonical.parameters = merged_parameters_for_projection(payload, canonical)
+                continue
+            if field == "memo":
+                canonical.memo = merged_memo_for_projection(payload, canonical)
+                continue
+            setattr(canonical, field, value)
+        canonical.updated_at = semantic_updated_at
+        # Preserve the Temporal semantic timestamp even when other columns change.
+        flag_modified(canonical, "updated_at")
         logger.info(
             "Synced canonical record %s: state=%s close_status=%s",
             desc.id,
