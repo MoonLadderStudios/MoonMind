@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionWorkflowInput,
         FetchCodexManagedSessionSummaryRequest,
         InterruptCodexManagedSessionTurnRequest,
+        TerminateCodexManagedSessionRequest,
         PublishCodexManagedSessionArtifactsRequest,
         SendCodexManagedSessionTurnRequest,
         SteerCodexManagedSessionTurnRequest,
@@ -531,6 +532,33 @@ class MoonMindAgentSessionWorkflow:
         self._termination_requested = True
         self._last_control_action = "terminate_session"
         self._last_control_reason = request.reason
+        if self._container_id and self._thread_id:
+            locator = self._require_locator()
+            try:
+                handle = CodexManagedSessionHandle.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.terminate_session",
+                        TerminateCodexManagedSessionRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            reason=request.reason,
+                        ).model_dump(by_alias=True),
+                    )
+                )
+            except Exception as exc:
+                workflow.logger.warning(
+                    "Managed session terminate activity failed for %s: %s",
+                    self._binding.session_id,
+                    exc,
+                )
+            else:
+                self._apply_runtime_snapshot(
+                    handle.session_state.model_dump(mode="json", by_alias=True),
+                    last_control_action="terminate_session",
+                    last_control_reason=request.reason,
+                )
         return self.get_status()
 
     @terminate_session_update.validator
