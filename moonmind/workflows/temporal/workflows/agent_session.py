@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionWorkflowInput,
         FetchCodexManagedSessionSummaryRequest,
         InterruptCodexManagedSessionTurnRequest,
+        TerminateCodexManagedSessionRequest,
         PublishCodexManagedSessionArtifactsRequest,
         SendCodexManagedSessionTurnRequest,
         SteerCodexManagedSessionTurnRequest,
@@ -527,6 +528,25 @@ class MoonMindAgentSessionWorkflow:
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        if self._container_id and self._thread_id:
+            locator = self._require_locator()
+            handle = CodexManagedSessionHandle.model_validate(
+                await self._execute_routed_activity(
+                    "agent_runtime.terminate_session",
+                    TerminateCodexManagedSessionRequest(
+                        sessionId=locator.session_id,
+                        sessionEpoch=locator.session_epoch,
+                        containerId=locator.container_id,
+                        threadId=locator.thread_id,
+                        reason=request.reason,
+                    ).model_dump(by_alias=True),
+                )
+            )
+            self._apply_runtime_snapshot(
+                handle.session_state.model_dump(mode="json", by_alias=True),
+                last_control_action="terminate_session",
+                last_control_reason=request.reason,
+            )
         self._status = AGENT_SESSION_STATUS_TERMINATING
         self._termination_requested = True
         self._last_control_action = "terminate_session"

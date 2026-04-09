@@ -141,6 +141,60 @@ async def test_agent_session_terminate_update_marks_termination_requested(
 
 
 @pytest.mark.asyncio
+async def test_agent_session_terminate_update_executes_remote_terminate_when_handles_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    captured: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        captured.append((activity_name, payload, kwargs))
+        if activity_name == "agent_runtime.terminate_session":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "status": "terminated",
+                "imageRef": "moonmind:latest",
+                "controlUrl": "docker-exec://container-1",
+                "metadata": {},
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    status = await workflow.terminate_session_update({"reason": "done"})
+
+    assert [name for name, _, _ in captured] == ["agent_runtime.terminate_session"]
+    assert captured[0][1]["containerId"] == "container-1"
+    assert captured[0][1]["threadId"] == "thread-1"
+    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
+    assert status["terminationRequested"] is True
+    assert status["activeTurnId"] is None
+
+
+@pytest.mark.asyncio
 async def test_agent_session_send_follow_up_update_executes_session_activity_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -568,6 +622,20 @@ async def test_agent_session_clear_session_update_preserves_concurrent_terminati
         payload: dict[str, object],
         **_kwargs: object,
     ) -> dict[str, object]:
+        if activity_name == "agent_runtime.terminate_session":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "status": "terminated",
+                "imageRef": "moonmind:latest",
+                "controlUrl": "http://session-control",
+                "metadata": {},
+            }
         if activity_name == "agent_runtime.clear_session":
             await workflow.terminate_session_update({"reason": "Shutdown now"})
             return {

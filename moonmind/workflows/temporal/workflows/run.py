@@ -16,6 +16,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
+        CodexManagedSessionSnapshot,
+        TerminateCodexManagedSessionRequest,
         CodexManagedSessionWorkflowInput,
         canonical_codex_managed_runtime_id,
     )
@@ -2301,6 +2303,32 @@ class MoonMindRunWorkflow:
         binding = self._codex_session_binding
         try:
             if handle is not None and binding is not None:
+                snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.load_session_snapshot"
+                )
+                snapshot_payload = await workflow.execute_activity(
+                    snapshot_route.activity_type,
+                    binding.model_dump(mode="json", by_alias=True),
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **self._execute_kwargs_for_route(snapshot_route),
+                )
+                snapshot = CodexManagedSessionSnapshot.model_validate(snapshot_payload)
+                if snapshot.container_id and snapshot.thread_id:
+                    terminate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.terminate_session"
+                    )
+                    await workflow.execute_activity(
+                        terminate_route.activity_type,
+                        TerminateCodexManagedSessionRequest(
+                            sessionId=snapshot.binding.session_id,
+                            sessionEpoch=snapshot.binding.session_epoch,
+                            containerId=snapshot.container_id,
+                            threadId=snapshot.thread_id,
+                            reason=reason,
+                        ).model_dump(mode="json", by_alias=True),
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(terminate_route),
+                    )
                 await handle.signal(
                     "control_action",
                     {
