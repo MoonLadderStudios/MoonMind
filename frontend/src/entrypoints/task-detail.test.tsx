@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
-import { getSessionProjectionRefetchInterval, TaskDetailPage } from './task-detail';
+import { expandRouteTemplate, getSessionProjectionRefetchInterval, TaskDetailPage } from './task-detail';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -76,12 +76,613 @@ describe('Task Detail Entrypoint', () => {
     page: 'task-detail',
     apiBase: '/api',
   };
+  const stepsPayload: BootPayload = {
+    page: 'task-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        pollIntervalsMs: { detail: 1 },
+        sources: {
+          taskRuns: {
+            observabilitySummary: '/api/task-runs/{taskRunId}/observability-summary',
+            observabilityEvents: '/api/task-runs/{taskRunId}/observability/events',
+            logsStream: '/api/task-runs/{taskRunId}/logs/stream',
+            logsStdout: '/api/task-runs/{taskRunId}/logs/stdout',
+            logsStderr: '/api/task-runs/{taskRunId}/logs/stderr',
+            logsMerged: '/api/task-runs/{taskRunId}/logs/merged',
+            diagnostics: '/api/task-runs/{taskRunId}/diagnostics',
+            artifactSession: '/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}',
+            artifactSessionControl: '/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control',
+          },
+        },
+      },
+    },
+  };
+
+  const latestStepsSnapshot = {
+    workflowId: 'test-123',
+    runId: '02-run',
+    runScope: 'latest',
+    steps: [
+      {
+        logicalStepId: 'plan',
+        order: 1,
+        title: 'Plan work',
+        tool: { type: 'skill', name: 'plan.generate', version: '1' },
+        dependsOn: [],
+        status: 'succeeded',
+        waitingReason: null,
+        attentionRequired: false,
+        attempt: 1,
+        startedAt: '2026-04-09T00:00:01Z',
+        updatedAt: '2026-04-09T00:00:02Z',
+        summary: 'Plan complete',
+        checks: [],
+        refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+        artifacts: {
+          outputSummary: 'art-step-plan',
+          outputPrimary: null,
+          runtimeStdout: null,
+          runtimeStderr: null,
+          runtimeMergedLogs: null,
+          runtimeDiagnostics: null,
+          providerSnapshot: null,
+        },
+        lastError: null,
+      },
+      {
+        logicalStepId: 'apply',
+        order: 2,
+        title: 'Apply patch',
+        tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
+        dependsOn: ['plan'],
+        status: 'running',
+        waitingReason: null,
+        attentionRequired: false,
+        attempt: 1,
+        startedAt: '2026-04-09T00:00:03Z',
+        updatedAt: '2026-04-09T00:00:04Z',
+        summary: 'Applying repository changes',
+        checks: [
+          {
+            kind: 'approval_policy',
+            status: 'passed',
+            summary: 'Auto-approved',
+            retryCount: 0,
+            artifactRef: null,
+          },
+        ],
+        refs: {
+          childWorkflowId: 'child-wf-1',
+          childRunId: 'child-run-1',
+          taskRunId: 'task-run-step-1',
+        },
+        artifacts: {
+          outputSummary: 'art-step-summary',
+          outputPrimary: 'art-step-output',
+          runtimeStdout: null,
+          runtimeStderr: null,
+          runtimeMergedLogs: null,
+          runtimeDiagnostics: 'art-step-diagnostics',
+          providerSnapshot: null,
+        },
+        lastError: null,
+      },
+      {
+        logicalStepId: 'verify',
+        order: 3,
+        title: 'Verify tests',
+        tool: { type: 'skill', name: 'repo.run_tests', version: '1' },
+        dependsOn: ['apply'],
+        status: 'ready',
+        waitingReason: null,
+        attentionRequired: false,
+        attempt: 0,
+        startedAt: null,
+        updatedAt: '2026-04-09T00:00:04Z',
+        summary: 'Ready to start',
+        checks: [],
+        refs: { childWorkflowId: null, childRunId: null, taskRunId: null },
+        artifacts: {
+          outputSummary: null,
+          outputPrimary: null,
+          runtimeStdout: null,
+          runtimeStderr: null,
+          runtimeMergedLogs: null,
+          runtimeDiagnostics: null,
+          providerSnapshot: null,
+        },
+        lastError: null,
+      },
+    ],
+  };
 
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     window.history.pushState({}, 'Test', '/tasks/test-123?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch');
+    fetchSpy.mockClear();
+  });
+
+  it('returns null for route templates with missing parameters', () => {
+    expect(
+      expandRouteTemplate('/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}', {
+        taskRunId: 'task-run-1',
+        sessionId: null,
+      }),
+    ).toBeNull();
+    expect(
+      expandRouteTemplate('/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}', {
+        taskRunId: 'task-run-1',
+      }),
+    ).toBeNull();
+  });
+
+  it('renders a Steps section above Timeline and Artifacts and loads steps before execution-wide artifacts', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Step detail task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByText('Plan work')).toBeTruthy();
+      expect(screen.getByText('Apply patch')).toBeTruthy();
+      expect(screen.getByText('Verify tests')).toBeTruthy();
+      expect(screen.getByText('Latest run')).toBeTruthy();
+      expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
+    });
+
+    const stepsHeading = screen.getByRole('heading', { name: 'Steps' });
+    const timelineHeading = screen.getByRole('heading', { name: 'Timeline' });
+    const artifactsHeading = screen.getByRole('heading', { name: 'Artifacts' });
+
+    const positions: [number, number] = [
+      stepsHeading.compareDocumentPosition(timelineHeading),
+      timelineHeading.compareDocumentPosition(artifactsHeading),
+    ];
+    expect(positions[0] & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(positions[1] & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await waitFor(() => {
+      const urls = fetchSpy.mock.calls.map(([input]) => String(input));
+      const detailIndex = urls.findIndex((url) => url.includes('/api/executions/test-123?source=temporal'));
+      const stepsIndex = urls.findIndex((url) => url.includes('/api/executions/test-123/steps'));
+      const artifactsIndex = urls.findIndex((url) => url.includes('/artifacts'));
+      expect(detailIndex).toBeGreaterThanOrEqual(0);
+      expect(stepsIndex).toBeGreaterThan(detailIndex);
+      expect(artifactsIndex).toBeGreaterThan(stepsIndex);
+    });
+  });
+
+  it('expands a bound step into grouped step details and lazily attaches row-scoped observability', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Step detail task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/task-runs/task-run-step-1/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-step-1/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-09T00:00:05Z',
+                stream: 'stdout',
+                text: 'step scoped log line\n',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-step-1/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => 'step scoped log line\n' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+    ).toBe(false);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { name: 'Summary' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Checks' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Logs & Diagnostics' })).toBeTruthy();
+      expect(screen.getAllByRole('heading', { name: 'Artifacts' }).length).toBeGreaterThan(0);
+      expect(screen.getByRole('heading', { name: 'Metadata' })).toBeTruthy();
+      expect(screen.getByText('Auto-approved')).toBeTruthy();
+      expect(screen.getByText('art-step-summary')).toBeTruthy();
+      expect(screen.getByText('child-wf-1')).toBeTruthy();
+      expect(screen.getByText('step scoped log line')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Hide details for Apply patch' })).toBeTruthy();
+    });
+    expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
+
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+    ).toBe(true);
+  });
+
+  it('keeps unbound rows free of task-run requests and upgrades expanded rows when taskRunId arrives later', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Delayed binding task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    let stepCalls = 0;
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        stepCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () =>
+            stepCalls === 1
+              ? {
+                  ...latestStepsSnapshot,
+                  steps: latestStepsSnapshot.steps.map((step) =>
+                    step.logicalStepId === 'apply'
+                      ? {
+                          ...step,
+                          refs: {
+                            ...step.refs,
+                            taskRunId: null,
+                          },
+                        }
+                      : step,
+                  ),
+                }
+              : latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-step-1/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-step-1/observability/events')) {
+        return Promise.resolve({ ok: false, status: 404 } as Response);
+      }
+      if (url.includes('/task-runs/task-run-step-1/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => 'attached after refresh\n' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+    ).toBe(false);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('attached after refresh')).toBeTruthy();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+    ).toBe(true);
+  });
+
+  it('resolves step-level task-run routes against apiBase', async () => {
+    const apiBasePayload: BootPayload = {
+      ...stepsPayload,
+      apiBase: '/tenant/api',
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/tenant/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Task behind apiBase',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/tenant/api/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/tenant/api/task-runs/task-run-step-1/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/tenant/api/task-runs/task-run-step-1/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/tenant/api/task-runs/task-run-step-1/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={apiBasePayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) =>
+          String(url).includes('/tenant/api/task-runs/task-run-step-1/observability-summary'),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('shows the execution Observation fallback when the steps endpoint fails', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      taskRunId: 'task-run-root',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Fallback observation task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: false, status: 403, statusText: '' } as Response);
+      }
+      if (url.includes('/task-runs/task-run-root/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-root/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            events: [
+              {
+                sequence: 1,
+                timestamp: '2026-04-09T00:00:05Z',
+                stream: 'stdout',
+                text: 'root observation log\n',
+              },
+            ],
+            truncated: false,
+          }),
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-root/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => 'root observation log\n' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Steps: 403 (/api/executions/test-123/steps)')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-root/observability-summary')),
+      ).toBe(true);
+    });
+  });
+
+  it('does not attach step-level observability when log streaming is disabled', async () => {
+    const logStreamingDisabledPayload: BootPayload = {
+      ...stepsPayload,
+      initialData: {
+        dashboardConfig: {
+          ...((stepsPayload.initialData as { dashboardConfig: unknown }).dashboardConfig as Record<string, unknown>),
+          features: {
+            logStreamingEnabled: false,
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Streaming disabled task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={logStreamingDisabledPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/live log streaming is disabled in the server dashboard config/i)).toBeTruthy();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/task-runs/task-run-step-1/observability-summary')),
+    ).toBe(false);
   });
 
   it('renders loading state initially', () => {

@@ -17,6 +17,7 @@ type DashboardConfig = {
   };
   sources?: {
     temporal?: Record<string, string>;
+    taskRuns?: Record<string, string>;
   };
 };
 
@@ -130,6 +131,7 @@ const ExecutionDetailSchema = z
     closedAt: z.string().nullable().optional(),
     taskRunId: z.string().nullable().optional(),
     task_run_id: z.string().nullable().optional(),
+    stepsHref: z.string().nullable().optional(),
     debugFields: z
       .object({
         workflowId: z.string().optional(),
@@ -305,6 +307,84 @@ const ArtifactListSchema = z.object({
     .default([]),
 });
 
+const StepLedgerToolSchema = z
+  .object({
+    type: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
+    version: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const StepLedgerCheckSchema = z
+  .object({
+    kind: z.string(),
+    status: z.string(),
+    summary: z.string().nullable().optional(),
+    retryCount: z.number().default(0),
+    artifactRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const StepLedgerRefsSchema = z
+  .object({
+    childWorkflowId: z.string().nullable().optional(),
+    childRunId: z.string().nullable().optional(),
+    taskRunId: z.string().nullable().optional(),
+  })
+  .default({
+    childWorkflowId: null,
+    childRunId: null,
+    taskRunId: null,
+  });
+
+const StepLedgerArtifactsSchema = z
+  .object({
+    outputSummary: z.string().nullable().optional(),
+    outputPrimary: z.string().nullable().optional(),
+    runtimeStdout: z.string().nullable().optional(),
+    runtimeStderr: z.string().nullable().optional(),
+    runtimeMergedLogs: z.string().nullable().optional(),
+    runtimeDiagnostics: z.string().nullable().optional(),
+    providerSnapshot: z.string().nullable().optional(),
+  })
+  .default({
+    outputSummary: null,
+    outputPrimary: null,
+    runtimeStdout: null,
+    runtimeStderr: null,
+    runtimeMergedLogs: null,
+    runtimeDiagnostics: null,
+    providerSnapshot: null,
+  });
+
+const StepLedgerRowSchema = z
+  .object({
+    logicalStepId: z.string(),
+    order: z.number(),
+    title: z.string(),
+    tool: StepLedgerToolSchema.default({}),
+    dependsOn: z.array(z.string()).default([]),
+    status: z.string(),
+    waitingReason: z.string().nullable().optional(),
+    attentionRequired: z.boolean().optional(),
+    attempt: z.number().default(0),
+    startedAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+    checks: z.array(StepLedgerCheckSchema).default([]),
+    refs: StepLedgerRefsSchema,
+    artifacts: StepLedgerArtifactsSchema,
+    lastError: z.unknown().nullable().optional(),
+  })
+  .passthrough();
+
+const StepLedgerSnapshotSchema = z.object({
+  workflowId: z.string(),
+  runId: z.string(),
+  runScope: z.string().default('latest'),
+  steps: z.array(StepLedgerRowSchema).default([]),
+});
+
 const RunSummaryArtifactSchema = z
   .object({
     finishOutcome: z
@@ -357,6 +437,58 @@ function decodeTaskPathSegment(segment: string | null | undefined): string | nul
   } catch {
     return segment;
   }
+}
+
+export function expandRouteTemplate(
+  template: string | null | undefined,
+  params: Record<string, string | null | undefined>,
+): string | null {
+  if (!template) return null;
+  let path = template;
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    path = path.replaceAll(`{${key}}`, encodeURIComponent(value));
+  }
+  return path.includes('{') && path.includes('}') ? null : path;
+}
+
+function joinApiBasePath(apiBase: string, path: string): string {
+  const base = apiBase.replace(/\/+$/g, '');
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${suffix}`;
+}
+
+function resolveApiBaseTemplate(apiBase: string, expandedTemplate: string): string {
+  const template = expandedTemplate.trim();
+  if (!template) return template;
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(template)) return template;
+
+  const normalizedApiBase = apiBase.replace(/\/+$/g, '');
+  if (!normalizedApiBase) return template;
+  if (template.startsWith(normalizedApiBase)) return template;
+
+  if (template === '/api') {
+    return normalizedApiBase;
+  }
+  if (template.startsWith('/api/')) {
+    return joinApiBasePath(normalizedApiBase, template.slice('/api'.length));
+  }
+  return joinApiBasePath(normalizedApiBase, template);
+}
+
+function taskRunRoute(
+  apiBase: string,
+  template: string | null | undefined,
+  fallback: string,
+  params: Record<string, string | null | undefined>,
+): string {
+  const expandedTemplate = expandRouteTemplate(template, params);
+  if (expandedTemplate) {
+    return resolveApiBaseTemplate(apiBase, expandedTemplate);
+  }
+  return joinApiBasePath(apiBase, fallback);
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -485,10 +617,15 @@ function buildObservabilityRequestError(status: number): ObservabilityRequestErr
   return new ObservabilityRequestError(status, `Observability request failed: ${status}`);
 }
 
-/** Fetch the plain-text merged-tail from the artifact-backed API. */
-async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<string> {
+async function fetchMergedTail(
+  apiBase: string,
+  taskRunId: string,
+  routeTemplate?: string | null,
+): Promise<string> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+    taskRunRoute(apiBase, routeTemplate, `/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`, {
+      taskRunId,
+    }),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -498,10 +635,19 @@ async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<stri
   return resp.text();
 }
 
-/** Fetch specific static stream (stdout or stderr) */
-async function fetchStream(apiBase: string, taskRunId: string, stream: 'stdout' | 'stderr'): Promise<string> {
+async function fetchStream(
+  apiBase: string,
+  taskRunId: string,
+  stream: 'stdout' | 'stderr',
+  routeTemplate?: string | null,
+): Promise<string> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -511,10 +657,18 @@ async function fetchStream(apiBase: string, taskRunId: string, stream: 'stdout' 
   return resp.text();
 }
 
-/** Fetch diagnostics JSON */
-async function fetchDiagnostics(apiBase: string, taskRunId: string): Promise<string> {
+async function fetchDiagnostics(
+  apiBase: string,
+  taskRunId: string,
+  routeTemplate?: string | null,
+): Promise<string> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -556,9 +710,15 @@ async function fetchArtifactSessionProjection(
   apiBase: string,
   taskRunId: string,
   sessionId: string,
+  routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionProjectionSchema> | null> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
+      { taskRunId, sessionId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -573,9 +733,15 @@ async function controlArtifactSession(
   taskRunId: string,
   sessionId: string,
   body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string },
+  routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
+      { taskRunId, sessionId },
+    ),
     {
       method: 'POST',
       credentials: 'include',
@@ -593,9 +759,15 @@ async function controlArtifactSession(
 async function fetchObservabilitySummary(
   apiBase: string,
   taskRunId: string,
+  routeTemplate?: string | null,
 ): Promise<z.infer<typeof ObservabilitySummarySchema> | null> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -609,9 +781,15 @@ async function fetchObservabilitySummary(
 async function fetchObservabilityEvents(
   apiBase: string,
   taskRunId: string,
+  routeTemplate?: string | null,
 ): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability/events`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/observability/events`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -619,6 +797,16 @@ async function fetchObservabilityEvents(
     throw buildObservabilityRequestError(resp.status);
   }
   return ObservabilityEventsResponseSchema.parse(await resp.json());
+}
+
+async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
+  const resp = await fetch(stepsHref, { credentials: 'include' });
+  if (!resp.ok) {
+    const statusText = resp.statusText.trim();
+    const detail = statusText ? ` ${statusText}` : '';
+    throw new Error(`Steps: ${resp.status}${detail} (${stepsHref})`);
+  }
+  return StepLedgerSnapshotSchema.parse(await resp.json());
 }
 
 const TERMINAL_RUN_STATUSES = new Set([
@@ -742,16 +930,304 @@ function mapEventsToTimelineRows(
   return payload.events.flatMap((event) => eventToTimelineRows(event));
 }
 
+type TaskRunRouteTemplates = {
+  observabilitySummary?: string | undefined;
+  observabilityEvents?: string | undefined;
+  logsStream?: string | undefined;
+  logsStdout?: string | undefined;
+  logsStderr?: string | undefined;
+  logsMerged?: string | undefined;
+  diagnostics?: string | undefined;
+  artifactSession?: string | undefined;
+  artifactSessionControl?: string | undefined;
+};
+
+function readTaskRunRouteTemplates(config: DashboardConfig | undefined): TaskRunRouteTemplates {
+  return {
+    observabilitySummary: config?.sources?.taskRuns?.observabilitySummary,
+    observabilityEvents: config?.sources?.taskRuns?.observabilityEvents,
+    logsStream: config?.sources?.taskRuns?.logsStream,
+    logsStdout: config?.sources?.taskRuns?.logsStdout,
+    logsStderr: config?.sources?.taskRuns?.logsStderr,
+    logsMerged: config?.sources?.taskRuns?.logsMerged,
+    diagnostics: config?.sources?.taskRuns?.diagnostics,
+    artifactSession: config?.sources?.taskRuns?.artifactSession,
+    artifactSessionControl: config?.sources?.taskRuns?.artifactSessionControl,
+  };
+}
+
+function formatStepToolLabel(tool: z.infer<typeof StepLedgerToolSchema>): string {
+  const name = String(tool.name || '').trim();
+  const type = String(tool.type || '').trim();
+  if (name) return name;
+  if (type) return type;
+  return 'unknown';
+}
+
+function formatStepLastError(lastError: unknown): string | null {
+  if (!lastError) return null;
+  if (typeof lastError === 'string') return lastError;
+  if (typeof lastError === 'object') {
+    const candidate = (lastError as { summary?: unknown; message?: unknown }).summary
+      ?? (lastError as { summary?: unknown; message?: unknown }).message;
+    return candidate ? String(candidate) : JSON.stringify(lastError);
+  }
+  return String(lastError);
+}
+
+function stepTerminal(status: string | null | undefined): boolean {
+  const normalized = String(status || '').trim().toLowerCase();
+  return normalized === 'succeeded'
+    || normalized === 'failed'
+    || normalized === 'canceled'
+    || normalized === 'cancelled'
+    || normalized === 'skipped';
+}
+
+function stepCheckStatusClass(status: string | null | undefined): string {
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `check-${normalized || 'unknown'}`;
+}
+
+function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
+  const checkStatusClass = stepCheckStatusClass(check.status);
+  return (
+    <span className={`step-check-badge ${checkStatusClass} ${executionStatusPillClasses(check.status)}`}>
+      {check.kind.replaceAll('_', ' ')}: {check.status.replaceAll('_', ' ')}
+    </span>
+  );
+}
+
+function StepArtifactsList({
+  artifacts,
+}: {
+  artifacts: z.infer<typeof StepLedgerArtifactsSchema>;
+}) {
+  const entries = [
+    ['Output summary', artifacts.outputSummary],
+    ['Output primary', artifacts.outputPrimary],
+    ['Runtime stdout', artifacts.runtimeStdout],
+    ['Runtime stderr', artifacts.runtimeStderr],
+    ['Runtime merged logs', artifacts.runtimeMergedLogs],
+    ['Runtime diagnostics', artifacts.runtimeDiagnostics],
+    ['Provider snapshot', artifacts.providerSnapshot],
+  ].filter(([, value]) => Boolean(value)) as Array<[string, string]>;
+
+  if (entries.length === 0) {
+    return <p className="small">No step artifacts linked yet.</p>;
+  }
+
+  return (
+    <ul className="step-detail-list">
+      {entries.map(([label, value]) => (
+        <li key={`${label}-${value}`}>
+          <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function StepMetadataList({
+  row,
+  runId,
+}: {
+  row: z.infer<typeof StepLedgerRowSchema>;
+  runId: string;
+}) {
+  return (
+    <ul className="step-detail-list">
+      <li><strong>Logical step id:</strong> <code className="text-xs break-all">{row.logicalStepId}</code></li>
+      <li><strong>Run id:</strong> <code className="text-xs break-all">{runId}</code></li>
+      <li><strong>Tool:</strong> <code className="text-xs break-all">{formatStepToolLabel(row.tool)}</code></li>
+      <li><strong>Attempt:</strong> {row.attempt}</li>
+      <li><strong>Depends on:</strong> {row.dependsOn.length > 0 ? row.dependsOn.join(', ') : 'None'}</li>
+      <li><strong>Child workflow:</strong> {row.refs.childWorkflowId ? <code className="text-xs break-all">{row.refs.childWorkflowId}</code> : '—'}</li>
+      <li><strong>Child run:</strong> {row.refs.childRunId ? <code className="text-xs break-all">{row.refs.childRunId}</code> : '—'}</li>
+      <li><strong>Task run:</strong> {row.refs.taskRunId ? <code className="text-xs break-all">{row.refs.taskRunId}</code> : '—'}</li>
+      <li><strong>Started:</strong> {formatWhen(row.startedAt)}</li>
+      <li><strong>Updated:</strong> {formatWhen(row.updatedAt)}</li>
+    </ul>
+  );
+}
+
+function StepObservabilityGroup({
+  apiBase,
+  logStreamingEnabled,
+  row,
+  routes,
+}: {
+  apiBase: string;
+  logStreamingEnabled: boolean;
+  row: z.infer<typeof StepLedgerRowSchema>;
+  routes: TaskRunRouteTemplates;
+}) {
+  if (!logStreamingEnabled) {
+    return (
+      <p className="small">Live log streaming is disabled in the server dashboard config.</p>
+    );
+  }
+
+  const taskRunId = row.refs.taskRunId;
+  if (!taskRunId) {
+    return (
+      <p className="small">
+        {renderMissingTaskRunCopy(
+          row.status === 'running' || row.status === 'awaiting_external'
+            ? 'waiting_for_launch'
+            : 'binding_missing',
+        )}
+      </p>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <LiveLogsPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        isTerminal={stepTerminal(row.status)}
+        autoExpand
+        routes={routes}
+      />
+      <StaticLogPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        stream="stdout"
+        routes={routes}
+      />
+      <StaticLogPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        stream="stderr"
+        routes={routes}
+      />
+      <DiagnosticsPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        routes={routes}
+      />
+    </div>
+  );
+}
+
+function StepLedgerRowCard({
+  apiBase,
+  logStreamingEnabled,
+  row,
+  runId,
+  expanded,
+  onToggle,
+  routes,
+}: {
+  apiBase: string;
+  logStreamingEnabled: boolean;
+  row: z.infer<typeof StepLedgerRowSchema>;
+  runId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  routes: TaskRunRouteTemplates;
+}) {
+  const lastError = formatStepLastError(row.lastError);
+
+  return (
+    <article className="step-row-card">
+      <div className="step-row-header">
+        <div className="step-row-header-main">
+          <button
+            type="button"
+            className="step-row-toggle"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={expanded ? `Hide details for ${row.title}` : `Show details for ${row.title}`}
+          >
+            {expanded ? 'Hide details' : 'Show details'}
+          </button>
+          <div className="step-row-title-block">
+            <strong>{row.title}</strong>
+            <div className="step-row-meta">
+              <code className="text-xs break-all">{row.logicalStepId}</code>
+              <code className="text-xs break-all">{formatStepToolLabel(row.tool)}</code>
+            </div>
+          </div>
+        </div>
+        <div className="step-row-statuses">
+          <span className={executionStatusPillClasses(row.status)}>{row.status.replaceAll('_', ' ')}</span>
+          <span className="step-attempt-pill">Attempt {row.attempt}</span>
+        </div>
+      </div>
+      <div className="step-row-summary">
+        <p className="small">{row.summary || 'No step summary yet.'}</p>
+        {row.checks.length > 0 ? (
+          <div className="step-check-badges">
+            {row.checks.map((check, index) => (
+              <StepCheckBadge key={`${check.kind}-${check.status}-${index}`} check={check} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {expanded ? (
+        <div className="step-row-details stack">
+          <section className="stack">
+            <h4>Summary</h4>
+            <p className="small">{row.summary || 'No step summary yet.'}</p>
+            {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
+            {lastError ? <p className="small">Last error: {lastError}</p> : null}
+          </section>
+          <section className="stack">
+            <h4>Checks</h4>
+            {row.checks.length > 0 ? (
+              <ul className="step-detail-list">
+                {row.checks.map((check, index) => (
+                  <li key={`${check.kind}-${check.status}-${index}`}>
+                    <StepCheckBadge check={check} />
+                    {check.summary ? <span className="small"> {check.summary}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="small">No structured checks for this step yet.</p>
+            )}
+          </section>
+          <section className="stack">
+            <h4>Logs & Diagnostics</h4>
+            <StepObservabilityGroup
+              apiBase={apiBase}
+              logStreamingEnabled={logStreamingEnabled}
+              row={row}
+              routes={routes}
+            />
+          </section>
+          <section className="stack">
+            <h4>Artifacts</h4>
+            <StepArtifactsList artifacts={row.artifacts} />
+          </section>
+          <section className="stack">
+            <h4>Metadata</h4>
+            <StepMetadataList row={row} runId={runId} />
+          </section>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function LiveLogsPanel({
   apiBase,
   taskRunId,
   isTerminal,
   autoExpand = false,
+  routes,
 }: {
   apiBase: string;
   taskRunId: string;
   isTerminal: boolean;
   autoExpand?: boolean;
+  routes: TaskRunRouteTemplates;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -783,7 +1259,7 @@ function LiveLogsPanel({
   // Query for observability summary
   const summaryQuery = useQuery({
     queryKey: ['observability-summary', taskRunId],
-    queryFn: () => fetchObservabilitySummary(apiBase, taskRunId),
+    queryFn: () => fetchObservabilitySummary(apiBase, taskRunId, routes.observabilitySummary),
     enabled: !!taskRunId && expanded,
     // The summary indicates stream availability; refetch occasionally if not terminal
     staleTime: 1000 * 10,
@@ -791,7 +1267,7 @@ function LiveLogsPanel({
 
   const historyQuery = useQuery({
     queryKey: ['task-run-observability-events', taskRunId],
-    queryFn: () => fetchObservabilityEvents(apiBase, taskRunId),
+    queryFn: () => fetchObservabilityEvents(apiBase, taskRunId, routes.observabilityEvents),
     enabled: !!taskRunId && expanded && summaryQuery.isSuccess,
     staleTime: Infinity,
     retry: false,
@@ -801,7 +1277,7 @@ function LiveLogsPanel({
   // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
     queryKey: ['task-run-tail', taskRunId],
-    queryFn: () => fetchMergedTail(apiBase, taskRunId),
+    queryFn: () => fetchMergedTail(apiBase, taskRunId, routes.logsMerged),
     enabled:
       !!taskRunId &&
       expanded &&
@@ -898,7 +1374,13 @@ function LiveLogsPanel({
 
     const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
     const since = nextSince != null ? `?since=${nextSince}` : '';
-    const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
+    const streamUrl = taskRunRoute(
+      apiBase,
+      routes.logsStream,
+      `/task-runs/${encodeURIComponent(taskRunId)}/logs/stream`,
+      { taskRunId },
+    );
+    const url = `${streamUrl}${since}`;
     const es = new EventSource(url, { withCredentials: true });
     esRef.current = es;
 
@@ -998,7 +1480,12 @@ function LiveLogsPanel({
     copyTextToClipboard(logContent.map((line) => line.text).join('\n'));
   };
 
-  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`;
+  const downloadUrl = taskRunRoute(
+    apiBase,
+    routes.logsMerged,
+    `/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+    { taskRunId },
+  );
   const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
   const sessionBadges = sessionSnapshot
     ? [
@@ -1258,18 +1745,26 @@ function InterventionPanel({
 function StaticLogPanel({
   apiBase,
   taskRunId,
-  stream
+  stream,
+  routes,
 }: {
   apiBase: string;
   taskRunId: string;
   stream: 'stdout' | 'stderr';
+  routes: TaskRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
 
   const streamQuery = useQuery({
     queryKey: ['task-run-stream', taskRunId, stream],
-    queryFn: () => fetchStream(apiBase, taskRunId, stream),
+    queryFn: () =>
+      fetchStream(
+        apiBase,
+        taskRunId,
+        stream,
+        stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
+      ),
     enabled: !!taskRunId && expanded,
     retry: false,
   });
@@ -1281,7 +1776,12 @@ function StaticLogPanel({
     copyTextToClipboard(streamQuery.data);
   };
 
-  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`;
+  const downloadUrl = taskRunRoute(
+    apiBase,
+    stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
+    `/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+    { taskRunId },
+  );
 
   return (
     <details className="stack" open={expanded}>
@@ -1329,17 +1829,19 @@ function StaticLogPanel({
 
 function DiagnosticsPanel({
   apiBase,
-  taskRunId
+  taskRunId,
+  routes,
 }: {
   apiBase: string;
   taskRunId: string;
+  routes: TaskRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
 
   const diagQuery = useQuery({
     queryKey: ['task-run-diagnostics', taskRunId],
-    queryFn: () => fetchDiagnostics(apiBase, taskRunId),
+    queryFn: () => fetchDiagnostics(apiBase, taskRunId, routes.diagnostics),
     enabled: !!taskRunId && expanded,
     retry: false,
   });
@@ -1349,7 +1851,12 @@ function DiagnosticsPanel({
     copyTextToClipboard(diagQuery.data);
   };
 
-  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`;
+  const downloadUrl = taskRunRoute(
+    apiBase,
+    routes.diagnostics,
+    `/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+    { taskRunId },
+  );
 
   return (
     <details className="stack" open={expanded}>
@@ -1403,6 +1910,7 @@ function SessionContinuityPanel({
   onCancel,
   invalidateTaskDetail,
   cancelBusy,
+  routes,
 }: {
   apiBase: string;
   taskRunId: string;
@@ -1411,6 +1919,7 @@ function SessionContinuityPanel({
   onCancel: () => void;
   invalidateTaskDetail: () => void;
   cancelBusy: boolean;
+  routes: TaskRunRouteTemplates;
 }) {
   const queryClient = useQueryClient();
   const sessionId = deriveCodexSessionId(taskRunId, targetRuntime);
@@ -1421,7 +1930,7 @@ function SessionContinuityPanel({
     queryKey: ['task-run-session-projection', taskRunId, sessionId],
     queryFn: () => {
       if (!sessionId) return Promise.resolve(null);
-      return fetchArtifactSessionProjection(apiBase, taskRunId, sessionId);
+      return fetchArtifactSessionProjection(apiBase, taskRunId, sessionId, routes.artifactSession);
     },
     enabled: Boolean(taskRunId && sessionId),
     refetchInterval: (query) => {
@@ -1437,7 +1946,7 @@ function SessionContinuityPanel({
   const controlMutation = useMutation({
     mutationFn: async (body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string }) => {
       if (!sessionId) throw new Error('Managed session is unavailable.');
-      return controlArtifactSession(apiBase, taskRunId, sessionId, body);
+      return controlArtifactSession(apiBase, taskRunId, sessionId, body, routes.artifactSessionControl);
     },
     onSuccess: (result) => {
       setPanelError(null);
@@ -1637,6 +2146,7 @@ function renderMissingTaskRunCopy(state: MissingTaskRunState): string {
 export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
+  const taskRunRoutes = readTaskRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
@@ -1652,6 +2162,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [liveUpdates, setLiveUpdates] = useState(true);
+  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
 
   const detailQuery = useQuery({
     queryKey: ['task-detail', encodedTaskId, sourceTemporal],
@@ -1701,6 +2212,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const missingTaskRunState = execution && !resolvedTaskRunId ? inferMissingTaskRunState(execution) : null;
 
+  const stepsQuery = useQuery({
+    queryKey: ['task-detail-steps', workflowId, execution?.stepsHref],
+    queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
+    enabled: Boolean(execution?.stepsHref),
+    refetchInterval: liveUpdates && execution?.stepsHref ? detailPoll : false,
+  });
+
   const artifactsQuery = useQuery({
     queryKey: ['task-detail-artifacts', namespace, workflowId, runId],
     queryFn: async () => {
@@ -1711,7 +2229,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       }
       return ArtifactListSchema.parse(await response.json());
     },
-    enabled: Boolean(namespace && workflowId && runId),
+    enabled:
+      Boolean(namespace && workflowId && runId)
+      && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
     refetchInterval: liveUpdates && namespace && workflowId && runId ? detailPoll : false,
   });
 
@@ -1754,9 +2274,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         execution.prerequisites.length > 0 ||
         execution.dependents.length > 0),
   );
+  const hasStepsEndpoint = Boolean(execution?.stepsHref);
+  const showExecutionObservationFallback =
+    !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-steps', workflowId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, runId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
   };
@@ -1898,6 +2422,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
+  const toggleStep = (logicalStepId: string) => {
+    setExpandedSteps((prev) => ({
+      ...prev,
+      [logicalStepId]: !prev[logicalStepId],
+    }));
+  };
 
   return (
     <div className="stack">
@@ -2069,6 +2599,46 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
+          {hasStepsEndpoint ? (
+            <section className="stack">
+              <div className="step-ledger-header">
+                <div>
+                  <h3>Steps</h3>
+                  <p className="small">
+                    Latest run <code className="text-xs break-all">{stepsQuery.data?.runId || runId || '—'}</code>
+                  </p>
+                </div>
+                {stepsQuery.data ? (
+                  <p className="small">
+                    {stepsQuery.data.steps.length} step{stepsQuery.data.steps.length === 1 ? '' : 's'} in {stepsQuery.data.runScope}
+                  </p>
+                ) : null}
+              </div>
+              {stepsQuery.isLoading ? (
+                <p className="loading">Loading steps...</p>
+              ) : stepsQuery.isError ? (
+                <div className="notice error">{(stepsQuery.error as Error).message}</div>
+              ) : stepsQuery.data ? (
+                <div className="step-ledger-list">
+                  {stepsQuery.data.steps.map((row) => (
+                    <StepLedgerRowCard
+                      key={row.logicalStepId}
+                      apiBase={payload.apiBase}
+                      logStreamingEnabled={logStreamingEnabled}
+                      row={row}
+                      runId={stepsQuery.data?.runId || runId}
+                      expanded={Boolean(expandedSteps[row.logicalStepId])}
+                      onToggle={() => toggleStep(row.logicalStepId)}
+                      routes={taskRunRoutes}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="small">No step ledger available for this execution.</p>
+              )}
+            </section>
+          ) : null}
+
           {execution.attentionRequired ? (
             <section className="notice">
               <strong>Attention required.</strong> This task is waiting for external input before it can continue.
@@ -2202,6 +2772,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               onCancel={onCancel}
               invalidateTaskDetail={invalidate}
               cancelBusy={cancelMutation.isPending}
+              routes={taskRunRoutes}
             />
           ) : null}
 
@@ -2303,42 +2874,59 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             )}
           </section>
 
-          <section className="stack">
-            <div>
-              <h3>Observation</h3>
-              <p className="small">
-                Live logs are passive observation only. Use the Intervention panel for control actions.
-              </p>
-            </div>
-            {logStreamingEnabled ? (
-              resolvedTaskRunId ? (
-                <>
-                  {showTaskRunAttachNotice ? (
-                    <p className="small">Waiting for managed runtime launch to create live logs.</p>
-                  ) : null}
-                  <LiveLogsPanel
-                    apiBase={payload.apiBase}
-                    taskRunId={resolvedTaskRunId}
-                    isTerminal={isTerminalExecution}
-                    autoExpand={showTaskRunAttachNotice}
-                  />
-                  <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stdout" />
-                  <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stderr" />
-                  <DiagnosticsPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} />
-                </>
+          {showExecutionObservationFallback ? (
+            <section className="stack">
+              <div>
+                <h3>Observation</h3>
+                <p className="small">
+                  Live logs are passive observation only. Use the Intervention panel for control actions.
+                </p>
+              </div>
+              {logStreamingEnabled ? (
+                resolvedTaskRunId ? (
+                  <>
+                    {showTaskRunAttachNotice ? (
+                      <p className="small">Waiting for managed runtime launch to create live logs.</p>
+                    ) : null}
+                    <LiveLogsPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      isTerminal={isTerminalExecution}
+                      autoExpand={showTaskRunAttachNotice}
+                      routes={taskRunRoutes}
+                    />
+                    <StaticLogPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      stream="stdout"
+                      routes={taskRunRoutes}
+                    />
+                    <StaticLogPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      stream="stderr"
+                      routes={taskRunRoutes}
+                    />
+                    <DiagnosticsPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      routes={taskRunRoutes}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <h3>Live Logs</h3>
+                    <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for task details...'}</p>
+                  </>
+                )
               ) : (
                 <>
                   <h3>Live Logs</h3>
-                  <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for task details...'}</p>
+                  <p className="small">Live log streaming is disabled in the server dashboard config.</p>
                 </>
-              )
-            ) : (
-              <>
-                <h3>Live Logs</h3>
-                <p className="small">Live log streaming is disabled in the server dashboard config.</p>
-              </>
-            )}
-          </section>
+              )}
+            </section>
+          ) : null}
 
           {debugOn && execution.debugFields ? (
             <section className="stack">
