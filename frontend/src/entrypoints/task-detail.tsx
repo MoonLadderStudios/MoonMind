@@ -1458,6 +1458,16 @@ function StepObservabilityGroup({
   );
 }
 
+function stepStatusIcon(status: string): { icon: string; cssClass: string } {
+  const s = status.toLowerCase().trim();
+  if (s === 'succeeded' || s === 'completed') return { icon: '✓', cssClass: 'step-icon-ok' };
+  if (s === 'failed') return { icon: '✕', cssClass: 'step-icon-fail' };
+  if (s === 'canceled' || s === 'cancelled' || s === 'skipped') return { icon: '–', cssClass: 'step-icon-skip' };
+  if (s === 'running' || s === 'executing' || s === 'planning' || s === 'initializing' || s === 'finalizing')
+    return { icon: '●', cssClass: 'step-icon-running' };
+  return { icon: '○', cssClass: 'step-icon-pending' };
+}
+
 function StepLedgerRowCard({
   apiBase,
   logStreamingEnabled,
@@ -1466,6 +1476,7 @@ function StepLedgerRowCard({
   runId,
   expanded,
   onToggle,
+  isLast,
   routes,
 }: {
   apiBase: string;
@@ -1475,90 +1486,89 @@ function StepLedgerRowCard({
   runId: string;
   expanded: boolean;
   onToggle: () => void;
+  isLast: boolean;
   routes: TaskRunRouteTemplates;
 }) {
   const lastError = formatStepLastError(row.lastError);
+  const { icon, cssClass } = stepStatusIcon(row.status);
 
   return (
-    <article className="step-row-card">
-      <div className="step-row-header">
-        <div className="step-row-header-main">
-          <button
-            type="button"
-            className="step-row-toggle"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={expanded ? `Hide details for ${row.title}` : `Show details for ${row.title}`}
-          >
-            {expanded ? 'Hide details' : 'Show details'}
-          </button>
-          <div className="step-row-title-block">
-            <strong>{row.title}</strong>
-            <div className="step-row-meta">
-              <code className="text-xs break-all">{row.logicalStepId}</code>
-              <code className="text-xs break-all">{formatStepToolLabel(row.tool)}</code>
-            </div>
-          </div>
-        </div>
-        <div className="step-row-statuses">
-          <span className={executionStatusPillClasses(row.status)}>{row.status.replaceAll('_', ' ')}</span>
-          <span className="step-attempt-pill">Attempt {row.attempt}</span>
-        </div>
+    <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
+      <div className="step-tl-gutter" aria-hidden="true">
+        <span className={`step-tl-icon ${cssClass}`} title={row.status.replaceAll('_', ' ')}>{icon}</span>
+        {!isLast ? <span className="step-tl-line" /> : null}
       </div>
-      <div className="step-row-summary">
-        <p className="small">{row.summary || 'No step summary yet.'}</p>
-        {row.checks.length > 0 ? (
-          <div className="step-check-badges">
-            {row.checks.map((check, index) => (
-              <StepCheckBadge key={`${check.kind}-${check.status}-${index}`} check={check} />
-            ))}
+      <div className="step-tl-content">
+        <button
+          type="button"
+          className="step-tl-toggle"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Hide details for ${row.title}` : `Show details for ${row.title}`}
+        >
+          <div className="step-tl-header">
+            <span className="step-tl-title">{row.title}</span>
+            <span className="step-tl-right">
+              <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
+              <span className={executionStatusPillClasses(row.status)}>{row.status.replaceAll('_', ' ')}</span>
+              {row.attempt > 1 ? <span className="step-attempt-pill">Attempt {row.attempt}</span> : null}
+              <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
+            </span>
+          </div>
+          {!expanded && row.summary ? (
+            <p className="step-tl-summary">{row.summary}</p>
+          ) : null}
+          {!expanded && row.checks.length > 0 ? (
+            <div className="step-check-badges">
+              {row.checks.map((check, index) => (
+                <StepCheckBadge key={`${check.kind}-${check.status}-${index}`} check={check} />
+              ))}
+            </div>
+          ) : null}
+        </button>
+        {expanded ? (
+          <div className="step-tl-details">
+            <section className="step-tl-detail-section">
+              <h4>Summary</h4>
+              <p className="small">{row.summary || 'No step summary yet.'}</p>
+              {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
+              {lastError ? <p className="small step-tl-error">Last error: {lastError}</p> : null}
+            </section>
+            {row.checks.length > 0 ? (
+              <section className="step-tl-detail-section">
+                <h4>Checks</h4>
+                <ul className="step-detail-list">
+                  {row.checks.map((check, index) => (
+                    <li key={`${check.kind}-${check.status}-${index}`}>
+                      <StepCheckBadge check={check} />
+                      {check.summary ? <span className="small"> {check.summary}</span> : null}
+                      <StepCheckDetails check={check} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+            <section className="step-tl-detail-section">
+              <h4>Logs & Diagnostics</h4>
+              <StepObservabilityGroup
+                apiBase={apiBase}
+                logStreamingEnabled={logStreamingEnabled}
+                sessionTimelineEnabled={sessionTimelineEnabled}
+                row={row}
+                routes={routes}
+              />
+            </section>
+            <section className="step-tl-detail-section">
+              <h4>Artifacts</h4>
+              <StepArtifactsList artifacts={row.artifacts} />
+            </section>
+            <section className="step-tl-detail-section">
+              <h4>Metadata</h4>
+              <StepMetadataList row={row} runId={runId} />
+            </section>
           </div>
         ) : null}
       </div>
-      {expanded ? (
-        <div className="step-row-details stack">
-          <section className="stack">
-            <h4>Summary</h4>
-            <p className="small">{row.summary || 'No step summary yet.'}</p>
-            {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
-            {lastError ? <p className="small">Last error: {lastError}</p> : null}
-          </section>
-          <section className="stack">
-            <h4>Checks</h4>
-            {row.checks.length > 0 ? (
-              <ul className="step-detail-list">
-                {row.checks.map((check, index) => (
-                  <li key={`${check.kind}-${check.status}-${index}`}>
-                    <StepCheckBadge check={check} />
-                    {check.summary ? <span className="small"> {check.summary}</span> : null}
-                    <StepCheckDetails check={check} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="small">No structured checks for this step yet.</p>
-            )}
-          </section>
-          <section className="stack">
-            <h4>Logs & Diagnostics</h4>
-            <StepObservabilityGroup
-              apiBase={apiBase}
-              logStreamingEnabled={logStreamingEnabled}
-              sessionTimelineEnabled={sessionTimelineEnabled}
-              row={row}
-              routes={routes}
-            />
-          </section>
-          <section className="stack">
-            <h4>Artifacts</h4>
-            <StepArtifactsList artifacts={row.artifacts} />
-          </section>
-          <section className="stack">
-            <h4>Metadata</h4>
-            <StepMetadataList row={row} runId={runId} />
-          </section>
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -2918,26 +2928,24 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
           {hasStepsEndpoint ? (
             <section className="stack">
-              <div className="step-ledger-header">
-                <div>
-                  <h3>Steps</h3>
-                  <p className="small">
-                    Latest run <code className="text-xs break-all">{latestRunId || '—'}</code>
-                  </p>
-                </div>
-                {stepsQuery.data ? (
-                  <p className="small">
-                    {stepsQuery.data.steps.length} step{stepsQuery.data.steps.length === 1 ? '' : 's'} in {stepsQuery.data.runScope}
-                  </p>
-                ) : null}
+              <div className="step-tl-section-header">
+                <h3>Steps</h3>
+                <span className="step-tl-header-meta">
+                  <code className="text-xs">{latestRunId || '—'}</code>
+                  {stepsQuery.data ? (
+                    <span className="step-tl-count">
+                      {stepsQuery.data.steps.length} step{stepsQuery.data.steps.length === 1 ? '' : 's'}
+                    </span>
+                  ) : null}
+                </span>
               </div>
               {stepsQuery.isLoading ? (
                 <p className="loading">Loading steps...</p>
               ) : stepsQuery.isError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
-                <div className="step-ledger-list">
-                  {stepsQuery.data.steps.map((row) => (
+                <div className="step-tl-list">
+                  {stepsQuery.data.steps.map((row, idx) => (
                     <StepLedgerRowCard
                       key={row.logicalStepId}
                       apiBase={payload.apiBase}
@@ -2947,6 +2955,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                       runId={latestRunId}
                       expanded={Boolean(expandedSteps[row.logicalStepId])}
                       onToggle={() => toggleStep(row.logicalStepId)}
+                      isLast={idx === stepsQuery.data.steps.length - 1}
                       routes={taskRunRoutes}
                     />
                   ))}
