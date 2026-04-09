@@ -160,10 +160,10 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "code: 429",
 )
 _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
-_PUBLISH_GIT_ADD_EXCLUDES: tuple[str, ...] = (
-    ":(exclude)CLAUDE.md",
-    ":(exclude)live_streams.spool",
-    ":(exclude).agents/skills/active",
+_PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
+    "CLAUDE.md",
+    "live_streams.spool",
+    ".agents/skills/active",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
@@ -3658,6 +3658,62 @@ class TemporalAgentRuntimeActivities:
         ]
 
     @staticmethod
+    def _parse_git_status_paths(status_output: bytes) -> tuple[str, ...]:
+        """Extract changed paths from `git status --porcelain=v1 -z` output."""
+
+        def _decode_path(path_bytes: bytes) -> str:
+            return os.fsdecode(path_bytes)
+
+        raw_output = bytes(status_output or b"")
+        if not raw_output:
+            return ()
+
+        entries = raw_output.split(b"\0")
+        paths: list[str] = []
+        index = 0
+        while index < len(entries):
+            record = entries[index]
+            if not record:
+                index += 1
+                continue
+            if len(record) < 4 or record[2:3] != b" ":
+                raise ValueError(f"unexpected git status record: {record!r}")
+
+            status = record[:2].decode("ascii", errors="strict")
+            path_bytes = record[3:]
+            if not path_bytes:
+                raise ValueError(f"missing path in git status record: {record!r}")
+            paths.append(_decode_path(path_bytes))
+
+            if "R" in status or "C" in status:
+                index += 1
+                if index >= len(entries):
+                    raise ValueError(
+                        f"missing original path for git rename/copy record: {record!r}"
+                    )
+                original_path_bytes = entries[index]
+                if not original_path_bytes:
+                    raise ValueError(
+                        f"missing original path for git rename/copy record: {record!r}"
+                    )
+                paths.append(_decode_path(original_path_bytes))
+
+            index += 1
+
+        return tuple(dict.fromkeys(paths))
+
+    @staticmethod
+    def _should_exclude_publish_path(path_text: str) -> bool:
+        """Skip runtime scaffolding paths that should never be published."""
+        normalized = str(path_text or "").strip().rstrip("/")
+        if not normalized:
+            return True
+        for excluded in _PUBLISH_GIT_EXCLUDED_PATHS:
+            if normalized == excluded or normalized.startswith(f"{excluded}/"):
+                return True
+        return False
+
+    @staticmethod
     def _workspace_command_env(workspace: str) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
@@ -3763,7 +3819,11 @@ class TemporalAgentRuntimeActivities:
 
         status_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "status", "--porcelain", "--untracked-files=all",
+                workspace,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -3781,12 +3841,26 @@ class TemporalAgentRuntimeActivities:
                 "push_error": f"could not inspect workspace changes: {detail}",
             }
 
-        if not status_stdout.decode("utf-8", errors="replace").strip():
+        if not status_stdout:
+            return {}
+
+        try:
+            changed_paths = tuple(
+                path
+                for path in self._parse_git_status_paths(status_stdout)
+                if not self._should_exclude_publish_path(path)
+            )
+        except ValueError as exc:
+            return {
+                "push_status": "failed",
+                "push_error": f"could not parse workspace changes: {exc}",
+            }
+        if not changed_paths:
             return {}
 
         add_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "add", "-A", "--", ".", *_PUBLISH_GIT_ADD_EXCLUDES,
+                workspace, "add", "-A", "--", *changed_paths,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
