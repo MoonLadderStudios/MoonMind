@@ -656,6 +656,42 @@ def test_runtime_launch_session_exports_codex_home(tmp_path: Path) -> None:
     )
 
 
+def test_runtime_launch_session_seeds_auth_volume_without_overwriting_materialized_config(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(tmp_path)
+    request = _launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    (auth_volume_path / "auth.json").write_text('{"token":"oauth"}', encoding="utf-8")
+    (auth_volume_path / "config.toml").write_text("model = 'gpt-5.4'\n", encoding="utf-8")
+    (auth_volume_path / "logs_1.sqlite").write_text("log", encoding="utf-8")
+    Path(request.codex_home_path, "config.toml").write_text(
+        "model = 'qwen/qwen3.6-plus:free'\n",
+        encoding="utf-8",
+    )
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+
+    assert Path(request.codex_home_path, "auth.json").is_file()
+    assert Path(request.codex_home_path, "config.toml").read_text(encoding="utf-8") == (
+        "model = 'qwen/qwen3.6-plus:free'\n"
+    )
+    assert not Path(request.codex_home_path, "logs_1.sqlite").exists()
+
+
 def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     workspace_path = tmp_path / "repo"
     workspace_path.mkdir()

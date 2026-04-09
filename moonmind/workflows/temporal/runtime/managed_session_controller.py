@@ -173,6 +173,22 @@ class DockerCodexManagedSessionController:
                 "launch_session environment cannot override reserved session keys: "
                 + ", ".join(reserved_keys)
             )
+        auth_volume_path = str(
+            request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
+        ).strip()
+        if auth_volume_path:
+            normalized_auth_volume_path = _normalize_absolute_posix_path(
+                auth_volume_path,
+                field_name="environment.MANAGED_AUTH_VOLUME_PATH",
+            )
+            normalized_codex_home_path = _normalize_absolute_posix_path(
+                request.codex_home_path,
+                field_name="codexHomePath",
+            )
+            if normalized_auth_volume_path == normalized_codex_home_path:
+                raise RuntimeError(
+                    "environment.MANAGED_AUTH_VOLUME_PATH must not equal codexHomePath"
+                )
 
     @staticmethod
     def _volume_mount(volume_name: str, target_path: str) -> str:
@@ -753,8 +769,6 @@ class DockerCodexManagedSessionController:
             _MANAGED_SESSION_CONTAINER_USER,
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
-            "--mount",
-            self._volume_mount(self._codex_volume_name, request.codex_home_path),
             "-e",
             f"MOONMIND_SESSION_WORKSPACE_PATH={request.workspace_path}",
             "-e",
@@ -768,6 +782,16 @@ class DockerCodexManagedSessionController:
             "-e",
             f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
         ]
+        auth_volume_path = str(
+            request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
+        ).strip()
+        if auth_volume_path:
+            run_command.extend(
+                [
+                    "--mount",
+                    self._volume_mount(self._codex_volume_name, auth_volume_path),
+                ]
+            )
         for key, value in sorted(request.environment.items()):
             run_command.extend(["-e", f"{key}={value}"])
         run_command.extend(

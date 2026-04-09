@@ -40,6 +40,8 @@ _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
 _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = 300.0
 _STDOUT_EOF = object()
+_AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
+_AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -305,6 +307,7 @@ class CodexManagedSessionRuntime:
         session_workspace_path: str,
         artifact_spool_path: str,
         codex_home_path: str,
+        auth_volume_path: str | None = None,
         image_ref: str,
         control_url: str,
         container_id: str,
@@ -315,6 +318,9 @@ class CodexManagedSessionRuntime:
         self._session_workspace_path = Path(session_workspace_path)
         self._artifact_spool_path = Path(artifact_spool_path)
         self._codex_home_path = Path(codex_home_path)
+        self._auth_volume_path = (
+            Path(auth_volume_path) if str(auth_volume_path or "").strip() else None
+        )
         self._image_ref = image_ref
         self._control_url = control_url
         self._container_id = container_id
@@ -331,6 +337,39 @@ class CodexManagedSessionRuntime:
         self._session_workspace_path.mkdir(parents=True, exist_ok=True)
         self._artifact_spool_path.mkdir(parents=True, exist_ok=True)
         self._codex_home_path.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _should_seed_auth_entry(path: Path) -> bool:
+        name = path.name
+        if name in _AUTH_SEED_EXCLUDED_NAMES:
+            return False
+        return not any(name.startswith(prefix) for prefix in _AUTH_SEED_EXCLUDED_PREFIXES)
+
+    def _seed_codex_home_from_auth_volume(self) -> None:
+        if self._auth_volume_path is None:
+            return
+        source_root = self._auth_volume_path
+        if not source_root.exists():
+            raise RuntimeError(
+                f"MANAGED_AUTH_VOLUME_PATH does not exist: {source_root}"
+            )
+        if not source_root.is_dir():
+            raise RuntimeError(
+                f"MANAGED_AUTH_VOLUME_PATH must be a directory: {source_root}"
+            )
+
+        self._ensure_directories()
+        for source_path in sorted(source_root.iterdir()):
+            if not self._should_seed_auth_entry(source_path):
+                continue
+            destination = self._codex_home_path / source_path.name
+            if source_path.is_symlink():
+                continue
+            if source_path.is_dir():
+                shutil.copytree(source_path, destination, dirs_exist_ok=True)
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination)
 
     def _append_spool(self, stream_name: str, text: str) -> None:
         if stream_name not in {"stdout", "stderr"}:
@@ -504,6 +543,7 @@ class CodexManagedSessionRuntime:
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         self._ensure_directories()
+        self._seed_codex_home_from_auth_volume()
         client = self._app_server_client()
         client.initialize()
         started = client.request("thread/start", {"cwd": str(self._workspace_path)})
@@ -826,11 +866,13 @@ def _runtime_from_environment() -> CodexManagedSessionRuntime:
             str(_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS),
         )
     )
+    auth_volume_path = str(os.environ.get("MANAGED_AUTH_VOLUME_PATH") or "").strip() or None
     return CodexManagedSessionRuntime(
         workspace_path=workspace_path,
         session_workspace_path=session_workspace_path,
         artifact_spool_path=artifact_spool_path,
         codex_home_path=codex_home_path,
+        auth_volume_path=auth_volume_path,
         image_ref=image_ref,
         control_url=control_url,
         container_id=container_id,

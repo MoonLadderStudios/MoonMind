@@ -99,6 +99,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_managed_api_key_reference,
     shape_launch_github_auth_environment,
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
@@ -2730,13 +2731,85 @@ class TemporalAgentRuntimeActivities:
             ) from exc
 
     @staticmethod
+    def _coerce_launch_session_request_payload(
+        request: Mapping[str, Any] | LaunchCodexManagedSessionRequest | None,
+    ) -> tuple[LaunchCodexManagedSessionRequest, ManagedRuntimeProfile | None]:
+        if isinstance(request, LaunchCodexManagedSessionRequest):
+            return request, None
+
+        payload = _coerce_activity_request(
+            request,
+            activity_type="agent_runtime.launch_session",
+        )
+        request_payload = payload.get("request")
+        if isinstance(request_payload, Mapping):
+            profile_payload = payload.get("profile")
+            profile = (
+                ManagedRuntimeProfile.model_validate(profile_payload)
+                if profile_payload is not None
+                else None
+            )
+            return (
+                LaunchCodexManagedSessionRequest.model_validate(request_payload),
+                profile,
+            )
+        return LaunchCodexManagedSessionRequest.model_validate(payload), None
+
+    @staticmethod
+    async def _materialize_launch_session_environment(
+        *,
+        request: LaunchCodexManagedSessionRequest,
+        profile: ManagedRuntimeProfile,
+    ) -> dict[str, str]:
+        from moonmind.workflows.adapters.materializer import (
+            ProviderProfileMaterializer,
+        )
+        from moonmind.workflows.adapters.secret_boundary import (
+            SecretResolverBoundary,
+        )
+
+        class _ActivitySecretResolver(SecretResolverBoundary):
+            async def resolve_secrets(
+                self,
+                secret_refs: dict[str, str],
+            ) -> dict[str, str]:
+                resolved: dict[str, str] = {}
+                for key, ref in secret_refs.items():
+                    resolved[key] = await resolve_managed_api_key_reference(str(ref))
+                return resolved
+
+        materializer = ProviderProfileMaterializer(
+            base_env=dict(request.environment),
+            secret_resolver=_ActivitySecretResolver(),
+        )
+        runtime_support_dir = str(
+            Path(request.codex_home_path).expanduser().resolve().parent
+        )
+        materialized_environment, _command = await materializer.materialize(
+            profile,
+            workspace_path=request.workspace_path,
+            runtime_support_dir=runtime_support_dir,
+        )
+        return materialized_environment
+
+    @staticmethod
     async def _shape_launch_session_request(
         request: LaunchCodexManagedSessionRequest,
+        *,
+        profile: ManagedRuntimeProfile | None = None,
     ) -> LaunchCodexManagedSessionRequest:
         """Resolve runtime-only auth immediately before remote session launch."""
 
+        environment = dict(request.environment)
+        if profile is not None:
+            environment = (
+                await TemporalAgentRuntimeActivities._materialize_launch_session_environment(
+                    request=request,
+                    profile=profile,
+                )
+            )
         environment = await shape_launch_github_auth_environment(
-            request.environment,
+            environment,
             ambient_github_token=os.environ.get("GITHUB_TOKEN"),
         )
         return request.model_copy(update={"environment": environment})
@@ -2749,12 +2822,13 @@ class TemporalAgentRuntimeActivities:
         controller = self._require_session_controller(
             activity_type="agent_runtime.launch_session"
         )
-        validated = self._validate_session_request(
-            request,
-            activity_type="agent_runtime.launch_session",
-            model_type=LaunchCodexManagedSessionRequest,
+        validated, profile = self._coerce_launch_session_request_payload(
+            request
         )
-        validated = await self._shape_launch_session_request(validated)
+        validated = await self._shape_launch_session_request(
+            validated,
+            profile=profile,
+        )
         try:
             response = await controller.launch_session(validated)
         except Exception as exc:

@@ -2072,10 +2072,70 @@ async def test_controller_launch_uses_mount_syntax_for_colon_scoped_paths(
     assert "--user" in run_command
     assert "1000:1000" in run_command
     assert "--mount" in run_command
+    assert "type=volume,src=codex_auth_volume," not in run_command
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_mounts_auth_volume_at_separate_managed_auth_path() -> None:
+    workspace_root = Path("/tmp/agent_jobs")
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath=str(workspace_root / "task-1" / ".moonmind" / "codex-home"),
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    run_command = commands[1]
     assert (
-        "type=volume,src=codex_auth_volume,"
-        f"dst={request.codex_home_path}"
-        in run_command
+        "type=volume,src=codex_auth_volume,dst=/home/app/.codex-auth" in run_command
+    )
+    assert (
+        f"type=volume,src=codex_auth_volume,dst={request.codex_home_path}"
+        not in run_command
     )
 
 
