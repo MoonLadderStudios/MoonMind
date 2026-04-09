@@ -449,13 +449,41 @@ function expandRouteTemplate(
   }, template);
 }
 
+function joinApiBasePath(apiBase: string, path: string): string {
+  const base = apiBase.replace(/\/+$/g, '');
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${suffix}`;
+}
+
+function resolveApiBaseTemplate(apiBase: string, expandedTemplate: string): string {
+  const template = expandedTemplate.trim();
+  if (!template) return template;
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(template)) return template;
+
+  const normalizedApiBase = apiBase.replace(/\/+$/g, '');
+  if (!normalizedApiBase) return template;
+  if (template.startsWith(normalizedApiBase)) return template;
+
+  if (template === '/api') {
+    return normalizedApiBase;
+  }
+  if (template.startsWith('/api/')) {
+    return joinApiBasePath(normalizedApiBase, template.slice('/api'.length));
+  }
+  return joinApiBasePath(normalizedApiBase, template);
+}
+
 function taskRunRoute(
   apiBase: string,
   template: string | null | undefined,
   fallback: string,
   params: Record<string, string | null | undefined>,
 ): string {
-  return expandRouteTemplate(template, params) ?? `${apiBase}${fallback}`;
+  const expandedTemplate = expandRouteTemplate(template, params);
+  if (expandedTemplate) {
+    return resolveApiBaseTemplate(apiBase, expandedTemplate);
+  }
+  return joinApiBasePath(apiBase, fallback);
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -769,7 +797,9 @@ async function fetchObservabilityEvents(
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
   const resp = await fetch(stepsHref, { credentials: 'include' });
   if (!resp.ok) {
-    throw new Error(`Steps: ${resp.statusText}`);
+    const statusText = resp.statusText.trim();
+    const detail = statusText ? ` ${statusText}` : '';
+    throw new Error(`Steps: ${resp.status}${detail} (${stepsHref})`);
   }
   return StepLedgerSnapshotSchema.parse(await resp.json());
 }
@@ -949,9 +979,19 @@ function stepTerminal(status: string | null | undefined): boolean {
     || normalized === 'skipped';
 }
 
+function stepCheckStatusClass(status: string | null | undefined): string {
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `check-${normalized || 'unknown'}`;
+}
+
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
+  const checkStatusClass = stepCheckStatusClass(check.status);
   return (
-    <span className={`step-check-badge ${executionStatusPillClasses(check.status)}`}>
+    <span className={`step-check-badge ${checkStatusClass} ${executionStatusPillClasses(check.status)}`}>
       {check.kind.replaceAll('_', ' ')}: {check.status.replaceAll('_', ' ')}
     </span>
   );
@@ -1012,13 +1052,21 @@ function StepMetadataList({
 
 function StepObservabilityGroup({
   apiBase,
+  logStreamingEnabled,
   row,
   routes,
 }: {
   apiBase: string;
+  logStreamingEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   routes: TaskRunRouteTemplates;
 }) {
+  if (!logStreamingEnabled) {
+    return (
+      <p className="small">Live log streaming is disabled in the server dashboard config.</p>
+    );
+  }
+
   const taskRunId = row.refs.taskRunId;
   if (!taskRunId) {
     return (
@@ -1064,6 +1112,7 @@ function StepObservabilityGroup({
 
 function StepLedgerRowCard({
   apiBase,
+  logStreamingEnabled,
   row,
   runId,
   expanded,
@@ -1071,6 +1120,7 @@ function StepLedgerRowCard({
   routes,
 }: {
   apiBase: string;
+  logStreamingEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
   runId: string;
   expanded: boolean;
@@ -1088,7 +1138,7 @@ function StepLedgerRowCard({
             className="step-row-toggle"
             onClick={onToggle}
             aria-expanded={expanded}
-            aria-label={`Expand step ${row.title}`}
+            aria-label={expanded ? `Hide details for ${row.title}` : `Show details for ${row.title}`}
           >
             {expanded ? 'Hide details' : 'Show details'}
           </button>
@@ -1140,7 +1190,12 @@ function StepLedgerRowCard({
           </section>
           <section className="stack">
             <h4>Logs & Diagnostics</h4>
-            <StepObservabilityGroup apiBase={apiBase} row={row} routes={routes} />
+            <StepObservabilityGroup
+              apiBase={apiBase}
+              logStreamingEnabled={logStreamingEnabled}
+              row={row}
+              routes={routes}
+            />
           </section>
           <section className="stack">
             <h4>Artifacts</h4>
@@ -2214,7 +2269,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         execution.prerequisites.length > 0 ||
         execution.dependents.length > 0),
   );
-  const shouldShowSteps = Boolean(execution?.stepsHref);
+  const hasStepsEndpoint = Boolean(execution?.stepsHref);
+  const showExecutionObservationFallback =
+    !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
@@ -2537,7 +2594,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {shouldShowSteps ? (
+          {hasStepsEndpoint ? (
             <section className="stack">
               <div className="step-ledger-header">
                 <div>
@@ -2562,6 +2619,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     <StepLedgerRowCard
                       key={row.logicalStepId}
                       apiBase={payload.apiBase}
+                      logStreamingEnabled={logStreamingEnabled}
                       row={row}
                       runId={stepsQuery.data?.runId || runId}
                       expanded={Boolean(expandedSteps[row.logicalStepId])}
@@ -2811,7 +2869,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             )}
           </section>
 
-          {!shouldShowSteps ? (
+          {showExecutionObservationFallback ? (
             <section className="stack">
               <div>
                 <h3>Observation</h3>

@@ -91,6 +91,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         == "/api/artifacts/{artifactId}/download"
     )
     assert config["sources"]["taskRuns"]["observabilitySummary"] == "/api/task-runs/{taskRunId}/observability-summary"
+    assert config["sources"]["taskRuns"]["observabilityEvents"] == "/api/task-runs/{taskRunId}/observability/events"
     assert config["sources"]["taskRuns"]["logsStream"] == "/api/task-runs/{taskRunId}/logs/stream"
     assert config["sources"]["taskRuns"]["logsStdout"] == "/api/task-runs/{taskRunId}/logs/stdout"
     assert config["sources"]["taskRuns"]["logsStderr"] == "/api/task-runs/{taskRunId}/logs/stderr"
