@@ -28,6 +28,14 @@ async def test_resolve_empty_raises() -> None:
         await resolve_managed_api_key_reference("  ")
 
 
+async def test_resolve_rejects_structured_secret_ref_values() -> None:
+    with pytest.raises(
+        ValueError,
+        match="MANAGED_API_KEY_REF must be a string secret reference",
+    ):
+        await resolve_managed_api_key_reference({"ref": "env://MY_TEST_SECRET_KEY"})
+
+
 async def test_resolve_unknown_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NOT_SET_XYZ", raising=False)
     with pytest.raises(ValueError, match="Unable to resolve"):

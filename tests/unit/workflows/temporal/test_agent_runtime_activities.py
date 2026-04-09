@@ -521,10 +521,13 @@ async def test_launch_session_materializes_profile_into_request_environment(
                 "providerId": "openrouter",
                 "credentialSource": "secret_ref",
                 "envTemplate": {
-                    "OPENAI_BASE_URL": "https://openrouter.ai/api/v1"
+                    "OPENAI_BASE_URL": "https://openrouter.ai/api/v1",
+                    "OPENROUTER_API_KEY": {
+                        "from_secret_ref": "provider_api_key"
+                    },
                 },
                 "secretRefs": {
-                    "OPENROUTER_API_KEY": "env://OPENROUTER_API_KEY"
+                    "provider_api_key": "env://OPENROUTER_API_KEY"
                 },
                 "homePathOverrides": {
                     "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
@@ -549,6 +552,50 @@ async def test_launch_session_materializes_profile_into_request_environment(
     assert "qwen/qwen3.6-plus:free" in (codex_home_path / "config.toml").read_text(
         encoding="utf-8"
     )
+
+
+async def test_launch_session_rejects_structured_secret_ref_values(
+    tmp_path: Path,
+) -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock()
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        ValueError,
+        match="profile.secretRefs.provider_api_key must be a string secret reference",
+    ):
+        await activities.agent_runtime_launch_session(
+            {
+                "request": {
+                    "taskRunId": "task-1",
+                    "sessionId": "sess-1",
+                    "threadId": "thread-1",
+                    "workspacePath": str(tmp_path / "task-1" / "repo"),
+                    "sessionWorkspacePath": str(tmp_path / "task-1" / "session"),
+                    "artifactSpoolPath": str(tmp_path / "task-1" / "artifacts"),
+                    "codexHomePath": str(
+                        tmp_path / "task-1" / ".moonmind" / "codex-home"
+                    ),
+                    "imageRef": "moonmind:latest",
+                },
+                "profile": {
+                    "runtimeId": "codex_cli",
+                    "envTemplate": {
+                        "OPENROUTER_API_KEY": {
+                            "from_secret_ref": "provider_api_key"
+                        }
+                    },
+                    "secretRefs": {
+                        "provider_api_key": {
+                            "ref": "env://OPENROUTER_API_KEY"
+                        }
+                    },
+                },
+            }
+        )
+
+    controller.launch_session.assert_not_awaited()
 
 
 async def test_load_session_snapshot_queries_session_workflow_via_client_boundary(

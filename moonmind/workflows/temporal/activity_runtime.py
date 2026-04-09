@@ -2775,7 +2775,10 @@ class TemporalAgentRuntimeActivities:
             ) -> dict[str, str]:
                 resolved: dict[str, str] = {}
                 for key, ref in secret_refs.items():
-                    resolved[key] = await resolve_managed_api_key_reference(str(ref))
+                    resolved[key] = await resolve_managed_api_key_reference(
+                        ref,
+                        field_name=f"profile.secretRefs.{key}",
+                    )
                 return resolved
 
         materializer = ProviderProfileMaterializer(
