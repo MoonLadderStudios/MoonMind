@@ -1188,16 +1188,33 @@ class DockerCodexManagedSessionController:
             return []
         reconciled: list[CodexManagedSessionRecord] = []
         for record in self._session_store.list_active():
-            if await self._container_exists(record.container_id):
+            try:
+                container_exists = await self._container_exists(record.container_id)
+                if not container_exists:
+                    updated = await self._session_store.update(
+                        record.session_id,
+                        status="degraded",
+                        error_message=(
+                            "managed session container is missing during reconcile"
+                        ),
+                        updated_at=datetime.now(tz=UTC),
+                    )
+                    reconciled.append(updated)
+                    continue
                 if self._session_supervisor is not None:
                     await self._session_supervisor.start(record)
                 reconciled.append(record)
-                continue
-            updated = await self._session_store.update(
-                record.session_id,
-                status="degraded",
-                error_message="managed session container is missing during reconcile",
-                updated_at=datetime.now(tz=UTC),
-            )
-            reconciled.append(updated)
+            except Exception as exc:
+                logger.warning(
+                    "Managed session reconcile degraded session %s after reattach failure",
+                    record.session_id,
+                    exc_info=True,
+                )
+                updated = await self._session_store.update(
+                    record.session_id,
+                    status="degraded",
+                    error_message=str(exc),
+                    updated_at=datetime.now(tz=UTC),
+                )
+                reconciled.append(updated)
         return reconciled

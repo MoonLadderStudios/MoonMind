@@ -308,7 +308,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Plan work')).toBeTruthy();
       expect(screen.getByText('Apply patch')).toBeTruthy();
       expect(screen.getByText('Verify tests')).toBeTruthy();
-      expect(screen.getByText(/Latest Run/i)).toBeTruthy();
+      expect(screen.getByText(/^Latest Run:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 

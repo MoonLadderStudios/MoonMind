@@ -1654,7 +1654,7 @@ async def test_controller_reconcile_reattaches_or_degrades_active_sessions(
 
 
 @pytest.mark.asyncio
-async def test_controller_reconcile_surfaces_transient_inspect_failures(
+async def test_controller_reconcile_degrades_when_container_inspect_fails(
     tmp_path: Path,
 ) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
@@ -1695,8 +1695,16 @@ async def test_controller_reconcile_surfaces_transient_inspect_failures(
         command_runner=_fake_runner,
     )
 
-    with pytest.raises(RuntimeError, match="failed to inspect managed session container ctr-ok"):
-        await controller.reconcile()
+    reconciled = await controller.reconcile()
+
+    assert [record.session_id for record in reconciled] == ["sess-ok"]
+    degraded = store.load("sess-ok")
+    assert degraded is not None
+    assert degraded.status == "degraded"
+    assert degraded.error_message == (
+        "failed to inspect managed session container ctr-ok: "
+        "docker daemon unavailable"
+    )
 
 
 @pytest.mark.asyncio
