@@ -376,6 +376,21 @@ class DockerCodexManagedSessionController:
     ) -> tuple[str, str]:
         return await self._run_host_command(command, extra_env=_GIT_COMMAND_LOCALE)
 
+    @staticmethod
+    def _workspace_git_command(
+        workspace_path: Path,
+        *args: str,
+    ) -> list[str]:
+        resolved_workspace = str(workspace_path.resolve())
+        return [
+            "git",
+            "-c",
+            f"safe.directory={resolved_workspace}",
+            "-C",
+            resolved_workspace,
+            *args,
+        ]
+
     async def _git_command_result(
         self,
         command: Sequence[str],
@@ -387,13 +402,11 @@ class DockerCodexManagedSessionController:
 
     async def _workspace_is_git_repository(self, *, workspace_path: Path) -> bool:
         returncode, stdout, _stderr = await self._git_command_result(
-            [
-                "git",
-                "-C",
-                str(workspace_path),
+            self._workspace_git_command(
+                workspace_path,
                 "rev-parse",
                 "--is-inside-work-tree",
-            ]
+            )
         )
         return returncode == 0 and stdout.strip() == "true"
 
@@ -511,12 +524,12 @@ class DockerCodexManagedSessionController:
         if not target_branch:
             return
 
-        checkout_command = (
-            "git",
-            "-C",
-            str(workspace_path),
-            "checkout",
-            target_branch,
+        checkout_command = tuple(
+            self._workspace_git_command(
+                workspace_path,
+                "checkout",
+                target_branch,
+            )
         )
         returncode, stdout, stderr = await self._git_command_result(checkout_command)
         if returncode == 0:
@@ -529,28 +542,24 @@ class DockerCodexManagedSessionController:
                 f"{stderr.strip() or stdout.strip()}"
             )
 
-        fetch_command = [
-            "git",
-            "-C",
-            str(workspace_path),
+        fetch_command = self._workspace_git_command(
+            workspace_path,
             "fetch",
             "origin",
             target_branch,
-        ]
+        )
         fetch_returncode, fetch_stdout, fetch_stderr = await self._git_command_result(
             fetch_command
         )
         if fetch_returncode == 0:
             await self._run_git_host_command(
-                [
-                    "git",
-                    "-C",
-                    str(workspace_path),
+                self._workspace_git_command(
+                    workspace_path,
                     "checkout",
                     "-B",
                     target_branch,
                     f"origin/{target_branch}",
-                ]
+                )
             )
             return
 
@@ -562,14 +571,12 @@ class DockerCodexManagedSessionController:
             )
 
         await self._run_git_host_command(
-            [
-                "git",
-                "-C",
-                str(workspace_path),
+            self._workspace_git_command(
+                workspace_path,
                 "checkout",
                 "-b",
                 target_branch,
-            ]
+            )
         )
 
     @staticmethod
