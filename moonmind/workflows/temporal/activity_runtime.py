@@ -159,10 +159,10 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "code: 429",
 )
 _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
-_PUBLISH_GIT_ADD_EXCLUDES: tuple[str, ...] = (
-    ":(exclude)CLAUDE.md",
-    ":(exclude)live_streams.spool",
-    ":(exclude).agents/skills/active",
+_PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
+    "CLAUDE.md",
+    "live_streams.spool",
+    ".agents/skills/active",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
@@ -3581,6 +3581,58 @@ class TemporalAgentRuntimeActivities:
         ]
 
     @staticmethod
+    def _parse_git_status_paths(status_output: str) -> tuple[str, ...]:
+        """Extract changed paths from `git status --porcelain` output."""
+
+        def _split_rename_paths(
+            entry: str,
+            *,
+            is_renamed: bool,
+        ) -> tuple[str, ...]:
+            if not is_renamed or " -> " not in entry:
+                return (entry,)
+            try:
+                tokens = tuple(shlex.split(entry))
+            except ValueError:
+                return (entry,)
+            if len(tokens) == 3 and tokens[1] == "->":
+                return (tokens[0], tokens[2])
+            return (entry,)
+
+        def _normalize_path(path_text: str) -> str:
+            text = str(path_text or "").strip()
+            if text.startswith('"') and text.endswith('"') and len(text) >= 2:
+                return text[1:-1]
+            return text
+
+        paths: list[str] = []
+        for raw_line in str(status_output or "").splitlines():
+            line = raw_line.rstrip()
+            if len(line) < 4:
+                continue
+            status = line[:2]
+            is_renamed = ("R" in status) or ("C" in status)
+            entry = line[3:].strip()
+            if not entry:
+                continue
+            for path in _split_rename_paths(entry, is_renamed=is_renamed):
+                normalized_path = _normalize_path(path)
+                if normalized_path:
+                    paths.append(normalized_path)
+        return tuple(dict.fromkeys(paths))
+
+    @staticmethod
+    def _should_exclude_publish_path(path_text: str) -> bool:
+        """Skip runtime scaffolding paths that should never be published."""
+        normalized = str(path_text or "").strip().rstrip("/")
+        if not normalized:
+            return True
+        for excluded in _PUBLISH_GIT_EXCLUDED_PATHS:
+            if normalized == excluded or normalized.startswith(f"{excluded}/"):
+                return True
+        return False
+
+    @staticmethod
     def _workspace_command_env(workspace: str) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
@@ -3704,12 +3756,21 @@ class TemporalAgentRuntimeActivities:
                 "push_error": f"could not inspect workspace changes: {detail}",
             }
 
-        if not status_stdout.decode("utf-8", errors="replace").strip():
+        status_text = status_stdout.decode("utf-8", errors="replace")
+        if not status_text.strip():
+            return {}
+
+        changed_paths = tuple(
+            path
+            for path in self._parse_git_status_paths(status_text)
+            if not self._should_exclude_publish_path(path)
+        )
+        if not changed_paths:
             return {}
 
         add_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "add", "-A", "--", ".", *_PUBLISH_GIT_ADD_EXCLUDES,
+                workspace, "add", "-A", "--", *changed_paths,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
