@@ -22,6 +22,7 @@ def _write_fake_app_server(
     tmp_path: Path,
     *,
     emit_completion: bool = True,
+    assistant_text: str = "OK",
     fail_thread_resume: bool = False,
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
@@ -52,6 +53,7 @@ FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
 START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
+ASSISTANT_TEXT = __ASSISTANT_TEXT__
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -199,7 +201,7 @@ __COMPLETION_BLOCK__
             "result": {
                 "thread": {
                     "id": thread_id,
-                    "preview": "OK",
+                    "preview": ASSISTANT_TEXT,
                     "ephemeral": False,
                     "modelProvider": "openai",
                     "createdAt": 1,
@@ -219,7 +221,7 @@ __COMPLETION_BLOCK__
                             "status": "completed",
                             "error": None,
                             "items": [
-                                {"type": "agentMessage", "id": "msg-1", "text": "OK", "phase": "final_answer", "memoryCitation": None}
+                                {"type": "agentMessage", "id": "msg-1", "text": ASSISTANT_TEXT, "phase": "final_answer", "memoryCitation": None}
                             ],
                         }
                     ],
@@ -247,6 +249,7 @@ __COMPLETION_BLOCK__
         )
         .replace("__START_THREAD_ID__", repr(start_thread_id))
         .replace("__START_THREAD_PATH__", repr(start_thread_path))
+        .replace("__ASSISTANT_TEXT__", repr(assistant_text))
         .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )
@@ -350,6 +353,49 @@ def test_runtime_send_turn_returns_completed_response_with_assistant_text(
     assert response.turn_id == "vendor-turn-1"
     assert response.session_state.active_turn_id is None
     assert response.metadata["assistantText"] == "OK"
+
+
+def test_runtime_send_turn_raises_when_completed_turn_has_no_assistant_output(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(tmp_path, assistant_text="")
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    with pytest.raises(
+        RuntimeError,
+        match="codex app-server turn/completed produced no assistant output",
+    ):
+        runtime.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+
+    state_payload = json.loads(
+        (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state_payload.get("activeTurnId") is None
+    stderr_path = Path(request.artifact_spool_path) / "stderr.log"
+    assert "turn completed without assistant output" in stderr_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(

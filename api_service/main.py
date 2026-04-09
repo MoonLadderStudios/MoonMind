@@ -652,6 +652,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "merge_strategy": "replace",
                     "content_template": {
                         "model_provider": "openrouter",
+                        "model_reasoning_effort": "high",
+                        "model": "qwen/qwen3.6-plus:free",
                         "profile": "openrouter_qwen36_plus",
                         "model_providers": {
                             "openrouter": {
@@ -694,10 +696,17 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 select(
                     ManagedAgentProviderProfile.profile_id,
                     ManagedAgentProviderProfile.default_model,
+                    ManagedAgentProviderProfile.file_templates,
                 )
             )
             existing_rows = existing_result.all()
-            existing_by_id = {row.profile_id: row.default_model for row in existing_rows}
+            existing_by_id = {
+                row.profile_id: {
+                    "default_model": row.default_model,
+                    "file_templates": row.file_templates,
+                }
+                for row in existing_rows
+            }
             existing_ids: set[str] = set(existing_by_id)
 
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
@@ -707,7 +716,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_id = profile_def["profile_id"]
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
-                    current_model = existing_by_id[profile_id]
+                    current_model = existing_by_id[profile_id]["default_model"]
                     # Only reconcile when the seeded profile has an explicit desired model
                     # (non-None) and the existing row is blank — never clear user-set values.
                     if desired_default_model is not None and not str(current_model or "").strip():
@@ -715,6 +724,20 @@ async def _auto_seed_provider_profiles() -> list[str]:
                             update(ManagedAgentProviderProfile)
                             .where(ManagedAgentProviderProfile.profile_id == profile_id)
                             .values(default_model=desired_default_model)
+                        )
+                        await session.execute(stmt)
+                        needs_commit = True
+                    desired_file_templates = profile_def.get("file_templates")
+                    current_file_templates = existing_by_id[profile_id]["file_templates"]
+                    if (
+                        profile_id == "codex_openrouter_qwen36_plus"
+                        and desired_file_templates is not None
+                        and current_file_templates != desired_file_templates
+                    ):
+                        stmt = (
+                            update(ManagedAgentProviderProfile)
+                            .where(ManagedAgentProviderProfile.profile_id == profile_id)
+                            .values(file_templates=desired_file_templates)
                         )
                         await session.execute(stmt)
                         needs_commit = True

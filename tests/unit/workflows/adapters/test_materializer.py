@@ -63,6 +63,8 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
                 "mergeStrategy": "replace",
                 "contentTemplate": {
                     "model_provider": "openrouter",
+                    "model_reasoning_effort": "high",
+                    "model": "qwen/qwen3.6-plus:free",
                     "profile": "openrouter_qwen36_plus",
                     "model_providers": {
                         "openrouter": {
@@ -102,6 +104,7 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
     with open(config_path) as f:
         content = f.read()
     assert 'model_provider = "openrouter"' in content
+    assert 'model_reasoning_effort = "high"' in content
     assert 'base_url = "https://openrouter.ai/api/v1"' in content
     assert 'model = "qwen/qwen3.6-plus:free"' in content
 

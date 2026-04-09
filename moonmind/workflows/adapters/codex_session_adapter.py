@@ -220,6 +220,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 )
             )
         )
+        if turn_response.status != "completed":
+            reason = str(turn_response.metadata.get("reason") or "").strip()
+            if not reason:
+                reason = (
+                    "Codex managed-session turn failed"
+                    f" with status '{turn_response.status}'"
+                )
+            raise RuntimeError(reason)
         await self._signal_control_action(
             action="send_turn",
             reason=None,
