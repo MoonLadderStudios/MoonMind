@@ -617,6 +617,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             return handle
 
         active_binding = snapshot.binding
+        turn_completion_timeout_seconds = self._turn_completion_timeout_seconds(
+            request=request,
+            profile=profile,
+        )
         launch_request = LaunchCodexManagedSessionRequest(
             taskRunId=active_binding.task_run_id,
             workflowId=self._workflow_id,
@@ -628,6 +632,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
+            turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=environment,
             workspaceSpec=(
                 dict(request.workspace_spec)
@@ -654,6 +659,23 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    @staticmethod
+    def _turn_completion_timeout_seconds(
+        *,
+        request: AgentExecutionRequest,
+        profile: ManagedRuntimeProfile,
+    ) -> int:
+        timeout_policy = request.timeout_policy if isinstance(request.timeout_policy, dict) else {}
+        raw_timeout = timeout_policy.get("timeout_seconds")
+        if raw_timeout is not None:
+            try:
+                timeout_seconds = int(float(raw_timeout))
+            except (TypeError, ValueError):
+                timeout_seconds = 0
+            if timeout_seconds > 0:
+                return timeout_seconds
+        return max(1, int(profile.default_timeout_seconds))
 
     def _profile_for_launch(
         self,

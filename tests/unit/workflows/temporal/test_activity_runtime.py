@@ -1313,6 +1313,6 @@ async def test_agent_runtime_send_turn_disables_catalog_retries(
             send_turn = catalog.resolve_activity("agent_runtime.send_turn")
 
             assert send_turn.retries.max_attempts == 1
-            assert send_turn.timeouts.start_to_close_seconds == 360
-            assert send_turn.timeouts.schedule_to_close_seconds == 600
+            assert send_turn.timeouts.start_to_close_seconds == 3900
+            assert send_turn.timeouts.schedule_to_close_seconds == 4200
             assert send_turn.timeouts.heartbeat_timeout_seconds == 30

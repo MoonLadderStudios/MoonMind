@@ -77,6 +77,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
         artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
         codexHomePath="/home/app/.codex",
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        turnCompletionTimeoutSeconds=1800,
     )
     commands: list[tuple[str, ...]] = []
 
@@ -132,6 +133,9 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert "--mount" in run_command
     assert "-v" not in run_command
     assert request.image_ref in run_command
+    assert (
+        "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
+    )
     assert "python3" in run_command
     assert "moonmind.workflows.temporal.runtime.codex_session_runtime" in run_command
     stored = session_store.load("sess-1")

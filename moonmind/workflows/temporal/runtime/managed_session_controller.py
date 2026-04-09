@@ -821,6 +821,9 @@ class DockerCodexManagedSessionController:
             f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
             "-e",
             f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
+            "-e",
+            "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
+            f"{request.turn_completion_timeout_seconds}",
         ]
         auth_volume_path = str(
             request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""

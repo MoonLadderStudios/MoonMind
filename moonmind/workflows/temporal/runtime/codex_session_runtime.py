@@ -38,7 +38,7 @@ from moonmind.schemas.managed_session_models import (
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
-_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = 300.0
+_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = 3600.0
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
