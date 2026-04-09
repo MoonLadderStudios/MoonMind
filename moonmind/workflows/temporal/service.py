@@ -56,6 +56,11 @@ from moonmind.workflows.temporal.manifest_ingest import (
     initialize_manifest_projection,
     list_manifest_nodes,
 )
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+    TERMINAL_MANAGED_SESSION_STATUSES,
+)
+from moonmind.schemas.managed_session_models import canonical_codex_managed_runtime_id
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.COMPLETED,
@@ -66,6 +71,15 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _get_managed_session_store_root() -> str:
+    import os
+
+    return os.path.join(
+        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+        "managed_sessions",
+    )
 
 NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.SCHEDULED,
@@ -1469,6 +1483,15 @@ class TemporalExecutionService:
         )
         reason_text = (reason or default_reason).strip() or default_reason
 
+        if (
+            record.workflow_type is TemporalWorkflowType.RUN
+            and record.state not in TERMINAL_STATES
+        ):
+            await self._best_effort_terminate_task_scoped_codex_session(
+                workflow_id=record.workflow_id,
+                reason=reason_text,
+            )
+
         try:
             if graceful:
                 await self._client_adapter.cancel_workflow(record.workflow_id)
@@ -1692,6 +1715,74 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         return record
+
+    async def _best_effort_terminate_task_scoped_codex_session(
+        self,
+        *,
+        workflow_id: str,
+        reason: str,
+    ) -> None:
+        store = ManagedSessionStore(_get_managed_session_store_root())
+        canonical_runtime_id = "codex_cli"
+        default_session_id = f"sess:{workflow_id}:{canonical_runtime_id}"
+        try:
+            session_record = store.load(default_session_id)
+        except Exception:
+            logger.warning(
+                "Failed to load managed session record %s before cancel for workflow %s",
+                default_session_id,
+                workflow_id,
+                exc_info=True,
+            )
+            session_record = None
+        else:
+            if (
+                session_record is None
+                or session_record.task_run_id != workflow_id
+                or canonical_codex_managed_runtime_id(session_record.runtime_id)
+                != canonical_runtime_id
+                or session_record.status in TERMINAL_MANAGED_SESSION_STATUSES
+            ):
+                session_record = None
+
+        if session_record is None:
+            try:
+                session_records = await asyncio.to_thread(store.list_active)
+            except Exception:
+                logger.warning(
+                    "Failed to read managed session store before cancel for workflow %s",
+                    workflow_id,
+                    exc_info=True,
+                )
+                return
+
+            session_record = next(
+                (
+                    record
+                    for record in session_records
+                    if record.task_run_id == workflow_id
+                    and canonical_codex_managed_runtime_id(record.runtime_id)
+                    == canonical_runtime_id
+                ),
+                None,
+            )
+        if session_record is None:
+            return
+
+        session_workflow_id = f"{workflow_id}:session:{session_record.runtime_id}"
+        try:
+            await self._client_adapter.update_workflow(
+                session_workflow_id,
+                "TerminateSession",
+                {"reason": reason},
+            )
+        except Exception:
+            logger.warning(
+                "Best-effort session termination dispatch failed for workflow %s session %s",
+                workflow_id,
+                session_record.session_id,
+                exc_info=True,
+            )
 
     async def mark_projection_repair_pending(
         self,
