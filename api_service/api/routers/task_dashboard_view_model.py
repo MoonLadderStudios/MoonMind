@@ -117,7 +117,7 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
     }
 
 
-def _build_live_logs_feature_config() -> dict[str, object]:
+def build_live_logs_feature_config() -> dict[str, object]:
     """Build the grouped Live Logs feature flags for dashboard consumers."""
 
     return {
@@ -241,7 +241,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
-            **_build_live_logs_feature_config(),
+            **build_live_logs_feature_config(),
         },
         "system": {
             **system_metadata,
@@ -290,4 +290,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["build_runtime_config", "normalize_status", "status_maps"]
+__all__ = [
+    "build_live_logs_feature_config",
+    "build_runtime_config",
+    "normalize_status",
+    "status_maps",
+]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from api_service.api.routers.task_dashboard_view_model import (
+    build_live_logs_feature_config,
     build_runtime_config,
     normalize_status,
     status_maps,
@@ -380,6 +381,23 @@ def test_build_runtime_config_groups_live_logs_feature_flags(monkeypatch) -> Non
     assert config["features"]["logStreamingEnabled"] is True
     assert config["features"]["liveLogsSessionTimelineEnabled"] is True
     assert config["features"]["liveLogsSessionTimelineRollout"] == "internal"
+
+
+def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "all_managed",
+    )
+
+    feature_config = build_live_logs_feature_config()
+
+    assert feature_config == {
+        "logStreamingEnabled": True,
+        "liveLogsSessionTimelineEnabled": True,
+        "liveLogsSessionTimelineRollout": "all_managed",
+    }
 
 
 def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
