@@ -1287,6 +1287,7 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_runtime.launch_session" in bound_types
             assert "agent_runtime.publish_artifacts" in bound_types
             assert "agent_runtime.session_status" in bound_types
+            assert "agent_runtime.prepare_turn_instructions" in bound_types
             assert "agent_runtime.send_turn" in bound_types
             assert "agent_runtime.steer_turn" in bound_types
             assert "agent_runtime.interrupt_turn" in bound_types

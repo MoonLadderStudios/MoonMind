@@ -48,7 +48,6 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
 
-
 SessionSnapshotLoader = Callable[
     [str], Awaitable[CodexManagedSessionSnapshot | Mapping[str, Any]]
 ]
@@ -60,6 +59,7 @@ LaunchSessionFunc = Callable[
 SessionStatusFunc = Callable[
     [CodexManagedSessionLocator], Awaitable[CodexManagedSessionHandle | Mapping[str, Any]]
 ]
+PrepareTurnInstructionsFunc = Callable[[dict[str, Any]], Awaitable[str | Mapping[str, Any]]]
 SendTurnFunc = Callable[
     [SendCodexManagedSessionTurnRequest],
     Awaitable[CodexManagedSessionTurnResponse | Mapping[str, Any]],
@@ -114,6 +114,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         load_session_snapshot: SessionSnapshotLoader,
         launch_session: LaunchSessionFunc,
         session_status: SessionStatusFunc,
+        prepare_turn_instructions: PrepareTurnInstructionsFunc | None,
         send_turn: SendTurnFunc,
         interrupt_turn: InterruptTurnFunc,
         clear_remote_session: ClearSessionFunc,
@@ -130,6 +131,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._load_session_snapshot = load_session_snapshot
         self._launch_session = launch_session
         self._session_status = session_status
+        self._prepare_turn_instructions = prepare_turn_instructions
         self._send_turn = send_turn
         self._interrupt_turn = interrupt_turn
         self._clear_remote_session = clear_remote_session
@@ -516,6 +518,35 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         return handle
 
     async def _instructions_for_request(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+        request: AgentExecutionRequest,
+    ) -> str:
+        if self._prepare_turn_instructions is None:
+            return await self._legacy_instructions_for_request(
+                binding=binding,
+                request=request,
+            )
+        prepared = await self._prepare_turn_instructions(
+            {
+                "request": request.model_dump(by_alias=True, exclude_none=True),
+                "workspacePath": self._workspace_path_for_request(
+                    binding=binding,
+                    request=request,
+                ),
+            }
+        )
+        if isinstance(prepared, Mapping):
+            prepared = prepared.get("instructions")
+        instructions = str(prepared or "").strip()
+        if instructions:
+            return instructions
+        raise ValueError(
+            "CodexSessionAdapter requires prepare_turn_instructions to return non-empty text"
+        )
+
+    async def _legacy_instructions_for_request(
         self,
         *,
         binding: CodexManagedSessionBinding,

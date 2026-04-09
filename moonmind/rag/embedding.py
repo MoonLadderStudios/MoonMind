@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
-import google.generativeai as genai
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -42,11 +41,19 @@ class EmbeddingClient:
         self._config = config
         self._provider = config.provider.lower()
         self._cached_dimension: Optional[int] = None
+        self._google_genai: Any | None = None
         if self._provider == "google":
             api_key = config.google_api_key
             if not api_key:
                 raise EmbeddingError("GOOGLE_API_KEY is required for google embeddings")
+            try:
+                import google.generativeai as genai
+            except Exception as exc:  # pragma: no cover - import/runtime edge
+                raise EmbeddingError(
+                    f"google.generativeai import failed: {exc}"
+                ) from exc
             genai.configure(api_key=api_key)
+            self._google_genai = genai
         elif self._provider == "openai":
             api_key = config.openai_api_key
             if not api_key:
@@ -67,7 +74,10 @@ class EmbeddingClient:
             raise EmbeddingError("Query text cannot be empty")
         if self._provider == "google":
             try:
-                response = genai.embed_content(model=self._config.model, content=text)
+                response = self._google_genai.embed_content(
+                    model=self._config.model,
+                    content=text,
+                )
             except Exception as exc:  # pragma: no cover - network failure
                 raise EmbeddingError(f"Google embedding failed: {exc}") from exc
             result = response.get("embedding") if isinstance(response, dict) else None

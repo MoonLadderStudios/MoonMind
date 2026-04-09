@@ -34,6 +34,21 @@ async def _async_noop(*_args: Any, **_kwargs: Any) -> None:
     return None
 
 
+async def _prepare_turn_instructions(payload: dict[str, Any]) -> str:
+    request = payload.get("request") if isinstance(payload, dict) else {}
+    instruction_ref = ""
+    if isinstance(request, dict):
+        instruction_ref = str(
+            request.get("instructionRef") or request.get("instruction_ref") or ""
+        ).strip()
+        parameters = request.get("parameters")
+        if not instruction_ref and isinstance(parameters, dict):
+            inline = str(parameters.get("instructions") or "").strip()
+            if inline:
+                return f"{inline}\n\nManaged Codex CLI note:"
+    return f"{instruction_ref}\n\nManaged Codex CLI note:"
+
+
 def _binding() -> CodexManagedSessionBinding:
     return CodexManagedSessionBinding(
         workflowId="wf-task-1:session:codex_cli",
@@ -260,6 +275,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         load_session_snapshot=_load_snapshot,
         launch_session=_launch_session,
         session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_send_turn,
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -332,28 +348,19 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert control_calls[-1]["threadId"] == "thread-1"
 
 
-async def test_start_restores_context_injection_before_sending_turn(
+async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binding = _binding()
     expected_workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
     send_turn_calls: list[Any] = []
+    prepared_payloads: list[dict[str, Any]] = []
 
-    class _FakeContextInjectionService:
-        async def inject_context(
-            self,
-            *,
-            request: AgentExecutionRequest,
-            workspace_path: Path,
-        ) -> None:
-            assert workspace_path == expected_workspace_path
-            request.instruction_ref = "Injected context instruction"
-
-    monkeypatch.setattr(
-        "moonmind.rag.context_injection.ContextInjectionService",
-        _FakeContextInjectionService,
-    )
+    async def _custom_prepare_turn_instructions(payload: dict[str, Any]) -> str:
+        prepared_payloads.append(payload)
+        assert payload["workspacePath"] == str(expected_workspace_path)
+        assert payload["request"]["instructionRef"] == "artifact:instructions"
+        return "Injected context instruction\n\nManaged Codex CLI note:"
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(binding=binding)
@@ -388,6 +395,7 @@ async def test_start_restores_context_injection_before_sending_turn(
         load_session_snapshot=_load_snapshot,
         launch_session=_launch_session,
         session_status=AsyncMock(),
+        prepare_turn_instructions=_custom_prepare_turn_instructions,
         send_turn=_send_turn,
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -416,6 +424,7 @@ async def test_start_restores_context_injection_before_sending_turn(
 
     await adapter.start(_request(binding, workspace_path=str(expected_workspace_path)))
 
+    assert prepared_payloads
     assert send_turn_calls
     assert send_turn_calls[0].instructions.startswith("Injected context instruction")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
@@ -438,6 +447,7 @@ async def test_start_rejects_non_text_input_refs_for_session_turns(
         load_session_snapshot=AsyncMock(),
         launch_session=AsyncMock(),
         session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=AsyncMock(),
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -524,6 +534,7 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
         load_session_snapshot=_load_snapshot,
         launch_session=_launch_session,
         session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_send_turn,
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -591,6 +602,7 @@ async def test_clear_session_rotates_epoch_and_signals_session_workflow(
         load_session_snapshot=_load_snapshot,
         launch_session=_async_noop,
         session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_async_noop,
         interrupt_turn=_async_noop,
         clear_remote_session=_clear_remote_session,
@@ -657,6 +669,7 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
         load_session_snapshot=_load_snapshot,
         launch_session=_async_noop,
         session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_async_noop,
         interrupt_turn=_interrupt_turn,
         clear_remote_session=_async_noop,
@@ -715,6 +728,7 @@ async def test_save_run_state_persists_blank_workspace_path_as_none(
         load_session_snapshot=AsyncMock(),
         launch_session=AsyncMock(),
         session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=AsyncMock(),
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -795,6 +809,7 @@ async def test_terminate_session_uses_remote_session_control_surface(
         load_session_snapshot=_load_snapshot,
         launch_session=_async_noop,
         session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_async_noop,
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -857,6 +872,7 @@ async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
         load_session_snapshot=_async_noop,
         launch_session=_async_noop,
         session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_async_noop,
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,
@@ -938,6 +954,7 @@ async def test_fetch_result_maps_blocked_pr_resolver_artifact_for_completed_run(
         load_session_snapshot=_async_noop,
         launch_session=_async_noop,
         session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
         send_turn=_async_noop,
         interrupt_turn=_async_noop,
         clear_remote_session=_async_noop,

@@ -790,6 +790,15 @@ def build_default_activity_catalog(
             heartbeat_required=True,
         ),
         TemporalActivityDefinition(
+            activity_type="agent_runtime.prepare_turn_instructions",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 180),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.send_turn",
             family="agent_runtime",
             capability_class="agent_runtime",
