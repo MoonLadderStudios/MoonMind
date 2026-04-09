@@ -21,7 +21,8 @@ from moonmind.workflows.temporal.runtime.codex_session_runtime import (
 def _write_fake_app_server(
     tmp_path: Path,
     *,
-    emit_completion: bool = True,
+    completion_notification_method: str | None = "turn/completed",
+    complete_turn_on_read: bool = True,
     fail_thread_resume: bool = False,
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
@@ -31,15 +32,16 @@ def _write_fake_app_server(
 ) -> Path:
     script = tmp_path / "fake_app_server.py"
     completion_block = """
+        turn_completed = True
         sys.stdout.write(json.dumps({
-            "method": "turn/completed",
+            "method": COMPLETION_NOTIFICATION_METHOD,
             "params": {
                 "threadId": thread_id,
                 "turn": {"id": "vendor-turn-1", "items": [], "status": "completed", "error": None},
             },
         }) + "\\n")
 """.rstrip()
-    if not emit_completion:
+    if not completion_notification_method:
         completion_block = ""
     script_template = """
 import json
@@ -52,6 +54,9 @@ FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
 START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
+COMPLETION_NOTIFICATION_METHOD = __COMPLETION_NOTIFICATION_METHOD__
+COMPLETE_TURN_ON_READ = __COMPLETE_TURN_ON_READ__
+turn_completed = False
 
 for line in sys.stdin:
     message = json.loads(line)
@@ -177,6 +182,7 @@ for line in sys.stdin:
         assert isinstance(input_items, list)
         assert input_items[0]["type"] == "text"
         assert input_items[0]["text"] == "Reply with exactly the word OK"
+        turn_completed = COMPLETE_TURN_ON_READ and not COMPLETION_NOTIFICATION_METHOD
         sys.stdout.write(json.dumps({
             "id": msg_id,
             "result": {"turn": {"id": "vendor-turn-1", "items": [], "status": "inProgress", "error": None}},
@@ -194,6 +200,12 @@ __COMPLETION_BLOCK__
         sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
+        turn_status = "completed" if turn_completed else "inProgress"
+        turn_items = []
+        if turn_completed:
+            turn_items = [
+                {"type": "agentMessage", "id": "msg-1", "text": "OK", "phase": "final_answer", "memoryCitation": None}
+            ]
         sys.stdout.write(json.dumps({
             "id": msg_id,
             "result": {
@@ -216,11 +228,9 @@ __COMPLETION_BLOCK__
                     "turns": [
                         {
                             "id": "vendor-turn-1",
-                            "status": "completed",
+                            "status": turn_status,
                             "error": None,
-                            "items": [
-                                {"type": "agentMessage", "id": "msg-1", "text": "OK", "phase": "final_answer", "memoryCitation": None}
-                            ],
+                            "items": turn_items,
                         }
                     ],
                 }
@@ -244,6 +254,14 @@ __COMPLETION_BLOCK__
         .replace(
             "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
             "True" if resume_requires_existing_rollout_path else "False",
+        )
+        .replace(
+            "__COMPLETION_NOTIFICATION_METHOD__",
+            repr(completion_notification_method),
+        )
+        .replace(
+            "__COMPLETE_TURN_ON_READ__",
+            "True" if complete_turn_on_read else "False",
         )
         .replace("__START_THREAD_ID__", repr(start_thread_id))
         .replace("__START_THREAD_PATH__", repr(start_thread_path))
@@ -349,6 +367,41 @@ def test_runtime_send_turn_returns_completed_response_with_assistant_text(
     assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
     assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "OK"
+
+
+def test_runtime_send_turn_accepts_item_completed_notification_contract(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(
+        tmp_path,
+        completion_notification_method="item/completed",
+    )
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.turn_id == "vendor-turn-1"
     assert response.metadata["assistantText"] == "OK"
 
 
@@ -553,7 +606,11 @@ def test_runtime_clear_session_rotates_logical_thread_and_epoch(tmp_path: Path) 
 def test_runtime_send_turn_times_out_without_completion_notification(
     tmp_path: Path,
 ) -> None:
-    script = _write_fake_app_server(tmp_path, emit_completion=False)
+    script = _write_fake_app_server(
+        tmp_path,
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+    )
     request = _launch_request(tmp_path)
     runtime = CodexManagedSessionRuntime(
         workspace_path=request.workspace_path,
@@ -568,7 +625,7 @@ def test_runtime_send_turn_times_out_without_completion_notification(
     )
     runtime.launch_session(request)
 
-    with pytest.raises(RuntimeError, match="timed out waiting for codex app-server"):
+    with pytest.raises(RuntimeError, match="timed out waiting for codex app-server turn completion"):
         runtime.send_turn(
             SendCodexManagedSessionTurnRequest(
                 sessionId="sess-1",
