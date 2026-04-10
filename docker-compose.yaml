@@ -658,6 +658,7 @@ services:
       VOLUMES: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/docker-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       - docker-proxy-network
     restart: unless-stopped
