@@ -39,6 +39,10 @@ module.exports = {
       transitionTimingFunction: {
         mm: "cubic-bezier(.2,.8,.2,1)",
       },
+      fontFamily: {
+        sans: ['"IBM Plex Sans"', "system-ui", "sans-serif"],
+        mono: ['"IBM Plex Mono"', "ui-monospace", "monospace"],
+      },
     },
   },
   safelist: [],
