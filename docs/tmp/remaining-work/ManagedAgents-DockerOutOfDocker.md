@@ -1,13 +1,13 @@
 # DockerOutOfDocker Remaining Work
 
 Source doc: [`docs/ManagedAgents/DockerOutOfDocker.md`](../../ManagedAgents/DockerOutOfDocker.md)
-Status: Phase 0 complete; Phases 1 through 7 pending
-Last updated: 2026-04-09
+Status: Phase 0 and Phase 1 complete; Phases 2 through 7 pending
+Last updated: 2026-04-10
 
 ## Phase checklist
 
 - [x] Phase 0: Lock the contract and carve the boundary across the canonical DooD, session-plane, and execution-model docs.
-- [ ] Phase 1: Define the control-plane workload contract (`WorkloadRequest`, `WorkloadResult`, `RunnerProfile`, ownership metadata, validation rules).
+- [x] Phase 1: Define the control-plane workload contract (`WorkloadRequest`, `WorkloadResult`, `RunnerProfile`, ownership metadata, validation rules).
 - [ ] Phase 2: Build the Docker workload launcher on the existing Docker-capable `agent_runtime` worker fleet.
 - [ ] Phase 3: Expose DooD through executable tools such as `container.run_workload` and `unreal.run_tests`.
 - [ ] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
@@ -21,6 +21,13 @@ Last updated: 2026-04-09
 - Session-plane doc now states that managed-session steps may invoke control-plane workload tools whose containers remain outside session identity.
 - Execution-model doc now states that Docker-backed workload tools remain ordinary executable tools unless they launch a true managed agent runtime.
 - A focused unit test guards the tracker reference and the agreed boundary wording.
+
+## Phase 1 completion notes
+
+- Canonical workload request/result, runner profile, and ownership metadata models are defined in code without invoking Docker.
+- A deployment-owned runner profile registry can load JSON/YAML profile files and fails closed when no registry exists.
+- Profile-aware validation rejects unknown profiles, unsafe images/mounts/network/device policy, disallowed env overrides, workspace paths outside the configured root, excessive resource overrides, and timeout overrides above profile limits.
+- Focused unit tests cover valid request construction, deterministic `moonmind.*` labels, registry loading, fail-closed behavior, and policy denials.
 
 ## Guardrails to preserve during later phases
 
