@@ -140,6 +140,8 @@ class DockerCodexManagedSessionController:
         workspace_volume_name: str,
         codex_volume_name: str,
         workspace_root: str,
+        network_name: str | None = None,
+        moonmind_url: str | None = None,
         session_store: ManagedSessionStore | None = None,
         session_supervisor: ManagedSessionSupervisor | Any | None = None,
         docker_binary: str = "docker",
@@ -155,6 +157,8 @@ class DockerCodexManagedSessionController:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
         self._workspace_root = workspace_root
+        self._network_name = str(network_name or "").strip() or None
+        self._moonmind_url = str(moonmind_url or "").strip() or None
         self._session_store = session_store
         self._session_supervisor = session_supervisor
         self._docker_binary = docker_binary
@@ -1122,7 +1126,14 @@ class DockerCodexManagedSessionController:
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
         ]
-        docker_network = _managed_session_docker_network(request.environment)
+        session_environment = dict(request.environment)
+        if self._moonmind_url:
+            existing_moonmind_url = session_environment.get("MOONMIND_URL")
+            if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
+                session_environment["MOONMIND_URL"] = self._moonmind_url
+        docker_network = self._network_name or _managed_session_docker_network(
+            session_environment
+        )
         if docker_network:
             run_command.extend(["--network", docker_network])
         run_command.extend(
@@ -1154,7 +1165,7 @@ class DockerCodexManagedSessionController:
                     self._volume_mount(self._codex_volume_name, auth_volume_path),
                 ]
             )
-        for key, value in sorted(request.environment.items()):
+        for key, value in sorted(session_environment.items()):
             run_command.extend(["-e", f"{key}={value}"])
         run_command.extend(
             [
