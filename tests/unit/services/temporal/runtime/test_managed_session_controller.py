@@ -62,8 +62,12 @@ def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str,
 
 @pytest.mark.asyncio
 async def test_controller_launches_container_and_returns_typed_handle(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_URL", "http://api:5000")
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
@@ -132,6 +136,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert "1000:1000" in run_command
     assert "--mount" in run_command
     assert "-v" not in run_command
+    assert "--network" in run_command
+    assert "local-network" in run_command
     assert request.image_ref in run_command
     assert (
         "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
