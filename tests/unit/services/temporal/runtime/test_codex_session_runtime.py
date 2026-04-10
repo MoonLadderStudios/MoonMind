@@ -338,10 +338,10 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     )
     assert state_payload["logicalThreadId"] == "logical-thread-1"
     assert state_payload["vendorThreadId"] == "vendor-thread-1"
-    assert "vendorThreadPath" not in state_payload
+    assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
 
 
-def test_runtime_send_turn_returns_running_response_then_session_status_completes_turn(
+def test_runtime_send_turn_returns_terminal_completed_response(
     tmp_path: Path,
 ) -> None:
     script = _write_fake_app_server(tmp_path)
@@ -368,9 +368,10 @@ def test_runtime_send_turn_returns_running_response_then_session_status_complete
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
-    assert response.session_state.active_turn_id == "vendor-turn-1"
+    assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "OK"
 
     handle = runtime.session_status(
         CodexManagedSessionLocator(
@@ -412,7 +413,11 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "failed"
+    assert (
+        response.metadata["reason"]
+        == "codex app-server turn/completed produced no assistant output"
+    )
 
     handle = runtime.session_status(
         CodexManagedSessionLocator(
@@ -474,18 +479,9 @@ def test_runtime_send_turn_accepts_item_completed_notification_contract(
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
-    handle = runtime.session_status(
-        CodexManagedSessionLocator(
-            sessionId="sess-1",
-            sessionEpoch=1,
-            containerId="ctr-1",
-            threadId="logical-thread-1",
-        )
-    )
-    assert handle.status == "ready"
-    assert handle.metadata["lastAssistantText"] == "OK"
+    assert response.metadata["assistantText"] == "OK"
 
 
 def test_runtime_send_turn_completes_via_thread_read_without_notification(
@@ -518,9 +514,10 @@ def test_runtime_send_turn_completes_via_thread_read_without_notification(
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
-    assert response.session_state.active_turn_id == "vendor-turn-1"
+    assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "OK"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -577,7 +574,7 @@ def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -618,7 +615,7 @@ def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -668,7 +665,7 @@ def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_n
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",
@@ -722,7 +719,7 @@ def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
         )
     )
 
-    assert response.status == "running"
+    assert response.status == "completed"
     handle = runtime.session_status(
         CodexManagedSessionLocator(
             sessionId="sess-1",

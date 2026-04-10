@@ -837,6 +837,7 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 
     assert response.status == "completed"
     assert response.metadata["assistantText"] == "OK"
+    assert len(commands) == 1
     exec_command = commands[0]
     assert exec_command[:3] == ("docker", "exec", "-i")
     assert "-c" not in exec_command

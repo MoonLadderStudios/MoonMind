@@ -519,7 +519,7 @@ class CodexManagedSessionRuntime:
         client: CodexAppServerRpcClient,
         vendor_thread_id: str,
         vendor_turn_id: str,
-    ) -> Mapping[str, Any]:
+    ) -> tuple[Mapping[str, Any], tuple[str, str | None]]:
         deadline = time.monotonic() + self._turn_completion_timeout_seconds
         while True:
             thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
@@ -528,17 +528,9 @@ class CodexManagedSessionRuntime:
                 vendor_turn_id=vendor_turn_id,
             )
             if isinstance(turn_payload, Mapping):
-                status = str(turn_payload.get("status") or "").strip().lower()
-                if status == "completed":
-                    return thread_payload
-                if status in {"failed", "error", "interrupted", "canceled", "cancelled"}:
-                    raise RuntimeError(
-                        f"codex app-server turn {vendor_turn_id} ended with status {status}"
-                    )
-                if turn_payload.get("error") not in (None, ""):
-                    raise RuntimeError(
-                        f"codex app-server turn {vendor_turn_id} ended with an error"
-                    )
+                outcome = self._terminal_turn_outcome(turn_payload)
+                if outcome is not None:
+                    return thread_payload, outcome
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -746,7 +738,7 @@ class CodexManagedSessionRuntime:
         vendor_thread_id = str(thread_payload.get("id") or "").strip()
         if not vendor_thread_id:
             raise RuntimeError("codex app-server thread/start returned a blank thread id")
-        vendor_thread_path = self._existing_thread_path(thread_payload.get("path"))
+        vendor_thread_path = self._normalized_thread_path(thread_payload.get("path"))
 
         state = CodexSessionRuntimeState(
             sessionId=request.session_id,
@@ -819,11 +811,64 @@ class CodexManagedSessionRuntime:
         state.last_control_at = time.time()
         self._save_state(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
+        try:
+            thread_payload, (status, error_text) = self._wait_for_turn_completion(
+                client=client,
+                vendor_thread_id=vendor_thread_id,
+                vendor_turn_id=vendor_turn_id,
+            )
+        except RuntimeError as exc:
+            message = str(exc).strip()
+            if message.startswith(
+                "timed out waiting for codex app-server turn completion"
+            ):
+                return CodexManagedSessionTurnResponse(
+                    sessionState=self._session_state(state),
+                    turnId=vendor_turn_id,
+                    status="running",
+                    metadata={},
+                )
+            self._finalize_turn(
+                state=state,
+                turn_id=vendor_turn_id,
+                status="failed",
+                error_text=message,
+            )
+            return CodexManagedSessionTurnResponse(
+                sessionState=self._session_state(state),
+                turnId=vendor_turn_id,
+                status="failed",
+                metadata={"reason": message},
+            )
+
+        assistant_text = self._extract_assistant_text(thread_payload)
+        metadata: dict[str, Any] = {}
+        if status == "completed" and not assistant_text:
+            error_text = "codex app-server turn/completed produced no assistant output"
+            self._append_spool(
+                "stderr",
+                (
+                    "codex app-server turn completed without assistant output: "
+                    f"{vendor_turn_id}\n"
+                ),
+            )
+            status = "failed"
+        if assistant_text:
+            metadata["assistantText"] = assistant_text
+        if error_text:
+            metadata["reason"] = error_text
+        self._finalize_turn(
+            state=state,
+            turn_id=vendor_turn_id,
+            status=status,
+            assistant_text=assistant_text,
+            error_text=error_text,
+        )
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
             turnId=vendor_turn_id,
-            status="running",
-            metadata={},
+            status=status,
+            metadata=metadata,
         )
 
     def steer_turn(
