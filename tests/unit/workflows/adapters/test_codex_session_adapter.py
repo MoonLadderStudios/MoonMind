@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -342,7 +343,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         persisted_record.observability_events_ref
         == "artifact:observability.events.jsonl"
     )
-    assert persisted_record.live_stream_capable is False
+    assert persisted_record.live_stream_capable is True
     assert status.status == "completed"
     assert result.summary == "Implemented through the session container."
     assert result.output_refs == [
@@ -367,6 +368,102 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert control_calls[-1]["action"] == "send_turn"
     assert control_calls[-1]["containerId"] == "container-1"
     assert control_calls[-1]["threadId"] == "thread-1"
+
+
+async def test_start_persists_running_record_before_turn_completes(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    send_turn_entered = asyncio.Event()
+    allow_send_turn_finish = asyncio.Event()
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _session_status(_request: Any) -> CodexManagedSessionHandle:
+        raise AssertionError("session_status should not be used before launch")
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        persisted_record = run_store.load(binding.task_run_id)
+        assert persisted_record is not None
+        assert persisted_record.status == "running"
+        assert persisted_record.workspace_path == str(workspace_path)
+        assert persisted_record.live_stream_capable is True
+        assert persisted_record.session_id == binding.session_id
+        assert persisted_record.session_epoch == binding.session_epoch
+        assert persisted_record.container_id == "container-1"
+        assert persisted_record.thread_id == "thread-1"
+        assert persisted_record.active_turn_id is None
+        send_turn_entered.set()
+        await allow_send_turn_finish.wait()
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    start_task = asyncio.create_task(
+        adapter.start(_request(binding, workspace_path=str(workspace_path)))
+    )
+    await asyncio.wait_for(send_turn_entered.wait(), timeout=1)
+    allow_send_turn_finish.set()
+    await start_task
+
+    persisted_record = run_store.load(binding.task_run_id)
+    assert persisted_record is not None
+    assert persisted_record.status == "completed"
+    assert persisted_record.live_stream_capable is True
 
 
 async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path) -> None:
