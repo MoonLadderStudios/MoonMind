@@ -39,6 +39,10 @@ module.exports = {
       transitionTimingFunction: {
         mm: "cubic-bezier(.2,.8,.2,1)",
       },
+      fontFamily: {
+        sans: ["var(--mm-font-sans)"],
+        mono: ["var(--mm-font-mono)"],
+      },
     },
   },
   safelist: [],

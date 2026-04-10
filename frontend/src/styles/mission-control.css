@@ -17,6 +17,9 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
+  --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mm-font-headline: "Barlow Condensed", var(--mm-font-sans);
+  --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 .dark {
@@ -40,6 +43,10 @@
   box-sizing: border-box;
 }
 
+html {
+  font-family: var(--mm-font-sans);
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -52,7 +59,13 @@ body {
     rgb(var(--mm-bg));
   background-attachment: fixed;
   background-repeat: no-repeat;
-  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--mm-font-mono);
 }
 
 .dark body {
@@ -152,7 +165,7 @@ body {
 }
 
 .version-badge-value {
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.62rem;
   font-weight: 400;
   color: rgb(var(--mm-muted) / 0.98);
@@ -176,7 +189,8 @@ body {
 
 h1 {
   margin: 0.35rem 0 0.2rem;
-  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-family: var(--mm-font-headline);
+  font-weight: 700;
   letter-spacing: 0.01em;
   font-size: clamp(1.7rem, 3vw, 2.55rem);
   line-height: 1;
@@ -206,7 +220,7 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.75rem;
   color: rgb(var(--mm-muted));
   letter-spacing: 0.02em;
@@ -1283,7 +1297,7 @@ button.secondary:hover {
 .live-logs-empty,
 .live-logs-legacy-viewer,
 .live-logs-viewer {
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.74rem;
   line-height: 1.45;
 }
@@ -1569,7 +1583,7 @@ button.secondary:hover {
 }
 
 .inline-code {
-  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-family: var(--mm-font-mono);
   background: rgb(var(--mm-panel) / 0.72);
   border-radius: 0.36rem;
   padding: 0.08rem 0.28rem;
@@ -1601,7 +1615,7 @@ button.secondary:hover {
   border-radius: 0.72rem;
   background: rgb(var(--mm-panel) / 0.72);
   color: rgb(var(--mm-ink));
-  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.8rem;
   line-height: 1.38;
   max-height: 320px;
