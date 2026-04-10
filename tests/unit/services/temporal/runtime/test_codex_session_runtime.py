@@ -637,6 +637,91 @@ def test_runtime_send_turn_completes_when_thread_read_omits_turns(
     assert handle.metadata["lastAssistantText"] == "Recovered from rollout transcript"
 
 
+def test_runtime_send_turn_recovers_last_agent_message_from_task_complete_event(
+    tmp_path: Path,
+) -> None:
+    request = _launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T17:55:16.922Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_started",
+                            "turn_id": "vendor-turn-1",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T17:57:55.661Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": "vendor-turn-1",
+                            "last_agent_message": "Recovered from task_complete event",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = _write_fake_app_server(
+        tmp_path,
+        omit_turns_on_read=True,
+        start_thread_path=str(transcript_path),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.turn_id == "vendor-turn-1"
+    assert response.session_state.active_turn_id is None
+    assert response.metadata["assistantText"] == "Recovered from task_complete event"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert handle.metadata["lastAssistantText"] == "Recovered from task_complete event"
+
+
 def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     tmp_path: Path,
 ) -> None:

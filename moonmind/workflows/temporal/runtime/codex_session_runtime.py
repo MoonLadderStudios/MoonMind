@@ -644,12 +644,13 @@ class CodexManagedSessionRuntime:
                         event_payload = payload.get("payload")
                         if not isinstance(event_payload, Mapping):
                             continue
-                        if (
-                            str(event_payload.get("type") or "").strip().lower()
-                            != "agent_message"
-                        ):
+                        event_type = str(event_payload.get("type") or "").strip().lower()
+                        if event_type == "agent_message":
+                            text = str(event_payload.get("message") or "").strip()
+                        elif event_type == "task_complete":
+                            text = str(event_payload.get("last_agent_message") or "").strip()
+                        else:
                             continue
-                        text = str(event_payload.get("message") or "").strip()
                         if text:
                             last_text = text
         except OSError:
