@@ -57,7 +57,9 @@ _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 logger = logging.getLogger(__name__)
 
 
-def _managed_session_docker_network() -> str | None:
+def _managed_session_docker_network(
+    request_environment: Mapping[str, str] | None = None,
+) -> str | None:
     """Return the Docker network managed session containers should join."""
 
     for env_key in (
@@ -72,7 +74,11 @@ def _managed_session_docker_network() -> str | None:
             return None
         return value
 
-    moonmind_url = os.environ.get("MOONMIND_URL", "").strip()
+    moonmind_url = ""
+    if request_environment is not None:
+        moonmind_url = str(request_environment.get("MOONMIND_URL") or "").strip()
+    if not moonmind_url:
+        moonmind_url = os.environ.get("MOONMIND_URL", "").strip()
     if moonmind_url:
         hostname = (urlparse(moonmind_url).hostname or "").strip().lower()
         if hostname in {"api", "moonmind-api", "moonmind-api-1"}:
@@ -1116,7 +1122,7 @@ class DockerCodexManagedSessionController:
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
         ]
-        docker_network = _managed_session_docker_network()
+        docker_network = _managed_session_docker_network(request.environment)
         if docker_network:
             run_command.extend(["--network", docker_network])
         run_command.extend(
