@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -13,18 +14,19 @@ from moonmind.schemas._validation import NonBlankStr, require_non_blank
 
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _CONTAINER_NAME_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
-_SIZE_PATTERN = re.compile(r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>[kmgtp]?i?b?)?$", re.I)
+_SIZE_PATTERN = re.compile(r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>[kmgt]?i?b?)?$", re.I)
+_VOLUME_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _SIZE_MULTIPLIERS: dict[str, int] = {
     "": 1,
     "b": 1,
-    "k": 1000,
-    "kb": 1000,
-    "m": 1000**2,
-    "mb": 1000**2,
-    "g": 1000**3,
-    "gb": 1000**3,
-    "t": 1000**4,
-    "tb": 1000**4,
+    "k": 1024,
+    "kb": 1024,
+    "m": 1024**2,
+    "mb": 1024**2,
+    "g": 1024**3,
+    "gb": 1024**3,
+    "t": 1024**4,
+    "tb": 1024**4,
     "ki": 1024,
     "kib": 1024,
     "mi": 1024**2,
@@ -111,6 +113,15 @@ def _image_has_tag_or_digest(image: str) -> bool:
     return ":" in last_segment
 
 
+def _is_under_work_path(value: str, *, allow_work_root: bool) -> bool:
+    normalized = posixpath.normpath(value)
+    if not normalized.startswith("/"):
+        return False
+    if normalized == "/work":
+        return allow_work_root
+    return normalized.startswith("/work/")
+
+
 class WorkloadMount(BaseModel):
     """Allowed container mount declaration for a runner profile."""
 
@@ -125,9 +136,9 @@ class WorkloadMount(BaseModel):
     def _validate_mount(self) -> "WorkloadMount":
         if self.type != "volume":
             raise ValueError("mount type must be volume")
-        if self.source.startswith("/") or ".." in self.source.split("/"):
+        if _VOLUME_NAME_PATTERN.match(self.source) is None:
             raise ValueError("mount source must be a Docker named volume")
-        if not self.target.startswith("/work/") and self.target != "/work":
+        if not _is_under_work_path(self.target, allow_work_root=True):
             raise ValueError("mount target must be under /work")
         if self.target == "/var/run/docker.sock" or "docker.sock" in self.target:
             raise ValueError("mount target must not expose the Docker socket")
@@ -169,19 +180,6 @@ class RunnerResourceProfile(BaseModel):
     max_memory: NonBlankStr | None = Field(None, alias="maxMemory")
     max_shm_size: NonBlankStr | None = Field(None, alias="maxShmSize")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_snake_case(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        aliases = {
-            "shm_size": "shmSize",
-            "max_cpu": "maxCpu",
-            "max_memory": "maxMemory",
-            "max_shm_size": "maxShmSize",
-        }
-        return {aliases.get(str(key), key): item for key, item in value.items()}
-
     @model_validator(mode="after")
     def _validate_limits(self) -> "RunnerResourceProfile":
         if self.cpu is not None:
@@ -217,17 +215,6 @@ class WorkloadCleanupPolicy(BaseModel):
 
     remove_container_on_exit: bool = Field(True, alias="removeContainerOnExit")
     kill_grace_seconds: int = Field(30, alias="killGraceSeconds", ge=0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_snake_case(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        aliases = {
-            "remove_container_on_exit": "removeContainerOnExit",
-            "kill_grace_seconds": "killGraceSeconds",
-        }
-        return {aliases.get(str(key), key): item for key, item in value.items()}
 
 
 class WorkloadDevicePolicy(BaseModel):
@@ -277,31 +264,13 @@ class RunnerProfile(BaseModel):
         alias="devicePolicy",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_snake_case(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        aliases = {
-            "command_wrapper": "commandWrapper",
-            "workdir_template": "workdirTemplate",
-            "required_mounts": "requiredMounts",
-            "optional_mounts": "optionalMounts",
-            "env_allowlist": "envAllowlist",
-            "network_policy": "networkPolicy",
-            "timeout_seconds": "timeoutSeconds",
-            "max_timeout_seconds": "maxTimeoutSeconds",
-            "device_policy": "devicePolicy",
-        }
-        return {aliases.get(str(key), key): item for key, item in value.items()}
-
     @model_validator(mode="after")
     def _validate_profile(self) -> "RunnerProfile":
         if not _image_has_tag_or_digest(self.image):
             raise ValueError("image must include an explicit tag or digest")
         if self.image.rsplit("/", 1)[-1].endswith(":latest"):
             raise ValueError("image must not use the latest tag")
-        if not self.workdir_template.startswith("/work/"):
+        if not _is_under_work_path(self.workdir_template, allow_work_root=False):
             raise ValueError("workdirTemplate must be under /work")
         if not self.required_mounts:
             raise ValueError("requiredMounts must include a workspace mount")

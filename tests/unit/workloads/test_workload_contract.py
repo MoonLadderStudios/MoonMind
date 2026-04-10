@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from moonmind.schemas.workload_models import (
     WorkloadRequest,
     WorkloadResult,
+    parse_size_bytes,
 )
 from moonmind.workloads.registry import (
     RunnerProfileRegistry,
@@ -169,6 +170,15 @@ def test_registry_loads_profile_mapping_keyed_by_profile_id(tmp_path: Path) -> N
     assert registry.profile_ids == ("local-python",)
 
 
+def test_size_parser_uses_docker_binary_units() -> None:
+    assert parse_size_bytes("512m") == 512 * 1024**2
+    assert parse_size_bytes("2gb") == 2 * 1024**3
+    assert parse_size_bytes("1ti") == 1024**4
+
+    with pytest.raises(ValueError, match="invalid size"):
+        parse_size_bytes("1p")
+
+
 def test_request_rejects_empty_command() -> None:
     with pytest.raises(ValidationError, match="command"):
         _request(command=[])
@@ -231,6 +241,31 @@ def test_registry_rejects_resource_overrides_above_profile_maximum(
             },
             "mount",
         ),
+        (
+            {
+                "required_mounts": [
+                    {
+                        "type": "volume",
+                        "source": "relative/cache",
+                        "target": "/work/cache",
+                    }
+                ]
+            },
+            "mount source",
+        ),
+        (
+            {
+                "required_mounts": [
+                    {
+                        "type": "volume",
+                        "source": "agent_workspaces",
+                        "target": "/work/../etc",
+                    }
+                ]
+            },
+            "mount target",
+        ),
+        ({"workdir_template": "/work/../tmp"}, "workdirTemplate"),
     ],
 )
 def test_registry_rejects_unsafe_profile_policy(
@@ -245,6 +280,31 @@ def test_registry_rejects_unsafe_profile_policy(
     )
 
     with pytest.raises((ValidationError, WorkloadPolicyError), match=message):
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+        )
+
+
+def test_registry_rejects_unsupported_registry_extension(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.toml"
+    registry_path.write_text("profiles = []", encoding="utf-8")
+
+    with pytest.raises(WorkloadPolicyError, match=".json, .yaml, or .yml"):
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+        )
+
+
+def test_registry_wraps_yaml_parse_errors(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.yaml"
+    registry_path.write_text("profiles: [", encoding="utf-8")
+
+    with pytest.raises(
+        WorkloadPolicyError,
+        match="invalid runner profile registry YAML",
+    ):
         RunnerProfileRegistry.load_file(
             registry_path,
             workspace_root=WORKSPACE_ROOT,

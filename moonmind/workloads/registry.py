@@ -170,9 +170,24 @@ class RunnerProfileRegistry:
 
 
 def _load_registry_payload(path: Path, raw_text: str) -> Any:
-    if path.suffix.lower() == ".json":
-        return json.loads(raw_text or "{}")
-    return yaml.safe_load(raw_text) or {}
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        try:
+            return json.loads(raw_text or "{}")
+        except json.JSONDecodeError as exc:
+            raise WorkloadPolicyError(
+                f"invalid runner profile registry JSON: {exc}"
+            ) from exc
+    if suffix in {".yaml", ".yml"}:
+        try:
+            return yaml.safe_load(raw_text) or {}
+        except yaml.YAMLError as exc:
+            raise WorkloadPolicyError(
+                f"invalid runner profile registry YAML: {exc}"
+            ) from exc
+    raise WorkloadPolicyError(
+        "runner profile registry must use a .json, .yaml, or .yml file extension"
+    )
 
 
 def _extract_profiles(payload: Any) -> list[RunnerProfile]:
