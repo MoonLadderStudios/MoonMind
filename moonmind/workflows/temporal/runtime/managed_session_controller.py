@@ -699,38 +699,43 @@ class DockerCodexManagedSessionController:
         )
 
         response_text = stdout.strip()
-        if not response_text:
-            rendered_command, _rendered_detail = self._scrub_command_failure(
+        def _raise_invalid_json_response(
+            reason: str,
+            detail: str,
+            *,
+            from_exc: Exception | None = None,
+        ) -> None:
+            rendered_command, rendered_detail = self._scrub_command_failure(
                 command,
-                "stdout was blank",
+                detail,
                 extra_env=extra_env,
             )
-            raise RuntimeError(
-                f"{target_label} returned no JSON output: {rendered_command}"
+            message = (
+                f"{target_label} {reason} via {rendered_command}: {rendered_detail}"
+            )
+            if from_exc is not None:
+                raise RuntimeError(message) from from_exc
+            raise RuntimeError(message)
+
+        if not response_text:
+            _raise_invalid_json_response(
+                "returned no JSON output",
+                "stdout was blank",
             )
 
         try:
             response_payload = json.loads(response_text)
         except json.JSONDecodeError as exc:
-            rendered_command, rendered_detail = self._scrub_command_failure(
-                command,
+            _raise_invalid_json_response(
+                "returned invalid JSON",
                 f"stdout={response_text}",
-                extra_env=extra_env,
+                from_exc=exc,
             )
-            raise RuntimeError(
-                f"{target_label} returned invalid JSON via {rendered_command}: "
-                f"{rendered_detail}"
-            ) from exc
 
         if not isinstance(response_payload, dict):
-            rendered_command, rendered_detail = self._scrub_command_failure(
-                command,
+            _raise_invalid_json_response(
+                "returned a non-object JSON payload",
                 f"stdout={response_text}",
-                extra_env=extra_env,
-            )
-            raise RuntimeError(
-                f"{target_label} returned a non-object JSON payload via {rendered_command}: "
-                f"{rendered_detail}"
             )
 
         return response_payload
