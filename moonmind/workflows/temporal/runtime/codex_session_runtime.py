@@ -47,6 +47,7 @@ _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
+_ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -470,27 +471,47 @@ class CodexManagedSessionRuntime:
         return state
 
     @staticmethod
-    def _extract_assistant_text(thread_payload: Mapping[str, Any]) -> str:
+    def _assistant_text_from_turn_payload(turn_payload: Mapping[str, Any]) -> str:
+        items = turn_payload.get("items")
+        if not isinstance(items, list):
+            return ""
+        for item in reversed(items):
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("type") != "agentMessage":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return ""
+
+    @classmethod
+    def _extract_assistant_text(
+        cls,
+        thread_payload: Mapping[str, Any],
+        *,
+        vendor_turn_id: str | None = None,
+    ) -> str:
         thread = thread_payload.get("thread")
         if not isinstance(thread, Mapping):
             return ""
         turns = thread.get("turns")
         if not isinstance(turns, list):
             return ""
+        if vendor_turn_id:
+            turn_payload = cls._find_turn_payload(
+                thread_payload,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if isinstance(turn_payload, Mapping):
+                return cls._assistant_text_from_turn_payload(turn_payload)
+            return ""
         for turn in reversed(turns):
             if not isinstance(turn, Mapping):
                 continue
-            items = turn.get("items")
-            if not isinstance(items, list):
-                continue
-            for item in reversed(items):
-                if not isinstance(item, Mapping):
-                    continue
-                if item.get("type") != "agentMessage":
-                    continue
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    return text.strip()
+            text = cls._assistant_text_from_turn_payload(turn)
+            if text:
+                return text
         return ""
 
     @staticmethod
@@ -528,20 +549,70 @@ class CodexManagedSessionRuntime:
             if not isinstance(item, Mapping):
                 continue
             item_type = str(item.get("type") or "").strip().lower()
-            if item_type not in {"output_text", "input_text", "text"}:
+            if item_type not in {"output_text", "text"}:
                 continue
             text = item.get("text")
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
         return "\n".join(parts).strip()
 
-    def _extract_assistant_text_from_rollout(self, vendor_thread_path: str | None) -> str:
-        rollout_path = self._existing_thread_path(vendor_thread_path)
+    @staticmethod
+    def _payload_references_turn(payload: Any, vendor_turn_id: str) -> bool:
+        if not vendor_turn_id:
+            return False
+        if isinstance(payload, Mapping):
+            direct_turn_id = str(
+                payload.get("turnId") or payload.get("turn_id") or ""
+            ).strip()
+            if direct_turn_id == vendor_turn_id:
+                return True
+            turn_payload = payload.get("turn")
+            if isinstance(turn_payload, Mapping):
+                turn_id = str(turn_payload.get("id") or "").strip()
+                if turn_id == vendor_turn_id:
+                    return True
+            for nested_key in ("payload", "data", "delta", "item", "event"):
+                if CodexManagedSessionRuntime._payload_references_turn(
+                    payload.get(nested_key),
+                    vendor_turn_id,
+                ):
+                    return True
+            return False
+        if isinstance(payload, list):
+            return any(
+                CodexManagedSessionRuntime._payload_references_turn(item, vendor_turn_id)
+                for item in payload
+            )
+        return False
+
+    def _allowed_rollout_path(self, path_value: str | None) -> str | None:
+        normalized = self._normalized_thread_path(path_value)
+        if normalized is None:
+            return None
+        candidate = Path(normalized)
+        try:
+            resolved = candidate.resolve()
+            sessions_root = (self._codex_home_path / "sessions").resolve()
+            resolved.relative_to(sessions_root)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return str(resolved) if resolved.is_file() else None
+
+    def _extract_assistant_text_from_rollout(
+        self,
+        vendor_thread_path: str | None,
+        *,
+        vendor_turn_id: str,
+    ) -> str:
+        rollout_path = self._allowed_rollout_path(vendor_thread_path)
         if rollout_path is None:
             return ""
         last_text = ""
         try:
-            with Path(rollout_path).open(encoding="utf-8") as handle:
+            rollout_file = Path(rollout_path)
+            if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
+                return ""
+            with rollout_file.open(encoding="utf-8") as handle:
                 for raw_line in handle:
                     stripped = raw_line.strip()
                     if not stripped:
@@ -551,6 +622,8 @@ class CodexManagedSessionRuntime:
                     except json.JSONDecodeError:
                         continue
                     if not isinstance(payload, Mapping):
+                        continue
+                    if not self._payload_references_turn(payload, vendor_turn_id):
                         continue
                     entry_type = str(payload.get("type") or "").strip().lower()
                     if entry_type == "response_item":
@@ -583,7 +656,7 @@ class CodexManagedSessionRuntime:
             return ""
         return last_text
 
-    def _resolved_vendor_thread_path(
+    def _resolved_rollout_path(
         self,
         *,
         state: CodexSessionRuntimeState,
@@ -593,13 +666,13 @@ class CodexManagedSessionRuntime:
         runtime_path = None
         if isinstance(thread, Mapping):
             runtime_path = self._normalized_thread_path(thread.get("path"))
-        existing_runtime_path = self._existing_thread_path(runtime_path)
-        if existing_runtime_path is not None:
-            state.vendor_thread_path = existing_runtime_path
-            return existing_runtime_path
-        existing_state_path = self._existing_thread_path(state.vendor_thread_path)
-        if existing_state_path is not None:
-            return existing_state_path
+        allowed_runtime_path = self._allowed_rollout_path(runtime_path)
+        if allowed_runtime_path is not None:
+            state.vendor_thread_path = allowed_runtime_path
+            return allowed_runtime_path
+        allowed_state_path = self._allowed_rollout_path(state.vendor_thread_path)
+        if allowed_state_path is not None:
+            return allowed_state_path
         recovered_path = self._find_vendor_thread_path(state.vendor_thread_id)
         if recovered_path is not None:
             state.vendor_thread_path = recovered_path
@@ -610,15 +683,22 @@ class CodexManagedSessionRuntime:
         *,
         state: CodexSessionRuntimeState,
         thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
     ) -> str:
-        assistant_text = self._extract_assistant_text(thread_payload)
+        assistant_text = self._extract_assistant_text(
+            thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
         if assistant_text:
             return assistant_text
-        vendor_thread_path = self._resolved_vendor_thread_path(
+        vendor_thread_path = self._resolved_rollout_path(
             state=state,
             thread_payload=thread_payload,
         )
-        return self._extract_assistant_text_from_rollout(vendor_thread_path)
+        return self._extract_assistant_text_from_rollout(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+        )
 
     @staticmethod
     def _find_turn_payload(
@@ -658,8 +738,10 @@ class CodexManagedSessionRuntime:
                 outcome = self._terminal_turn_outcome(turn_payload)
                 if outcome is not None:
                     return thread_payload, outcome
-            elif self._thread_status_type(thread_payload) == "idle":
-                return thread_payload, ("completed", None)
+            else:
+                thread_outcome = self._terminal_thread_outcome(thread_payload)
+                if thread_outcome is not None:
+                    return thread_payload, thread_outcome
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -756,6 +838,23 @@ class CodexManagedSessionRuntime:
             return "failed", error_text
         return None
 
+    @classmethod
+    def _terminal_thread_outcome(
+        cls,
+        thread_payload: Mapping[str, Any],
+    ) -> tuple[str, str | None] | None:
+        status_type = cls._thread_status_type(thread_payload)
+        if status_type == "idle":
+            return "completed", None
+        if status_type in {"failed", "error"}:
+            return "failed", cls._thread_status_reason(thread_payload)
+        if status_type in {"interrupted", "cancelled", "canceled"}:
+            return (
+                "interrupted",
+                cls._thread_status_reason(thread_payload) or status_type,
+            )
+        return None
+
     def _finalize_turn(
         self,
         *,
@@ -820,24 +919,18 @@ class CodexManagedSessionRuntime:
             if outcome is None:
                 return state
         else:
-            status_type = self._thread_status_type(thread_payload)
-            if status_type == "idle":
-                outcome = ("completed", None)
-            elif status_type in {"failed", "error"}:
-                outcome = ("failed", self._thread_status_reason(thread_payload))
-            elif status_type in {"interrupted", "cancelled", "canceled"}:
-                outcome = (
-                    "interrupted",
-                    self._thread_status_reason(thread_payload) or status_type,
-                )
-            else:
+            outcome = self._terminal_thread_outcome(thread_payload)
+            if outcome is None:
                 return state
 
         status, error_text = outcome
-        assistant_text = self._assistant_text_for_completed_turn(
-            state=state,
-            thread_payload=thread_payload,
-        )
+        assistant_text = ""
+        if status == "completed":
+            assistant_text = self._assistant_text_for_completed_turn(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=active_turn_id,
+            )
         if status == "completed" and not assistant_text:
             error_text = "codex app-server turn/completed produced no assistant output"
             self._append_spool(
@@ -985,23 +1078,26 @@ class CodexManagedSessionRuntime:
                 metadata={"reason": message},
             )
 
-        assistant_text = self._assistant_text_for_completed_turn(
-            state=state,
-            thread_payload=thread_payload,
-        )
+        assistant_text = ""
         metadata: dict[str, Any] = {}
-        if status == "completed" and not assistant_text:
-            error_text = "codex app-server turn/completed produced no assistant output"
-            self._append_spool(
-                "stderr",
-                (
-                    "codex app-server turn completed without assistant output: "
-                    f"{vendor_turn_id}\n"
-                ),
+        if status == "completed":
+            assistant_text = self._assistant_text_for_completed_turn(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=vendor_turn_id,
             )
-            status = "failed"
-        if assistant_text:
-            metadata["assistantText"] = assistant_text
+            if not assistant_text:
+                error_text = "codex app-server turn/completed produced no assistant output"
+                self._append_spool(
+                    "stderr",
+                    (
+                        "codex app-server turn completed without assistant output: "
+                        f"{vendor_turn_id}\n"
+                    ),
+                )
+                status = "failed"
+            else:
+                metadata["assistantText"] = assistant_text
         if error_text:
             metadata["reason"] = error_text
         self._finalize_turn(
