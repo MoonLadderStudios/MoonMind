@@ -789,20 +789,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_id = profile_def["profile_id"]
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
-                    current_provider_id = str(
-                        existing_by_id[profile_id]["provider_id"] or ""
-                    ).strip()
-                    if profile_id == "codex_default" and current_provider_id == "moonladder":
-                        stmt = (
-                            update(ManagedAgentProviderProfile)
-                            .where(ManagedAgentProviderProfile.profile_id == profile_id)
-                            .values(
-                                provider_id=profile_def["provider_id"],
-                                provider_label=profile_def.get("provider_label"),
+                    if profile_id == "codex_default":
+                        current_provider_id = str(
+                            existing_by_id[profile_id]["provider_id"] or ""
+                        ).strip()
+                        if current_provider_id == "moonladder":
+                            stmt = (
+                                update(ManagedAgentProviderProfile)
+                                .where(
+                                    ManagedAgentProviderProfile.profile_id == profile_id
+                                )
+                                .values(
+                                    provider_id=profile_def["provider_id"],
+                                    provider_label=profile_def.get("provider_label"),
+                                )
                             )
-                        )
-                        await session.execute(stmt)
-                        needs_commit = True
+                            await session.execute(stmt)
+                            needs_commit = True
                     current_model = existing_by_id[profile_id]["default_model"]
                     # Only reconcile when the seeded profile has an explicit desired model
                     # (non-None) and the existing row is blank or contains an old
