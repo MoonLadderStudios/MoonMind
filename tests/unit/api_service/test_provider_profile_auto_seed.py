@@ -64,6 +64,10 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert defaults["gemini_default"] is None
     assert defaults["codex_default"] is None
     assert defaults["claude_anthropic"] is None
+    runtime_defaults = {p.profile_id: p.is_default for p in profiles}
+    assert runtime_defaults["gemini_default"] is True
+    assert runtime_defaults["codex_default"] is True
+    assert runtime_defaults["claude_anthropic"] is True
 
 
 
@@ -136,6 +140,10 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.default_model == "MiniMax-M2.7"
     assert mm_profile.volume_ref is None
     assert mm_profile.volume_mount_path is None
+    assert mm_profile.is_default is False
+
+    anthropic_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
+    assert anthropic_profile.is_default is True
 
 
 @pytest.mark.asyncio
@@ -238,6 +246,7 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     profile = next(p for p in profiles if p.profile_id == "codex_openrouter_qwen36_plus")
     assert profile.runtime_id == "codex_cli"
     assert profile.provider_id == "openrouter"
+    assert profile.is_default is False
     assert profile.default_model == "qwen/qwen3.6-plus:free"
     assert profile.secret_refs == {"provider_api_key": "env://OPENROUTER_API_KEY"}
     assert profile.env_template == {
@@ -275,3 +284,6 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     assert profile.command_behavior == {"suppress_default_model_flag": True}
     assert profile.max_parallel_runs == 4
     assert profile.cooldown_after_429_seconds == 300
+
+    codex_default = next(p for p in profiles if p.profile_id == "codex_default")
+    assert codex_default.is_default is True

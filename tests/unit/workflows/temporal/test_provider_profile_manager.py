@@ -254,6 +254,29 @@ class TestProviderProfileManagerHelpers:
         assert best is not None
         assert best.profile_id == "p2"
 
+    def test_find_available_profile_prefers_runtime_default(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+        )
+        wf._profiles["p2"] = ProfileSlotState(
+            profile_id="p2",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+
+        best = wf._find_available_profile()
+        assert best is not None
+        assert best.profile_id == "p2"
+
     def test_find_available_profile_none_available(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
@@ -353,7 +376,7 @@ class TestProviderProfileManagerHelpers:
             rate_limit_policy="backoff", enabled=True, provider_id="anthropic", priority=200
         )
         
-        best = wf._find_available_profile()
+        best = wf._find_available_profile({"providerId": "anthropic"})
         assert best is not None
         assert best.profile_id == "p3"
 

@@ -16,6 +16,7 @@ export interface ProviderProfile {
   cooldown_after_429_seconds: number;
   rate_limit_policy: string;
   enabled: boolean;
+  is_default?: boolean;
   command_behavior?: Record<string, unknown> | null;
   tags?: string[] | null;
   priority?: number | null;
@@ -52,6 +53,7 @@ interface ProviderProfileFormState {
   cooldownAfter429Seconds: string;
   rateLimitPolicy: string;
   enabled: boolean;
+  isDefault: boolean;
   commandBehavior: string;
   tagsText: string;
   priority: string;
@@ -77,6 +79,7 @@ export function defaultFormState(): ProviderProfileFormState {
     cooldownAfter429Seconds: '300',
     rateLimitPolicy: 'backoff',
     enabled: true,
+    isDefault: false,
     commandBehavior: '{}',
     tagsText: '',
     priority: '',
@@ -101,6 +104,7 @@ export function toFormState(profile: ProviderProfile): ProviderProfileFormState 
     cooldownAfter429Seconds: String(profile.cooldown_after_429_seconds ?? 300),
     rateLimitPolicy: profile.rate_limit_policy ?? 'backoff',
     enabled: Boolean(profile.enabled),
+    isDefault: Boolean(profile.is_default),
     commandBehavior: profile.command_behavior ? JSON.stringify(profile.command_behavior, null, 2) : '{}',
     tagsText: (profile.tags ?? []).join(', '),
     priority: profile.priority != null ? String(profile.priority) : '',
@@ -201,6 +205,7 @@ export function ProviderProfilesManager({
         cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
         rate_limit_policy: form.rateLimitPolicy,
         enabled: form.enabled,
+        is_default: form.isDefault,
         command_behavior: parseCommandBehavior(form.commandBehavior),
         tags: parseTags(form.tagsText),
         priority: parsePriority(form.priority),
@@ -373,6 +378,11 @@ export function ProviderProfilesManager({
                 <tr key={profile.profile_id}>
                   <td className="px-3 py-4">
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
+                    {profile.is_default ? (
+                      <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                        Runtime default
+                      </div>
+                    ) : null}
                     {profile.default_model ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">
                         Model: {profile.default_model}
@@ -598,6 +608,16 @@ export function ProviderProfilesManager({
               }
             />
             Enabled
+          </label>
+          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={form.isDefault}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, isDefault: event.target.checked }))
+              }
+            />
+            Runtime default
           </label>
         </div>
 

@@ -241,6 +241,7 @@ describe("Task Create Entrypoint", () => {
                   {
                     profile_id: "profile:gemini-default",
                     account_label: "Gemini Default",
+                    is_default: true,
                   },
                 ]
               : runtimeId === "claude_code"
@@ -248,16 +249,19 @@ describe("Task Create Entrypoint", () => {
                     {
                       profile_id: "profile:claude-default",
                       account_label: "Claude Default",
+                      is_default: true,
                     },
                   ]
                 : [
                     {
                       profile_id: "profile:codex-default",
                       account_label: "Codex Default",
+                      is_default: true,
                     },
                     {
                       profile_id: "profile:codex-secondary",
                       account_label: "Codex Secondary",
+                      is_default: false,
                     },
                   ];
           return Promise.resolve({
@@ -585,10 +589,12 @@ describe("Task Create Entrypoint", () => {
         (providerSelect as HTMLSelectElement).options,
       ).map((option) => option.text);
       expect(labels).toEqual([
-        "Default (system chooses)",
-        "Codex Default",
+        "Codex Default (Default)",
         "Codex Secondary",
       ]);
+      expect((providerSelect as HTMLSelectElement).value).toBe(
+        "profile:codex-default",
+      );
     });
 
     fireEvent.change(screen.getByLabelText("Runtime"), {
@@ -599,7 +605,10 @@ describe("Task Create Entrypoint", () => {
       const labels = Array.from(
         (providerSelect as HTMLSelectElement).options,
       ).map((option) => option.text);
-      expect(labels).toEqual(["Default (system chooses)", "Gemini Default"]);
+      expect(labels).toEqual(["Gemini Default (Default)"]);
+      expect((providerSelect as HTMLSelectElement).value).toBe(
+        "profile:gemini-default",
+      );
     });
   });
 
@@ -656,10 +665,15 @@ describe("Task Create Entrypoint", () => {
 
   it("uploads task input to the returned single-put URL and finalizes the artifact before task creation", async () => {
     const providerProfileItems = [
-      { profile_id: "profile:codex-default", account_label: "Codex Default" },
+      {
+        profile_id: "profile:codex-default",
+        account_label: "Codex Default",
+        is_default: true,
+      },
       {
         profile_id: "profile:codex-secondary",
         account_label: "Codex Secondary",
+        is_default: false,
       },
     ];
 

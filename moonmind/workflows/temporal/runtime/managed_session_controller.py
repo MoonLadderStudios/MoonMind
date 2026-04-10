@@ -48,6 +48,7 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
     r"(?i)(?:token|secret|password|key|credential|auth)"
 )
 _GIT_COMMAND_LOCALE = {"LC_ALL": "C", "LANG": "C"}
+_SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 logger = logging.getLogger(__name__)
 
 
@@ -111,6 +112,7 @@ class DockerCodexManagedSessionController:
         docker_host: str | None = None,
         ready_poll_interval_seconds: float = 1.0,
         ready_poll_attempts: int = 30,
+        turn_poll_interval_seconds: float = 1.0,
         command_runner: CommandRunner = _default_command_runner,
     ) -> None:
         self._workspace_volume_name = workspace_volume_name
@@ -122,6 +124,7 @@ class DockerCodexManagedSessionController:
         self._docker_host = docker_host
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
         self._ready_poll_attempts = ready_poll_attempts
+        self._turn_poll_interval_seconds = turn_poll_interval_seconds
         self._command_runner = command_runner
 
     def _docker_env(self) -> dict[str, str]:
@@ -731,12 +734,58 @@ class DockerCodexManagedSessionController:
                 action,
             ]
         )
-        stdout, stderr = await self._run(
-            command,
+        env = self._docker_env()
+        if extra_env:
+            env.update({str(key): str(value) for key, value in extra_env.items()})
+        returncode, stdout, stderr = await self._command_runner(
+            tuple(command),
             input_text=json.dumps(payload),
+            env=env,
         )
         session_id = str(payload.get("sessionId") or "").strip() or None
         stdout_text = stdout.strip()
+        if returncode != 0:
+            if stdout_text:
+                try:
+                    response_payload = json.loads(stdout_text)
+                except json.JSONDecodeError as exc:
+                    self._raise_transport_failure(
+                        command,
+                        action=action,
+                        container_id=container_id,
+                        session_id=session_id,
+                        reason=f"failed with exit code {returncode} and returned invalid JSON",
+                        stdout=stdout_text,
+                        stderr=stderr,
+                        extra_env=extra_env,
+                        cause=exc,
+                    )
+                if isinstance(response_payload, dict):
+                    error_payload = response_payload.get("error")
+                    if isinstance(error_payload, str) and error_payload.strip():
+                        raise RuntimeError(error_payload.strip())
+                    if error_payload not in (None, ""):
+                        raise RuntimeError(str(error_payload))
+                self._raise_transport_failure(
+                    command,
+                    action=action,
+                    container_id=container_id,
+                    session_id=session_id,
+                    reason=f"failed with exit code {returncode}",
+                    stdout=stdout_text,
+                    stderr=stderr,
+                    extra_env=extra_env,
+                )
+            self._raise_transport_failure(
+                command,
+                action=action,
+                container_id=container_id,
+                session_id=session_id,
+                reason=f"failed with exit code {returncode}",
+                stdout=None,
+                stderr=stderr,
+                extra_env=extra_env,
+            )
         if not stdout_text:
             self._raise_transport_failure(
                 command,
@@ -777,6 +826,135 @@ class DockerCodexManagedSessionController:
                 extra_env=extra_env,
             )
         return response_payload
+
+    def _load_runtime_state_payload(
+        self,
+        *,
+        session_workspace_path: str,
+    ) -> dict[str, Any] | None:
+        state_path = Path(session_workspace_path) / _SESSION_STATE_FILENAME
+        if not state_path.is_file():
+            return None
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _recover_send_turn_response(
+        self,
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse | None:
+        if self._session_store is None:
+            return None
+        record = self._session_store.load(request.session_id)
+        if record is None:
+            return None
+        try:
+            self._matches_locator(record, request)
+        except RuntimeError:
+            return None
+        state_payload = self._load_runtime_state_payload(
+            session_workspace_path=record.session_workspace_path,
+        )
+        if state_payload is None:
+            return None
+        if str(state_payload.get("sessionId") or "").strip() != request.session_id:
+            return None
+        if int(state_payload.get("sessionEpoch") or 0) != request.session_epoch:
+            return None
+        if str(state_payload.get("containerId") or "").strip() != request.container_id:
+            return None
+        if str(state_payload.get("logicalThreadId") or "").strip() != request.thread_id:
+            return None
+
+        turn_id = str(
+            state_payload.get("lastTurnId") or state_payload.get("activeTurnId") or ""
+        ).strip()
+        if not turn_id:
+            return None
+        status = str(state_payload.get("lastTurnStatus") or "").strip().lower()
+        active_turn_id = str(state_payload.get("activeTurnId") or "").strip() or None
+        if not status:
+            status = "running" if active_turn_id else ""
+        if status not in {"accepted", "running", "completed", "interrupted", "failed"}:
+            return None
+
+        metadata: dict[str, Any] = {}
+        assistant_text = str(state_payload.get("lastAssistantText") or "").strip()
+        if assistant_text:
+            metadata["assistantText"] = assistant_text
+        error_text = str(state_payload.get("lastTurnError") or "").strip()
+        if error_text:
+            metadata["reason"] = error_text
+
+        return CodexManagedSessionTurnResponse(
+            sessionState={
+                "sessionId": request.session_id,
+                "sessionEpoch": request.session_epoch,
+                "containerId": request.container_id,
+                "threadId": request.thread_id,
+                "activeTurnId": active_turn_id,
+            },
+            turnId=turn_id,
+            status=status,
+            metadata=metadata,
+        )
+
+    async def _wait_for_terminal_turn_response(
+        self,
+        *,
+        request: SendCodexManagedSessionTurnRequest,
+        initial_response: CodexManagedSessionTurnResponse,
+    ) -> CodexManagedSessionTurnResponse:
+        turn_id = initial_response.turn_id
+        while True:
+            payload = await self._invoke_json(
+                container_id=request.container_id,
+                action="session_status",
+                payload=request.model_dump(by_alias=True),
+            )
+            handle = CodexManagedSessionHandle.model_validate(payload)
+            metadata = dict(handle.metadata)
+            turn_id = str(metadata.get("lastTurnId") or turn_id).strip() or turn_id
+            last_turn_status = str(metadata.get("lastTurnStatus") or "").strip().lower()
+            assistant_text = str(metadata.get("lastAssistantText") or "").strip()
+            reason = str(metadata.get("lastTurnError") or "").strip()
+
+            if handle.status == "busy" and handle.session_state.active_turn_id:
+                if self._turn_poll_interval_seconds > 0:
+                    await asyncio.sleep(self._turn_poll_interval_seconds)
+                continue
+
+            if handle.status == "failed" or last_turn_status == "failed":
+                metadata = {"reason": reason or "turn execution failed"}
+                return CodexManagedSessionTurnResponse(
+                    sessionState=handle.session_state,
+                    turnId=turn_id,
+                    status="failed",
+                    metadata=metadata,
+                )
+
+            if handle.status == "interrupted" or last_turn_status == "interrupted":
+                metadata = {"reason": reason or "interrupt requested"}
+                return CodexManagedSessionTurnResponse(
+                    sessionState=handle.session_state,
+                    turnId=turn_id,
+                    status="interrupted",
+                    metadata=metadata,
+                )
+
+            if handle.status == "ready" and not handle.session_state.active_turn_id:
+                metadata = {"assistantText": assistant_text} if assistant_text else {}
+                return CodexManagedSessionTurnResponse(
+                    sessionState=handle.session_state,
+                    turnId=turn_id,
+                    status="completed",
+                    metadata=metadata,
+                )
+
+            if self._turn_poll_interval_seconds > 0:
+                await asyncio.sleep(self._turn_poll_interval_seconds)
 
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (
@@ -1000,24 +1178,38 @@ class DockerCodexManagedSessionController:
         self,
         request: SendCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
-        payload = await self._invoke_json(
-            container_id=request.container_id,
-            action="send_turn",
-            payload=request.model_dump(by_alias=True),
-        )
-        response = CodexManagedSessionTurnResponse.model_validate(payload)
+        try:
+            payload = await self._invoke_json(
+                container_id=request.container_id,
+                action="send_turn",
+                payload=request.model_dump(by_alias=True),
+            )
+            response = CodexManagedSessionTurnResponse.model_validate(payload)
+        except RuntimeError:
+            recovered = self._recover_send_turn_response(request)
+            if recovered is None:
+                raise
+            response = recovered
+
+        terminal_response = response
+        if response.status in {"accepted", "running"}:
+            terminal_response = await self._wait_for_terminal_turn_response(
+                request=request,
+                initial_response=response,
+            )
+
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None:
                 updated_record = await self._session_store.update(
                     request.session_id,
-                    session_epoch=response.session_state.session_epoch,
-                    container_id=response.session_state.container_id,
-                thread_id=response.session_state.thread_id,
-                active_turn_id=response.session_state.active_turn_id,
-                status=self._record_status_from_turn_status(response.status),
-                updated_at=datetime.now(tz=UTC),
-                error_message=self._turn_error_message(response),
+                    session_epoch=terminal_response.session_state.session_epoch,
+                    container_id=terminal_response.session_state.container_id,
+                    thread_id=terminal_response.session_state.thread_id,
+                    active_turn_id=terminal_response.session_state.active_turn_id,
+                    status=self._record_status_from_turn_status(terminal_response.status),
+                    updated_at=datetime.now(tz=UTC),
+                    error_message=self._turn_error_message(terminal_response),
                 )
                 if self._session_supervisor is not None:
                     await self._emit_session_event(
@@ -1031,20 +1223,20 @@ class DockerCodexManagedSessionController:
                             "reason": request.reason,
                         },
                     )
-                    if response.status == "completed":
+                    if terminal_response.status == "completed":
                         await self._emit_session_event(
                             record=updated_record,
                             kind="turn_completed",
-                            text=f"Turn completed: {response.turn_id}.",
-                            turn_id=response.turn_id,
+                            text=f"Turn completed: {terminal_response.turn_id}.",
+                            turn_id=terminal_response.turn_id,
                             active_turn_id=updated_record.active_turn_id,
                             metadata={
                                 "action": "send_turn",
-                                "assistantText": response.metadata.get("assistantText"),
+                                "assistantText": terminal_response.metadata.get("assistantText"),
                                 "reason": request.reason,
                             },
                         )
-        return response
+        return terminal_response
 
     async def steer_turn(
         self,
