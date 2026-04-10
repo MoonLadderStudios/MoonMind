@@ -885,14 +885,14 @@ class CodexManagedSessionRuntime:
             vendor_thread_path,
             vendor_turn_id=vendor_turn_id,
         )
-        if saw_task_complete or rollout_error:
-            recovered_error = rollout_error or self._extract_turn_error_from_logs(
-                vendor_turn_id
-            )
+        if rollout_error:
+            return "failed", rollout_error
+        if saw_task_complete:
+            if assistant_text:
+                return "completed", None
+            recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
                 return "failed", recovered_error
-            if saw_task_complete and assistant_text:
-                return "completed", None
             return "failed", "codex app-server turn/completed produced no assistant output"
         if assistant_text:
             return "completed", None
