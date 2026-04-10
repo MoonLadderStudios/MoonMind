@@ -337,6 +337,36 @@ class DockerCodexManagedSessionController:
         rendered_detail = scrub_github_tokens(redactor.scrub(detail))
         return rendered_command, rendered_detail
 
+    @staticmethod
+    def _transport_output_snippet(text: str, *, max_chars: int = 500) -> str:
+        return json.dumps(text[:max_chars], ensure_ascii=True)
+
+    def _raise_transport_failure(
+        self,
+        command: Sequence[str],
+        *,
+        action: str,
+        detail: str,
+        stderr: str,
+        extra_env: Mapping[str, str] | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        rendered_detail = f"managed session action {action} {detail}"
+        stderr_text = stderr.strip()
+        if stderr_text:
+            rendered_detail += (
+                f"; stderr: {self._transport_output_snippet(stderr_text)}"
+            )
+        rendered_command, scrubbed_detail = self._scrub_command_failure(
+            command,
+            rendered_detail,
+            extra_env=extra_env,
+        )
+        error = RuntimeError(f"{rendered_command}: {scrubbed_detail}")
+        if cause is not None:
+            raise error from cause
+        raise error
+
     async def _remove_container(
         self,
         container_identifier: str,
@@ -692,38 +722,38 @@ class DockerCodexManagedSessionController:
         )
         stdout_text = stdout.strip()
         if not stdout_text:
-            rendered_command, rendered_detail = self._scrub_command_failure(
+            self._raise_transport_failure(
                 command,
-                (
-                    f"managed session action {action} returned no JSON output"
-                    + (f"; stderr: {stderr.strip()}" if stderr.strip() else "")
-                ),
+                action=action,
+                detail="returned no JSON output",
+                stderr=stderr,
                 extra_env=extra_env,
             )
-            raise RuntimeError(f"{rendered_command}: {rendered_detail}")
         try:
             parsed = json.loads(stdout_text)
         except json.JSONDecodeError as exc:
-            rendered_command, rendered_detail = self._scrub_command_failure(
+            self._raise_transport_failure(
                 command,
-                (
-                    f"managed session action {action} returned invalid JSON: "
-                    f"{stdout_text[:500]}"
-                    + (f"; stderr: {stderr.strip()}" if stderr.strip() else "")
+                action=action,
+                detail=(
+                    "returned invalid JSON: "
+                    f"{self._transport_output_snippet(stdout_text)}"
                 ),
+                stderr=stderr,
                 extra_env=extra_env,
+                cause=exc,
             )
-            raise RuntimeError(f"{rendered_command}: {rendered_detail}") from exc
         if not isinstance(parsed, dict):
-            rendered_command, rendered_detail = self._scrub_command_failure(
+            self._raise_transport_failure(
                 command,
-                (
-                    f"managed session action {action} returned a "
-                    f"{type(parsed).__name__} payload instead of a JSON object"
+                action=action,
+                detail=(
+                    f"returned a {type(parsed).__name__} payload instead of a "
+                    "JSON object"
                 ),
+                stderr=stderr,
                 extra_env=extra_env,
             )
-            raise RuntimeError(f"{rendered_command}: {rendered_detail}")
         return parsed
 
     async def _wait_ready(self, *, container_id: str) -> None:

@@ -840,8 +840,41 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_controller_send_turn_rejects_empty_transport_output(
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "expected_fragments", "unexpected_fragments"),
+    [
+        (
+            "   \n",
+            "",
+            ["managed session action send_turn returned no JSON output"],
+            [],
+        ),
+        (
+            "invalid\njson",
+            "stderr\nline",
+            [
+                f"managed session action send_turn returned invalid JSON: {json.dumps('invalid\njson')}",
+                f"stderr: {json.dumps('stderr\nline')}",
+            ],
+            ["invalid\njson", "stderr\nline"],
+        ),
+        (
+            "[1, 2, 3]",
+            "stderr\nline",
+            [
+                "managed session action send_turn returned a list payload instead of a JSON object",
+                f"stderr: {json.dumps('stderr\nline')}",
+            ],
+            ["stderr\nline"],
+        ),
+    ],
+)
+async def test_controller_send_turn_rejects_malformed_transport_output(
     tmp_path: Path,
+    stdout: str,
+    stderr: str,
+    expected_fragments: list[str],
+    unexpected_fragments: list[str],
 ) -> None:
     async def _fake_runner(
         command: tuple[str, ...],
@@ -850,7 +883,7 @@ async def test_controller_send_turn_rejects_empty_transport_output(
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
-            return 0, "   \n", ""
+            return 0, stdout, stderr
         raise AssertionError(f"unexpected command: {command}")
 
     controller = DockerCodexManagedSessionController(
@@ -860,10 +893,7 @@ async def test_controller_send_turn_rejects_empty_transport_output(
         command_runner=_fake_runner,
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="managed session action send_turn returned no JSON output",
-    ):
+    with pytest.raises(RuntimeError) as exc_info:
         await controller.send_turn(
             SendCodexManagedSessionTurnRequest(
                 sessionId="sess-1",
@@ -873,6 +903,11 @@ async def test_controller_send_turn_rejects_empty_transport_output(
                 instructions="Reply with exactly the word OK",
             )
         )
+    message = str(exc_info.value)
+    for fragment in expected_fragments:
+        assert fragment in message
+    for fragment in unexpected_fragments:
+        assert fragment not in message
 
 
 @pytest.mark.asyncio
