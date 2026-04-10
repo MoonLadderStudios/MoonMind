@@ -47,12 +47,14 @@ from moonmind.schemas.temporal_models import (
     ExecutionDebugFieldsModel,
     ExecutionListResponse,
     ExecutionModel,
+    ExecutionProgressModel,
     ExecutionRefreshEnvelope,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
     ScheduleCreatedResponse,
     ScheduleParameters,
     SignalExecutionRequest,
+    StepLedgerSnapshotModel,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
     TASK_RUN_ID_MEMO_KEYS,
@@ -67,7 +69,7 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from api_service.api.schemas import CreateJobRequest
@@ -535,10 +537,18 @@ def _serialize_execution(
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
     pr_url = _extract_execution_pr_url(memo, search_attributes, params)
     is_admin = _is_execution_admin(user)
+    steps_href = (
+        settings.temporal_dashboard.steps_endpoint.replace(
+            "{workflowId}", record.workflow_id
+        )
+        if workflow_type_value == "MoonMind.Run"
+        else None
+    )
 
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,
+        progress=None,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,
@@ -601,6 +611,7 @@ def _serialize_execution(
         artifacts_count=len(record.artifact_refs or []),
         scheduled_for=getattr(record, "scheduled_for", None),
         created_at=getattr(record, "created_at", None) or record.started_at,
+        steps_href=steps_href,
         actions=actions,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
@@ -726,6 +737,89 @@ def _resolve_task_run_id_from_managed_store(workflow_id: str) -> str | None:
     if record is None:
         return None
     return str(record.run_id or "").strip() or None
+
+
+async def _load_execution_progress(
+    *,
+    temporal_client: Client,
+    workflow_id: str,
+) -> tuple[ExecutionProgressModel | None, str | None]:
+    try:
+        payload = await query_workflow(temporal_client, workflow_id, "get_progress")
+    except Exception as exc:
+        logger.warning(
+            "Failed to query execution progress for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return None, None
+
+    if payload is None:
+        return None, None
+
+    queried_run_id = None
+    if isinstance(payload, Mapping):
+        queried_run_id = (
+            _coerce_temporal_scalar(payload.get("runId"))
+            or _coerce_temporal_scalar(payload.get("run_id"))
+            or None
+        )
+
+    try:
+        return ExecutionProgressModel.model_validate(payload), queried_run_id
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid execution progress payload for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return None, None
+
+
+async def _load_execution_step_ledger(
+    *,
+    temporal_client: Client,
+    workflow_id: str,
+) -> StepLedgerSnapshotModel:
+    try:
+        payload = await query_workflow(
+            temporal_client,
+            workflow_id,
+            "get_step_ledger",
+        )
+    except RPCError as exc:
+        logger.warning(
+            "Failed to query execution step ledger for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_unavailable",
+                "message": "Temporal step query unavailable.",
+            },
+        ) from exc
+
+    try:
+        return StepLedgerSnapshotModel.model_validate(payload)
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid execution step ledger payload for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "invalid_execution_query_payload",
+                "message": "Execution step ledger query returned an invalid payload.",
+            },
+        ) from exc
 
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
@@ -1971,6 +2065,41 @@ async def list_executions(
     )
 
 
+@router.get("/{workflow_id}/steps", response_model=StepLedgerSnapshotModel)
+async def describe_execution_steps(
+    workflow_id: str,
+    response: Response,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+    temporal_client: Client = Depends(get_temporal_client),
+) -> StepLedgerSnapshotModel:
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    record = await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+    )
+    workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
+    if workflow_type_value != "MoonMind.Run":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_query",
+                "message": "Step-ledger reads are only supported for MoonMind.Run executions.",
+            },
+        )
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+    return await _load_execution_step_ledger(
+        temporal_client=temporal_client,
+        workflow_id=canonical_workflow_id,
+    )
+
+
 @router.get("/{workflow_id}", response_model=ExecutionModel)
 async def describe_execution(
     workflow_id: str,
@@ -2042,6 +2171,16 @@ async def describe_execution(
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
     execution = await _hydrate_provider_profile_metadata(execution, session)
+    if execution.workflow_type == "MoonMind.Run":
+        progress, queried_run_id = await _load_execution_progress(
+            temporal_client=temporal_client,
+            workflow_id=canonical_workflow_id,
+        )
+        update: dict[str, object] = {"progress": progress}
+        if queried_run_id:
+            update["run_id"] = queried_run_id
+            update["temporal_run_id"] = queried_run_id
+        execution = execution.model_copy(update=update)
     if not execution.task_run_id:
         task_run_id = await asyncio.to_thread(
             _resolve_task_run_id_from_managed_store,

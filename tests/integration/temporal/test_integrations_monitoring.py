@@ -19,7 +19,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionService,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @asynccontextmanager

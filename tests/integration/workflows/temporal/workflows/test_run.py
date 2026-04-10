@@ -6,6 +6,10 @@ import pytest
 
 pytest.importorskip("temporalio")
 
+# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping
+# consistently exceed CI timeout thresholds. Kept for local dev verification.
+pytestmark = [pytest.mark.integration]
+
 from temporalio import activity, client, exceptions
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
@@ -331,6 +335,58 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
                 )
+
+    async def test_moonmind_run_workflow_queries_step_ledger_after_completion(self) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[
+                        mock_plan_generate,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[mock_artifact_read],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=SANDBOX_TASK_QUEUE,
+                    activities=[mock_sandbox_command, mock_skill_execute],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+            ):
+                handle = await env.client.start_workflow(
+                    MoonMindRunWorkflow.run,
+                    {
+                        "workflowType": "MoonMind.Run",
+                        "title": "Queryable run",
+                    },
+                    id="test-workflow-ledger-query",
+                    task_queue="test-task-queue",
+                    search_attributes=_trusted_search_attributes(),
+                )
+
+                result = await handle.result()
+                progress = await handle.query("get_progress")
+                ledger = await handle.query("get_step_ledger")
+
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(progress["total"], 1)
+                self.assertEqual(progress["succeeded"], 1)
+                self.assertEqual(ledger["workflowId"], "test-workflow-ledger-query")
+                self.assertEqual(ledger["runScope"], "latest")
+                self.assertEqual(len(ledger["steps"]), 1)
+                self.assertEqual(ledger["steps"][0]["logicalStepId"], "step-1")
+                self.assertEqual(ledger["steps"][0]["status"], "succeeded")
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:

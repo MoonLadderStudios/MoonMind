@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
     ACTIVITY_TASK_QUEUE,
 )
 
+# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 @activity.defn(name="oauth_session.ensure_volume")

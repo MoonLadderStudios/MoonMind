@@ -2251,6 +2251,10 @@ class TemporalArtifactActivities:
             stmt = select(ManagedAgentProviderProfile).where(
                 ManagedAgentProviderProfile.runtime_id == runtime_id,
                 ManagedAgentProviderProfile.enabled.is_(True),
+            ).order_by(
+                ManagedAgentProviderProfile.is_default.desc(),
+                ManagedAgentProviderProfile.priority.desc(),
+                ManagedAgentProviderProfile.profile_id.asc(),
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -2261,6 +2265,7 @@ class TemporalArtifactActivities:
                 {
                     "profile_id": row.profile_id,
                     "runtime_id": row.runtime_id,
+                    "is_default": row.is_default,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
                     "tags": row.tags or [],

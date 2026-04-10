@@ -41,7 +41,7 @@ Phase 2 focuses on: Mission Control UI exposure of advanced profile fields, dyna
 
 ### Out of Scope
 
-- Adding additional OpenRouter-backed model profiles beyond `qwen/qwen3.6-plus:free` (Phase 3)
+- Adding additional OpenRouter-backed model profiles beyond `qwen/qwen3.6-plus` (Phase 3)
 - Provider-specific UI presets or validation rules (e.g., openrouter-specific form hints) — generic JSON editors suffice
 - Changes to the auto-seeding logic or credential mechanisms
 - Legacy auth-profile migration (already complete)

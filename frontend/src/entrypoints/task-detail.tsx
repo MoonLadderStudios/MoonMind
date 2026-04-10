@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Anser from 'anser';
+import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
@@ -14,13 +16,82 @@ type DashboardConfig = {
       debugFieldsEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
+    liveLogsSessionTimelineEnabled?: boolean;
+    liveLogsSessionTimelineRollout?: string;
+    liveLogsStructuredHistoryEnabled?: boolean;
   };
   sources?: {
     temporal?: Record<string, string>;
+    taskRuns?: Record<string, string>;
   };
 };
 
+type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'all_managed';
+
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
+const SESSION_PROJECTION_POLL_MS = 5000;
+
+function normalizeLiveLogsSessionTimelineRollout(
+  value: string | null | undefined,
+): LiveLogsSessionTimelineRollout | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (
+    normalized === 'off'
+    || normalized === 'internal'
+    || normalized === 'codex_managed'
+    || normalized === 'all_managed'
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function isCodexManagedRuntime(runtimeId: string | null | undefined): boolean {
+  const normalized = String(runtimeId || '').trim().toLowerCase();
+  return normalized === 'codex' || normalized === 'codex_cli';
+}
+
+function shouldEnableSessionTimelineViewer({
+  config,
+  targetRuntime,
+  taskRunId,
+}: {
+  config: DashboardConfig | undefined;
+  targetRuntime: string | null | undefined;
+  taskRunId: string | null | undefined;
+}): boolean {
+  const rollout = normalizeLiveLogsSessionTimelineRollout(
+    config?.features?.liveLogsSessionTimelineRollout,
+  );
+  if (rollout === 'off') {
+    return false;
+  }
+  if (rollout === 'internal') {
+    return true;
+  }
+  if (rollout === 'codex_managed') {
+    return isCodexManagedRuntime(targetRuntime);
+  }
+  if (rollout === 'all_managed') {
+    return Boolean(String(taskRunId || '').trim());
+  }
+  return config?.features?.liveLogsSessionTimelineEnabled === true;
+}
+
+function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolean {
+  return config?.features?.liveLogsStructuredHistoryEnabled !== false;
+}
+
+export function getSessionProjectionRefetchInterval(
+  isTerminal: boolean,
+  hasProjection: boolean,
+  hasError: boolean,
+): number | false {
+  if (isTerminal || hasProjection || hasError) {
+    return false;
+  }
+  return SESSION_PROJECTION_POLL_MS;
+}
 
 function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
   if (!value) {
@@ -118,6 +189,7 @@ const ExecutionDetailSchema = z
     closedAt: z.string().nullable().optional(),
     taskRunId: z.string().nullable().optional(),
     task_run_id: z.string().nullable().optional(),
+    stepsHref: z.string().nullable().optional(),
     debugFields: z
       .object({
         workflowId: z.string().optional(),
@@ -172,6 +244,126 @@ const ArtifactSummarySchema = z
   })
   .passthrough();
 
+const ArtifactRefSummarySchema = z
+  .object({
+    artifact_id: z.string(),
+  })
+  .passthrough();
+
+const ArtifactSessionProjectionSchema = z.object({
+  task_run_id: z.string(),
+  session_id: z.string(),
+  session_epoch: z.number(),
+  grouped_artifacts: z
+    .array(
+      z.object({
+        group_key: z.string(),
+        title: z.string(),
+        artifacts: z
+          .array(
+            z
+              .object({
+                artifact_id: z.string().optional(),
+                artifactId: z.string().optional(),
+                status: z.string().optional(),
+              })
+              .passthrough()
+              .transform((artifact) =>
+                ArtifactSummarySchema.parse({
+                  ...artifact,
+                  artifactId: artifact.artifactId ?? artifact.artifact_id,
+                }),
+              ),
+          )
+          .default([]),
+      }),
+    )
+    .default([]),
+  latest_summary_ref: ArtifactRefSummarySchema.nullable().optional(),
+  latest_checkpoint_ref: ArtifactRefSummarySchema.nullable().optional(),
+  latest_control_event_ref: ArtifactRefSummarySchema.nullable().optional(),
+  latest_reset_boundary_ref: ArtifactRefSummarySchema.nullable().optional(),
+});
+
+const ArtifactSessionControlResponseSchema = z.object({
+  action: z.enum(['send_follow_up', 'clear_session']),
+  projection: ArtifactSessionProjectionSchema,
+});
+
+const SessionSnapshotSchema = z
+  .object({
+    sessionId: z.string(),
+    sessionEpoch: z.number(),
+    containerId: z.string(),
+    threadId: z.string(),
+    activeTurnId: z.string().nullable().optional(),
+    status: z.string().optional(),
+    latestSummaryRef: z.string().nullable().optional(),
+    latestCheckpointRef: z.string().nullable().optional(),
+    latestControlEventRef: z.string().nullable().optional(),
+    latestResetBoundaryRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const ObservabilitySummarySchema = z.object({
+  supportsLiveStreaming: z.boolean().default(false),
+  liveStreamStatus: z.string().default('unavailable'),
+  status: z.string().default(''),
+  sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+});
+
+const RawObservabilityEventSchema = z
+  .object({
+    sequence: z.number(),
+    timestamp: z.string(),
+    stream: z.enum(['stdout', 'stderr', 'system', 'session']),
+    text: z.string(),
+    offset: z.number().nullable().optional(),
+    kind: z.string().nullable().optional(),
+    sessionId: z.string().nullable().optional(),
+    session_id: z.string().nullable().optional(),
+    sessionEpoch: z.number().nullable().optional(),
+    session_epoch: z.number().nullable().optional(),
+    containerId: z.string().nullable().optional(),
+    container_id: z.string().nullable().optional(),
+    threadId: z.string().nullable().optional(),
+    thread_id: z.string().nullable().optional(),
+    turnId: z.string().nullable().optional(),
+    turn_id: z.string().nullable().optional(),
+    activeTurnId: z.string().nullable().optional(),
+    active_turn_id: z.string().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+
+export function normalizeObservabilityEvent(event: z.infer<typeof RawObservabilityEventSchema>) {
+  return {
+    sequence: event.sequence,
+    timestamp: event.timestamp,
+    stream: event.stream,
+    text: event.text,
+    offset: event.offset ?? null,
+    kind: event.kind ?? null,
+    session_id: event.session_id ?? event.sessionId ?? null,
+    session_epoch: event.session_epoch ?? event.sessionEpoch ?? null,
+    container_id: event.container_id ?? event.containerId ?? null,
+    thread_id: event.thread_id ?? event.threadId ?? null,
+    turn_id: event.turn_id ?? event.turnId ?? null,
+    active_turn_id: event.active_turn_id ?? event.activeTurnId ?? null,
+    metadata: event.metadata ?? {},
+  };
+}
+
+const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =>
+  normalizeObservabilityEvent(event),
+);
+
+const ObservabilityEventsResponseSchema = z.object({
+  events: z.array(ObservabilityEventSchema).default([]),
+  truncated: z.boolean().default(false),
+  sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+});
+
 const ArtifactListSchema = z.object({
   artifacts: z
     .array(
@@ -199,6 +391,84 @@ const ArtifactListSchema = z.object({
         ),
     )
     .default([]),
+});
+
+const StepLedgerToolSchema = z
+  .object({
+    type: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
+    version: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const StepLedgerCheckSchema = z
+  .object({
+    kind: z.string(),
+    status: z.string(),
+    summary: z.string().nullable().optional(),
+    retryCount: z.number().default(0),
+    artifactRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const StepLedgerRefsSchema = z
+  .object({
+    childWorkflowId: z.string().nullable().optional(),
+    childRunId: z.string().nullable().optional(),
+    taskRunId: z.string().nullable().optional(),
+  })
+  .default({
+    childWorkflowId: null,
+    childRunId: null,
+    taskRunId: null,
+  });
+
+const StepLedgerArtifactsSchema = z
+  .object({
+    outputSummary: z.string().nullable().optional(),
+    outputPrimary: z.string().nullable().optional(),
+    runtimeStdout: z.string().nullable().optional(),
+    runtimeStderr: z.string().nullable().optional(),
+    runtimeMergedLogs: z.string().nullable().optional(),
+    runtimeDiagnostics: z.string().nullable().optional(),
+    providerSnapshot: z.string().nullable().optional(),
+  })
+  .default({
+    outputSummary: null,
+    outputPrimary: null,
+    runtimeStdout: null,
+    runtimeStderr: null,
+    runtimeMergedLogs: null,
+    runtimeDiagnostics: null,
+    providerSnapshot: null,
+  });
+
+const StepLedgerRowSchema = z
+  .object({
+    logicalStepId: z.string(),
+    order: z.number(),
+    title: z.string(),
+    tool: StepLedgerToolSchema.default({}),
+    dependsOn: z.array(z.string()).default([]),
+    status: z.string(),
+    waitingReason: z.string().nullable().optional(),
+    attentionRequired: z.boolean().optional(),
+    attempt: z.number().default(0),
+    startedAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+    checks: z.array(StepLedgerCheckSchema).default([]),
+    refs: StepLedgerRefsSchema,
+    artifacts: StepLedgerArtifactsSchema,
+    lastError: z.unknown().nullable().optional(),
+  })
+  .passthrough();
+
+const StepLedgerSnapshotSchema = z.object({
+  workflowId: z.string(),
+  runId: z.string(),
+  runScope: z.string().default('latest'),
+  steps: z.array(StepLedgerRowSchema).default([]),
 });
 
 const RunSummaryArtifactSchema = z
@@ -253,6 +523,58 @@ function decodeTaskPathSegment(segment: string | null | undefined): string | nul
   } catch {
     return segment;
   }
+}
+
+export function expandRouteTemplate(
+  template: string | null | undefined,
+  params: Record<string, string | null | undefined>,
+): string | null {
+  if (!template) return null;
+  let path = template;
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    path = path.replaceAll(`{${key}}`, encodeURIComponent(value));
+  }
+  return path.includes('{') && path.includes('}') ? null : path;
+}
+
+function joinApiBasePath(apiBase: string, path: string): string {
+  const base = apiBase.replace(/\/+$/g, '');
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${suffix}`;
+}
+
+function resolveApiBaseTemplate(apiBase: string, expandedTemplate: string): string {
+  const template = expandedTemplate.trim();
+  if (!template) return template;
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(template)) return template;
+
+  const normalizedApiBase = apiBase.replace(/\/+$/g, '');
+  if (!normalizedApiBase) return template;
+  if (template.startsWith(normalizedApiBase)) return template;
+
+  if (template === '/api') {
+    return normalizedApiBase;
+  }
+  if (template.startsWith('/api/')) {
+    return joinApiBasePath(normalizedApiBase, template.slice('/api'.length));
+  }
+  return joinApiBasePath(normalizedApiBase, template);
+}
+
+function taskRunRoute(
+  apiBase: string,
+  template: string | null | undefined,
+  fallback: string,
+  params: Record<string, string | null | undefined>,
+): string {
+  const expandedTemplate = expandRouteTemplate(template, params);
+  if (expandedTemplate) {
+    return resolveApiBaseTemplate(apiBase, expandedTemplate);
+  }
+  return joinApiBasePath(apiBase, fallback);
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -381,10 +703,15 @@ function buildObservabilityRequestError(status: number): ObservabilityRequestErr
   return new ObservabilityRequestError(status, `Observability request failed: ${status}`);
 }
 
-/** Fetch the plain-text merged-tail from the artifact-backed API. */
-async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<string> {
+async function fetchMergedTail(
+  apiBase: string,
+  taskRunId: string,
+  routeTemplate?: string | null,
+): Promise<string> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+    taskRunRoute(apiBase, routeTemplate, `/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`, {
+      taskRunId,
+    }),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -394,10 +721,19 @@ async function fetchMergedTail(apiBase: string, taskRunId: string): Promise<stri
   return resp.text();
 }
 
-/** Fetch specific static stream (stdout or stderr) */
-async function fetchStream(apiBase: string, taskRunId: string, stream: 'stdout' | 'stderr'): Promise<string> {
+async function fetchStream(
+  apiBase: string,
+  taskRunId: string,
+  stream: 'stdout' | 'stderr',
+  routeTemplate?: string | null,
+): Promise<string> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -407,10 +743,18 @@ async function fetchStream(apiBase: string, taskRunId: string, stream: 'stdout' 
   return resp.text();
 }
 
-/** Fetch diagnostics JSON */
-async function fetchDiagnostics(apiBase: string, taskRunId: string): Promise<string> {
+async function fetchDiagnostics(
+  apiBase: string,
+  taskRunId: string,
+  routeTemplate?: string | null,
+): Promise<string> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -437,13 +781,79 @@ async function fetchRunSummaryArtifact(
   return RunSummaryArtifactSchema.parse(JSON.parse(text));
 }
 
+function deriveCodexSessionId(
+  taskRunId: string | null | undefined,
+  runtimeId: string | null | undefined,
+): string | null {
+  const normalizedRuntime = String(runtimeId || '').trim().toLowerCase();
+  if (!taskRunId || (normalizedRuntime !== 'codex' && normalizedRuntime !== 'codex_cli')) {
+    return null;
+  }
+  return `sess:${taskRunId}:codex_cli`;
+}
+
+async function fetchArtifactSessionProjection(
+  apiBase: string,
+  taskRunId: string,
+  sessionId: string,
+  routeTemplate?: string | null,
+): Promise<z.infer<typeof ArtifactSessionProjectionSchema> | null> {
+  const resp = await fetch(
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}`,
+      { taskRunId, sessionId },
+    ),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw new Error(`Session continuity: ${resp.status}`);
+  }
+  return ArtifactSessionProjectionSchema.parse(await resp.json());
+}
+
+async function controlArtifactSession(
+  apiBase: string,
+  taskRunId: string,
+  sessionId: string,
+  body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string },
+  routeTemplate?: string | null,
+): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
+  const resp = await fetch(
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/artifact-sessions/${encodeURIComponent(sessionId)}/control`,
+      { taskRunId, sessionId },
+    ),
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    throw new Error(`Session control: ${resp.status}`);
+  }
+  return ArtifactSessionControlResponseSchema.parse(await resp.json());
+}
+
 /** Fetch the observability summary for a task run. */
 async function fetchObservabilitySummary(
   apiBase: string,
   taskRunId: string,
-): Promise<{ supportsLiveStreaming: boolean; liveStreamStatus: string; status: string } | null> {
+  routeTemplate?: string | null,
+): Promise<z.infer<typeof ObservabilitySummarySchema> | null> {
   const resp = await fetch(
-    `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/observability-summary`,
+      { taskRunId },
+    ),
     { credentials: 'include' },
   );
   if (!resp.ok) {
@@ -451,12 +861,38 @@ async function fetchObservabilitySummary(
     throw buildObservabilityRequestError(resp.status);
   }
   const body = (await resp.json()) as { summary: Record<string, unknown> };
-  const s = body.summary;
-  return {
-    supportsLiveStreaming: Boolean(s.supportsLiveStreaming),
-    liveStreamStatus: String(s.liveStreamStatus ?? 'unavailable'),
-    status: String(s.status ?? ''),
-  };
+  return ObservabilitySummarySchema.parse(body.summary);
+}
+
+async function fetchObservabilityEvents(
+  apiBase: string,
+  taskRunId: string,
+  routeTemplate?: string | null,
+): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
+  const resp = await fetch(
+    taskRunRoute(
+      apiBase,
+      routeTemplate,
+      `/task-runs/${encodeURIComponent(taskRunId)}/observability/events`,
+      { taskRunId },
+    ),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw buildObservabilityRequestError(resp.status);
+  }
+  return ObservabilityEventsResponseSchema.parse(await resp.json());
+}
+
+async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
+  const resp = await fetch(stepsHref, { credentials: 'include' });
+  if (!resp.ok) {
+    const statusText = resp.statusText.trim();
+    const detail = statusText ? ` ${statusText}` : '';
+    throw new Error(`Steps: ${resp.status}${detail} (${stepsHref})`);
+  }
+  return StepLedgerSnapshotSchema.parse(await resp.json());
 }
 
 const TERMINAL_RUN_STATUSES = new Set([
@@ -483,10 +919,24 @@ function usePageVisibility() {
   return isVisible;
 }
 
-type LogLine = {
+type ObservabilityEvent = z.infer<typeof ObservabilityEventSchema>;
+type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
+type TimelineStream = 'stdout' | 'stderr' | 'system' | 'session' | 'unknown';
+type TimelineRow = {
   id: string;
   text: string;
-  stream: 'stdout' | 'stderr' | 'system' | 'unknown';
+  stream: TimelineStream;
+  kind: string | null;
+  sequence: number | null;
+  timestamp: string | null;
+  sessionId: string | null;
+  sessionEpoch: number | null;
+  containerId: string | null;
+  threadId: string | null;
+  turnId: string | null;
+  activeTurnId: string | null;
+  metadata: Record<string, unknown>;
+  rowType: 'output' | 'system' | 'session' | 'approval' | 'publication' | 'boundary' | 'fallback';
 };
 
 function splitLogText(content: string): string[] {
@@ -513,17 +963,625 @@ function copyTextToClipboard(text: string): void {
   }
 }
 
-function parseArtifactToLines(content: string): LogLine[] {
+function parseArtifactToRows(content: string): TimelineRow[] {
   const lines = splitLogText(content);
-  let currentStream: LogLine['stream'] = 'unknown';
+  let currentStream: TimelineStream = 'unknown';
 
   return lines.map((line, i) => {
     if (line.startsWith('--- stdout ---')) currentStream = 'stdout';
     else if (line.startsWith('--- stderr ---')) currentStream = 'stderr';
     else if (line.startsWith('--- system ---')) currentStream = 'system';
+    else if (line.startsWith('--- session ---')) currentStream = 'session';
 
-    return { id: `artifact-${i}`, text: line, stream: currentStream };
+    return {
+      id: `artifact-${i}`,
+      text: line,
+      stream: currentStream,
+      kind: null,
+      sequence: null,
+      timestamp: null,
+      sessionId: null,
+      sessionEpoch: null,
+      containerId: null,
+      threadId: null,
+      turnId: null,
+      activeTurnId: null,
+      metadata: {},
+      rowType: 'fallback',
+    };
   });
+}
+
+function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
+  if (event.kind === 'session_reset_boundary') {
+    return 'boundary';
+  }
+  if (event.stream === 'system') {
+    return 'system';
+  }
+  if (event.stream === 'session') {
+    if ((event.kind ?? '').startsWith('approval_')) {
+      return 'approval';
+    }
+    if ((event.kind ?? '').endsWith('_published')) {
+      return 'publication';
+    }
+    return 'session';
+  }
+  return 'output';
+}
+
+function eventToTimelineRows(event: ObservabilityEvent): TimelineRow[] {
+  const stream = event.stream as TimelineStream;
+  const rowType = classifyTimelineRow(event);
+  const lines = splitLogText(event.text);
+  const sourceLines = lines.length > 0 ? lines : [event.text];
+  return sourceLines.map((line, index) => ({
+    id: `${event.sequence}-${index}-${event.kind ?? 'event'}`,
+    text: line,
+    stream,
+    kind: event.kind ?? null,
+    sequence: event.sequence,
+    timestamp: event.timestamp ?? null,
+    sessionId: event.session_id ?? null,
+    sessionEpoch: event.session_epoch ?? null,
+    containerId: event.container_id ?? null,
+    threadId: event.thread_id ?? null,
+    turnId: event.turn_id ?? null,
+    activeTurnId: event.active_turn_id ?? null,
+    metadata: event.metadata ?? {},
+    rowType,
+  }));
+}
+
+function mapEventsToTimelineRows(
+  payload: z.infer<typeof ObservabilityEventsResponseSchema> | null | undefined,
+): TimelineRow[] {
+  if (!payload) return [];
+  return payload.events.flatMap((event) => eventToTimelineRows(event));
+}
+
+function deriveSessionSnapshotFromEvent(
+  event: ObservabilityEvent,
+  previous: SessionSnapshot | null,
+): SessionSnapshot | null {
+  if (!event.session_id || typeof event.session_epoch !== 'number') {
+    return previous;
+  }
+  return {
+    sessionId: event.session_id,
+    sessionEpoch: event.session_epoch,
+    containerId: event.container_id ?? previous?.containerId ?? '',
+    threadId: event.thread_id ?? previous?.threadId ?? '',
+    activeTurnId: event.active_turn_id ?? previous?.activeTurnId ?? null,
+    status: previous?.status,
+    latestSummaryRef: previous?.latestSummaryRef ?? null,
+    latestCheckpointRef: previous?.latestCheckpointRef ?? null,
+    latestControlEventRef: previous?.latestControlEventRef ?? null,
+    latestResetBoundaryRef: previous?.latestResetBoundaryRef ?? null,
+  };
+}
+
+function renderAnsiFragments(text: string): ReactNode {
+  const fragments = Anser.ansiToJson(text, { json: true, remove_empty: true });
+  if (fragments.length === 0) {
+    return text;
+  }
+  return fragments.map((fragment, index) => {
+    const style: Record<string, string> = {};
+    const foreground = fragment.fg_truecolor || fragment.fg;
+    const background = fragment.bg_truecolor || fragment.bg;
+    if (foreground) {
+      style.color = foreground;
+    }
+    if (background) {
+      style.backgroundColor = background;
+    }
+    if (fragment.decorations.includes('bold')) {
+      style.fontWeight = '700';
+    }
+    if (fragment.decorations.includes('italic')) {
+      style.fontStyle = 'italic';
+    }
+    const textDecoration = [
+      fragment.decorations.includes('underline') ? 'underline' : null,
+      fragment.decorations.includes('strikethrough') ? 'line-through' : null,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (textDecoration) {
+      style.textDecoration = textDecoration;
+    }
+    return (
+      <span key={`${fragment.content}-${index}`} data-ansi-fragment="true" style={style}>
+        {fragment.content}
+      </span>
+    );
+  });
+}
+
+function renderTimelineRowText(row: TimelineRow, timelineViewerEnabled: boolean): ReactNode {
+  if (!timelineViewerEnabled) {
+    return row.text;
+  }
+  if (row.stream === 'stdout' || row.stream === 'stderr') {
+    return renderAnsiFragments(row.text);
+  }
+  return row.text;
+}
+
+function getCopyableRowText(row: TimelineRow): string {
+  if (row.stream === 'stdout' || row.stream === 'stderr') {
+    return Anser.ansiToText(row.text, { remove_empty: true });
+  }
+  return row.text;
+}
+
+type TimelineArtifactLink = {
+  key: string;
+  label: string;
+  href: string;
+};
+
+function TimelineArtifactLinks({ links }: { links: TimelineArtifactLink[] }): ReactNode {
+  if (links.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="live-logs-artifact-links">
+      {links.map((link) => (
+        <a
+          key={link.key}
+          className="live-logs-artifact-link"
+          href={link.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={link.label}
+        >
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function coerceArtifactRef(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    return normalized || null;
+  }
+  if (value && typeof value === 'object') {
+    const candidate = (value as { artifactRef?: unknown; artifact_id?: unknown; artifactId?: unknown }).artifactRef
+      ?? (value as { artifactRef?: unknown; artifact_id?: unknown; artifactId?: unknown }).artifact_id
+      ?? (value as { artifactRef?: unknown; artifact_id?: unknown; artifactId?: unknown }).artifactId;
+    if (typeof candidate === 'string') {
+      const normalized = candidate.trim();
+      return normalized || null;
+    }
+  }
+  return null;
+}
+
+function buildArtifactDownloadHref(apiBase: string, artifactId: string): string {
+  return joinApiBasePath(apiBase, `/artifacts/${encodeURIComponent(artifactId)}/download`);
+}
+
+function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): TimelineArtifactLink[] {
+  const links: TimelineArtifactLink[] = [];
+  const seen = new Set<string>();
+  const addLink = (label: string, value: unknown) => {
+    const artifactId = coerceArtifactRef(value);
+    if (!artifactId) return;
+    const key = `${label}:${artifactId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    links.push({
+      key,
+      label,
+      href: buildArtifactDownloadHref(apiBase, artifactId),
+    });
+  };
+
+  if (row.kind === 'summary_published') {
+    addLink('Open summary artifact', row.metadata.summaryRef ?? row.metadata.artifactRef);
+  }
+  if (row.kind === 'checkpoint_published') {
+    addLink('Open checkpoint artifact', row.metadata.checkpointRef ?? row.metadata.artifactRef);
+  }
+  if (row.kind === 'session_cleared' || row.kind === 'session_reset_boundary') {
+    addLink(
+      'Open control event artifact',
+      row.metadata.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata.artifactRef : null),
+    );
+    addLink(
+      'Open reset boundary artifact',
+      row.metadata.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata.artifactRef : null),
+    );
+  }
+
+  return links;
+}
+
+function renderTimelineRow(
+  row: TimelineRow,
+  wrapLines: boolean,
+  timelineViewerEnabled: boolean,
+  apiBase: string,
+): ReactNode {
+  const rowClasses = [
+    'live-logs-row',
+    `live-logs-row-${row.rowType}`,
+    `live-logs-stream-${row.stream}`,
+    wrapLines ? 'is-wrapped' : 'is-unwrapped',
+  ].join(' ');
+  const artifactLinks = timelineViewerEnabled ? buildTimelineArtifactLinks(row, apiBase) : [];
+
+  if (timelineViewerEnabled && row.rowType === 'boundary') {
+    return (
+      <div
+        key={row.id}
+        className={rowClasses}
+      >
+        <div className="live-logs-boundary-label">Session reset boundary</div>
+        <div
+          className="live-logs-row-text"
+          data-stream={row.stream}
+          data-kind={row.kind ?? undefined}
+          data-row-type={row.rowType}
+        >
+          {row.text}
+        </div>
+        <TimelineArtifactLinks links={artifactLinks} />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      key={row.id}
+      className={rowClasses}
+    >
+      {timelineViewerEnabled && row.kind ? (
+        <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+      ) : null}
+      <div
+        className="live-logs-row-text"
+        data-stream={row.stream}
+        data-kind={row.kind ?? undefined}
+        data-row-type={row.rowType}
+      >
+        {renderTimelineRowText(row, timelineViewerEnabled)}
+      </div>
+      <TimelineArtifactLinks links={artifactLinks} />
+    </div>
+  );
+}
+
+type TaskRunRouteTemplates = {
+  observabilitySummary?: string | undefined;
+  observabilityEvents?: string | undefined;
+  logsStream?: string | undefined;
+  logsStdout?: string | undefined;
+  logsStderr?: string | undefined;
+  logsMerged?: string | undefined;
+  diagnostics?: string | undefined;
+  artifactSession?: string | undefined;
+  artifactSessionControl?: string | undefined;
+};
+
+function readTaskRunRouteTemplates(config: DashboardConfig | undefined): TaskRunRouteTemplates {
+  return {
+    observabilitySummary: config?.sources?.taskRuns?.observabilitySummary,
+    observabilityEvents: config?.sources?.taskRuns?.observabilityEvents,
+    logsStream: config?.sources?.taskRuns?.logsStream,
+    logsStdout: config?.sources?.taskRuns?.logsStdout,
+    logsStderr: config?.sources?.taskRuns?.logsStderr,
+    logsMerged: config?.sources?.taskRuns?.logsMerged,
+    diagnostics: config?.sources?.taskRuns?.diagnostics,
+    artifactSession: config?.sources?.taskRuns?.artifactSession,
+    artifactSessionControl: config?.sources?.taskRuns?.artifactSessionControl,
+  };
+}
+
+function formatStepToolLabel(tool: z.infer<typeof StepLedgerToolSchema>): string {
+  const name = String(tool.name || '').trim();
+  const type = String(tool.type || '').trim();
+  if (name) return name;
+  if (type) return type;
+  return 'unknown';
+}
+
+function formatStepLastError(lastError: unknown): string | null {
+  if (!lastError) return null;
+  if (typeof lastError === 'string') return lastError;
+  if (typeof lastError === 'object') {
+    const candidate = (lastError as { summary?: unknown; message?: unknown }).summary
+      ?? (lastError as { summary?: unknown; message?: unknown }).message;
+    return candidate ? String(candidate) : JSON.stringify(lastError);
+  }
+  return String(lastError);
+}
+
+function stepTerminal(status: string | null | undefined): boolean {
+  const normalized = String(status || '').trim().toLowerCase();
+  return normalized === 'succeeded'
+    || normalized === 'failed'
+    || normalized === 'canceled'
+    || normalized === 'cancelled'
+    || normalized === 'skipped';
+}
+
+function stepCheckStatusClass(status: string | null | undefined): string {
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `check-${normalized || 'unknown'}`;
+}
+
+function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
+  const checkStatusClass = stepCheckStatusClass(check.status);
+  return (
+    <span className={`step-check-badge ${checkStatusClass} ${executionStatusPillClasses(check.status)}`}>
+      {check.kind.replaceAll('_', ' ')}: {check.status.replaceAll('_', ' ')}
+    </span>
+  );
+}
+
+function StepCheckDetails({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
+  return (
+    <div className="step-check-details">
+      {typeof check.retryCount === 'number' ? (
+        <span className="small">Retry count: {check.retryCount}</span>
+      ) : null}
+      {check.artifactRef ? (
+        <span className="small">
+          Review artifact: <code className="text-xs break-all">{check.artifactRef}</code>
+        </span>
+      ) : (
+        <span className="small">No review artifact linked yet.</span>
+      )}
+    </div>
+  );
+}
+
+function StepArtifactsList({
+  artifacts,
+}: {
+  artifacts: z.infer<typeof StepLedgerArtifactsSchema>;
+}) {
+  const entries = [
+    ['Output summary', artifacts.outputSummary],
+    ['Output primary', artifacts.outputPrimary],
+    ['Runtime stdout', artifacts.runtimeStdout],
+    ['Runtime stderr', artifacts.runtimeStderr],
+    ['Runtime merged logs', artifacts.runtimeMergedLogs],
+    ['Runtime diagnostics', artifacts.runtimeDiagnostics],
+    ['Provider snapshot', artifacts.providerSnapshot],
+  ].filter(([, value]) => Boolean(value)) as Array<[string, string]>;
+
+  if (entries.length === 0) {
+    return <p className="small">No step artifacts linked yet.</p>;
+  }
+
+  return (
+    <ul className="step-detail-list">
+      {entries.map(([label, value]) => (
+        <li key={`${label}-${value}`}>
+          <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function StepMetadataList({
+  row,
+  runId,
+}: {
+  row: z.infer<typeof StepLedgerRowSchema>;
+  runId: string;
+}) {
+  return (
+    <ul className="step-detail-list">
+      <li><strong>Logical step id:</strong> <code className="text-xs break-all">{row.logicalStepId}</code></li>
+      <li><strong>Run id:</strong> <code className="text-xs break-all">{runId}</code></li>
+      <li><strong>Tool:</strong> <code className="text-xs break-all">{formatStepToolLabel(row.tool)}</code></li>
+      <li><strong>Attempt:</strong> {row.attempt}</li>
+      <li><strong>Depends on:</strong> {row.dependsOn.length > 0 ? row.dependsOn.join(', ') : 'None'}</li>
+      <li><strong>Child workflow:</strong> {row.refs.childWorkflowId ? <code className="text-xs break-all">{row.refs.childWorkflowId}</code> : '—'}</li>
+      <li><strong>Child run:</strong> {row.refs.childRunId ? <code className="text-xs break-all">{row.refs.childRunId}</code> : '—'}</li>
+      <li><strong>Task run:</strong> {row.refs.taskRunId ? <code className="text-xs break-all">{row.refs.taskRunId}</code> : '—'}</li>
+      <li><strong>Started:</strong> {formatWhen(row.startedAt)}</li>
+      <li><strong>Updated:</strong> {formatWhen(row.updatedAt)}</li>
+    </ul>
+  );
+}
+
+function StepObservabilityGroup({
+  apiBase,
+  logStreamingEnabled,
+  sessionTimelineEnabled,
+  structuredHistoryEnabled,
+  row,
+  routes,
+}: {
+  apiBase: string;
+  logStreamingEnabled: boolean;
+  sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
+  row: z.infer<typeof StepLedgerRowSchema>;
+  routes: TaskRunRouteTemplates;
+}) {
+  if (!logStreamingEnabled) {
+    return (
+      <p className="small">Live log streaming is disabled in the server dashboard config.</p>
+    );
+  }
+
+  const taskRunId = row.refs.taskRunId;
+  if (!taskRunId) {
+    return (
+      <p className="small">
+        {renderMissingTaskRunCopy(
+          row.status === 'running' || row.status === 'awaiting_external'
+            ? 'waiting_for_launch'
+            : 'binding_missing',
+        )}
+      </p>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <LiveLogsPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        isTerminal={stepTerminal(row.status)}
+        autoExpand
+        routes={routes}
+        sessionTimelineEnabled={sessionTimelineEnabled}
+        structuredHistoryEnabled={structuredHistoryEnabled}
+      />
+      <StaticLogPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        stream="stdout"
+        routes={routes}
+      />
+      <StaticLogPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        stream="stderr"
+        routes={routes}
+      />
+      <DiagnosticsPanel
+        apiBase={apiBase}
+        taskRunId={taskRunId}
+        routes={routes}
+      />
+    </div>
+  );
+}
+
+function stepStatusIcon(status: string): { icon: string; cssClass: string } {
+  const s = status.toLowerCase().trim();
+  if (s === 'succeeded' || s === 'completed') return { icon: '✓', cssClass: 'step-icon-ok' };
+  if (s === 'failed') return { icon: '✕', cssClass: 'step-icon-fail' };
+  if (s === 'canceled' || s === 'cancelled' || s === 'skipped') return { icon: '–', cssClass: 'step-icon-skip' };
+  if (s === 'running' || s === 'executing' || s === 'planning' || s === 'initializing' || s === 'finalizing')
+    return { icon: '●', cssClass: 'step-icon-running' };
+  return { icon: '○', cssClass: 'step-icon-pending' };
+}
+
+function StepLedgerRowCard({
+  apiBase,
+  logStreamingEnabled,
+  sessionTimelineEnabled,
+  structuredHistoryEnabled,
+  row,
+  runId,
+  expanded,
+  onToggle,
+  isLast,
+  routes,
+}: {
+  apiBase: string;
+  logStreamingEnabled: boolean;
+  sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
+  row: z.infer<typeof StepLedgerRowSchema>;
+  runId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  isLast: boolean;
+  routes: TaskRunRouteTemplates;
+}) {
+  const lastError = formatStepLastError(row.lastError);
+  const { icon, cssClass } = stepStatusIcon(row.status);
+
+  return (
+    <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
+      <div className="step-tl-gutter" aria-hidden="true">
+        <span className={`step-tl-icon ${cssClass}`} title={row.status.replaceAll('_', ' ')}>{icon}</span>
+        {!isLast ? <span className="step-tl-line" /> : null}
+      </div>
+      <div className="step-tl-content">
+        <button
+          type="button"
+          className="step-tl-toggle"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Hide details for ${row.title}` : `Show details for ${row.title}`}
+        >
+          <div className="step-tl-header">
+            <span className="step-tl-title">{row.title}</span>
+            <span className="step-tl-right">
+              <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
+              <span className={executionStatusPillClasses(row.status)}>{row.status.replaceAll('_', ' ')}</span>
+              {row.attempt > 1 ? <span className="step-attempt-pill">Attempt {row.attempt}</span> : null}
+              <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
+            </span>
+          </div>
+          {!expanded && row.summary ? (
+            <p className="step-tl-summary">{row.summary}</p>
+          ) : null}
+          {!expanded && row.checks.length > 0 ? (
+            <div className="step-check-badges">
+              {row.checks.map((check, index) => (
+                <StepCheckBadge key={`${check.kind}-${check.status}-${index}`} check={check} />
+              ))}
+            </div>
+          ) : null}
+        </button>
+        {expanded ? (
+          <div className="step-tl-details">
+            <section className="step-tl-detail-section">
+              <h4>Summary</h4>
+              <p className="small">{row.summary || 'No step summary yet.'}</p>
+              {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
+              {lastError ? <p className="small step-tl-error">Last error: {lastError}</p> : null}
+            </section>
+            {row.checks.length > 0 ? (
+              <section className="step-tl-detail-section">
+                <h4>Checks</h4>
+                <ul className="step-detail-list">
+                  {row.checks.map((check, index) => (
+                    <li key={`${check.kind}-${check.status}-${index}`}>
+                      <StepCheckBadge check={check} />
+                      {check.summary ? <span className="small"> {check.summary}</span> : null}
+                      <StepCheckDetails check={check} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+            <section className="step-tl-detail-section">
+              <h4>Logs & Diagnostics</h4>
+              <StepObservabilityGroup
+                apiBase={apiBase}
+                logStreamingEnabled={logStreamingEnabled}
+                sessionTimelineEnabled={sessionTimelineEnabled}
+                structuredHistoryEnabled={structuredHistoryEnabled}
+                row={row}
+                routes={routes}
+              />
+            </section>
+            <section className="step-tl-detail-section">
+              <h4>Artifacts</h4>
+              <StepArtifactsList artifacts={row.artifacts} />
+            </section>
+            <section className="step-tl-detail-section">
+              <h4>Metadata</h4>
+              <StepMetadataList row={row} runId={runId} />
+            </section>
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
 }
 
 function LiveLogsPanel({
@@ -531,19 +1589,26 @@ function LiveLogsPanel({
   taskRunId,
   isTerminal,
   autoExpand = false,
+  routes,
+  sessionTimelineEnabled,
+  structuredHistoryEnabled,
 }: {
   apiBase: string;
   taskRunId: string;
   isTerminal: boolean;
   autoExpand?: boolean;
+  routes: TaskRunRouteTemplates;
+  sessionTimelineEnabled: boolean;
+  structuredHistoryEnabled: boolean;
 }) {
-  const [logContent, setLogContent] = useState<LogLine[]>([]);
+  const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const [expanded, setExpanded] = useState(false);
   const isVisible = usePageVisibility();
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const isTerminalRef = useRef(isTerminal);
+  const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
   useEffect(() => {
@@ -566,17 +1631,32 @@ function LiveLogsPanel({
   // Query for observability summary
   const summaryQuery = useQuery({
     queryKey: ['observability-summary', taskRunId],
-    queryFn: () => fetchObservabilitySummary(apiBase, taskRunId),
+    queryFn: () => fetchObservabilitySummary(apiBase, taskRunId, routes.observabilitySummary),
     enabled: !!taskRunId && expanded,
     // The summary indicates stream availability; refetch occasionally if not terminal
     staleTime: 1000 * 10,
   });
 
-  // Query for the artifact-backed tail (runs after summary resolves)
+  const historyQuery = useQuery({
+    queryKey: ['task-run-observability-events', taskRunId],
+    queryFn: () => fetchObservabilityEvents(apiBase, taskRunId, routes.observabilityEvents),
+    enabled: structuredHistoryEnabled && !!taskRunId && expanded && summaryQuery.isSuccess,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const historyRows = useMemo(() => mapEventsToTimelineRows(historyQuery.data), [historyQuery.data]);
+  const historyUnavailable = !structuredHistoryEnabled || historyQuery.isError || historyQuery.data === null;
+  const historyEmpty = structuredHistoryEnabled && historyQuery.isSuccess && historyRows.length === 0;
+
+  // Legacy fallback: keep merged text available for older runs or partial failures.
   const tailQuery = useQuery({
     queryKey: ['task-run-tail', taskRunId],
-    queryFn: () => fetchMergedTail(apiBase, taskRunId),
-    enabled: !!taskRunId && expanded && summaryQuery.isSuccess,
+    queryFn: () => fetchMergedTail(apiBase, taskRunId, routes.logsMerged),
+    enabled:
+      !!taskRunId &&
+      expanded &&
+      summaryQuery.isSuccess &&
+      (!structuredHistoryEnabled || historyUnavailable || historyEmpty),
     staleTime: Infinity,
     retry: false,
   });
@@ -587,37 +1667,89 @@ function LiveLogsPanel({
       setViewerState('starting');
       return;
     }
-    if (tailQuery.isError) {
+    if ((structuredHistoryEnabled && historyQuery.isError && tailQuery.isError) || (!structuredHistoryEnabled && tailQuery.isError)) {
       setViewerState('error');
-    } else if (summaryQuery.isSuccess && tailQuery.isSuccess) {
+    } else if (
+      summaryQuery.isSuccess &&
+      ((structuredHistoryEnabled && historyQuery.isSuccess) || tailQuery.isSuccess)
+    ) {
       const summary = summaryQuery.data;
-      const runIsTerminal = isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+      const runIsTerminal =
+        isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
       const supportsStreaming = summary?.supportsLiveStreaming ?? false;
 
       if (!supportsStreaming) {
-        setViewerState(tailQuery.data ? 'ended' : 'not_available');
+        setViewerState(
+          historyRows.length > 0 || Boolean(tailQuery.data)
+            ? 'ended'
+            : 'not_available',
+        );
       } else if (runIsTerminal) {
         setViewerState('ended');
       }
     }
-  }, [expanded, summaryQuery.isSuccess, summaryQuery.data, tailQuery.isError, tailQuery.isSuccess, tailQuery.data]);
+  }, [
+    expanded,
+    structuredHistoryEnabled,
+    historyQuery.data,
+    historyQuery.isError,
+    historyQuery.isSuccess,
+    summaryQuery.data,
+    summaryQuery.isSuccess,
+    tailQuery.data,
+    tailQuery.isError,
+    tailQuery.isSuccess,
+  ]);
 
-  // Sync tail content into the local log buffer when tail fetch completes.
   useEffect(() => {
-    if (tailQuery.isSuccess && tailQuery.data) {
-      setLogContent((prev) => {
-        if (lastSeqRef.current !== null) return prev;
-        return parseArtifactToLines(tailQuery.data);
-      });
+    if (summaryQuery.data?.sessionSnapshot) {
+      setSessionSnapshot(summaryQuery.data.sessionSnapshot);
     }
-  }, [tailQuery.isSuccess, tailQuery.data]);
+  }, [summaryQuery.data]);
+
+  // Sync structured history into the local timeline when history fetch completes.
+  useEffect(() => {
+    if (!structuredHistoryEnabled) {
+      return;
+    }
+    if (historyQuery.isSuccess) {
+      const sequences = historyQuery.data?.events
+        .map((event) => event.sequence)
+        .filter((sequence) => Number.isFinite(sequence));
+      if (lastSeqRef.current === null && historyRows.length > 0) {
+        setLogContent(historyRows);
+      }
+      lastSeqRef.current = sequences && sequences.length > 0 ? Math.max(...sequences) : null;
+      if (historyQuery.data?.sessionSnapshot) {
+        setSessionSnapshot(historyQuery.data.sessionSnapshot);
+      } else {
+        const latestSessionEvent = (historyQuery.data?.events ?? []).findLast(
+          (event) => event.session_id && typeof event.session_epoch === 'number',
+        );
+        if (latestSessionEvent) {
+          setSessionSnapshot((prev) => deriveSessionSnapshotFromEvent(latestSessionEvent, prev));
+        }
+      }
+    }
+  }, [historyQuery.data, historyQuery.isSuccess, historyRows, structuredHistoryEnabled]);
+
+  // Sync legacy merged-text fallback only when structured history is unavailable.
+  useEffect(() => {
+    if (tailQuery.isSuccess && tailQuery.data && (!structuredHistoryEnabled || historyUnavailable || historyEmpty)) {
+      if (lastSeqRef.current === null) {
+        setLogContent(parseArtifactToRows(tailQuery.data));
+      }
+    }
+  }, [historyEmpty, historyUnavailable, structuredHistoryEnabled, tailQuery.data, tailQuery.isSuccess]);
 
   // Connect to SSE only after tail succeeds, if streaming is supported and active
   useEffect(() => {
-    if (!taskRunId || !expanded || !summaryQuery.isSuccess || !tailQuery.isSuccess || !isVisible) return;
+    if (!taskRunId || !expanded || !summaryQuery.isSuccess || !isVisible) return;
+    if ((structuredHistoryEnabled && !historyQuery.isSuccess && !tailQuery.isSuccess) || (!structuredHistoryEnabled && !tailQuery.isSuccess)) return;
 
     const summary = summaryQuery.data;
-    const runIsTerminal = isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
+    const runIsTerminal =
+      isTerminalRef.current || (summary ? TERMINAL_RUN_STATUSES.has(summary.status) : false);
     const supportsStreaming = summary?.supportsLiveStreaming ?? false;
 
     if (runIsTerminal || !supportsStreaming) return;
@@ -626,7 +1758,13 @@ function LiveLogsPanel({
 
     const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
     const since = nextSince != null ? `?since=${nextSince}` : '';
-    const url = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/stream${since}`;
+    const streamUrl = taskRunRoute(
+      apiBase,
+      routes.logsStream,
+      `/task-runs/${encodeURIComponent(taskRunId)}/logs/stream`,
+      { taskRunId },
+    );
+    const url = `${streamUrl}${since}`;
     const es = new EventSource(url, { withCredentials: true });
     esRef.current = es;
 
@@ -637,18 +1775,13 @@ function LiveLogsPanel({
     const handleLogChunk = (event: MessageEvent) => {
       if (cancelled) return;
       try {
-        const data = JSON.parse(event.data) as { sequence: number; text: string; stream?: string };
+        const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
         lastSeqRef.current = data.sequence;
 
         setLogContent((prev) => {
-          const lines = splitLogText(data.text);
-          const mapped: LogLine[] = lines.map((l, i) => ({
-            id: `live-${data.sequence}-${i}`,
-            text: l,
-            stream: (data.stream as LogLine['stream']) || 'unknown',
-          }));
-          return [...prev, ...mapped];
+          return [...prev, ...eventToTimelineRows(data)];
         });
+        setSessionSnapshot((prev) => deriveSessionSnapshotFromEvent(data, prev));
       } catch {
         // ignore malformed events
       }
@@ -672,7 +1805,16 @@ function LiveLogsPanel({
         esRef.current = null;
       }
     };
-  }, [apiBase, taskRunId, expanded, isVisible, summaryQuery.isSuccess, summaryQuery.data, tailQuery.isSuccess]);
+  }, [
+    apiBase,
+    expanded,
+    historyQuery.isSuccess,
+    isVisible,
+    summaryQuery.data,
+    summaryQuery.isSuccess,
+    tailQuery.isSuccess,
+    taskRunId,
+  ]);
 
   // Close the stream once the task reaches a terminal state.
   useEffect(() => {
@@ -703,11 +1845,30 @@ function LiveLogsPanel({
 
   const handleCopy = () => {
     if (logContent.length === 0) return;
-    copyTextToClipboard(logContent.map((line) => line.text).join('\n'));
+    copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
   };
 
-  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`;
+  const downloadUrl = taskRunRoute(
+    apiBase,
+    routes.logsMerged,
+    `/task-runs/${encodeURIComponent(taskRunId)}/logs/merged`,
+    { taskRunId },
+  );
   const summaryErrorMessage = summaryQuery.isError ? (summaryQuery.error as Error).message : null;
+  const liveStatusValue =
+    summaryQuery.data?.liveStreamStatus
+    ?? sessionSnapshot?.status
+    ?? (viewerState === 'live' ? 'live' : viewerState);
+  const sessionBadges = sessionSnapshot
+    ? [
+        ['Session', sessionSnapshot.sessionId],
+        ['Epoch', String(sessionSnapshot.sessionEpoch)],
+        ['Container', sessionSnapshot.containerId],
+        ['Thread', sessionSnapshot.threadId],
+        ['Active Turn', sessionSnapshot.activeTurnId ?? null],
+        ['Live', liveStatusValue],
+      ].filter(([, value]) => value) as Array<[string, string]>
+    : [];
 
   return (
     <details
@@ -723,11 +1884,11 @@ function LiveLogsPanel({
       >
         <span>Live Logs</span>
       </summary>
-      <div className="stack">
+      <div className="stack live-logs-panel">
         {summaryErrorMessage ? <div className="notice error">{summaryErrorMessage}</div> : null}
         {expanded ? (
-          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+          <div className="button-group live-logs-toolbar">
+            <label className="live-logs-wrap-toggle">
               <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
               <span className="small">Wrap lines</span>
             </label>
@@ -738,47 +1899,37 @@ function LiveLogsPanel({
         <p className="small">
           Task run <code className="text-xs">{taskRunId}</code> — {statusLabel}
         </p>
-        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-          <div
-            style={{
-              background: '#111',
-              color: '#e8e8e8',
-              padding: '0.75rem',
-              fontSize: '0.7rem',
-              lineHeight: 1.4,
-              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLines ? 'break-all' : 'normal',
-              borderRadius: '4px',
-              margin: 0,
-              fontFamily: 'monospace',
-            }}
-          >
-            {logContent.length === 0 ? (
-              <div>{emptyLabel}</div>
-            ) : (
-              logContent.map((line) => (
-                <div
-                  key={line.id}
-                  data-stream={line.stream}
-                  style={{
-                    borderLeft:
-                      line.stream === 'stdout'
-                        ? '2px solid #3b82f6'
-                        : line.stream === 'stderr'
-                          ? '2px solid #ef4444'
-                          : line.stream === 'system'
-                            ? '2px solid #22c55e'
-                            : '2px solid transparent',
-                    paddingLeft: '6px',
-                    // dim system messages
-                    opacity: line.stream === 'system' ? 0.7 : 1,
-                  }}
-                >
-                  {line.text}
-                </div>
-              ))
-            )}
+        {sessionTimelineEnabled ? (
+          <p className="small">
+            Timeline shows what happened. Continuity artifacts remain the durable drill-down evidence.
+          </p>
+        ) : null}
+        {sessionBadges.length > 0 ? (
+          <div className="live-logs-session-badges">
+            {sessionBadges.map(([label, value]) => (
+              <span key={`${label}-${value}`} className="card live-logs-session-badge">
+                <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
+              </span>
+            ))}
           </div>
+        ) : null}
+        <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
+          {logContent.length === 0 ? (
+            <div className="live-logs-empty">{emptyLabel}</div>
+          ) : sessionTimelineEnabled ? (
+            <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
+              <Virtuoso
+                style={{ height: 400 }}
+                data={logContent}
+                computeItemKey={(_, row) => row.id}
+                itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
+              />
+            </div>
+          ) : (
+            <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
+              {logContent.map((line) => renderTimelineRow(line, wrapLines, false, apiBase))}
+            </div>
+          )}
         </div>
       </div>
     </details>
@@ -929,18 +2080,26 @@ function InterventionPanel({
 function StaticLogPanel({
   apiBase,
   taskRunId,
-  stream
+  stream,
+  routes,
 }: {
   apiBase: string;
   taskRunId: string;
   stream: 'stdout' | 'stderr';
+  routes: TaskRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
 
   const streamQuery = useQuery({
     queryKey: ['task-run-stream', taskRunId, stream],
-    queryFn: () => fetchStream(apiBase, taskRunId, stream),
+    queryFn: () =>
+      fetchStream(
+        apiBase,
+        taskRunId,
+        stream,
+        stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
+      ),
     enabled: !!taskRunId && expanded,
     retry: false,
   });
@@ -952,7 +2111,12 @@ function StaticLogPanel({
     copyTextToClipboard(streamQuery.data);
   };
 
-  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`;
+  const downloadUrl = taskRunRoute(
+    apiBase,
+    stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
+    `/task-runs/${encodeURIComponent(taskRunId)}/logs/${stream}`,
+    { taskRunId },
+  );
 
   return (
     <details className="stack" open={expanded}>
@@ -1000,17 +2164,19 @@ function StaticLogPanel({
 
 function DiagnosticsPanel({
   apiBase,
-  taskRunId
+  taskRunId,
+  routes,
 }: {
   apiBase: string;
   taskRunId: string;
+  routes: TaskRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
 
   const diagQuery = useQuery({
     queryKey: ['task-run-diagnostics', taskRunId],
-    queryFn: () => fetchDiagnostics(apiBase, taskRunId),
+    queryFn: () => fetchDiagnostics(apiBase, taskRunId, routes.diagnostics),
     enabled: !!taskRunId && expanded,
     retry: false,
   });
@@ -1020,7 +2186,12 @@ function DiagnosticsPanel({
     copyTextToClipboard(diagQuery.data);
   };
 
-  const downloadUrl = `${apiBase}/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`;
+  const downloadUrl = taskRunRoute(
+    apiBase,
+    routes.diagnostics,
+    `/task-runs/${encodeURIComponent(taskRunId)}/diagnostics`,
+    { taskRunId },
+  );
 
   return (
     <details className="stack" open={expanded}>
@@ -1066,6 +2237,214 @@ function DiagnosticsPanel({
   );
 }
 
+function SessionContinuityPanel({
+  apiBase,
+  taskRunId,
+  targetRuntime,
+  isTerminal,
+  onCancel,
+  invalidateTaskDetail,
+  cancelBusy,
+  routes,
+}: {
+  apiBase: string;
+  taskRunId: string;
+  targetRuntime: string | null | undefined;
+  isTerminal: boolean;
+  onCancel: () => void;
+  invalidateTaskDetail: () => void;
+  cancelBusy: boolean;
+  routes: TaskRunRouteTemplates;
+}) {
+  const queryClient = useQueryClient();
+  const sessionId = deriveCodexSessionId(taskRunId, targetRuntime);
+  const [followUpMessage, setFollowUpMessage] = useState('');
+  const [panelError, setPanelError] = useState<string | null>(null);
+
+  const projectionQuery = useQuery({
+    queryKey: ['task-run-session-projection', taskRunId, sessionId],
+    queryFn: () => {
+      if (!sessionId) return Promise.resolve(null);
+      return fetchArtifactSessionProjection(apiBase, taskRunId, sessionId, routes.artifactSession);
+    },
+    enabled: Boolean(taskRunId && sessionId),
+    refetchInterval: (query) => {
+      return getSessionProjectionRefetchInterval(
+        isTerminal,
+        Boolean(query.state.data),
+        Boolean(query.state.error),
+      );
+    },
+    retry: false,
+  });
+
+  const controlMutation = useMutation({
+    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string }) => {
+      if (!sessionId) throw new Error('Managed session is unavailable.');
+      return controlArtifactSession(apiBase, taskRunId, sessionId, body, routes.artifactSessionControl);
+    },
+    onSuccess: (result) => {
+      setPanelError(null);
+      void queryClient.setQueryData(
+        ['task-run-session-projection', taskRunId, sessionId],
+        result.projection,
+      );
+      invalidateTaskDetail();
+      if (result.action === 'send_follow_up') {
+        setFollowUpMessage('');
+      }
+    },
+    onError: (error: Error) => setPanelError(error.message),
+  });
+
+  if (!sessionId) {
+    return null;
+  }
+  if (projectionQuery.isLoading) {
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <p className="small">Loading session continuity...</p>
+      </section>
+    );
+  }
+  if (projectionQuery.isError) {
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <div className="notice error">{(projectionQuery.error as Error).message}</div>
+      </section>
+    );
+  }
+  if (!projectionQuery.data) {
+    if (isTerminal) {
+      return null;
+    }
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <p className="small">Waiting for session continuity artifacts...</p>
+      </section>
+    );
+  }
+
+  const projection = projectionQuery.data;
+  const latestBadges = [
+    ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
+    ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
+    ['Latest Control', projection.latest_control_event_ref?.artifact_id ?? null],
+    ['Latest Reset', projection.latest_reset_boundary_ref?.artifact_id ?? null],
+  ].filter(([, artifactId]) => artifactId !== null) as Array<[string, string]>;
+  const busy = controlMutation.isPending || cancelBusy;
+
+  const submitFollowUp = () => {
+    const message = followUpMessage.trim();
+    if (!message) return;
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'send_follow_up',
+      message,
+    });
+  };
+
+  const clearSession = () => {
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'clear_session',
+    });
+  };
+
+  return (
+    <section className="stack">
+      <div>
+        <h3>Session Continuity</h3>
+        <p className="small">
+          Continuity artifacts are durable evidence and drill-down for this session.
+        </p>
+        <p className="small">
+          Session <code>{projection.session_id}</code> — Epoch {projection.session_epoch}
+        </p>
+      </div>
+
+      {panelError ? <div className="notice error">{panelError}</div> : null}
+
+      <div className="grid-2">
+        <Card label="Session ID">
+          <code className="text-xs break-all">{projection.session_id}</code>
+        </Card>
+        <Card label="Current Epoch">{projection.session_epoch}</Card>
+      </div>
+
+      {latestBadges.length > 0 ? (
+        <div className="actions">
+          {latestBadges.map(([label, artifactId]) => (
+            <span key={`${label}-${artifactId}`} className="card">
+              <strong>{label}:</strong> <code className="text-xs">{artifactId}</code>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="stack">
+        {projection.grouped_artifacts.map((group) => (
+          <div key={group.group_key} className="card">
+            <strong>{group.title}</strong>
+            <div className="stack gap-1" style={{ marginTop: '0.5rem' }}>
+              {group.artifacts.length === 0 ? (
+                <span className="small">No artifacts.</span>
+              ) : (
+                group.artifacts.map((artifact) => (
+                  <code key={artifact.artifactId} className="text-xs break-all">
+                    {artifact.artifactId}
+                  </code>
+                ))
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="stack">
+        <label htmlFor="session-follow-up">Follow-up message</label>
+        <textarea
+          id="session-follow-up"
+          value={followUpMessage}
+          onChange={(event) => setFollowUpMessage(event.target.value)}
+          rows={3}
+          placeholder="Send a follow-up turn to the managed Codex session."
+          disabled={busy || isTerminal}
+        />
+        <div className="actions">
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || isTerminal || !followUpMessage.trim()}
+            onClick={submitFollowUp}
+          >
+            Send follow-up
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || isTerminal}
+            onClick={clearSession}
+          >
+            Clear / Reset
+          </button>
+          <button
+            type="button"
+            className="queue-action queue-action-danger"
+            disabled={busy || isTerminal}
+            onClick={onCancel}
+          >
+            Cancel Execution
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 type MissingTaskRunState = 'waiting_for_launch' | 'binding_missing' | 'launch_failed';
 
 function inferMissingTaskRunState(execution: z.infer<typeof ExecutionDetailSchema>): MissingTaskRunState {
@@ -1105,10 +2484,12 @@ function renderMissingTaskRunCopy(state: MissingTaskRunState): string {
 export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
+  const taskRunRoutes = readTaskRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
+  const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
 
   const taskIdMatch = window.location.pathname.match(
     /^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/,
@@ -1120,6 +2501,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [liveUpdates, setLiveUpdates] = useState(true);
+  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
 
   const detailQuery = useQuery({
     queryKey: ['task-detail', encodedTaskId, sourceTemporal],
@@ -1143,6 +2525,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
   const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
   const resolvedTaskRunId = explicitTaskRunId;
+  const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
+    config: cfg,
+    targetRuntime: execution?.targetRuntime,
+    taskRunId: resolvedTaskRunId,
+  });
   const previousTaskRunIdRef = useRef(resolvedTaskRunId);
   const [showTaskRunAttachNotice, setShowTaskRunAttachNotice] = useState(false);
 
@@ -1169,18 +2556,28 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const missingTaskRunState = execution && !resolvedTaskRunId ? inferMissingTaskRunState(execution) : null;
 
+  const stepsQuery = useQuery({
+    queryKey: ['task-detail-steps', workflowId, execution?.stepsHref],
+    queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
+    enabled: Boolean(execution?.stepsHref),
+    refetchInterval: liveUpdates && execution?.stepsHref ? detailPoll : false,
+  });
+  const latestRunId = stepsQuery.data?.runId || runId;
+
   const artifactsQuery = useQuery({
-    queryKey: ['task-detail-artifacts', namespace, workflowId, runId],
+    queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId],
     queryFn: async () => {
-      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(runId)}/artifacts`;
+      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts`;
       const response = await fetch(path);
       if (!response.ok) {
         throw new Error(`Artifacts: ${response.statusText}`);
       }
       return ArtifactListSchema.parse(await response.json());
     },
-    enabled: Boolean(namespace && workflowId && runId),
-    refetchInterval: liveUpdates && namespace && workflowId && runId ? detailPoll : false,
+    enabled:
+      Boolean(namespace && workflowId && latestRunId)
+      && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
+    refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
   });
 
   const runSummaryQuery = useQuery({
@@ -1222,10 +2619,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         execution.prerequisites.length > 0 ||
         execution.dependents.length > 0),
   );
+  const hasStepsEndpoint = Boolean(execution?.stepsHref);
+  const showExecutionObservationFallback =
+    !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
-    void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, runId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-steps', workflowId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
   };
 
@@ -1352,6 +2753,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const actions = execution?.actions;
   const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
+  const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const hasTaskActions = Boolean(actions?.canSetTitle || actions?.canRerun);
   const hasInterventionSection = Boolean(
     actions &&
@@ -1365,6 +2767,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
+  const toggleStep = (logicalStepId: string) => {
+    setExpandedSteps((prev) => ({
+      ...prev,
+      [logicalStepId]: !prev[logicalStepId],
+    }));
+  };
 
   return (
     <div className="stack">
@@ -1454,7 +2862,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.scheduledFor ? <Card label="Scheduled For">{formatWhen(execution.scheduledFor)}</Card> : null}
             <Card label="Created">{formatWhen(execution.createdAt)}</Card>
             <Card label="Latest Run">
-              <code className="text-xs break-all">{runId || '—'}</code>
+              <code className="text-xs break-all">{latestRunId || '—'}</code>
             </Card>
             {resolvedTaskRunId ? (
               <Card label="Task Run">
@@ -1533,6 +2941,47 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             <section>
               <h3>Waiting Reason</h3>
               <p>{execution.waitingReason}</p>
+            </section>
+          ) : null}
+
+          {hasStepsEndpoint ? (
+            <section className="stack">
+              <div className="step-tl-section-header">
+                <h3>Steps</h3>
+                <span className="step-tl-header-meta">
+                  <code className="text-xs">{latestRunId || '—'}</code>
+                  {stepsQuery.data ? (
+                    <span className="step-tl-count">
+                      {stepsQuery.data.steps.length} step{stepsQuery.data.steps.length === 1 ? '' : 's'}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+              {stepsQuery.isLoading ? (
+                <p className="loading">Loading steps...</p>
+              ) : stepsQuery.isError ? (
+                <div className="notice error">{(stepsQuery.error as Error).message}</div>
+              ) : stepsQuery.data ? (
+                <div className="step-tl-list">
+                  {stepsQuery.data.steps.map((row, idx) => (
+                    <StepLedgerRowCard
+                      key={row.logicalStepId}
+                      apiBase={payload.apiBase}
+                      logStreamingEnabled={logStreamingEnabled}
+                      sessionTimelineEnabled={sessionTimelineEnabled}
+                      structuredHistoryEnabled={structuredHistoryEnabled}
+                      row={row}
+                      runId={latestRunId}
+                      expanded={Boolean(expandedSteps[row.logicalStepId])}
+                      onToggle={() => toggleStep(row.logicalStepId)}
+                      isLast={idx === stepsQuery.data.steps.length - 1}
+                      routes={taskRunRoutes}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="small">No step ledger available for this execution.</p>
+              )}
             </section>
           ) : null}
 
@@ -1660,6 +3109,19 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
+          {resolvedTaskRunId ? (
+            <SessionContinuityPanel
+              apiBase={payload.apiBase}
+              taskRunId={resolvedTaskRunId}
+              targetRuntime={execution.targetRuntime}
+              isTerminal={isTerminalExecution}
+              onCancel={onCancel}
+              invalidateTaskDetail={invalidate}
+              cancelBusy={cancelMutation.isPending}
+              routes={taskRunRoutes}
+            />
+          ) : null}
+
           <section className="stack">
             <h3>Timeline</h3>
             <div className="queue-table-wrapper" data-layout="table">
@@ -1758,42 +3220,61 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             )}
           </section>
 
-          <section className="stack">
-            <div>
-              <h3>Observation</h3>
-              <p className="small">
-                Live logs are passive observation only. Use the Intervention panel for control actions.
-              </p>
-            </div>
-            {logStreamingEnabled ? (
-              resolvedTaskRunId ? (
-                <>
-                  {showTaskRunAttachNotice ? (
-                    <p className="small">Waiting for managed runtime launch to create live logs.</p>
-                  ) : null}
-                  <LiveLogsPanel
-                    apiBase={payload.apiBase}
-                    taskRunId={resolvedTaskRunId}
-                    isTerminal={TERMINAL_STATES.has(execution.rawState || execution.state || '')}
-                    autoExpand={showTaskRunAttachNotice}
-                  />
-                  <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stdout" />
-                  <StaticLogPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} stream="stderr" />
-                  <DiagnosticsPanel apiBase={payload.apiBase} taskRunId={resolvedTaskRunId} />
-                </>
+          {showExecutionObservationFallback ? (
+            <section className="stack">
+              <div>
+                <h3>Observation</h3>
+                <p className="small">
+                  Live logs are passive observation only. Use the Intervention panel for control actions.
+                </p>
+              </div>
+              {logStreamingEnabled ? (
+                resolvedTaskRunId ? (
+                  <>
+                    {showTaskRunAttachNotice ? (
+                      <p className="small">Waiting for managed runtime launch to create live logs.</p>
+                    ) : null}
+                    <LiveLogsPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      isTerminal={isTerminalExecution}
+                      autoExpand={showTaskRunAttachNotice}
+                      routes={taskRunRoutes}
+                      sessionTimelineEnabled={sessionTimelineEnabled}
+                      structuredHistoryEnabled={structuredHistoryEnabled}
+                    />
+                    <StaticLogPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      stream="stdout"
+                      routes={taskRunRoutes}
+                    />
+                    <StaticLogPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      stream="stderr"
+                      routes={taskRunRoutes}
+                    />
+                    <DiagnosticsPanel
+                      apiBase={payload.apiBase}
+                      taskRunId={resolvedTaskRunId}
+                      routes={taskRunRoutes}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <h3>Live Logs</h3>
+                    <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for task details...'}</p>
+                  </>
+                )
               ) : (
                 <>
                   <h3>Live Logs</h3>
-                  <p className="small">{missingTaskRunState ? renderMissingTaskRunCopy(missingTaskRunState) : 'Waiting for task details...'}</p>
+                  <p className="small">Live log streaming is disabled in the server dashboard config.</p>
                 </>
-              )
-            ) : (
-              <>
-                <h3>Live Logs</h3>
-                <p className="small">Live log streaming is disabled in the server dashboard config.</p>
-              </>
-            )}
-          </section>
+              )}
+            </section>
+          ) : null}
 
           {debugOn && execution.debugFields ? (
             <section className="stack">

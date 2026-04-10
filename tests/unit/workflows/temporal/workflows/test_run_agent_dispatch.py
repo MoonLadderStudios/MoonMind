@@ -4,6 +4,7 @@ Pure unit tests — no Temporal test server needed.
 """
 
 import unittest
+from types import SimpleNamespace
 
 import pytest
 
@@ -365,6 +366,46 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
 
+    def test_build_agent_execution_request_preserves_retry_feedback_in_instructions_fields(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        for instruction_key in ("instructions", "instructionRef"):
+            with self.subTest(instruction_key=instruction_key):
+                retried_inputs = wf._inject_review_feedback_into_inputs(
+                    tool_type="agent_runtime",
+                    original_inputs={
+                        instruction_key: "Implement the requested change.",
+                        "targetRuntime": "jules",
+                    },
+                    attempt=1,
+                    feedback="Fix the missing import before retrying.",
+                    issues=(),
+                )
+
+                with patch(
+                    "moonmind.workflows.temporal.workflows.run.workflow.info",
+                    return_value=MockInfo(),
+                ):
+                    request = wf._build_agent_execution_request(
+                        node_inputs=retried_inputs,
+                        node_id="node-review-retry",
+                        tool_name="jules",
+                    )
+
+                self.assertIn("REVIEW FEEDBACK (attempt 1)", request.instruction_ref)
+                self.assertIn(
+                    "Fix the missing import before retrying.",
+                    request.instruction_ref,
+                )
+
     def test_build_agent_execution_request_overrides_stale_selected_skill(self) -> None:
         from unittest.mock import patch
 
@@ -395,6 +436,46 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         metadata = request.parameters.get("metadata") or {}
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
+
+
+class TestReviewGateHelpers(unittest.TestCase):
+    def test_review_gate_skips_matching_tool_identifier(self) -> None:
+        wf = MoonMindRunWorkflow()
+        approval_policy = SimpleNamespace(
+            enabled=True,
+            skip_tool_types=("repo.publish",),
+        )
+
+        is_active = wf._review_gate_active(
+            approval_policy=approval_policy,
+            tool_type="skill",
+            tool_name="repo.publish",
+        )
+
+        self.assertFalse(is_active)
+
+    def test_review_gate_still_skips_matching_tool_type(self) -> None:
+        wf = MoonMindRunWorkflow()
+        approval_policy = SimpleNamespace(
+            enabled=True,
+            skip_tool_types=("agent_runtime",),
+        )
+
+        is_active = wf._review_gate_active(
+            approval_policy=approval_policy,
+            tool_type="agent_runtime",
+            tool_name="jules",
+        )
+
+        self.assertFalse(is_active)
+
+    def test_accepted_review_summary_pluralizes_retries(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        self.assertEqual(
+            wf._accepted_review_summary("PASS", retry_count=2),
+            "Approved after 2 retries",
+        )
 
 
 class TestFetchProfileSnapshots(unittest.TestCase):

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-import socket
 from copy import deepcopy
 from typing import Any
 
-from moonmind.config.settings import settings
+from moonmind.config.settings import WorkflowSettings, settings
+from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.tasks.runtime_defaults import (
     DEFAULT_REPOSITORY,
     normalize_runtime_id,
@@ -22,7 +22,6 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "gemini_cli", "claude_code", "jules", "universal")
-_HOSTNAME = socket.gethostname()
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
@@ -118,15 +117,29 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
     }
 
 
+def build_live_logs_feature_config() -> dict[str, object]:
+    """Build the grouped Live Logs feature flags for dashboard consumers."""
+
+    return {
+        "logStreamingEnabled": bool(WorkflowSettings(_env_file=None).log_streaming_enabled),
+        "liveLogsSessionTimelineEnabled": bool(
+            settings.feature_flags.live_logs_session_timeline_enabled
+        ),
+        "liveLogsSessionTimelineRollout": str(
+            settings.feature_flags.live_logs_session_timeline_rollout
+        ),
+        "liveLogsStructuredHistoryEnabled": bool(
+            settings.feature_flags.live_logs_structured_history_enabled
+        ),
+    }
+
+
 def _build_dashboard_system_metadata() -> dict[str, str | None]:
     """Return operator-facing build metadata for the dashboard shell and runtime config."""
 
-    build_id = str(os.environ.get("MOONMIND_BUILD_ID", "")).strip() or None
-    codex_cli_version = str(os.environ.get("CODEX_CLI_VERSION", "")).strip() or None
+    build_id = resolve_moonmind_build_id()
     return {
         "buildId": build_id,
-        "codexCliVersion": codex_cli_version,
-        "hostname": _HOSTNAME,
     }
 
 
@@ -197,6 +210,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "list": temporal_dashboard.list_endpoint,
                 "create": temporal_dashboard.create_endpoint,
                 "detail": temporal_dashboard.detail_endpoint,
+                "steps": temporal_dashboard.steps_endpoint,
                 "update": temporal_dashboard.update_endpoint,
                 "manifestStatus": "/api/executions/{workflowId}/manifest-status",
                 "manifestNodes": "/api/executions/{workflowId}/manifest-nodes",
@@ -207,6 +221,17 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactMetadata": temporal_dashboard.artifact_metadata_endpoint,
                 "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
                 "artifactDownload": temporal_dashboard.artifact_download_endpoint,
+            },
+            "taskRuns": {
+                "observabilitySummary": "/api/task-runs/{taskRunId}/observability-summary",
+                "observabilityEvents": "/api/task-runs/{taskRunId}/observability/events",
+                "logsStream": "/api/task-runs/{taskRunId}/logs/stream",
+                "logsStdout": "/api/task-runs/{taskRunId}/logs/stdout",
+                "logsStderr": "/api/task-runs/{taskRunId}/logs/stderr",
+                "logsMerged": "/api/task-runs/{taskRunId}/logs/merged",
+                "diagnostics": "/api/task-runs/{taskRunId}/diagnostics",
+                "artifactSession": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}",
+                "artifactSessionControl": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control",
             },
 
         },
@@ -219,10 +244,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
-            "logStreamingEnabled": bool(
-                os.environ.get("MOONMIND_LOG_STREAMING_ENABLED", "true").strip().lower()
-                not in ("0", "false", "no", "off")
-            ),
+            **build_live_logs_feature_config(),
         },
         "system": {
             **system_metadata,
@@ -271,4 +293,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["build_runtime_config", "normalize_status", "status_maps"]
+__all__ = [
+    "build_live_logs_feature_config",
+    "build_runtime_config",
+    "normalize_status",
+    "status_maps",
+]

@@ -7,6 +7,9 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from moonmind.workflows.temporal.activities.task_5_14 import task_5_14_activity
 from moonmind.workflows.temporal.workflows.task_5_14_workflow import Task514Workflow
 
+# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+
 
 @pytest.mark.asyncio
 async def test_task_5_14_workflow():

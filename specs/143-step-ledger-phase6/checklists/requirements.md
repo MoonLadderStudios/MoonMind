@@ -1,0 +1,5 @@
+- [X] Latest-run-only semantics stay anchored to `workflowId`
+- [X] `runId` rotation across rerun / Continue-As-New is covered explicitly
+- [X] Projection/degraded-read truthfulness is covered explicitly
+- [X] Task-detail secondary evidence alignment is covered explicitly
+- [X] Runtime code changes plus validation tests are required

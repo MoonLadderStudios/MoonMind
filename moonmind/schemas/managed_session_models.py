@@ -182,7 +182,13 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     artifact_spool_path: NonBlankStr = Field(..., alias="artifactSpoolPath")
     codex_home_path: NonBlankStr = Field(..., alias="codexHomePath")
     image_ref: NonBlankStr = Field(..., alias="imageRef")
+    turn_completion_timeout_seconds: int = Field(
+        3600,
+        alias="turnCompletionTimeoutSeconds",
+        ge=1,
+    )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+    workspace_spec: dict[str, Any] = Field(default_factory=dict, alias="workspaceSpec")
 
     @model_validator(mode="after")
     def _normalize_environment(self) -> "LaunchCodexManagedSessionRequest":
@@ -191,6 +197,11 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
             key = require_non_blank(str(raw_key), field_name="environment key")
             normalized[key] = str(raw_value)
         self.environment = normalized
+        self.workspace_spec = (
+            dict(self.workspace_spec)
+            if isinstance(self.workspace_spec, dict)
+            else {}
+        )
         return self
 
 
@@ -198,8 +209,7 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Send a new turn to the remote session container."""
 
     instructions: NonBlankStr = Field(..., alias="instructions")
-    input_refs: tuple[NonBlankStr, ...] = Field(default=(), alias="inputRefs")
-    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    reason: NonBlankStr | None = Field(None, alias="reason")
 
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
@@ -281,6 +291,9 @@ class CodexManagedSessionSummary(_CodexManagedSessionRemoteContract):
     latest_control_event_ref: NonBlankStr | None = Field(
         None, alias="latestControlEventRef"
     )
+    latest_reset_boundary_ref: NonBlankStr | None = Field(
+        None, alias="latestResetBoundaryRef"
+    )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
 
@@ -297,6 +310,9 @@ class CodexManagedSessionArtifactsPublication(_CodexManagedSessionRemoteContract
     )
     latest_control_event_ref: NonBlankStr | None = Field(
         None, alias="latestControlEventRef"
+    )
+    latest_reset_boundary_ref: NonBlankStr | None = Field(
+        None, alias="latestResetBoundaryRef"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
@@ -321,9 +337,15 @@ class CodexManagedSessionRecord(BaseModel):
     stdout_artifact_ref: str | None = Field(None, alias="stdoutArtifactRef")
     stderr_artifact_ref: str | None = Field(None, alias="stderrArtifactRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    observability_events_ref: str | None = Field(
+        None,
+        alias="observabilityEventsRef",
+    )
     latest_summary_ref: str | None = Field(None, alias="latestSummaryRef")
     latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
     latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
+    latest_reset_boundary_ref: str | None = Field(None, alias="latestResetBoundaryRef")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
     last_log_offset: int | None = Field(None, alias="lastLogOffset", ge=0)
     last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
@@ -366,6 +388,11 @@ class CodexManagedSessionRecord(BaseModel):
                 self.diagnostics_ref,
                 field_name="diagnosticsRef",
             )
+        if self.observability_events_ref is not None:
+            self.observability_events_ref = require_non_blank(
+                self.observability_events_ref,
+                field_name="observabilityEventsRef",
+            )
         if self.latest_summary_ref is not None:
             self.latest_summary_ref = require_non_blank(
                 self.latest_summary_ref,
@@ -380,6 +407,16 @@ class CodexManagedSessionRecord(BaseModel):
             self.latest_control_event_ref = require_non_blank(
                 self.latest_control_event_ref,
                 field_name="latestControlEventRef",
+            )
+        if self.latest_reset_boundary_ref is not None:
+            self.latest_reset_boundary_ref = require_non_blank(
+                self.latest_reset_boundary_ref,
+                field_name="latestResetBoundaryRef",
+            )
+        if self.active_turn_id is not None:
+            self.active_turn_id = require_non_blank(
+                self.active_turn_id,
+                field_name="activeTurnId",
             )
         if self.error_message is not None:
             self.error_message = require_non_blank(
@@ -400,19 +437,26 @@ class CodexManagedSessionRecord(BaseModel):
             sessionEpoch=self.session_epoch,
             containerId=self.container_id,
             threadId=self.thread_id,
-            activeTurnId=None,
+            activeTurnId=self.active_turn_id,
         )
 
     def published_artifact_refs(self) -> tuple[str, ...]:
-        return tuple(
-            ref
-            for ref in (
-                self.stdout_artifact_ref,
-                self.stderr_artifact_ref,
-                self.diagnostics_ref,
-            )
-            if ref
-        )
+        refs: list[str] = []
+        for ref in (
+            self.stdout_artifact_ref,
+            self.stderr_artifact_ref,
+            self.diagnostics_ref,
+            self.observability_events_ref,
+            self.latest_summary_ref,
+            self.latest_checkpoint_ref,
+            self.latest_control_event_ref,
+            self.latest_reset_boundary_ref,
+        ):
+            if ref and ref not in refs:
+                refs.append(ref)
+        return tuple(refs)
+
+
 class CodexManagedSessionBinding(BaseModel):
     """Bounded task-scoped session binding passed across workflow boundaries."""
 
@@ -488,31 +532,63 @@ class CodexManagedSessionWorkflowInput(BaseModel):
         return self
 
 
-class CodexManagedSessionControlRequest(BaseModel):
-    """Control payload applied to the task-scoped Codex session workflow."""
+class CodexManagedSessionSendFollowUpRequest(BaseModel):
+    """Typed workflow update request for sending a follow-up turn."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    action: ManagedSessionControlAction = Field(..., alias="action")
+    message: NonBlankStr = Field(..., alias="message")
     reason: str | None = Field(None, alias="reason")
-    container_id: str | None = Field(None, alias="containerId")
-    thread_id: str | None = Field(None, alias="threadId")
-    active_turn_id: str | None = Field(None, alias="activeTurnId")
 
     @model_validator(mode="after")
-    def _normalize(self) -> "CodexManagedSessionControlRequest":
+    def _normalize(self) -> "CodexManagedSessionSendFollowUpRequest":
         if self.reason is not None:
             self.reason = require_non_blank(self.reason, field_name="reason")
-        if self.container_id is not None:
-            self.container_id = require_non_blank(
-                self.container_id, field_name="containerId"
-            )
-        if self.thread_id is not None:
-            self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
-        if self.active_turn_id is not None:
-            self.active_turn_id = require_non_blank(
-                self.active_turn_id, field_name="activeTurnId"
-            )
+        return self
+
+
+class CodexManagedSessionInterruptRequest(BaseModel):
+    """Typed workflow update request for interrupting an active turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    reason: str | None = Field(None, alias="reason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionInterruptRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
+        return self
+
+
+class CodexManagedSessionSteerRequest(BaseModel):
+    """Typed workflow update request for steering an active turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    message: NonBlankStr = Field(..., alias="message")
+    reason: str | None = Field(None, alias="reason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionSteerRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
+        return self
+
+
+class CodexManagedSessionWorkflowControlRequest(BaseModel):
+    """Typed workflow update request for clear/cancel/terminate operations."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    reason: str | None = Field(None, alias="reason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionWorkflowControlRequest":
+        if self.reason is not None:
+            self.reason = require_non_blank(self.reason, field_name="reason")
         return self
 
 
@@ -538,15 +614,18 @@ __all__ = [
     "CodexManagedSessionArtifactsPublication",
     "CodexManagedSessionBinding",
     "CodexManagedSessionClearRequest",
-    "CodexManagedSessionControlRequest",
     "CodexManagedSessionHandle",
+    "CodexManagedSessionInterruptRequest",
     "CodexManagedSessionLocator",
     "CodexManagedSessionPlaneContract",
     "CodexManagedSessionRecord",
+    "CodexManagedSessionSendFollowUpRequest",
     "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
+    "CodexManagedSessionSteerRequest",
     "CodexManagedSessionSummary",
     "CodexManagedSessionTurnResponse",
+    "CodexManagedSessionWorkflowControlRequest",
     "CodexManagedSessionWorkflowInput",
     "CodexManagedSessionWorkflowStatus",
     "FetchCodexManagedSessionSummaryRequest",

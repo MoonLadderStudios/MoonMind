@@ -1,6 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -78,8 +78,18 @@ def mock_run_environment(monkeypatch):
     async def fake_planning_stage(*args, **kwargs):
         return "ref-123"
 
-    async def fake_execution_stage(*args, **kwargs):
-        pass
+    async def fake_execution_stage(self, *args, **kwargs):
+        try:
+            await workflow.wait_condition(
+                lambda: self._paused or self._cancel_requested,
+                timeout=timedelta(seconds=1),
+            )
+        except asyncio.TimeoutError:
+            return
+        while self._paused and not self._cancel_requested:
+            await workflow.wait_condition(
+                lambda: not self._paused or self._cancel_requested
+            )
 
     monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_planning_stage)
     monkeypatch.setattr(

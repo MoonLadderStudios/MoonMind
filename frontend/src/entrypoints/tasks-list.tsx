@@ -315,7 +315,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       <div className="toolbar">
         <div>
           <h2 className="page-title">Tasks List</h2>
-          <p className="page-meta">Task-oriented Temporal work in the classic Mission Control table layout.</p>
         </div>
         <div className="toolbar-controls">
           <label className="queue-inline-toggle toolbar-live-toggle">

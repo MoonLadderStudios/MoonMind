@@ -1283,9 +1283,11 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert bindings
             assert {binding.fleet for binding in bindings} == {AGENT_RUNTIME_FLEET}
             bound_types = {binding.activity_type for binding in bindings}
+            assert "agent_runtime.build_launch_context" in bound_types
             assert "agent_runtime.launch_session" in bound_types
             assert "agent_runtime.publish_artifacts" in bound_types
             assert "agent_runtime.session_status" in bound_types
+            assert "agent_runtime.prepare_turn_instructions" in bound_types
             assert "agent_runtime.send_turn" in bound_types
             assert "agent_runtime.steer_turn" in bound_types
             assert "agent_runtime.interrupt_turn" in bound_types
@@ -1311,3 +1313,6 @@ async def test_agent_runtime_send_turn_disables_catalog_retries(
             send_turn = catalog.resolve_activity("agent_runtime.send_turn")
 
             assert send_turn.retries.max_attempts == 1
+            assert send_turn.timeouts.start_to_close_seconds == 3600
+            assert send_turn.timeouts.schedule_to_close_seconds == 3900
+            assert send_turn.timeouts.heartbeat_timeout_seconds == 30

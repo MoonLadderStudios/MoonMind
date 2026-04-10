@@ -175,20 +175,34 @@ def _manifest_tree_is_usable(
     return True
 
 
+def _dist_root_manifest_mtime_ns(dist_root: Path) -> int:
+    manifest_path = _manifest_path_for_dist_root(dist_root)
+    try:
+        return manifest_path.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
 def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Path:
     configured_manifest_path = _configured_manifest_path()
     if configured_manifest_path:
         return _dist_root_for_manifest(configured_manifest_path)
 
-    for candidate in (local_ui_dist_root(), bundled_ui_dist_root()):
+    local_root = local_ui_dist_root()
+    bundled_root = bundled_ui_dist_root()
+    candidates = sorted(
+        (local_root, bundled_root),
+        key=_dist_root_manifest_mtime_ns,
+        reverse=True,
+    )
+    for candidate in candidates:
         if _manifest_tree_is_usable(candidate, entrypoint):
             return candidate
 
-    local_root = local_ui_dist_root()
     if _manifest_path_for_dist_root(local_root).exists():
         return local_root
 
-    return bundled_ui_dist_root()
+    return bundled_root
 
 
 def _verify_asset_paths(dist_root: Path, asset_info: Dict[str, Any]) -> None:

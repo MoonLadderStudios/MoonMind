@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
-import { defaultFormState, toFormState, parseCommandBehavior, parseTags, parsePriority, parseClearEnvKeys } from './ProviderProfilesManager';
+import {
+  defaultFormState,
+  toFormState,
+  parseCommandBehavior,
+  parseTags,
+  parsePriority,
+  parseClearEnvKeys,
+} from './ProviderProfilesManager';
 
 describe('defaultFormState', () => {
   it('includes advanced fields with correct defaults', () => {
@@ -11,6 +18,7 @@ describe('defaultFormState', () => {
     expect(state.priority).toBe('');
     expect(state.clearEnvKeysText).toBe('');
     expect(state.accountLabel).toBe('');
+    expect(state.isDefault).toBe(false);
   });
 
   it('includes all legacy fields', () => {
@@ -22,6 +30,7 @@ describe('defaultFormState', () => {
     expect(state.credentialSource).toBe('secret_ref');
     expect(state.rateLimitPolicy).toBe('backoff');
     expect(state.enabled).toBe(true);
+    expect(state.isDefault).toBe(false);
   });
 });
 
@@ -37,6 +46,7 @@ describe('toFormState', () => {
     cooldown_after_429_seconds: 300,
     rate_limit_policy: 'backoff',
     enabled: true,
+    is_default: false,
   };
 
   const fullProfile: ProviderProfile = {
@@ -51,6 +61,7 @@ describe('toFormState', () => {
     priority: 200,
     clear_env_keys: ['OPENAI_API_KEY', 'OPENAI_BASE_URL'],
     account_label: 'team-prod',
+    is_default: true,
   };
 
   it('maps a minimal profile with null advanced fields', () => {
@@ -61,6 +72,7 @@ describe('toFormState', () => {
     expect(state.priority).toBe('');
     expect(state.clearEnvKeysText).toBe('');
     expect(state.accountLabel).toBe('');
+    expect(state.isDefault).toBe(false);
   });
 
   it('maps a full profile with advanced fields', () => {
@@ -73,6 +85,7 @@ describe('toFormState', () => {
     expect(state.priority).toBe('200');
     expect(state.clearEnvKeysText).toBe('OPENAI_API_KEY\nOPENAI_BASE_URL');
     expect(state.accountLabel).toBe('team-prod');
+    expect(state.isDefault).toBe(true);
   });
 
   it('maps legacy fields correctly', () => {
@@ -90,6 +103,7 @@ describe('toFormState', () => {
     expect(state.cooldownAfter429Seconds).toBe('300');
     expect(state.rateLimitPolicy).toBe('backoff');
     expect(state.enabled).toBe(true);
+    expect(state.isDefault).toBe(true);
   });
 
   it('handles null/undefined optional string fields', () => {

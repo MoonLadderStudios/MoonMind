@@ -2,7 +2,7 @@
 
 Status: Desired state
 Owners: MoonMind Platform
-Last updated: 2026-04-06
+Last updated: 2026-04-09
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
@@ -42,7 +42,16 @@ MoonMind owns:
 - observability hooks
 - recovery and cancellation semantics
 
-Temporal remains the control plane and system of record.
+Temporal remains the control plane for workflow orchestration.
+
+In the current near-term production path, durable operator/audit truth comes from:
+
+- artifacts
+- bounded workflow metadata
+
+The JSON-backed `ManagedSessionStore` is also part of the production path, but as an
+operational supervision record for recovery and reconciliation, not as the
+operator-facing source of truth.
 
 ### 2.2 Managed Session Plane
 
@@ -54,6 +63,8 @@ The managed session plane is the task-scoped Codex runtime environment:
 - continuity reused across steps within the same task only
 
 The session plane is a continuity and performance cache. It is not durable truth.
+
+Managed-session steps may invoke **control-plane tools** that launch separate workload containers as described in [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md). Those workload containers remain outside session identity: they do not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or `active_turn_id`, and they do not replace the task-scoped session container.
 
 ## 3. Protocol
 
@@ -122,14 +133,31 @@ Rules:
 
 ## 7. Durable State Rule
 
-Container state is performance and continuity state only.
+The managed session plane has three different truth surfaces.
 
-Recovery, audit, and operator presentation must come from:
+### 7.1 Operator / Audit Truth
+
+Operator presentation, audit, and continuity review come from:
 
 - artifacts
 - bounded workflow metadata
 
-They must not depend on:
+These are the authoritative surfaces operators should inspect.
+
+### 7.2 Operational Recovery Index
+
+The JSON-backed `ManagedSessionStore` record is allowed to participate in recovery
+and reconciliation as the operational supervision index. It tracks the currently
+known session/container/thread state and the latest published artifact refs so the
+controller and supervisor can recover or reconcile after restarts.
+
+It is not the operator/audit source of truth.
+
+### 7.3 Disposable Cache
+
+Container-local runtime state is performance and continuity cache only.
+
+Operator/audit truth must not depend on:
 
 - in-memory container state
 - container-local thread databases
@@ -143,6 +171,13 @@ Artifact-backed logs and diagnostics remain authoritative even when live streami
 Every managed Codex step must remain execution-centric even when a container is reused across steps.
 
 At minimum, each step must produce durable evidence through the existing artifact system, including step outputs and runtime diagnostics. Session continuity should be represented with summary, checkpoint, and control-boundary artifacts rather than inferred from container state.
+
+For the current production path, `managed_session_controller` plus the managed-session
+supervisor are the production artifact publishers for summary/checkpoint/control/reset
+refs and related session observability. The transitional in-container
+`fetch_session_summary()` and `publish_session_artifacts()` helpers may still exist as
+fallback or bring-up helpers, but they are not the production publication path while
+they return empty publication refs.
 
 ## 9. Non-goals for This Contract Slice
 

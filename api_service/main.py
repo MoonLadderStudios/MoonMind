@@ -522,6 +522,92 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+_CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
+_LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
+
+
+def _codex_openrouter_qwen36_plus_file_templates(
+    model: str,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "replace",
+            "content_template": {
+                "model_provider": "openrouter",
+                "model_reasoning_effort": "high",
+                "model": model,
+                "profile": "openrouter_qwen36_plus",
+                "model_providers": {
+                    "openrouter": {
+                        "name": "OpenRouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "env_key": "OPENROUTER_API_KEY",
+                        "wire_api": "responses",
+                    },
+                },
+                "profiles": {
+                    "openrouter_qwen36_plus": {
+                        "model_provider": "openrouter",
+                        "model": model,
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+
+
+def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
+    return [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "replace",
+            "content_template": {
+                "model_provider": "openrouter",
+                "profile": "openrouter_qwen36_plus",
+                "model_providers": {
+                    "openrouter": {
+                        "name": "OpenRouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "env_key": "OPENROUTER_API_KEY",
+                        "wire_api": "responses",
+                    },
+                },
+                "profiles": {
+                    "openrouter_qwen36_plus": {
+                        "model_provider": "openrouter",
+                        "model": _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL,
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+
+
+def _should_reconcile_openrouter_codex_file_templates(
+    profile_id: str,
+    current_file_templates,
+    desired_file_templates,
+) -> bool:
+    if profile_id != "codex_openrouter_qwen36_plus":
+        return False
+    if desired_file_templates is None:
+        return False
+    if current_file_templates == desired_file_templates:
+        return False
+    deprecated_seed_templates = _codex_openrouter_qwen36_plus_file_templates(
+        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
+    )
+    return current_file_templates in (
+        deprecated_seed_templates,
+        _legacy_codex_openrouter_qwen36_plus_file_templates(),
+    )
+
+
 async def _auto_seed_provider_profiles() -> list[str]:
     """Seed well-known provider profiles that are missing from the DB.
 
@@ -542,6 +628,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
         RuntimeMaterializationMode,
         ManagedAgentRateLimitPolicy,
     )
+    from api_service.services.provider_profile_service import (
+        normalize_runtime_default_profile,
+    )
 
     if os.environ.get("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
         logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
@@ -552,6 +641,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "gemini_default",
             "runtime_id": "gemini_cli",
+            "is_default": True,
             "provider_id": "google",
             "provider_label": "Google",
             "default_model": None,  # inherits runtime default: gemini-3.1-pro-preview
@@ -564,6 +654,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "codex_default",
             "runtime_id": "codex_cli",
+            "is_default": True,
             "provider_id": "moonladder",
             "provider_label": "MoonLadder",
             "default_model": None,  # inherits runtime default: gpt-5.4
@@ -576,6 +667,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "claude_anthropic",
             "runtime_id": "claude_code",
+            "is_default": True,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
             "default_model": None,  # inherits runtime default: Sonnet 4.6
@@ -594,6 +686,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         _DEFAULT_PROFILES.append({
             "profile_id": "claude_minimax",
             "runtime_id": "claude_code",
+            "is_default": False,
             "provider_id": "minimax",
             "provider_label": "MiniMax",
             "default_model": "MiniMax-M2.7",
@@ -625,9 +718,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
         _DEFAULT_PROFILES.append({
             "profile_id": "codex_openrouter_qwen36_plus",
             "runtime_id": "codex_cli",
+            "is_default": False,
             "provider_id": "openrouter",
             "provider_label": "OpenRouter",
-            "default_model": "qwen/qwen3.6-plus:free",
+            "default_model": _CODEX_OPENROUTER_QWEN36_PLUS_MODEL,
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
             "secret_refs": {
@@ -645,32 +739,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "from_secret_ref": "provider_api_key",
                 },
             },
-            "file_templates": [
-                {
-                    "path": "{{runtime_support_dir}}/codex-home/config.toml",
-                    "format": "toml",
-                    "merge_strategy": "replace",
-                    "content_template": {
-                        "model_provider": "openrouter",
-                        "profile": "openrouter_qwen36_plus",
-                        "model_providers": {
-                            "openrouter": {
-                                "name": "OpenRouter",
-                                "base_url": "https://openrouter.ai/api/v1",
-                                "env_key": "OPENROUTER_API_KEY",
-                                "wire_api": "responses",
-                            },
-                        },
-                        "profiles": {
-                            "openrouter_qwen36_plus": {
-                                "model_provider": "openrouter",
-                                "model": "qwen/qwen3.6-plus:free",
-                            },
-                        },
-                    },
-                    "permissions": "0600",
-                },
-            ],
+            "file_templates": _codex_openrouter_qwen36_plus_file_templates(
+                _CODEX_OPENROUTER_QWEN36_PLUS_MODEL
+            ),
             "home_path_overrides": {
                 "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
             },
@@ -694,10 +765,17 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 select(
                     ManagedAgentProviderProfile.profile_id,
                     ManagedAgentProviderProfile.default_model,
+                    ManagedAgentProviderProfile.file_templates,
                 )
             )
             existing_rows = existing_result.all()
-            existing_by_id = {row.profile_id: row.default_model for row in existing_rows}
+            existing_by_id = {
+                row.profile_id: {
+                    "default_model": row.default_model,
+                    "file_templates": row.file_templates,
+                }
+                for row in existing_rows
+            }
             existing_ids: set[str] = set(existing_by_id)
 
             to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
@@ -707,14 +785,39 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_id = profile_def["profile_id"]
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
-                    current_model = existing_by_id[profile_id]
+                    current_model = existing_by_id[profile_id]["default_model"]
                     # Only reconcile when the seeded profile has an explicit desired model
-                    # (non-None) and the existing row is blank — never clear user-set values.
-                    if desired_default_model is not None and not str(current_model or "").strip():
+                    # (non-None) and the existing row is blank or contains an old
+                    # deprecated seed value; never clear user-set values.
+                    current_model_text = str(current_model or "").strip()
+                    legacy_openrouter_model = (
+                        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
+                    )
+                    should_reconcile_deprecated_model = (
+                        profile_id == "codex_openrouter_qwen36_plus"
+                        and current_model_text == legacy_openrouter_model
+                    )
+                    if desired_default_model is not None and (
+                        not current_model_text or should_reconcile_deprecated_model
+                    ):
                         stmt = (
                             update(ManagedAgentProviderProfile)
                             .where(ManagedAgentProviderProfile.profile_id == profile_id)
                             .values(default_model=desired_default_model)
+                        )
+                        await session.execute(stmt)
+                        needs_commit = True
+                    desired_file_templates = profile_def.get("file_templates")
+                    current_file_templates = existing_by_id[profile_id]["file_templates"]
+                    if _should_reconcile_openrouter_codex_file_templates(
+                        profile_id=profile_id,
+                        current_file_templates=current_file_templates,
+                        desired_file_templates=desired_file_templates,
+                    ):
+                        stmt = (
+                            update(ManagedAgentProviderProfile)
+                            .where(ManagedAgentProviderProfile.profile_id == profile_id)
+                            .values(file_templates=desired_file_templates)
                         )
                         await session.execute(stmt)
                         needs_commit = True
@@ -729,6 +832,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 len(to_insert),
             )
 
+            touched_runtime_ids: set[str] = set()
             for profile_def in to_insert:
                 profile = ManagedAgentProviderProfile(
                     profile_id=profile_def["profile_id"],
@@ -756,12 +860,22 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         ManagedAgentRateLimitPolicy.BACKOFF,
                     ),
                     enabled=True,
+                    is_default=bool(profile_def.get("is_default", False)),
                     max_lease_duration_seconds=profile_def.get(
                         "max_lease_duration_seconds", 7200
                     ),
                 )
                 session.add(profile)
-                seeded.append(profile_def["runtime_id"])
+                runtime_id = profile_def["runtime_id"]
+                touched_runtime_ids.add(runtime_id)
+                seeded.append(runtime_id)
+
+            await session.flush()
+            for runtime_id in touched_runtime_ids:
+                await normalize_runtime_default_profile(
+                    session=session,
+                    runtime_id=runtime_id,
+                )
 
             await session.commit()
             logger.info(

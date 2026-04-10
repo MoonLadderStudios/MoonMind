@@ -208,6 +208,7 @@ ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
+ARG MOONMIND_BUILD_ID
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
 # /bin/sh defaults or ignore unset variables. Keep the options explicit for
@@ -218,6 +219,10 @@ ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
     PATH="/usr/local/bin:${PATH}"
 
 WORKDIR /app
+
+RUN build_id="${MOONMIND_BUILD_ID:-}" \
+    && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
+    && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
 
 # Copy Codex and Gemini/Claude artifacts from the tooling builder so the runtime
 # image retains only the compiled CLIs and minimal Node runtime needed to
@@ -313,7 +318,7 @@ RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 RUN pip install --no-cache-dir -e .
 # Keep test runners available in all worker images (codex/gemini/claude).
 RUN pip install --no-cache-dir readmeai~=0.6.3 --no-deps && \
-    pip install --no-cache-dir pytest pytest-xdist
+    pip install --no-cache-dir pytest pytest-xdist pytest-timeout
 
 # Install test extras when requested so compose-driven test runs have pytest and
 # related dependencies baked into the image, avoiding runtime network installs.

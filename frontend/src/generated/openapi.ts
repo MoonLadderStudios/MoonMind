@@ -820,6 +820,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Describe Execution Steps */
+        get: operations["describe_execution_steps_api_executions__workflow_id__steps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}": {
         parameters: {
             query?: never;
@@ -1221,6 +1238,60 @@ export interface paths {
          * @description Fetch the observability summary for a task run from the shared agent jobs volume.
          */
         get: operations["get_observability_summary_api_task_runs__id__observability_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-runs/{task_run_id}/artifact-sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Task Run Artifact Session */
+        get: operations["get_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-runs/{task_run_id}/artifact-sessions/{session_id}/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Control Task Run Artifact Session */
+        post: operations["control_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/task-runs/{id}/observability/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Run Observability Events
+         * @description Return structured observability history for one task run.
+         */
+        get: operations["get_task_run_observability_events_api_task_runs__id__observability_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2159,6 +2230,63 @@ export interface components {
             encryption: string;
         };
         /**
+         * ArtifactSessionControlRequest
+         * @description Operator control request for one task-scoped artifact session.
+         */
+        ArtifactSessionControlRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "send_follow_up" | "clear_session";
+            /** Message */
+            message?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * ArtifactSessionControlResponse
+         * @description Control response envelope with the refreshed session projection.
+         */
+        ArtifactSessionControlResponse: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "send_follow_up" | "clear_session";
+            projection: components["schemas"]["ArtifactSessionProjectionModel"];
+        };
+        /**
+         * ArtifactSessionGroupModel
+         * @description Server-defined grouping of task-scoped session artifacts.
+         */
+        ArtifactSessionGroupModel: {
+            /** Group Key */
+            group_key: string;
+            /** Title */
+            title: string;
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactMetadataModel"][];
+        };
+        /**
+         * ArtifactSessionProjectionModel
+         * @description Minimal task-scoped session continuity projection.
+         */
+        ArtifactSessionProjectionModel: {
+            /** Task Run Id */
+            task_run_id: string;
+            /** Session Id */
+            session_id: string;
+            /** Session Epoch */
+            session_epoch: number;
+            /** Grouped Artifacts */
+            grouped_artifacts?: components["schemas"]["ArtifactSessionGroupModel"][];
+            latest_summary_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            latest_checkpoint_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            latest_control_event_ref?: components["schemas"]["ArtifactRefModel"] | null;
+            latest_reset_boundary_ref?: components["schemas"]["ArtifactRefModel"] | null;
+        };
+        /**
          * ArtifactUploadModel
          * @description Upload descriptor for local-dev upload completion.
          */
@@ -3007,6 +3135,7 @@ export interface components {
             taskId: string;
             /** Taskrunid */
             taskRunId?: string | null;
+            progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Namespace */
             namespace: string;
             /** Workflowid */
@@ -3145,6 +3274,8 @@ export interface components {
              * Format: date-time
              */
             createdAt: string;
+            /** Stepshref */
+            stepsHref?: string | null;
             integration?: components["schemas"]["IntegrationStateModel"] | null;
             /**
              * Latestrunview
@@ -3206,6 +3337,69 @@ export interface components {
             staleState: boolean;
             /** Refreshedat */
             refreshedAt?: string | null;
+        };
+        /**
+         * ExecutionProgressModel
+         * @description Bounded latest-run progress summary derived from workflow-owned step state.
+         */
+        ExecutionProgressModel: {
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Pending
+             * @default 0
+             */
+            pending: number;
+            /**
+             * Ready
+             * @default 0
+             */
+            ready: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Awaitingexternal
+             * @default 0
+             */
+            awaitingExternal: number;
+            /**
+             * Reviewing
+             * @default 0
+             */
+            reviewing: number;
+            /**
+             * Succeeded
+             * @default 0
+             */
+            succeeded: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Canceled
+             * @default 0
+             */
+            canceled: number;
+            /** Currentsteptitle */
+            currentStepTitle?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
         };
         /**
          * ExecutionRefreshEnvelope
@@ -3916,6 +4110,11 @@ export interface components {
              */
             enabled: boolean;
             /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /**
              * Max Lease Duration Seconds
              * @default 7200
              */
@@ -3984,6 +4183,8 @@ export interface components {
             rate_limit_policy: string;
             /** Enabled */
             enabled: boolean;
+            /** Is Default */
+            is_default: boolean;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds: number;
             /** Created At */
@@ -4047,6 +4248,8 @@ export interface components {
             rate_limit_policy?: string | null;
             /** Enabled */
             enabled?: boolean | null;
+            /** Is Default */
+            is_default?: boolean | null;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds?: number | null;
         };
@@ -4370,6 +4573,125 @@ export interface components {
             };
             /** Payloadartifactref */
             payloadArtifactRef?: string | null;
+        };
+        /**
+         * StepLedgerArtifactsModel
+         * @description Stable semantic artifact slots for step evidence.
+         */
+        StepLedgerArtifactsModel: {
+            /** Outputsummary */
+            outputSummary?: string | null;
+            /** Outputprimary */
+            outputPrimary?: string | null;
+            /** Runtimestdout */
+            runtimeStdout?: string | null;
+            /** Runtimestderr */
+            runtimeStderr?: string | null;
+            /** Runtimemergedlogs */
+            runtimeMergedLogs?: string | null;
+            /** Runtimediagnostics */
+            runtimeDiagnostics?: string | null;
+            /** Providersnapshot */
+            providerSnapshot?: string | null;
+        };
+        /**
+         * StepLedgerCheckModel
+         * @description Structured step-level review or check result.
+         */
+        StepLedgerCheckModel: {
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary?: string | null;
+            /**
+             * Retrycount
+             * @default 0
+             */
+            retryCount: number;
+            /** Artifactref */
+            artifactRef?: string | null;
+        };
+        /**
+         * StepLedgerRefsModel
+         * @description Stable ref slots for child workflow and task-run linkage.
+         */
+        StepLedgerRefsModel: {
+            /** Childworkflowid */
+            childWorkflowId?: string | null;
+            /** Childrunid */
+            childRunId?: string | null;
+            /** Taskrunid */
+            taskRunId?: string | null;
+        };
+        /**
+         * StepLedgerRowModel
+         * @description Current/latest attempt state for one logical step in the active run.
+         */
+        StepLedgerRowModel: {
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Order */
+            order: number;
+            /** Title */
+            title: string;
+            /** Tool */
+            tool?: {
+                [key: string]: unknown;
+            };
+            /** Dependson */
+            dependsOn?: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "ready" | "running" | "awaiting_external" | "reviewing" | "succeeded" | "failed" | "skipped" | "canceled";
+            /** Waitingreason */
+            waitingReason?: string | null;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
+            /**
+             * Attempt
+             * @default 0
+             */
+            attempt: number;
+            /** Startedat */
+            startedAt?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Summary */
+            summary?: string | null;
+            /** Checks */
+            checks?: components["schemas"]["StepLedgerCheckModel"][];
+            refs?: components["schemas"]["StepLedgerRefsModel"];
+            artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
+            /** Lasterror */
+            lastError?: string | null;
+        };
+        /**
+         * StepLedgerSnapshotModel
+         * @description Latest-run step-ledger query payload.
+         */
+        StepLedgerSnapshotModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /**
+             * Runscope
+             * @default latest
+             * @constant
+             */
+            runScope: "latest";
+            /** Steps */
+            steps?: components["schemas"]["StepLedgerRowModel"][];
         };
         /** StoryDraft */
         StoryDraft: {
@@ -7140,6 +7462,37 @@ export interface operations {
             };
         };
     };
+    describe_execution_steps_api_executions__workflow_id__steps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepLedgerSnapshotModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     describe_execution_api_executions__workflow_id__get: {
         parameters: {
             query?: {
@@ -7987,6 +8340,154 @@ export interface operations {
     get_observability_summary_api_task_runs__id__observability_summary_get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Observability record not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_run_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSessionProjectionModel"];
+                };
+            };
+            /** @description You do not have permission to access this task run */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session projection not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    control_task_run_artifact_session_api_task_runs__task_run_id__artifact_sessions__session_id__control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_run_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactSessionControlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSessionControlResponse"];
+                };
+            };
+            /** @description You do not have permission to access this task run */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session projection not found for this task run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The managed session cannot accept this control action */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_run_observability_events_api_task_runs__id__observability_events_get: {
+        parameters: {
+            query?: {
+                since?: number | null;
+                limit?: number;
+                stream?: ("stdout" | "stderr" | "system" | "session")[] | null;
+                kind?: string[] | null;
+            };
             header?: never;
             path: {
                 id: string;

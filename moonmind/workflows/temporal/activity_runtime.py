@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import inspect
 import json
@@ -27,8 +28,12 @@ from moonmind.schemas.temporal_activity_models import (
     PlanGenerateInput,
 )
 from moonmind.workflows.tasks.routing import _coerce_bool
-from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
-from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+from moonmind.auth.env_shaping import _should_filter_base_env_var
+from moonmind.workflows.adapters.managed_agent_adapter import (
+    ManagedAgentAdapter,
+    ManagedProfileLaunchContext,
+    build_managed_profile_launch_context,
+)
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
@@ -46,9 +51,11 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionBinding,
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
+    CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     FetchCodexManagedSessionSummaryRequest,
@@ -90,6 +97,14 @@ from moonmind.workflows.temporal.manifest_ingest import (
     build_manifest_summary,
     compile_manifest_plan,
     plan_nodes_to_runtime_nodes,
+)
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_managed_api_key_reference,
+    shape_launch_github_auth_environment,
+)
+from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
+from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+    append_managed_codex_runtime_note,
 )
 
 
@@ -145,11 +160,12 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "code: 429",
 )
 _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
-_PUBLISH_GIT_ADD_EXCLUDES: tuple[str, ...] = (
-    ":(exclude)CLAUDE.md",
-    ":(exclude)live_streams.spool",
-    ":(exclude).agents/skills/active",
+_PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
+    "CLAUDE.md",
+    "live_streams.spool",
+    ".agents/skills/active",
 )
+_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 
 class ManagedSessionController(Protocol):
@@ -345,8 +361,16 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
+    "agent_runtime.build_launch_context": (
+        "agent_runtime",
+        "agent_runtime_build_launch_context",
+    ),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "agent_runtime.launch_session": ("agent_runtime", "agent_runtime_launch_session"),
+    "agent_runtime.load_session_snapshot": (
+        "agent_runtime",
+        "agent_runtime_load_session_snapshot",
+    ),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
     "integration.codex_cloud.fetch_result": (
@@ -362,6 +386,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.session_status": (
         "agent_runtime",
         "agent_runtime_session_status",
+    ),
+    "agent_runtime.prepare_turn_instructions": (
+        "agent_runtime",
+        "agent_runtime_prepare_turn_instructions",
     ),
     "agent_runtime.send_turn": ("agent_runtime", "agent_runtime_send_turn"),
     "agent_runtime.steer_turn": ("agent_runtime", "agent_runtime_steer_turn"),
@@ -753,6 +781,36 @@ async def _maybe_call_heartbeat(
     result = callback(payload)
     if inspect.isawaitable(result):
         await result
+
+
+async def _await_with_activity_heartbeats(
+    awaitable: Awaitable[Any],
+    *,
+    heartbeat_payload: Mapping[str, Any],
+    interval_seconds: float | None = None,
+) -> Any:
+    from temporalio import activity
+
+    task = asyncio.ensure_future(awaitable)
+    try:
+        if not activity.in_activity():
+            return await task
+
+        heartbeat_interval = (
+            interval_seconds
+            if interval_seconds is not None
+            else _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS
+        )
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
+            if task in done:
+                return await task
+            activity.heartbeat(dict(heartbeat_payload))
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 class TemporalPlanActivities:
@@ -2203,12 +2261,18 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        if client_adapter is None:
+            from moonmind.workflows.temporal import client as temporal_client_module
+
+            client_adapter = temporal_client_module.TemporalClientAdapter()
+        self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
@@ -2260,6 +2324,94 @@ class TemporalAgentRuntimeActivities:
                 run_id,
                 exc_info=True,
             )
+
+    async def agent_runtime_build_launch_context(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Build managed launch context on the activity side."""
+
+        profile_raw = payload.get("profile")
+        if not isinstance(profile_raw, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload.profile is required for agent_runtime.build_launch_context"
+            )
+        runtime_for_profile = str(payload.get("runtime_for_profile") or "").strip()
+        workflow_id = str(payload.get("workflow_id") or "").strip()
+        default_credential_source = str(
+            payload.get("default_credential_source")
+            or payload.get("defaultCredentialSource")
+            or ""
+        ).strip()
+        if not runtime_for_profile or not workflow_id or not default_credential_source:
+            raise TemporalActivityRuntimeError(
+                "payload must include runtime_for_profile, workflow_id, and default_credential_source"
+            )
+
+        profile = dict(profile_raw)
+        context = build_managed_profile_launch_context(
+            profile=profile,
+            runtime_for_profile=runtime_for_profile,
+            workflow_id=workflow_id,
+            default_credential_source=default_credential_source,
+        )
+        delta_env_overrides = dict(context.delta_env_overrides)
+        tags = profile.get("tags") or []
+        if "proxy-first" in tags:
+            from cryptography.fernet import Fernet
+
+            from api_service.core.encryption import get_encryption_key
+
+            provider = str(profile.get("provider_id") or "anthropic").strip().lower()
+            payload_bytes = json.dumps(
+                {
+                    "provider": provider,
+                    "workflow_id": workflow_id,
+                    "secret_refs": profile.get("secret_refs", {}),
+                    "exp": time.time() + 3600,
+                }
+            ).encode("utf-8")
+            fernet = Fernet(get_encryption_key().encode("utf-8"))
+            proxy_token = "mm-proxy-token:" + fernet.encrypt(payload_bytes).decode(
+                "utf-8"
+            )
+            api_url = os.environ.get(
+                "MOONMIND_PROXY_URL",
+                "http://moonmind-api:8000/api/v1/proxy",
+            )
+            delta_env_overrides["MOONMIND_PROXY_TOKEN"] = proxy_token
+            if provider in {"anthropic", "minimax"}:
+                delta_env_overrides["ANTHROPIC_BASE_URL"] = f"{api_url}/{provider}"
+                delta_env_overrides["ANTHROPIC_API_KEY"] = proxy_token
+                delta_env_overrides["ANTHROPIC_AUTH_TOKEN"] = proxy_token
+            elif provider == "openai":
+                delta_env_overrides["OPENAI_BASE_URL"] = f"{api_url}/openai/v1"
+                delta_env_overrides["OPENAI_API_KEY"] = proxy_token
+
+        passthrough_env_keys = [
+            key
+            for key in context.passthrough_env_keys
+            if str(os.environ.get(key, "")).strip()
+        ]
+        combined_env_keys = {
+            key for key in os.environ if not _should_filter_base_env_var(key)
+        }
+        combined_env_keys.update(delta_env_overrides)
+        result = ManagedProfileLaunchContext(
+            profile_id=context.profile_id,
+            credential_source=context.credential_source,
+            delta_env_overrides=delta_env_overrides,
+            passthrough_env_keys=passthrough_env_keys,
+            env_keys_count=len(combined_env_keys),
+        )
+        return {
+            "profile_id": result.profile_id,
+            "credential_source": result.credential_source,
+            "delta_env_overrides": result.delta_env_overrides,
+            "passthrough_env_keys": result.passthrough_env_keys,
+            "env_keys_count": result.env_keys_count,
+        }
 
     async def agent_runtime_launch(
         self,
@@ -2353,10 +2505,11 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult | None:
         """Publish agent-run outputs back to artifact storage.
 
-        Writes a summary JSON artifact containing the run result metadata
-        (output refs, summary, failure class) via the artifact service.
+        Best-effort publication writes ``output.summary`` and
+        ``output.agent_result`` JSON artifacts plus managed-session
+        ``input.*`` reference artifacts when those refs are present.
         Returns the result enriched with a ``diagnostics_ref`` pointing to
-        the persisted summary artifact.
+        the persisted ``output.agent_result`` artifact.
         """
         if result is None:
             return result
@@ -2375,6 +2528,74 @@ class TemporalAgentRuntimeActivities:
         else:
             result_dict = {"raw": str(result)}
 
+        from temporalio import activity
+
+        try:
+            info = activity.info()
+        except RuntimeError:
+            info = None
+
+        def _execution_ref(link_type: str) -> ExecutionRef | None:
+            if info is None:
+                return None
+            return ExecutionRef(
+                namespace=info.namespace,
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+                link_type=link_type,
+            )
+
+        metadata = (
+            result_dict.get("metadata")
+            if isinstance(result_dict.get("metadata"), Mapping)
+            else {}
+        )
+        moonmind_metadata = (
+            metadata.get("moonmind")
+            if isinstance(metadata.get("moonmind"), Mapping)
+            else {}
+        )
+        step_ledger_metadata = (
+            moonmind_metadata.get("stepLedger")
+            if isinstance(moonmind_metadata.get("stepLedger"), Mapping)
+            else {}
+        )
+        step_artifact_metadata: dict[str, Any] = {}
+        logical_step_id = str(step_ledger_metadata.get("logicalStepId") or "").strip()
+        if logical_step_id:
+            step_artifact_metadata["step_id"] = logical_step_id
+        attempt = step_ledger_metadata.get("attempt")
+        if isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
+            step_artifact_metadata["attempt"] = int(attempt)
+        scope = str(step_ledger_metadata.get("scope") or "").strip()
+        if scope:
+            step_artifact_metadata["scope"] = scope
+
+        async def _write_reference_artifact(
+            *,
+            link_type: str,
+            artifact_ref_value: str,
+            field_name: str,
+        ) -> str:
+            ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload={
+                    field_name: artifact_ref_value,
+                },
+                execution_ref=_execution_ref(link_type),
+                metadata_json={
+                    "name": link_type.replace(".", "_") + ".json",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", link_type],
+                    **step_artifact_metadata,
+                },
+            )
+            return ref.artifact_id
+
+        instruction_ref = str(metadata.get("instructionRef") or "").strip()
+        resolved_skillset_ref = str(metadata.get("resolvedSkillsetRef") or "").strip()
+
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
             "summary": result_dict.get("summary") or result_dict.get("raw", ""),
@@ -2385,33 +2606,86 @@ class TemporalAgentRuntimeActivities:
         }
 
         try:
+            published_refs: dict[str, str] = {}
+            if instruction_ref:
+                published_refs["inputInstructionsRef"] = await _write_reference_artifact(
+                    link_type="input.instructions",
+                    artifact_ref_value=instruction_ref,
+                    field_name="instructionRef",
+                )
+            if resolved_skillset_ref:
+                published_refs["inputSkillSnapshotRef"] = await _write_reference_artifact(
+                    link_type="input.skill_snapshot",
+                    artifact_ref_value=resolved_skillset_ref,
+                    field_name="resolvedSkillsetRef",
+                )
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
                 payload=summary_payload,
+                execution_ref=_execution_ref("output.summary"),
+                metadata_json={
+                    "name": "agent_run_summary.json",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", "output.summary"],
+                    **step_artifact_metadata,
+                },
+            )
+            agent_result_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=result_dict,
+                execution_ref=_execution_ref("output.agent_result"),
                 metadata_json={
                     "name": "agent_run_result.json",
                     "producer": "activity:agent_runtime.publish_artifacts",
-                    "labels": ["agent_runtime", "result"],
+                    "labels": ["agent_runtime", "output.agent_result"],
+                    **step_artifact_metadata,
                 },
             )
             # Enrich result with the diagnostics ref
             if isinstance(result, Mapping):
                 enriched = dict(result)
                 if "diagnosticsRef" in enriched:
-                    enriched["diagnosticsRef"] = summary_ref.artifact_id
+                    enriched["diagnosticsRef"] = agent_result_ref.artifact_id
                 else:
-                    enriched["diagnostics_ref"] = summary_ref.artifact_id
+                    enriched["diagnostics_ref"] = agent_result_ref.artifact_id
+                enriched_metadata = (
+                    dict(enriched.get("metadata") or {})
+                    if isinstance(enriched.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata.update(
+                    {
+                        **published_refs,
+                        "outputSummaryRef": summary_ref.artifact_id,
+                        "outputAgentResultRef": agent_result_ref.artifact_id,
+                    }
+                )
+                enriched["metadata"] = enriched_metadata
                 # Remove snake_case if alias is present to avoid Pydantic validation errors
                 if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
                     del enriched["diagnostics_ref"]
                 return enriched
             if hasattr(result, "diagnostics_ref"):
-                result.diagnostics_ref = summary_ref.artifact_id
+                result.diagnostics_ref = agent_result_ref.artifact_id
+            if hasattr(result, "metadata"):
+                metadata_obj = getattr(result, "metadata", None)
+                enriched_metadata = (
+                    dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
+                )
+                enriched_metadata.update(
+                    {
+                        **published_refs,
+                        "outputSummaryRef": summary_ref.artifact_id,
+                        "outputAgentResultRef": agent_result_ref.artifact_id,
+                    }
+                )
+                result.metadata = enriched_metadata
             return result
         except Exception as exc:
             logger.warning(
-                "agent_runtime.publish_artifacts failed to write summary artifact",
+                "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
                 exc_info=True,
             )
             return result
@@ -2456,6 +2730,93 @@ class TemporalAgentRuntimeActivities:
                 f"{activity_type} returned an invalid session contract payload"
             ) from exc
 
+    @staticmethod
+    def _coerce_launch_session_request_payload(
+        request: Mapping[str, Any] | LaunchCodexManagedSessionRequest | None,
+    ) -> tuple[LaunchCodexManagedSessionRequest, ManagedRuntimeProfile | None]:
+        if isinstance(request, LaunchCodexManagedSessionRequest):
+            return request, None
+
+        payload = _coerce_activity_request(
+            request,
+            activity_type="agent_runtime.launch_session",
+        )
+        request_payload = payload.get("request")
+        if isinstance(request_payload, Mapping):
+            profile_payload = payload.get("profile")
+            profile = (
+                ManagedRuntimeProfile.model_validate(profile_payload)
+                if profile_payload is not None
+                else None
+            )
+            return (
+                LaunchCodexManagedSessionRequest.model_validate(request_payload),
+                profile,
+            )
+        return LaunchCodexManagedSessionRequest.model_validate(payload), None
+
+    @staticmethod
+    async def _materialize_launch_session_environment(
+        *,
+        request: LaunchCodexManagedSessionRequest,
+        profile: ManagedRuntimeProfile,
+    ) -> dict[str, str]:
+        from moonmind.workflows.adapters.materializer import (
+            ProviderProfileMaterializer,
+        )
+        from moonmind.workflows.adapters.secret_boundary import (
+            SecretResolverBoundary,
+        )
+
+        class _ActivitySecretResolver(SecretResolverBoundary):
+            async def resolve_secrets(
+                self,
+                secret_refs: dict[str, str],
+            ) -> dict[str, str]:
+                resolved: dict[str, str] = {}
+                for key, ref in secret_refs.items():
+                    resolved[key] = await resolve_managed_api_key_reference(
+                        ref,
+                        field_name=f"profile.secretRefs.{key}",
+                    )
+                return resolved
+
+        materializer = ProviderProfileMaterializer(
+            base_env=dict(request.environment),
+            secret_resolver=_ActivitySecretResolver(),
+        )
+        runtime_support_dir = str(
+            Path(request.codex_home_path).expanduser().resolve().parent
+        )
+        materialized_environment, _command = await materializer.materialize(
+            profile,
+            workspace_path=request.workspace_path,
+            runtime_support_dir=runtime_support_dir,
+        )
+        return materialized_environment
+
+    @staticmethod
+    async def _shape_launch_session_request(
+        request: LaunchCodexManagedSessionRequest,
+        *,
+        profile: ManagedRuntimeProfile | None = None,
+    ) -> LaunchCodexManagedSessionRequest:
+        """Resolve runtime-only auth immediately before remote session launch."""
+
+        environment = dict(request.environment)
+        if profile is not None:
+            environment = (
+                await TemporalAgentRuntimeActivities._materialize_launch_session_environment(
+                    request=request,
+                    profile=profile,
+                )
+            )
+        environment = await shape_launch_github_auth_environment(
+            environment,
+            ambient_github_token=os.environ.get("GITHUB_TOKEN"),
+        )
+        return request.model_copy(update={"environment": environment})
+
     async def agent_runtime_launch_session(
         self,
         request: Mapping[str, Any] | LaunchCodexManagedSessionRequest | None = None,
@@ -2464,16 +2825,42 @@ class TemporalAgentRuntimeActivities:
         controller = self._require_session_controller(
             activity_type="agent_runtime.launch_session"
         )
-        validated = self._validate_session_request(
-            request,
-            activity_type="agent_runtime.launch_session",
-            model_type=LaunchCodexManagedSessionRequest,
+        validated, profile = self._coerce_launch_session_request_payload(
+            request
         )
-        response = await controller.launch_session(validated)
+        validated = await self._shape_launch_session_request(
+            validated,
+            profile=profile,
+        )
+        try:
+            response = await controller.launch_session(validated)
+        except Exception as exc:
+            detail = self._sanitize_operator_summary(str(exc)) or "managed session launch failed"
+            raise TemporalActivityRuntimeError(
+                f"agent_runtime.launch_session failed: {detail}"
+            ) from exc
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.launch_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_load_session_snapshot(
+        self,
+        request: Mapping[str, Any] | CodexManagedSessionBinding | None = None,
+        /,
+    ) -> CodexManagedSessionSnapshot:
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.load_session_snapshot",
+            model_type=CodexManagedSessionBinding,
+        )
+        handle = await self._client_adapter.get_workflow_handle(validated.workflow_id)
+        response = await handle.query("get_status")
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.load_session_snapshot",
+            model_type=CodexManagedSessionSnapshot,
         )
 
     async def agent_runtime_session_status(
@@ -2496,6 +2883,44 @@ class TemporalAgentRuntimeActivities:
             model_type=CodexManagedSessionHandle,
         )
 
+    async def agent_runtime_prepare_turn_instructions(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> str:
+        request_raw = payload.get("request")
+        if not isinstance(request_raw, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload.request is required for agent_runtime.prepare_turn_instructions"
+            )
+        request = AgentExecutionRequest.model_validate(dict(request_raw))
+        workspace_path_raw = str(
+            payload.get("workspace_path") or payload.get("workspacePath") or ""
+        ).strip()
+        instruction_ref = str(request.instruction_ref or "").strip()
+        if instruction_ref:
+            if not workspace_path_raw:
+                raise TemporalActivityRuntimeError(
+                    "payload.workspace_path or payload.workspacePath is required when request.instructionRef is set"
+                )
+            from moonmind.rag.context_injection import ContextInjectionService
+
+            service = ContextInjectionService()
+            await service.inject_context(
+                request=request,
+                workspace_path=Path(workspace_path_raw),
+            )
+            instruction_ref = str(request.instruction_ref or "").strip()
+            if instruction_ref:
+                return append_managed_codex_runtime_note(instruction_ref)
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        instructions = str(parameters.get("instructions") or "").strip()
+        if instructions:
+            return append_managed_codex_runtime_note(instructions)
+        raise TemporalActivityRuntimeError(
+            "request.instructionRef or request.parameters.instructions is required"
+        )
+
     async def agent_runtime_send_turn(
         self,
         request: Mapping[str, Any] | SendCodexManagedSessionTurnRequest | None = None,
@@ -2509,7 +2934,15 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.send_turn",
             model_type=SendCodexManagedSessionTurnRequest,
         )
-        response = await controller.send_turn(validated)
+        response = await _await_with_activity_heartbeats(
+            controller.send_turn(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.send_turn",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+                "threadId": validated.thread_id,
+            },
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.send_turn",
@@ -2785,6 +3218,10 @@ class TemporalAgentRuntimeActivities:
             or request.get("publish_base_branch")
             or request.get("publishBaseBranch")
         ) if isinstance(request, Mapping) else None
+        head_branch = (
+            request.get("head_branch")
+            or request.get("headBranch")
+        ) if isinstance(request, Mapping) else None
 
         async def _unused_profile_fetcher(**_kwargs: Any) -> dict[str, Any]:
             return {"profiles": []}
@@ -2826,6 +3263,18 @@ class TemporalAgentRuntimeActivities:
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
             if record is not None:
+                meta.setdefault("taskRunId", record.run_id)
+                if record.stdout_artifact_ref:
+                    meta.setdefault("stdoutArtifactRef", record.stdout_artifact_ref)
+                if record.stderr_artifact_ref:
+                    meta.setdefault("stderrArtifactRef", record.stderr_artifact_ref)
+                if record.merged_log_artifact_ref:
+                    meta.setdefault(
+                        "mergedLogArtifactRef",
+                        record.merged_log_artifact_ref,
+                    )
+                if record.diagnostics_ref:
+                    meta.setdefault("diagnosticsRef", record.diagnostics_ref)
                 operator_summary = await self._collect_operator_summary(
                     record=record,
                     result=result,
@@ -2845,6 +3294,8 @@ class TemporalAgentRuntimeActivities:
                 push_kwargs: dict[str, Any] = {
                     "target_branch": target_branch,
                 }
+                if isinstance(head_branch, str) and head_branch.strip():
+                    push_kwargs["head_branch"] = head_branch.strip()
                 if (
                     isinstance(raw_commit_message, str)
                     and raw_commit_message.strip()
@@ -3207,12 +3658,134 @@ class TemporalAgentRuntimeActivities:
         ]
 
     @staticmethod
+    def _parse_git_status_paths(status_output: bytes) -> tuple[str, ...]:
+        """Extract changed paths from `git status --porcelain=v1 -z` output."""
+
+        def _decode_path(path_bytes: bytes) -> str:
+            return os.fsdecode(path_bytes)
+
+        raw_output = bytes(status_output or b"")
+        if not raw_output:
+            return ()
+
+        entries = raw_output.split(b"\0")
+        paths: list[str] = []
+        index = 0
+        while index < len(entries):
+            record = entries[index]
+            if not record:
+                index += 1
+                continue
+            if len(record) < 4 or record[2:3] != b" ":
+                raise ValueError(f"unexpected git status record: {record!r}")
+
+            status = record[:2].decode("ascii", errors="strict")
+            path_bytes = record[3:]
+            if not path_bytes:
+                raise ValueError(f"missing path in git status record: {record!r}")
+            paths.append(_decode_path(path_bytes))
+
+            if "R" in status or "C" in status:
+                index += 1
+                if index >= len(entries):
+                    raise ValueError(
+                        f"missing original path for git rename/copy record: {record!r}"
+                    )
+                original_path_bytes = entries[index]
+                if not original_path_bytes:
+                    raise ValueError(
+                        f"missing original path for git rename/copy record: {record!r}"
+                    )
+                paths.append(_decode_path(original_path_bytes))
+
+            index += 1
+
+        return tuple(dict.fromkeys(paths))
+
+    @staticmethod
+    def _should_exclude_publish_path(path_text: str) -> bool:
+        """Skip runtime scaffolding paths that should never be published."""
+        normalized = str(path_text or "").strip().rstrip("/")
+        if not normalized:
+            return True
+        for excluded in _PUBLISH_GIT_EXCLUDED_PATHS:
+            if normalized == excluded or normalized.startswith(f"{excluded}/"):
+                return True
+        return False
+
+    @staticmethod
     def _workspace_command_env(workspace: str) -> dict[str, str]:
         """Build a subprocess env that exposes workspace-local command shims."""
         env = dict(os.environ)
         support_root = Path(workspace).resolve().parent / ".moonmind"
         support_bin = support_root / "bin"
         support_gitconfig = support_root / "gitconfig"
+        github_token = str(env.get("GITHUB_TOKEN", "")).strip()
+        git_helper_path = support_bin / "git-credential-moonmind"
+        helper_command: str | None = None
+
+        try:
+            support_root.mkdir(parents=True, exist_ok=True)
+            support_bin.mkdir(parents=True, exist_ok=True)
+            if github_token:
+                helper_script = (
+                    "#!/usr/bin/env python3\n"
+                    "import os\n"
+                    "import sys\n"
+                    "\n"
+                    "operation = str(sys.argv[1] if len(sys.argv) > 1 else '').strip().lower()\n"
+                    "if operation not in {'get', 'fill'}:\n"
+                    "    raise SystemExit(0)\n"
+                    "\n"
+                    "request = {}\n"
+                    "for raw_line in sys.stdin:\n"
+                    "    line = raw_line.rstrip('\\n')\n"
+                    "    if not line:\n"
+                    "        break\n"
+                    "    key, _, value = line.partition('=')\n"
+                    "    request[key] = value\n"
+                    "\n"
+                    "host = str(request.get('host') or '').strip().lower()\n"
+                    "protocol = str(request.get('protocol') or '').strip().lower()\n"
+                    "if host != 'github.com' or (protocol and protocol != 'https'):\n"
+                    "    raise SystemExit(0)\n"
+                    "\n"
+                    "token = str(os.environ.get('GITHUB_TOKEN', '')).strip()\n"
+                    "if not token:\n"
+                    "    raise SystemExit(0)\n"
+                    "\n"
+                    "sys.stdout.write('username=x-access-token\\n')\n"
+                    "sys.stdout.write(f'password={token}\\n\\n')\n"
+                    "sys.stdout.flush()\n"
+                )
+                git_helper_path.write_text(helper_script, encoding="utf-8")
+                git_helper_path.chmod(0o700)
+                helper_command = shlex.quote(str(git_helper_path))
+
+            git_config_lines = [
+                "# moonmind-runtime-git-config\n",
+                "[safe]\n",
+                f'\tdirectory = "{Path(workspace).resolve()}"\n',
+            ]
+            if helper_command is not None:
+                git_config_lines.extend(
+                    [
+                        "[credential]\n",
+                        f"\thelper = !{helper_command}\n",
+                    ]
+                )
+            support_gitconfig.write_text("".join(git_config_lines), encoding="utf-8")
+            support_gitconfig.chmod(0o600)
+        except OSError:
+            logger.warning(
+                "Failed to bootstrap workspace-local git support files for workspace %s "
+                "(support_root=%s, gitconfig=%s)",
+                workspace,
+                support_root,
+                support_gitconfig,
+                exc_info=True,
+            )
+
         if support_bin.exists():
             existing_path = str(env.get("PATH") or "").strip()
             env["PATH"] = (
@@ -3246,7 +3819,11 @@ class TemporalAgentRuntimeActivities:
 
         status_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "status", "--porcelain", "--untracked-files=all",
+                workspace,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -3264,12 +3841,26 @@ class TemporalAgentRuntimeActivities:
                 "push_error": f"could not inspect workspace changes: {detail}",
             }
 
-        if not status_stdout.decode("utf-8", errors="replace").strip():
+        if not status_stdout:
+            return {}
+
+        try:
+            changed_paths = tuple(
+                path
+                for path in self._parse_git_status_paths(status_stdout)
+                if not self._should_exclude_publish_path(path)
+            )
+        except ValueError as exc:
+            return {
+                "push_status": "failed",
+                "push_error": f"could not parse workspace changes: {exc}",
+            }
+        if not changed_paths:
             return {}
 
         add_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "add", "-A", "--", ".", *_PUBLISH_GIT_ADD_EXCLUDES,
+                workspace, "add", "-A", "--", *changed_paths,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -3372,6 +3963,7 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         *,
         target_branch: str | None = None,
+        head_branch: str | None = None,
         commit_message: str | None = None,
     ) -> dict[str, Any]:
         """Push the workspace branch to origin.
@@ -3414,6 +4006,50 @@ class TemporalAgentRuntimeActivities:
             protected = {"main", "master", "HEAD"}
             if target_branch:
                 protected.add(target_branch)
+            if (
+                current_branch == "HEAD"
+                and head_branch
+                and head_branch not in protected
+            ):
+                repair_proc = await asyncio.create_subprocess_exec(
+                    *self._workspace_git_command(
+                        workspace, "checkout", "-B", head_branch,
+                    ),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=command_env,
+                )
+                try:
+                    repair_stdout, repair_stderr = await asyncio.wait_for(
+                        repair_proc.communicate(), timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    repair_proc.kill()
+                    await repair_proc.wait()
+                    return {
+                        "push_status": "failed",
+                        "push_error": "detached HEAD recovery timed out after 30s",
+                        "push_branch": "HEAD",
+                    }
+                if repair_proc.returncode != 0:
+                    repair_detail = (
+                        repair_stderr.decode("utf-8", errors="replace").strip()
+                        or repair_stdout.decode("utf-8", errors="replace").strip()
+                    )
+                    return {
+                        "push_status": "failed",
+                        "push_error": (
+                            "could not recover detached HEAD onto "
+                            f"'{head_branch}': {repair_detail}"
+                        ),
+                        "push_branch": "HEAD",
+                    }
+                logger.info(
+                    "Recovered detached HEAD for run %s onto branch '%s' before push",
+                    run_id,
+                    head_branch,
+                )
+                current_branch = head_branch
             if not current_branch or current_branch in protected:
                 logger.warning(
                     "Post-agent git push skipped for run %s: "

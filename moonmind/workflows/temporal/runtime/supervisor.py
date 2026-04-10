@@ -481,6 +481,7 @@ class ManagedRunSupervisor:
                 reason="diagnostics",
             )
             annotations = self._log_streamer.consume_annotations(run_id)
+            observability_events = self._log_streamer.consume_observability_events(run_id)
 
             diagnostics_ref = self._log_streamer.collect_diagnostics(
                 run_id=run_id,
@@ -490,6 +491,12 @@ class ManagedRunSupervisor:
                 annotations=annotations,
                 parsed_output=parsed_output,
                 events=events,
+                observability_events=observability_events,
+            )
+            observability_events_ref = await asyncio.to_thread(
+                self._log_streamer.persist_observability_events,
+                run_id=run_id,
+                workspace_path=record.workspace_path if record else None,
             )
 
             record = self._store.update_status(
@@ -504,6 +511,7 @@ class ManagedRunSupervisor:
                 failure_class=failure_class,
                 provider_error_code=exit_result.provider_error_code,
                 error_message=error_message,
+                observability_events_ref=observability_events_ref,
             )
 
             # Fire completion callback (best-effort, never crashes the supervisor).
@@ -521,6 +529,7 @@ class ManagedRunSupervisor:
             return record
         finally:
             self._log_streamer.consume_annotations(run_id)
+            self._log_streamer.consume_observability_events(run_id)
             self._active_processes.pop(run_id, None)
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
 

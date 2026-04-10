@@ -551,6 +551,7 @@ class ManagedRunRecord(BaseModel):
     stderr_artifact_ref: str | None = Field(None, alias="stderrArtifactRef")
     merged_log_artifact_ref: str | None = Field(None, alias="mergedLogArtifactRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    observability_events_ref: str | None = Field(None, alias="observabilityEventsRef")
     last_log_offset: int | None = Field(None, alias="lastLogOffset")
     last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
@@ -558,6 +559,11 @@ class ManagedRunRecord(BaseModel):
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
     # Capability metadata indicating if live streaming is supported for this run
     live_stream_capable: bool | None = Field(None, alias="liveStreamCapable")
+    session_id: str | None = Field(None, alias="sessionId")
+    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
+    container_id: str | None = Field(None, alias="containerId")
+    thread_id: str | None = Field(None, alias="threadId")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
 
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedRunRecord":
@@ -566,10 +572,29 @@ class ManagedRunRecord(BaseModel):
             self.workflow_id = require_non_blank(
                 self.workflow_id, field_name="workflowId"
             )
+        if self.observability_events_ref is not None:
+            self.observability_events_ref = require_non_blank(
+                self.observability_events_ref,
+                field_name="observabilityEventsRef",
+            )
         self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
         self.runtime_id = require_non_blank(
             self.runtime_id, field_name="runtimeId"
         )
+        if self.session_id is not None:
+            self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        if self.container_id is not None:
+            self.container_id = require_non_blank(
+                self.container_id,
+                field_name="containerId",
+            )
+        if self.thread_id is not None:
+            self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
+        if self.active_turn_id is not None:
+            self.active_turn_id = require_non_blank(
+                self.active_turn_id,
+                field_name="activeTurnId",
+            )
         if self.started_at.tzinfo is None:
             self.started_at = self.started_at.replace(tzinfo=UTC)
         
@@ -590,18 +615,85 @@ class ManagedRunRecord(BaseModel):
                 
         return self
 
-class LiveLogChunk(BaseModel):
-    """A single atomic chunk of live log output pushed over the stream."""
+ObservabilityEventKind = Literal[
+    "stdout_chunk",
+    "stderr_chunk",
+    "system_annotation",
+    "session_started",
+    "session_resumed",
+    "turn_started",
+    "turn_completed",
+    "turn_interrupted",
+    "session_cleared",
+    "session_terminated",
+    "session_reset_boundary",
+    "approval_requested",
+    "approval_resolved",
+    "summary_published",
+    "checkpoint_published",
+    "reset_boundary_published",
+]
 
-    model_config = ConfigDict(populate_by_name=True, frozen=True)
 
+class RunObservabilityEvent(BaseModel):
+    """Canonical MoonMind-owned observability event for live and historical logs."""
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True, extra="forbid")
+
+    run_id: str | None = Field(
+        None,
+        alias="runId",
+        description="Task-run identifier for filtering shared observability history",
+    )
     sequence: int = Field(..., description="Monotonically increasing sequence number")
-    stream: Literal["stdout", "stderr", "system"] = Field(
-        ..., description="Standard output, standard error, or system event log"
+    stream: Literal["stdout", "stderr", "system", "session"] = Field(
+        ..., description="Standard output, standard error, system, or session event log"
     )
     timestamp: str = Field(..., description="ISO-8601 formatted timestamp")
     text: str = Field(..., description="Decoded output text buffer content")
     offset: int | None = Field(None, description="Global byte offset of this chunk")
+    kind: ObservabilityEventKind | None = Field(
+        None,
+        description="Optional structured observability event kind",
+    )
+    session_id: str | None = Field(
+        None,
+        alias="sessionId",
+        description="Managed-session id when the event is session-scoped",
+    )
+    session_epoch: int | None = Field(
+        None,
+        alias="sessionEpoch",
+        ge=1,
+        description="Managed-session epoch when the event is session-scoped",
+    )
+    container_id: str | None = Field(
+        None,
+        alias="containerId",
+        description="Managed-session container id when available",
+    )
+    thread_id: str | None = Field(
+        None,
+        alias="threadId",
+        description="Managed-session logical thread id when available",
+    )
+    turn_id: str | None = Field(
+        None,
+        alias="turnId",
+        description="Managed-session turn id when available",
+    )
+    active_turn_id: str | None = Field(
+        None,
+        alias="activeTurnId",
+        description="Currently active managed-session turn id when available",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional structured metadata for the event row",
+    )
+
+
+LiveLogChunk = RunObservabilityEvent
 
 
 class ProviderCapabilityDescriptor(BaseModel):
@@ -719,6 +811,7 @@ __all__ = [
     "ExternalExecutionStyle",
     "AgentRunHandle",
     "AgentRunResult",
+    "RunObservabilityEvent",
     "LiveLogChunk",
     "AgentRunState",
     "AgentRunStatus",

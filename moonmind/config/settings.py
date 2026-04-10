@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Annotated, Any, Optional, Sequence
+from typing import Annotated, Any, Literal, Optional, Sequence
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator
@@ -263,6 +263,13 @@ class TemporalDashboardSettings(BaseSettings):
         "/api/artifacts/{artifactId}/download",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT"),
     )
+
+    @property
+    def steps_endpoint(self) -> str:
+        detail_endpoint = str(self.detail_endpoint or "").strip()
+        if not detail_endpoint:
+            return "/api/executions/{workflowId}/steps"
+        return f"{detail_endpoint.rstrip('/')}/steps"
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
@@ -1588,6 +1595,34 @@ class OIDCSettings(BaseSettings):
 class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
 
+    live_logs_session_timeline_rollout: Literal[
+        "off",
+        "internal",
+        "codex_managed",
+        "all_managed",
+    ] = Field(
+        "off",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+            "LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+        ),
+        description=(
+            "Rollout scope for the session-aware Live Logs timeline contract. "
+            "Allowed values: off, internal, codex_managed, all_managed."
+        ),
+    )
+    live_logs_structured_history_enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
+            "LIVE_LOGS_STRUCTURED_HISTORY_ENABLED",
+        ),
+        description=(
+            "Enable structured historical Live Logs loading through "
+            "/observability/events. Disable to force merged-tail rollback."
+        ),
+    )
+
     task_template_catalog: bool = Field(
         True,
         validation_alias=AliasChoices(
@@ -1615,6 +1650,12 @@ class FeatureFlagsSettings(BaseSettings):
         return bool(
             self.task_template_catalog and not self.disable_task_template_catalog
         )
+
+    @property
+    def live_logs_session_timeline_enabled(self) -> bool:
+        """Return whether the session-aware timeline contract is enabled."""
+
+        return self.live_logs_session_timeline_rollout != "off"
 
     model_config = SettingsConfigDict(
         populate_by_name=True,

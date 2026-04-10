@@ -15,11 +15,15 @@ with workflow.unsafe.imports_passed_through():
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        _MAX_SUMMARY_CHARS,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
         ManagedAgentAdapter,
         ProfileResolutionError,
+    )
+    from moonmind.workflows.adapters.codex_session_adapter import (
+        CodexSessionAdapter,
     )
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
@@ -93,6 +97,12 @@ STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
+MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
+    "agent-run-managed-session-fetch-result-activity-v1"
+)
+MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
+    "agent-run-managed-session-prepare-turn-instructions-activity-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -103,6 +113,14 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
 _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MANAGED_RUNTIME_STORE_ROOT = os.environ.get(
+    "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+)
+_MANAGED_RUN_STORE_ROOT = os.path.join(_MANAGED_RUNTIME_STORE_ROOT, "managed_runs")
+_DEFAULT_SESSION_IMAGE_REF = os.environ.get(
+    "WORKFLOW_JOB_IMAGE",
+    "ghcr.io/moonladderstudios/moonmind:latest",
+)
 
 
 def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
@@ -119,6 +137,34 @@ def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
         or ""
     ).strip()
     return selected_skill or None
+
+
+def _request_step_ledger_context(
+    request: AgentExecutionRequest,
+) -> dict[str, Any] | None:
+    """Return compact step-ledger context carried from the parent workflow."""
+
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    moonmind = metadata_map.get("moonmind")
+    moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
+    raw_context = moonmind_map.get("stepLedger")
+    if not isinstance(raw_context, Mapping):
+        return None
+
+    logical_step_id = str(raw_context.get("logicalStepId") or "").strip()
+    if not logical_step_id:
+        return None
+
+    context: dict[str, Any] = {"logicalStepId": logical_step_id}
+    attempt = raw_context.get("attempt")
+    if isinstance(attempt, (int, float)) and not isinstance(attempt, bool):
+        context["attempt"] = int(attempt)
+    scope = str(raw_context.get("scope") or "").strip()
+    if scope:
+        context["scope"] = scope
+    return context
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     return f"auth-profile-manager:{runtime_id}"
@@ -301,20 +347,199 @@ class MoonMindAgentRun:
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
         )
 
-    @staticmethod
-    def _merge_managed_session_metadata(
+    def _enrich_result_metadata(
+        self,
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult | None,
     ) -> AgentRunResult | None:
-        if result is None or request.managed_session is None:
+        if result is None:
             return result
+
         metadata = dict(result.metadata or {})
-        metadata["managedSession"] = request.managed_session.model_dump(
-            mode="json",
-            by_alias=True,
-        )
+        metadata.setdefault("childWorkflowId", workflow.info().workflow_id)
+        metadata.setdefault("childRunId", workflow.info().run_id)
+
+        task_run_id = ""
+        if request.managed_session is not None:
+            task_run_id = str(request.managed_session.task_run_id or "").strip()
+            metadata["managedSession"] = request.managed_session.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+            if request.instruction_ref:
+                metadata.setdefault("instructionRef", request.instruction_ref)
+            if request.resolved_skillset_ref:
+                metadata.setdefault("resolvedSkillsetRef", request.resolved_skillset_ref)
+        elif request.agent_kind == "managed":
+            task_run_id = str(self.run_id or "").strip()
+
+        if task_run_id:
+            metadata.setdefault("taskRunId", task_run_id)
+
+        step_ledger_context = _request_step_ledger_context(request)
+        if step_ledger_context is not None:
+            moonmind_payload = (
+                metadata.get("moonmind")
+                if isinstance(metadata.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["stepLedger"] = step_ledger_context
+            metadata["moonmind"] = moonmind_payload
+
         return result.model_copy(update={"metadata": metadata})
+
+    def _managed_start_failure_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        error: Exception,
+    ) -> AgentRunResult:
+        summary = str(error).strip()
+        if len(summary) > _MAX_SUMMARY_CHARS:
+            summary = summary[: _MAX_SUMMARY_CHARS - 3] + "..."
+        if not summary:
+            summary = "Managed agent failed before execution started."
+        metadata: dict[str, Any] = {"phase": "start"}
+        if request.managed_session is not None:
+            metadata["managedSession"] = request.managed_session.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+        return AgentRunResult(
+            summary=summary,
+            failureClass="execution_error",
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _uses_codex_session_adapter(request: AgentExecutionRequest) -> bool:
+        return request.agent_kind == "managed" and request.managed_session is not None
+
+    @staticmethod
+    def _request_workspace_starting_branch(
+        request: AgentExecutionRequest,
+    ) -> str | None:
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, Mapping)
+            else {}
+        )
+        branch = str(
+            workspace_spec.get("startingBranch")
+            or workspace_spec.get("branch")
+            or ""
+        ).strip()
+        return branch or None
+
+    @staticmethod
+    def _request_workspace_target_branch(
+        request: AgentExecutionRequest,
+    ) -> str | None:
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, Mapping)
+            else {}
+        )
+        branch = str(
+            workspace_spec.get("targetBranch")
+            or ""
+        ).strip()
+        return branch or None
+
+    def _build_managed_fetch_result_activity_input(
+        self,
+        request: AgentExecutionRequest,
+    ) -> dict[str, Any]:
+        params = request.parameters if isinstance(request.parameters, Mapping) else {}
+        raw_publish_mode = params.get("publishMode")
+        publish_mode = (
+            str(raw_publish_mode).strip().lower()
+            if isinstance(raw_publish_mode, str) and raw_publish_mode.strip()
+            else "none"
+        )
+
+        run_id = str(self.run_id or "").strip()
+        if request.managed_session is not None:
+            run_id = str(request.managed_session.task_run_id).strip()
+
+        activity_input: dict[str, Any] = {
+            "run_id": run_id,
+            "agent_id": request.agent_id,
+        }
+        if publish_mode != "none":
+            activity_input["publish_mode"] = publish_mode
+
+        raw_commit_message = params.get("commitMessage")
+        if isinstance(raw_commit_message, str) and raw_commit_message.strip():
+            activity_input["commit_message"] = raw_commit_message.strip()
+
+        target_branch = str(
+            params.get("publishBaseBranch")
+            or self._request_workspace_starting_branch(request)
+            or ""
+        ).strip()
+        if target_branch:
+            activity_input["target_branch"] = target_branch
+
+        head_branch = str(
+            params.get("targetBranch")
+            or self._request_workspace_target_branch(request)
+            or ""
+        ).strip()
+        if head_branch:
+            activity_input["head_branch"] = head_branch
+
+        if _request_selected_skill(request) == "pr-resolver":
+            activity_input["pr_resolver_expected"] = True
+        return activity_input
+
+    async def _fetch_managed_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        adapter: AgentAdapter,
+        uses_codex_session_adapter: bool,
+        use_managed_status_activity: bool,
+    ) -> AgentRunResult:
+        if uses_codex_session_adapter:
+            if workflow.patched(MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID):
+                result_payload = await self._execute_routed_activity(
+                    "agent_runtime.fetch_result",
+                    self._build_managed_fetch_result_activity_input(request),
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                )
+                return (
+                    AgentRunResult(**result_payload)
+                    if isinstance(result_payload, dict)
+                    else result_payload
+                )
+
+            return await adapter.fetch_result(
+                self.run_id,
+                pr_resolver_expected=(
+                    _request_selected_skill(request) == "pr-resolver"
+                ),
+            )
+
+        if use_managed_status_activity:
+            result_payload = await self._execute_routed_activity(
+                "agent_runtime.fetch_result",
+                self._build_managed_fetch_result_activity_input(request),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            return (
+                AgentRunResult(**result_payload)
+                if isinstance(result_payload, dict)
+                else result_payload
+            )
+
+        return await adapter.fetch_result(
+            self.run_id,
+            pr_resolver_expected=(
+                _request_selected_skill(request) == "pr-resolver"
+            ),
+        )
 
     async def _ensure_manager_and_signal(
         self,
@@ -681,6 +906,7 @@ class MoonMindAgentRun:
         try:
             while True:
                 skip_poll_and_fetch = False
+                uses_codex_session_adapter = self._uses_codex_session_adapter(request)
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = RunStatus.timed_out
@@ -877,22 +1103,165 @@ class MoonMindAgentRun:
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
-                    store_root = os.path.join(
-                        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
-                        "managed_runs",
-                    )
-                    run_store = ManagedRunStore(store_root)
+                    async def _launch_context_builder(**kw):
+                        return await self._execute_routed_activity(
+                            "agent_runtime.build_launch_context",
+                            kw,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
 
-                    adapter: AgentAdapter = ManagedAgentAdapter(
-                        profile_fetcher=_profile_fetcher,
-                        slot_requester=_slot_requester,
-                        slot_releaser=_slot_releaser,
-                        cooldown_reporter=_cooldown_reporter,
-                        workflow_id=wf_id,
-                        runtime_id=runtime_id,
-                        run_store=run_store,
-                        run_launcher=_run_launcher,
-                    )
+                    run_store = ManagedRunStore(_MANAGED_RUN_STORE_ROOT)
+
+                    if uses_codex_session_adapter:
+                        use_prepare_turn_instructions_activity = workflow.patched(
+                            MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID
+                        )
+                        if request.managed_session is None:
+                            raise ApplicationError(
+                                "managedSession is required for Codex session-backed runs",
+                                type="MissingManagedSession",
+                                non_retryable=True,
+                            )
+                        session_workflow_id = request.managed_session.workflow_id
+                        session_handle = workflow.get_external_workflow_handle(
+                            session_workflow_id
+                        )
+
+                        async def _load_session_snapshot(workflow_id: str) -> dict[str, Any]:
+                            session_snapshot_request = request.managed_session.model_dump(
+                                mode="json",
+                                by_alias=True,
+                            )
+                            session_snapshot_request["workflowId"] = workflow_id
+                            return await self._execute_routed_activity(
+                                "agent_runtime.load_session_snapshot",
+                                session_snapshot_request,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
+                            await session_handle.signal("attach_runtime_handles", payload)
+
+                        async def _apply_session_control_action(payload: dict[str, Any]) -> None:
+                            signal_payload = {
+                                key: value
+                                for key, value in payload.items()
+                                if key in {"containerId", "threadId", "activeTurnId", "sessionEpoch"}
+                            }
+                            action = payload.get("action")
+                            if action is not None:
+                                signal_payload["lastControlAction"] = action
+                            reason = payload.get("reason")
+                            if reason is not None:
+                                signal_payload["lastControlReason"] = reason
+                            await session_handle.signal(
+                                "attach_runtime_handles",
+                                signal_payload,
+                            )
+
+                        async def _launch_session(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.launch_session",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _session_status(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.session_status",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _prepare_turn_instructions(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.prepare_turn_instructions",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _send_turn(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.send_turn",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _interrupt_turn(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.interrupt_turn",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _clear_session(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.clear_session",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _terminate_session(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.terminate_session",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _fetch_session_summary(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.fetch_session_summary",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        async def _publish_session_artifacts(request_payload: Any) -> Any:
+                            return await self._execute_routed_activity(
+                                "agent_runtime.publish_session_artifacts",
+                                request_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+
+                        adapter = CodexSessionAdapter(
+                            profile_fetcher=_profile_fetcher,
+                            slot_requester=_slot_requester,
+                            slot_releaser=_slot_releaser,
+                            cooldown_reporter=_cooldown_reporter,
+                            workflow_id=wf_id,
+                            runtime_id=runtime_id,
+                            run_store=run_store,
+                            load_session_snapshot=_load_session_snapshot,
+                            launch_session=_launch_session,
+                            session_status=_session_status,
+                            prepare_turn_instructions=(
+                                _prepare_turn_instructions
+                                if use_prepare_turn_instructions_activity
+                                else None
+                            ),
+                            send_turn=_send_turn,
+                            interrupt_turn=_interrupt_turn,
+                            clear_remote_session=_clear_session,
+                            terminate_remote_session=_terminate_session,
+                            fetch_remote_summary=_fetch_session_summary,
+                            publish_remote_artifacts=_publish_session_artifacts,
+                            attach_runtime_handles=_attach_runtime_handles,
+                            apply_session_control_action=_apply_session_control_action,
+                            workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
+                            session_image_ref=_DEFAULT_SESSION_IMAGE_REF,
+                            launch_context_builder=_launch_context_builder,
+                        )
+                    else:
+                        adapter = ManagedAgentAdapter(
+                            profile_fetcher=_profile_fetcher,
+                            slot_requester=_slot_requester,
+                            slot_releaser=_slot_releaser,
+                            cooldown_reporter=_cooldown_reporter,
+                            workflow_id=wf_id,
+                            runtime_id=runtime_id,
+                            run_store=run_store,
+                            run_launcher=_run_launcher,
+                            launch_context_builder=_launch_context_builder,
+                        )
 
                     # --- Managed agent: launch via adapter ---
                     try:
@@ -903,9 +1272,37 @@ class MoonMindAgentRun:
                             type="ProfileResolutionError",
                             non_retryable=True,
                         ) from exc
-                    self.run_id = handle.run_id
-                    self.run_status = handle.status
-                    poll_interval = handle.poll_hint_seconds or 10
+                    except RuntimeError as exc:
+                        self._get_logger().warning(
+                            "Managed agent start failed",
+                            extra={
+                                "agent_id": request.agent_id,
+                                "workflow_id": workflow.info().workflow_id,
+                                "error": str(exc),
+                            },
+                        )
+                        self.run_status = RunStatus.failed
+                        self.final_result = self._managed_start_failure_result(
+                            request=request,
+                            error=exc,
+                        )
+                        skip_poll_and_fetch = True
+                        handle = None
+                    if handle is not None:
+                        self.run_id = handle.run_id
+                        self.run_status = handle.status
+                        poll_interval = handle.poll_hint_seconds or 10
+                        if (
+                            uses_codex_session_adapter
+                            and handle.status in _TERMINAL_RUN_STATUSES
+                        ):
+                            self.final_result = await self._fetch_managed_result(
+                                request=request,
+                                adapter=adapter,
+                                uses_codex_session_adapter=uses_codex_session_adapter,
+                                use_managed_status_activity=use_managed_status_activity,
+                            )
+                            skip_poll_and_fetch = True
 
                 elif request.agent_kind == "external":
                     # Validate adapter availability and resolve execution style.
@@ -1030,7 +1427,9 @@ class MoonMindAgentRun:
                                     fallback_agent_id=request.agent_id,
                                 )
                             else:
-                                if use_managed_status_activity:
+                                if uses_codex_session_adapter:
+                                    status_obj = await adapter.status(self.run_id)
+                                elif use_managed_status_activity:
                                     status_payload = await self._execute_routed_activity(
                                         "agent_runtime.status",
                                         {
@@ -1155,52 +1554,12 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
-                        if use_managed_status_activity:
-                            raw_publish_mode = (request.parameters or {}).get("publishMode")
-                            publish_mode = str(raw_publish_mode).strip().lower() if isinstance(raw_publish_mode, str) and raw_publish_mode.strip() else "none"
-                            params = request.parameters or {}
-                            target_branch = params.get("publishBaseBranch") or params.get("startingBranch")
-
-                            activity_input: dict[str, Any] = {
-                                "run_id": self.run_id,
-                                "agent_id": request.agent_id,
-                            }
-                            if publish_mode != "none":
-                                activity_input["publish_mode"] = publish_mode
-                            raw_commit_message = (request.parameters or {}).get(
-                                "commitMessage"
-                            )
-                            if (
-                                isinstance(raw_commit_message, str)
-                                and raw_commit_message.strip()
-                            ):
-                                activity_input["commit_message"] = (
-                                    raw_commit_message.strip()
-                                )
-                            if target_branch:
-                                activity_input["target_branch"] = target_branch
-                            if _request_selected_skill(request) == "pr-resolver":
-                                activity_input["pr_resolver_expected"] = True
-
-                            result_payload = await self._execute_routed_activity(
-                                "agent_runtime.fetch_result",
-                                activity_input,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
-                            )
-                            self.final_result = (
-                                AgentRunResult(**result_payload)
-                                if isinstance(result_payload, dict)
-                                else result_payload
-                            )
-                        else:
-                            # Managed agent legacy path.
-                            self.final_result = await adapter.fetch_result(
-                                self.run_id,
-                                pr_resolver_expected=(
-                                    _request_selected_skill(request) == "pr-resolver"
-                                ),
-                            )
+                        self.final_result = await self._fetch_managed_result(
+                            request=request,
+                            adapter=adapter,
+                            uses_codex_session_adapter=uses_codex_session_adapter,
+                            use_managed_status_activity=use_managed_status_activity,
+                        )
 
                 if (
                     request.agent_kind == "external"
@@ -1345,7 +1704,7 @@ class MoonMindAgentRun:
                 if manager_handle and request.execution_profile_ref:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
 
-                self.final_result = self._merge_managed_session_metadata(
+                self.final_result = self._enrich_result_metadata(
                     request=request,
                     result=self.final_result,
                 )

@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
     _get_service,
@@ -27,6 +28,39 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionValidationError,
 )
+from moonmind.schemas.temporal_models import (
+    ExecutionProgressModel,
+    StepLedgerSnapshotModel,
+)
+
+
+class _QueryHandle:
+    def __init__(self, *, progress=None, ledger=None, error: Exception | None = None) -> None:
+        self._progress = progress
+        self._ledger = ledger
+        self._error = error
+
+    async def query(self, name: str):
+        if self._error is not None:
+            raise self._error
+        if name == "get_progress":
+            return self._progress
+        if name == "get_step_ledger":
+            return self._ledger
+        raise AssertionError(f"Unexpected query name: {name}")
+
+
+def _override_query_client(
+    app: FastAPI,
+    *,
+    progress=None,
+    ledger=None,
+    error: Exception | None = None,
+) -> SimpleNamespace:
+    handle = _QueryHandle(progress=progress, ledger=ledger, error=error)
+    client = SimpleNamespace(get_workflow_handle=Mock(return_value=handle))
+    app.dependency_overrides[get_temporal_client] = lambda: client
+    return client
 
 
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNamespace:
@@ -216,6 +250,69 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "execution_forbidden"
     mock_service.list_executions.assert_not_awaited()
+
+
+def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
+    progress = ExecutionProgressModel.model_validate(
+        {
+            "total": 1,
+            "pending": 0,
+            "ready": 0,
+            "running": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Prepare workspace",
+            "updatedAt": "2026-04-07T12:00:00Z",
+        }
+    )
+    snapshot = StepLedgerSnapshotModel.model_validate(
+        {
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "prepare",
+                    "order": 1,
+                    "title": "Prepare workspace",
+                    "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+                    "dependsOn": [],
+                    "status": "succeeded",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    "attempt": 1,
+                    "startedAt": "2026-04-07T12:00:00Z",
+                    "updatedAt": "2026-04-07T12:00:00Z",
+                    "summary": "Workspace prepared",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": None,
+                    },
+                    "artifacts": {
+                        "outputSummary": None,
+                        "outputPrimary": None,
+                        "runtimeStdout": None,
+                        "runtimeStderr": None,
+                        "runtimeMergedLogs": None,
+                        "runtimeDiagnostics": None,
+                        "providerSnapshot": None,
+                    },
+                    "lastError": None,
+                }
+            ],
+        }
+    )
+
+    assert progress.model_dump(by_alias=True, mode="json")["awaitingExternal"] == 0
+    dumped_snapshot = snapshot.model_dump(by_alias=True, mode="json")
+    assert dumped_snapshot["runScope"] == "latest"
+    assert dumped_snapshot["steps"][0]["logicalStepId"] == "prepare"
 
 
 def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> None:
@@ -1177,6 +1274,266 @@ def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
         assert payload["temporalRunId"] == "run-2"
         assert payload["latestRunView"] is True
         assert payload["continueAsNewCause"] == "manual_rerun"
+        assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
+
+
+def test_describe_execution_includes_latest_run_progress() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "total": 3,
+            "pending": 0,
+            "ready": 1,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
+    assert payload["progress"] == {
+        "total": 3,
+        "pending": 0,
+        "ready": 1,
+        "running": 1,
+        "awaitingExternal": 0,
+        "reviewing": 0,
+        "succeeded": 1,
+        "failed": 0,
+        "skipped": 0,
+        "canceled": 0,
+        "currentStepTitle": "Run tests",
+        "updatedAt": "2026-04-08T12:00:00Z",
+    }
+
+
+def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "runId": "run-99",
+            "total": 3,
+            "pending": 0,
+            "ready": 1,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runId"] == "run-99"
+    assert payload["temporalRunId"] == "run-99"
+    assert payload["progress"] == {
+        "total": 3,
+        "pending": 0,
+        "ready": 1,
+        "running": 1,
+        "awaitingExternal": 0,
+        "reviewing": 0,
+        "succeeded": 1,
+        "failed": 0,
+        "skipped": 0,
+        "canceled": 0,
+        "currentStepTitle": "Run tests",
+        "updatedAt": "2026-04-08T12:00:00Z",
+    }
+    assert "runId" not in payload["progress"]
+
+
+def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(app, error=RuntimeError("query unavailable"))
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
+    assert payload["progress"] is None
+
+
+def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "detail_endpoint",
+        "/gateway/api/executions/{workflowId}",
+    )
+    payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
+    assert payload["stepsHref"] == "/gateway/api/executions/mm:wf-1/steps"
+
+
+def test_describe_execution_does_not_query_progress_for_manifest_workflows() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(
+        workflow_type=TemporalWorkflowType.MANIFEST_INGEST
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    query_client = _override_query_client(app, progress={"total": 99})
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["progress"] is None
+    assert payload["stepsHref"] is None
+    assert query_client.get_workflow_handle.call_count <= 1
+
+
+def test_get_execution_steps_returns_latest_run_ledger() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "run-tests",
+                    "order": 1,
+                    "title": "Run tests",
+                    "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                    "dependsOn": [],
+                    "status": "running",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    "attempt": 2,
+                    "startedAt": "2026-04-08T12:00:00Z",
+                    "updatedAt": "2026-04-08T12:01:00Z",
+                    "summary": "Running pytest",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "taskRunId": "task-run-1",
+                    },
+                    "artifacts": {
+                        "outputSummary": None,
+                        "outputPrimary": None,
+                        "runtimeStdout": "artifact://stdout",
+                        "runtimeStderr": None,
+                        "runtimeMergedLogs": None,
+                        "runtimeDiagnostics": None,
+                        "providerSnapshot": None,
+                    },
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflowId"] == "mm:wf-1"
+    assert payload["runId"] == "run-99"
+    assert payload["runScope"] == "latest"
+    assert payload["steps"][0]["attempt"] == 2
+    assert payload["steps"][0]["refs"]["taskRunId"] == "task-run-1"
+
+
+def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        error=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None),
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "temporal_unavailable"
+
+
+def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(app, ledger={})
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "invalid_execution_query_payload"
+
+
+def test_get_execution_steps_rejects_unsupported_workflow_types() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(
+        workflow_type=TemporalWorkflowType.MANIFEST_INGEST
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(app, ledger={})
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_query"
 
 
 def test_describe_execution_hydrates_provider_profile_metadata() -> None:

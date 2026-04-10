@@ -62,6 +62,7 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
             cooldown_after_429_seconds=120,
             rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
             enabled=True,
+            is_default=True,
         )
         session.add(profile)
         await session.commit()
@@ -96,6 +97,47 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["rate_limit_policy"] == "queue"
     assert data["default_model"] == "test-model-v2"
     assert data["model_overrides"] == {"smart": "test-model-v3"}
+    assert data["is_default"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_second_profile_can_become_runtime_default(
+    client_app: AsyncClient,
+    _module_db,
+):
+    """Creating a second profile with is_default should move the runtime default."""
+    first_payload = {
+        "profile_id": "runtime_default_first",
+        "runtime_id": "codex_cli",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://first_secret"},
+        "enabled": True,
+    }
+    second_payload = {
+        "profile_id": "runtime_default_second",
+        "runtime_id": "codex_cli",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://second_secret"},
+        "enabled": True,
+        "is_default": True,
+    }
+
+    async with client_app as client:
+        first_response = await client.post("/api/v1/provider-profiles", json=first_payload)
+        second_response = await client.post("/api/v1/provider-profiles", json=second_payload)
+        listed = await client.get("/api/v1/provider-profiles", params={"runtime_id": "codex_cli"})
+
+    assert first_response.status_code == 201
+    assert first_response.json()["is_default"] is True
+    assert second_response.status_code == 201
+    assert second_response.json()["is_default"] is True
+    assert listed.status_code == 200
+
+    profiles = {profile["profile_id"]: profile for profile in listed.json()}
+    assert profiles["runtime_default_first"]["is_default"] is False
+    assert profiles["runtime_default_second"]["is_default"] is True
 
 
 @pytest.mark.asyncio

@@ -43,12 +43,47 @@ When creating a new spec folder/feature ID:
 - ❌ **DON'T** reset numbering to `001` for a new short-name if higher numbered specs already exist.
 
 ## Testing Instructions
+
+### Test Taxonomy
+
+MoonMind uses a four-tier test model that separates hermetic CI from credentialed provider checks:
+
+| Tier | Marker(s) | Required on PR? | Runner |
+|------|-----------|-----------------|--------|
+| **Unit** | `asyncio` (as needed) | Yes | `./tools/test_unit.sh` |
+| **Hermetic Integration CI** | `integration` + `integration_ci` | Yes | `./tools/test_integration.sh` |
+| **Provider Verification** | `provider_verification` + `jules` + `requires_credentials` | No (manual/nightly) | `./tools/test_jules_provider.sh` |
+| **Local-only Integration** | `integration` without `integration_ci` | No | local dev only |
+
+- **Hermetic Integration Tests** — compose-backed, local-dependencies-only, no external credentials required.
+  These are marked with `@pytest.mark.integration_ci` and are run by the required CI pipeline.
+  Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell) to run them locally.
+
+  The required integration_ci suite focuses on the highest-risk seams:
+  - **Artifacts**: create/upload/list, auth/preview, lifecycle cleanup, authorization boundaries
+  - **Worker topology**: activity family routing, task queue assignment, sandbox execution
+  - **Live logs**: SSE publisher/subscriber, performance at volume, managed runtime streaming
+  - **Compose foundation**: service topology, namespace bootstrapping, visibility schema rehearsal
+  - **Startup seeding**: profiles, managed secrets, task templates
+
+- **Provider Verification Tests** — real third-party provider checks using real credentials.
+  These are **not** required for merge and are excluded from the required CI pipeline.
+  They are marked with `@pytest.mark.provider_verification` (and often `@pytest.mark.jules` / `@pytest.mark.requires_credentials`).
+  Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1` (PowerShell) to run them locally.
+
+- **Temporal workflow boundary tests with time-skipping** (`tests/integration/temporal/test_execution_rescheduling.py`, `tests/integration/temporal/test_interventions_temporal.py`, `tests/integration/workflows/temporal/**`) are **not** marked `integration_ci` because they consistently exceed CI timeout thresholds under the Temporal test server. They remain valuable for local dev verification.
+
+Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/test_jules_activities.py`, etc.) remain in the required unit suite — only Jules *provider verification* tests are excluded from required CI.
+
+### Running Tests
+
 - **Unit Tests**: Always use `./tools/test_unit.sh` for final unit-test verification. In MoonMind-managed agent containers, unit tests are expected to run locally inside the current container. Do not use `./tools/test_unit_docker.sh` or nested Docker for normal managed-agent verification.
 - **Managed-Agent Local Test Mode**: Managed-agent worker environments should run with `MOONMIND_FORCE_LOCAL_TESTS=1`. The WSL Docker fallback applies to human local WSL development only, not to containerized worker sessions.
 - **Frontend Test Prereqs**: Frontend unit tests require local Node/npm and repo JS dependencies from `package-lock.json`. `./tools/test_unit.sh` should prepare these automatically when dashboard tests are enabled. If `node_modules` is missing or stale relative to `package-lock.json`, the script runs `npm ci --no-fund --no-audit` before executing `npm run ui:test`.
 - **Targeted Test Runs**: Positional args to `./tools/test_unit.sh` filter Python tests only. They do not target a Vitest file. For focused frontend iteration, use `npm run ui:test -- <path>` after local JS deps are prepared, or use `./tools/test_unit.sh --ui-args <path>` to route Vitest targets through the test runner. Before finalizing, rerun `./tools/test_unit.sh` for the full suite.
 - **No Docker Assumption in Agent Jobs**: Do not assume the Docker socket is available inside MoonMind-managed agent workspaces when running unit tests.
-- **Integration Tests**: Run hermetic Python integration tests in the test compose image, for example `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`, or use `tools/test-integration.ps1` (no args) / `./tools/test_integration.sh` for the same default. Run live provider verification separately, for example `./tools/test_jules_provider.sh`.
+- **Hermetic Integration Tests**: Run compose-backed, no-credentials-required tests marked with `integration_ci`. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell). Under the hood: `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
+- **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1` (PowerShell). These scripts fail fast if `JULES_API_KEY` is not set.
 - **Workflow Boundary Coverage**: Any change to Temporal workflows, activity signatures, signal/update names, serialized payload shapes, status normalization, or adapter-to-workflow contracts MUST add or update tests at the workflow boundary, not just isolated unit tests. At minimum:
   - cover the real invocation shape used by the worker binding or Temporal activity wrapper,
   - cover one compatibility case for the previous payload/history shape when runs may already be in flight,

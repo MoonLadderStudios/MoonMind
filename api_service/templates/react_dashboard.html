@@ -44,19 +44,17 @@
     <div class="dashboard-shell-constrained">
       <header class="masthead">
         <div class="masthead-copy">
-          <p class="eyebrow">MoonMind Operations</p>
-          <h1>Mission Control</h1>
-          <p class="masthead-meta">
+          <p class="eyebrow">MOONMIND OPERATIONS</p>
+          <div class="masthead-title-row">
+            <h1>Mission Control</h1>
             {% if build_id %}
-            <span class="masthead-meta-item" title="Build ID">{{ build_id }}</span>
+            <div class="masthead-title-meta">
+              <div class="version-badge" title="MoonMind image version">
+                <span class="version-badge-value">v{{ build_id }}</span>
+              </div>
+            </div>
             {% endif %}
-            {% if codex_cli_version %}
-            <span class="masthead-meta-item" title="Codex CLI version">{{ codex_cli_version }}</span>
-            {% endif %}
-            {% if hostname %}
-            <span class="masthead-meta-item" title="Hostname">{{ hostname }}</span>
-            {% endif %}
-          </p>
+          </div>
         </div>
       </header>
 

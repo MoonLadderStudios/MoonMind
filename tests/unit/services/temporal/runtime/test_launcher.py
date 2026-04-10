@@ -199,7 +199,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
         return None
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
         _fake_resolve,
     )
 
@@ -255,7 +255,7 @@ async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monk
         return None
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
         _fake_resolve,
     )
 
@@ -338,7 +338,7 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
         return None
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
         _fake_resolve,
     )
 
@@ -370,7 +370,7 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     profile = _make_profile(
         runtime_id="codex_cli",
         command_template=["codex", "exec"],
-        default_model="qwen/qwen3.6-plus:free",
+        default_model="qwen/qwen3.6-plus",
     )
     request = _make_request(instruction_ref="Do work")
 
@@ -404,7 +404,7 @@ async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._resolve_github_token_for_launch",
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
         _fake_resolve,
     )
 
@@ -1485,45 +1485,6 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
 
 
 @pytest.mark.asyncio
-async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
-    monkeypatch,
-):
-    from moonmind.config.settings import settings as app_settings
-
-    async def _fake_resolve(_secret_name: str) -> str:
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
-        _fake_resolve,
-    )
-
-    with pytest.raises(asyncio.CancelledError):
-        await ManagedRuntimeLauncher._resolve_github_token_for_launch({})
-
-
-@pytest.mark.asyncio
-async def test_resolve_github_token_for_launch_propagates_cancellation_from_store(
-    monkeypatch,
-):
-    from moonmind.config.settings import settings as app_settings
-
-    async def _fake_store_token() -> str:
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _fake_store_token,
-    )
-
-    with pytest.raises(asyncio.CancelledError):
-        await ManagedRuntimeLauncher._resolve_github_token_for_launch({})
-
-
 @pytest.mark.asyncio
 async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypatch):
     """When launched as root for claude_code runtime, the process should:

@@ -91,6 +91,21 @@ interface ProviderProfile {
   profile_id: string;
   account_label?: string | null;
   default_model?: string | null;
+  is_default?: boolean;
+}
+
+function resolveDefaultProviderProfileId(
+  profiles: ProviderProfile[],
+): string {
+  const explicitDefault = profiles.find((profile) => profile.is_default);
+  if (explicitDefault) {
+    return explicitDefault.profile_id;
+  }
+  const onlyProfile = profiles[0];
+  if (profiles.length === 1 && onlyProfile) {
+    return onlyProfile.profile_id;
+  }
+  return profiles[0]?.profile_id || "";
 }
 
 interface SkillsResponse {
@@ -1085,6 +1100,28 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   });
 
   useEffect(() => {
+    const profiles = providerProfilesQuery.data || [];
+    if (profiles.length === 0) {
+      if (providerProfile) {
+        setProviderProfile("");
+      }
+      return;
+    }
+
+    const stillValid = profiles.some(
+      (profile) => profile.profile_id === providerProfile,
+    );
+    if (stillValid) {
+      return;
+    }
+
+    const defaultProfileId = resolveDefaultProviderProfileId(profiles);
+    if (defaultProfileId && providerProfile !== defaultProfileId) {
+      setProviderProfile(defaultProfileId);
+    }
+  }, [providerProfile, providerProfilesQuery.data]);
+
+  useEffect(() => {
     const runtimeChanged = prevRuntimeRef.current !== runtime;
     const profileChanged = prevProviderProfileRef.current !== providerProfile;
 
@@ -1306,10 +1343,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setDependencyMessage(null);
   }
 
-  const providerOptions = (providerProfilesQuery.data || []).map((profile) => ({
-    id: profile.profile_id,
-    label: profile.account_label || profile.profile_id,
-  }));
+  const providerOptions = [...(providerProfilesQuery.data || [])]
+    .sort((left, right) => {
+      const leftDefault = Boolean(left.is_default);
+      const rightDefault = Boolean(right.is_default);
+      if (leftDefault !== rightDefault) {
+        return leftDefault ? -1 : 1;
+      }
+      return (left.account_label || left.profile_id).localeCompare(
+        right.account_label || right.profile_id,
+      );
+    })
+    .map((profile) => ({
+      id: profile.profile_id,
+      label: profile.account_label || profile.profile_id,
+      isDefault: Boolean(profile.is_default),
+    }));
 
   const attachmentValidation = useMemo(
     () => validateAttachmentFiles(selectedAttachmentFiles, attachmentPolicy),
@@ -2622,10 +2671,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               value={providerProfile}
               onChange={(event) => setProviderProfile(event.target.value)}
             >
-              <option value="">Default (system chooses)</option>
               {providerOptions.map((option) => (
                 <option key={option.id} value={option.id}>
-                  {option.label}
+                  {option.isDefault ? `${option.label} (Default)` : option.label}
                 </option>
               ))}
             </select>
