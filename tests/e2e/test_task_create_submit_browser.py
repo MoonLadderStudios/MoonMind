@@ -170,10 +170,12 @@ def _route_handlers(
                 {
                     "profile_id": "profile:codex-default",
                     "account_label": "Codex Default",
+                    "is_default": True,
                 },
                 {
                     "profile_id": "profile:codex-secondary",
                     "account_label": "Codex Secondary",
+                    "is_default": False,
                 },
             ]
         elif runtime_id == "gemini_cli":
@@ -181,6 +183,7 @@ def _route_handlers(
                 {
                     "profile_id": "profile:gemini-default",
                     "account_label": "Gemini Default",
+                    "is_default": True,
                 }
             ]
         elif runtime_id == "claude_code":
@@ -188,6 +191,7 @@ def _route_handlers(
                 {
                     "profile_id": "profile:claude-default",
                     "account_label": "Claude Default",
+                    "is_default": True,
                 }
             ]
         route.fulfill(
@@ -447,17 +451,16 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
                     !wrap.hidden &&
                     !wrap.classList.contains("hidden") &&
                     select &&
-                    select.options.length >= 3
+                    select.options.length >= 2
                 );
             }
             """
         )
         assert provider_wrap.is_visible()
-        assert provider_select.input_value() == ""
+        assert provider_select.input_value() == "profile:codex-default"
         option_labels = provider_select.locator("option").all_text_contents()
         assert option_labels == [
-            "Default (system chooses)",
-            "Codex Default",
+            "Codex Default (Default)",
             "Codex Secondary",
         ]
 
@@ -470,14 +473,13 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
                     return false;
                 }
                 const labels = Array.from(select.options).map((option) => option.textContent?.trim() || "");
-                return labels.length === 2 && labels[1] === "Gemini Default";
+                return labels.length === 1 && labels[0] === "Gemini Default (Default)";
             }
             """
         )
         option_labels = provider_select.locator("option").all_text_contents()
         assert option_labels == [
-            "Default (system chooses)",
-            "Gemini Default",
+            "Gemini Default (Default)",
         ]
 
         page.select_option('select[name="runtime"]', "claude_code")
@@ -489,14 +491,13 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
                     return false;
                 }
                 const labels = Array.from(select.options).map((option) => option.textContent?.trim() || "");
-                return labels.length === 2 && labels[1] === "Claude Default";
+                return labels.length === 1 && labels[0] === "Claude Default (Default)";
             }
             """
         )
         option_labels = provider_select.locator("option").all_text_contents()
         assert option_labels == [
-            "Default (system chooses)",
-            "Claude Default",
+            "Claude Default (Default)",
         ]
         browser.close()
 

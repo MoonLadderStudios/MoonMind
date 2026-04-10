@@ -1,6 +1,40 @@
-import { describe, it, expect } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
+import { fireEvent, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
-import { defaultFormState, toFormState, parseCommandBehavior, parseTags, parsePriority, parseClearEnvKeys } from './ProviderProfilesManager';
+import {
+  defaultFormState,
+  ProviderProfilesManager,
+  toFormState,
+  parseCommandBehavior,
+  parseTags,
+  parsePriority,
+  parseClearEnvKeys,
+} from './ProviderProfilesManager';
+import { renderWithClient } from '../../utils/test-utils';
+
+function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  const onNotice = vi.fn();
+
+  renderWithClient(
+    <ProviderProfilesManager
+      profiles={profiles}
+      secretSlugs={['OPENAI_API_KEY']}
+      onNotice={onNotice}
+      queryClient={queryClient}
+      defaultTaskModelByRuntime={{}}
+    />,
+  );
+
+  return { onNotice, queryClient };
+}
 
 describe('defaultFormState', () => {
   it('includes advanced fields with correct defaults', () => {
@@ -11,6 +45,7 @@ describe('defaultFormState', () => {
     expect(state.priority).toBe('');
     expect(state.clearEnvKeysText).toBe('');
     expect(state.accountLabel).toBe('');
+    expect(state.isDefault).toBe(false);
   });
 
   it('includes all legacy fields', () => {
@@ -22,6 +57,7 @@ describe('defaultFormState', () => {
     expect(state.credentialSource).toBe('secret_ref');
     expect(state.rateLimitPolicy).toBe('backoff');
     expect(state.enabled).toBe(true);
+    expect(state.isDefault).toBe(false);
   });
 });
 
@@ -37,6 +73,7 @@ describe('toFormState', () => {
     cooldown_after_429_seconds: 300,
     rate_limit_policy: 'backoff',
     enabled: true,
+    is_default: false,
   };
 
   const fullProfile: ProviderProfile = {
@@ -51,6 +88,7 @@ describe('toFormState', () => {
     priority: 200,
     clear_env_keys: ['OPENAI_API_KEY', 'OPENAI_BASE_URL'],
     account_label: 'team-prod',
+    is_default: true,
   };
 
   it('maps a minimal profile with null advanced fields', () => {
@@ -61,6 +99,7 @@ describe('toFormState', () => {
     expect(state.priority).toBe('');
     expect(state.clearEnvKeysText).toBe('');
     expect(state.accountLabel).toBe('');
+    expect(state.isDefault).toBe(false);
   });
 
   it('maps a full profile with advanced fields', () => {
@@ -73,6 +112,7 @@ describe('toFormState', () => {
     expect(state.priority).toBe('200');
     expect(state.clearEnvKeysText).toBe('OPENAI_API_KEY\nOPENAI_BASE_URL');
     expect(state.accountLabel).toBe('team-prod');
+    expect(state.isDefault).toBe(true);
   });
 
   it('maps legacy fields correctly', () => {
@@ -90,6 +130,7 @@ describe('toFormState', () => {
     expect(state.cooldownAfter429Seconds).toBe('300');
     expect(state.rateLimitPolicy).toBe('backoff');
     expect(state.enabled).toBe(true);
+    expect(state.isDefault).toBe(true);
   });
 
   it('handles null/undefined optional string fields', () => {
@@ -192,5 +233,45 @@ describe('parseClearEnvKeys', () => {
 
   it('filters blank lines', () => {
     expect(parseClearEnvKeys('OPENAI_API_KEY\n\nOPENAI_BASE_URL')).toEqual(['OPENAI_API_KEY', 'OPENAI_BASE_URL']);
+  });
+});
+
+describe('ProviderProfilesManager form controls', () => {
+  const profile: ProviderProfile = {
+    profile_id: 'codex-default',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: { OPENAI_API_KEY: 'db://OPENAI_API_KEY' },
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: true,
+    is_default: true,
+  };
+
+  it('labels secret refs and resets create-form values', () => {
+    renderProviderProfilesManager();
+
+    const secretRefs = screen.getByLabelText('Secret refs (JSON object of string refs)');
+    expect(secretRefs.tagName).toBe('TEXTAREA');
+
+    const profileId = screen.getByLabelText(/Profile ID/) as HTMLInputElement;
+    fireEvent.change(profileId, { target: { value: 'draft-profile' } });
+    expect(profileId.value).toBe('draft-profile');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset form' }));
+    expect(profileId.value).toBe('');
+    expect(screen.queryByRole('button', { name: 'Cancel edit' })).toBeNull();
+  });
+
+  it('uses one cancel action while editing', () => {
+    renderProviderProfilesManager([profile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(screen.getAllByRole('button', { name: 'Cancel edit' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Reset form' })).toBeNull();
   });
 });

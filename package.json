@@ -57,10 +57,15 @@
     "vitest": "^4.1.1"
   },
   "dependencies": {
+    "@fontsource/barlow-condensed": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
     "@tanstack/react-query": "^5.95.2",
+    "anser": "^2.3.5",
     "marked": "^17.0.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-virtuoso": "^4.18.4",
     "zod": "^4.3.6"
   }
 }

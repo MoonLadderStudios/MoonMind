@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -87,6 +88,28 @@ def test_detect_pr_url_uses_workspace_command_shims(tmp_path):
     assert gh_env["PATH"].startswith(str(workspace.parent / ".moonmind" / "bin"))
 
 
+def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() -> None:
+    status_output = (
+        b'M  "quoted-looking.txt"\0'
+        b'?? na\xc3\xafve.txt\0'
+        b"R  renamed path.txt\0old path.txt\0"
+    )
+
+    paths = TemporalAgentRuntimeActivities._parse_git_status_paths(status_output)
+
+    assert paths == (
+        '"quoted-looking.txt"',
+        "naïve.txt",
+        "renamed path.txt",
+        "old path.txt",
+    )
+
+
+def test_parse_git_status_paths_rejects_truncated_rename_record() -> None:
+    with pytest.raises(ValueError, match="missing original path"):
+        TemporalAgentRuntimeActivities._parse_git_status_paths(b"R  renamed path.txt\0")
+
+
 # ---------------------------------------------------------------------------
 # _push_workspace_branch
 # ---------------------------------------------------------------------------
@@ -155,6 +178,86 @@ class TestPushWorkspaceBranch:
             mock_exec.return_value = proc
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "protected_branch"
+
+    @pytest.mark.asyncio
+    async def test_push_recovers_detached_head_to_explicit_head_branch(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        captured_checkout_args = None
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count, captured_checkout_args
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # checkout -B feature branch
+                captured_checkout_args = args
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recover-detached-head",
+            )
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "feature/recover-detached-head"
+        assert captured_checkout_args is not None
+        assert captured_checkout_args[-3:] == (
+            "checkout",
+            "-B",
+            "feature/recover-detached-head",
+        )
+
+    @pytest.mark.asyncio
+    async def test_push_detached_head_recovery_timeout_kills_checkout(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        repair_proc = MagicMock()
+        repair_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
+        repair_proc.wait = AsyncMock(return_value=0)
+        repair_proc.kill = MagicMock()
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # rev-parse
+                proc = MagicMock()
+                proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
+                proc.returncode = 0
+                return proc
+            if call_count == 2:  # checkout -B feature branch
+                return repair_proc
+            raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="main",
+                head_branch="feature/recover-detached-head",
+            )
+
+        assert result["push_status"] == "failed"
+        assert result["push_branch"] == "HEAD"
+        assert result["push_error"] == "detached HEAD recovery timed out after 30s"
+        repair_proc.kill.assert_called_once_with()
+        repair_proc.wait.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_push_protected_target_branch(self):
@@ -372,7 +475,7 @@ class TestPushWorkspaceBranch:
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(
-                    return_value=(b" M api_service/main.py\n?? tests/new_test.py\n", b"")
+                    return_value=(b" M api_service/main.py\0?? tests/new_test.py\0", b"")
                 )
                 proc.returncode = 0
             elif call_count == 3:  # git add -A with runtime exclusions
@@ -405,12 +508,10 @@ class TestPushWorkspaceBranch:
         assert result["push_commit_count"] == 1
         assert result["push_commit_message"] == "Ship dirty workspace"
         add_call = recorded_calls[2]
-        assert list(add_call[-5:]) == [
+        assert list(add_call[-3:]) == [
             "--",
-            ".",
-            ":(exclude)CLAUDE.md",
-            ":(exclude)live_streams.spool",
-            ":(exclude).agents/skills/active",
+            "api_service/main.py",
+            "tests/new_test.py",
         ]
         commit_call = next(call for call in recorded_calls if "commit" in call)
         assert list(commit_call[-3:]) == ["commit", "-m", "Ship dirty workspace"]
@@ -430,7 +531,7 @@ class TestPushWorkspaceBranch:
                 proc.communicate = AsyncMock(return_value=(b"auto-dirty123\n", b""))
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
-                proc.communicate = AsyncMock(return_value=(b" M api_service/main.py\n", b""))
+                proc.communicate = AsyncMock(return_value=(b" M api_service/main.py\0", b""))
                 proc.returncode = 0
             elif call_count == 3:  # git add -A
                 proc.communicate = AsyncMock(return_value=(b"", b""))
@@ -457,24 +558,20 @@ class TestPushWorkspaceBranch:
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
         call_count = 0
+        recorded_calls: list[tuple[object, ...]] = []
 
         async def _mock_exec(*args, **kwargs):
             nonlocal call_count
             call_count += 1
+            recorded_calls.append(args)
             proc = AsyncMock()
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"auto-claude123\n", b""))
                 proc.returncode = 0
             elif call_count == 2:  # status --porcelain
-                proc.communicate = AsyncMock(return_value=(b"?? CLAUDE.md\n", b""))
+                proc.communicate = AsyncMock(return_value=(b"?? CLAUDE.md\0", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # git add -A with exclusions
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-                proc.returncode = 0
-            elif call_count == 4:  # staged diff check
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-                proc.returncode = 0
-            elif call_count == 5:  # push
+            elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -488,6 +585,61 @@ class TestPushWorkspaceBranch:
         assert result["push_status"] == "no_commits"
         assert result["push_branch"] == "auto-claude123"
         assert result["push_commit_count"] == 0
+        assert all("add" not in call for call in recorded_calls)
+
+    @pytest.mark.asyncio
+    async def test_push_stages_only_porcelain_reported_paths(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-dirty123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(
+                    return_value=(
+                        b" M moonmind/workflows/temporal/activity_runtime.py\0",
+                        b"",
+                    )
+                )
+                proc.returncode = 0
+            elif call_count == 3:  # git add -A for changed paths only
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # staged diff check
+                proc.communicate = AsyncMock(
+                    return_value=(b"moonmind/workflows/temporal/activity_runtime.py\n", b"")
+                )
+                proc.returncode = 0
+            elif call_count == 5:  # commit
+                proc.communicate = AsyncMock(return_value=(b"[auto-dirty123 abc123] msg\n", b""))
+                proc.returncode = 0
+            elif call_count == 6:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "pushed"
+        add_call = recorded_calls[2]
+        assert "." not in add_call
+        assert "live_streams.spool" not in add_call
+        assert list(add_call[-2:]) == [
+            "--",
+            "moonmind/workflows/temporal/activity_runtime.py",
+        ]
 
     def test_workspace_command_env_includes_support_gitconfig_and_git_identity(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
@@ -540,6 +692,57 @@ class TestPushWorkspaceBranch:
         assert env["GIT_COMMITTER_NAME"] == "MoonMind Bot"
         assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
         assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
+
+    def test_workspace_command_env_bootstraps_git_helper_without_writing_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        support_root = workspace.parent / ".moonmind"
+        support_bin = support_root / "bin"
+        gitconfig = support_root / "gitconfig"
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token_value")
+        monkeypatch.setattr(settings.workflow, "git_user_name", "MoonMind Bot")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "moonmind@example.com"
+        )
+
+        env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        helper_path = support_bin / "git-credential-moonmind"
+        assert support_bin.is_dir()
+        assert gitconfig.is_file()
+        assert helper_path.is_file()
+        assert env["PATH"].startswith(str(support_bin))
+        assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
+
+        helper_text = helper_path.read_text(encoding="utf-8")
+        gitconfig_text = gitconfig.read_text(encoding="utf-8")
+        assert "ghp_test_token_value" not in helper_text
+        assert "ghp_test_token_value" not in gitconfig_text
+        assert "os.environ.get('GITHUB_TOKEN'" in helper_text
+        assert "password={token}" in helper_text
+        assert "git-credential-moonmind" in gitconfig_text
+        assert str(workspace.resolve()) in gitconfig_text
+
+    def test_workspace_command_env_logs_bootstrap_failures(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "run-1" / "repo"
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        with patch(
+            "pathlib.Path.mkdir",
+            side_effect=OSError("read-only filesystem"),
+        ), patch(
+            "moonmind.workflows.temporal.activity_runtime.logger.warning"
+        ) as warning_mock:
+            env = TemporalAgentRuntimeActivities._workspace_command_env(str(workspace))
+
+        assert env["PATH"] == "/usr/bin"
+        assert "GIT_CONFIG_GLOBAL" not in env
+        warning_mock.assert_called_once()
+        assert warning_mock.call_args.args[1] == str(workspace)
 
     @pytest.mark.asyncio
     async def test_push_revlist_failure_falls_through(self):

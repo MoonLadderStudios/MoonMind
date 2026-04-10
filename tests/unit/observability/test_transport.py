@@ -17,6 +17,7 @@ def test_spool_log_publisher_appends_json_chunks(tmp_path: Path) -> None:
     publisher = SpoolLogPublisher(workspace_path=str(workspace_dir))
     
     chunk1 = LiveLogChunk(
+        runId="run-123",
         sequence=1,
         stream="stdout",
         text="Hello\n",
@@ -24,11 +25,13 @@ def test_spool_log_publisher_appends_json_chunks(tmp_path: Path) -> None:
         offset=0,
     )
     chunk2 = LiveLogChunk(
+        runId="run-123",
         sequence=2,
         stream="stderr",
         text="Error!\n",
         timestamp="2026-03-31T00:00:01Z",
         offset=6,
+        sessionId="sess-1",
     )
     
     publisher.publish(chunk1)
@@ -44,10 +47,13 @@ def test_spool_log_publisher_appends_json_chunks(tmp_path: Path) -> None:
     parsed1 = json.loads(lines[0])
     assert parsed1["sequence"] == 1
     assert parsed1["stream"] == "stdout"
-    
+    assert parsed1["runId"] == "run-123"
+
     parsed2 = json.loads(lines[1])
     assert parsed2["sequence"] == 2
     assert parsed2["stream"] == "stderr"
+    assert parsed2["runId"] == "run-123"
+    assert parsed2["sessionId"] == "sess-1"
 
 
 @pytest.mark.asyncio

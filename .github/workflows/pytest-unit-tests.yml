@@ -114,7 +114,7 @@ jobs:
           exit 0
         fi
 
-        if printf '%s\n' "$changed_files" | grep -Eq '^(api_service/|moonmind/|tools/(export_openapi\.py|generate_openapi_types\.py|run_repo_python\.sh)|frontend/src/generated/openapi\.ts|package(-lock)?\.json|pyproject\.toml|uv\.lock)$'; then
+        if bash tools/check_openapi_affecting_changes.sh <<< "$changed_files"; then
           echo "run_check=true" >> "$GITHUB_OUTPUT"
         else
           echo "run_check=false" >> "$GITHUB_OUTPUT"

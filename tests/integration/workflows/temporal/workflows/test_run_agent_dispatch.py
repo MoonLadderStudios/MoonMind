@@ -13,6 +13,9 @@ import pytest
 
 pytest.importorskip("temporalio")
 
+# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
+pytestmark = [pytest.mark.integration]
+
 from temporalio import activity, client, workflow
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest

@@ -259,6 +259,50 @@ def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestC
     assert "dashboardConfig" in detail.text
 
 
+def test_react_shell_renders_build_metadata_with_accurate_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
+
+    with _client_with_mock_service(monkeypatch) as (client, _mock_service):
+        response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert 'title="MoonMind image version"' in response.text
+    assert '<span class="version-badge-value">v20260408.1703</span>' in response.text
+    assert "MoonMind</span>" not in response.text
+    assert 'title="Codex CLI version"' not in response.text
+
+
+def test_react_shell_places_operator_metadata_in_title_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
+
+    with _client_with_mock_service(monkeypatch) as (client, _mock_service):
+        response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert 'class="masthead-title-meta"' in response.text
+    assert 'title="MoonMind image version"' in response.text
+    assert "v20260408.1703" in response.text
+    assert 'class="masthead-meta"' not in response.text
+
+
+def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_BUILD_ID", raising=False)
+    monkeypatch.setenv("MOONMIND_BUILD_ID_PATH", str(tmp_path / "missing-build-id"))
+
+    with _client_with_mock_service(monkeypatch) as (client, _mock_service):
+        response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert 'class="masthead-title-meta"' not in response.text
+
+
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/system")
 

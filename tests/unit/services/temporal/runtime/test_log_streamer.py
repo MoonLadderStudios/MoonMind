@@ -4,6 +4,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
+from moonmind.workflows.temporal.runtime import log_streamer as log_streamer_module
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.output_parser import (
     GeminiCliOutputParser,
@@ -316,6 +318,168 @@ async def test_stream_to_artifact_calls_publisher(streamer):
 
     combined_text = "".join(chunk.text for chunk in published_chunks)
     assert combined_text == "chunk1\nchunk2\n"
+
+
+def test_emit_observability_event_publishes_session_metadata(streamer):
+    log_streamer, _ = streamer
+    mock_publisher = Mock()
+    log_streamer.publisher = mock_publisher
+
+    log_streamer.emit_observability_event(
+        run_id="run-session-event",
+        workspace_path=None,
+        stream="session",
+        text="Session cleared.",
+        kind="session_reset_boundary",
+        session_id="sess-1",
+        session_epoch=2,
+        container_id="ctr-1",
+        thread_id="thread-2",
+        turn_id="turn-7",
+        active_turn_id=None,
+        metadata={"reason": "operator_reset"},
+    )
+
+    published_chunk = mock_publisher.publish.call_args[0][0]
+    assert isinstance(published_chunk, RunObservabilityEvent)
+    assert published_chunk.run_id == "run-session-event"
+    assert published_chunk.stream == "session"
+    assert published_chunk.kind == "session_reset_boundary"
+    assert published_chunk.session_id == "sess-1"
+    assert published_chunk.session_epoch == 2
+    assert published_chunk.thread_id == "thread-2"
+    assert published_chunk.metadata["reason"] == "operator_reset"
+
+    persisted_events = log_streamer.consume_observability_events("run-session-event")
+    assert persisted_events[0]["runId"] == "run-session-event"
+    assert persisted_events[0]["sessionId"] == "sess-1"
+    assert persisted_events[0]["sessionEpoch"] == 2
+    assert "session_id" not in persisted_events[0]
+
+
+def test_persist_observability_events_promotes_spool_to_artifact(
+    streamer,
+    tmp_path: Path,
+) -> None:
+    log_streamer, storage = streamer
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    spool_path = workspace_path / "live_streams.spool"
+    spool_payload = "\n".join(
+        [
+            json.dumps(
+                {
+                    "runId": "run-journal",
+                    "sequence": 1,
+                    "stream": "stdout",
+                    "text": "hello\n",
+                    "timestamp": "2026-04-08T00:00:00Z",
+                    "kind": "stdout_chunk",
+                }
+            ),
+            json.dumps(
+                {
+                    "runId": "run-journal",
+                    "sequence": 2,
+                    "stream": "session",
+                    "text": "Session started.",
+                    "timestamp": "2026-04-08T00:00:01Z",
+                    "kind": "session_started",
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                }
+            ),
+        ]
+    )
+    spool_path.write_text(spool_payload + "\n", encoding="utf-8")
+
+    ref = log_streamer.persist_observability_events(
+        run_id="run-journal",
+        workspace_path=str(workspace_path),
+    )
+
+    assert ref == "run-journal/observability.events.jsonl"
+    persisted = storage.resolve_storage_path(ref).read_text(encoding="utf-8")
+    assert persisted == spool_payload + "\n"
+
+
+def test_persist_observability_events_returns_none_on_io_error(
+    streamer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_streamer, _ = streamer
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    spool_path = workspace_path / "live_streams.spool"
+    spool_path.write_text("{}", encoding="utf-8")
+
+    def _raise_io_error(*args: object, **kwargs: object) -> object:
+        raise OSError("disk error")
+
+    monkeypatch.setattr(Path, "open", _raise_io_error)
+
+    ref = log_streamer.persist_observability_events(
+        run_id="run-journal",
+        workspace_path=str(workspace_path),
+    )
+
+    assert ref is None
+
+
+def test_emit_system_annotation_keeps_annotations_out_of_observability_events(streamer):
+    log_streamer, _ = streamer
+
+    log_streamer.emit_system_annotation(
+        run_id="run-annotations",
+        workspace_path=None,
+        text="Supervisor started.",
+        annotation_type="run_started",
+    )
+
+    annotations = log_streamer.consume_annotations("run-annotations")
+    observability_events = log_streamer.consume_observability_events("run-annotations")
+
+    assert len(annotations) == 1
+    assert annotations[0]["annotation_type"] == "run_started"
+    assert observability_events == []
+
+
+def test_observability_publish_reuses_one_spool_publisher_per_workspace(
+    streamer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_streamer, _ = streamer
+    created_publishers: list[object] = []
+
+    class _FakePublisher:
+        def __init__(self, workspace_path: str) -> None:
+            self.workspace_path = workspace_path
+            self.published: list[object] = []
+            created_publishers.append(self)
+
+        def publish(self, chunk: object) -> None:
+            self.published.append(chunk)
+
+    monkeypatch.setattr(log_streamer_module, "SpoolLogPublisher", _FakePublisher)
+
+    log_streamer.emit_observability_event(
+        run_id="run-cache",
+        workspace_path="/tmp/workspace",
+        stream="session",
+        text="event one",
+        kind="session_started",
+    )
+    log_streamer.emit_observability_event(
+        run_id="run-cache",
+        workspace_path="/tmp/workspace",
+        stream="session",
+        text="event two",
+        kind="session_started",
+    )
+
+    assert len(created_publishers) == 1
+    assert len(created_publishers[0].published) == 2
 
 
 @pytest.mark.asyncio

@@ -383,6 +383,107 @@ class ExecutionDependencySummaryModel(BaseModel):
     workflow_type: Optional[str] = Field(None, alias="workflowType")
 
 
+class ExecutionProgressModel(BaseModel):
+    """Bounded latest-run progress summary derived from workflow-owned step state."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    total: int = Field(0, alias="total", ge=0)
+    pending: int = Field(0, alias="pending", ge=0)
+    ready: int = Field(0, alias="ready", ge=0)
+    running: int = Field(0, alias="running", ge=0)
+    awaiting_external: int = Field(0, alias="awaitingExternal", ge=0)
+    reviewing: int = Field(0, alias="reviewing", ge=0)
+    succeeded: int = Field(0, alias="succeeded", ge=0)
+    failed: int = Field(0, alias="failed", ge=0)
+    skipped: int = Field(0, alias="skipped", ge=0)
+    canceled: int = Field(0, alias="canceled", ge=0)
+    current_step_title: str | None = Field(None, alias="currentStepTitle")
+    updated_at: datetime = Field(..., alias="updatedAt")
+
+
+class StepLedgerCheckModel(BaseModel):
+    """Structured step-level review or check result."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: str = Field(..., alias="kind", min_length=1)
+    status: str = Field(..., alias="status", min_length=1)
+    summary: str | None = Field(None, alias="summary")
+    retry_count: int = Field(0, alias="retryCount", ge=0)
+    artifact_ref: str | None = Field(None, alias="artifactRef")
+
+
+class StepLedgerRefsModel(BaseModel):
+    """Stable ref slots for child workflow and task-run linkage."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    child_workflow_id: str | None = Field(None, alias="childWorkflowId")
+    child_run_id: str | None = Field(None, alias="childRunId")
+    task_run_id: str | None = Field(None, alias="taskRunId")
+
+
+class StepLedgerArtifactsModel(BaseModel):
+    """Stable semantic artifact slots for step evidence."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    output_summary: str | None = Field(None, alias="outputSummary")
+    output_primary: str | None = Field(None, alias="outputPrimary")
+    runtime_stdout: str | None = Field(None, alias="runtimeStdout")
+    runtime_stderr: str | None = Field(None, alias="runtimeStderr")
+    runtime_merged_logs: str | None = Field(None, alias="runtimeMergedLogs")
+    runtime_diagnostics: str | None = Field(None, alias="runtimeDiagnostics")
+    provider_snapshot: str | None = Field(None, alias="providerSnapshot")
+
+
+class StepLedgerRowModel(BaseModel):
+    """Current/latest attempt state for one logical step in the active run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    order: int = Field(..., alias="order", ge=1)
+    title: str = Field(..., alias="title", min_length=1)
+    tool: dict[str, Any] = Field(default_factory=dict, alias="tool")
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+    status: Literal[
+        "pending",
+        "ready",
+        "running",
+        "awaiting_external",
+        "reviewing",
+        "succeeded",
+        "failed",
+        "skipped",
+        "canceled",
+    ] = Field(..., alias="status")
+    waiting_reason: str | None = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
+    attempt: int = Field(0, alias="attempt", ge=0)
+    started_at: datetime | None = Field(None, alias="startedAt")
+    updated_at: datetime = Field(..., alias="updatedAt")
+    summary: str | None = Field(None, alias="summary")
+    checks: list[StepLedgerCheckModel] = Field(default_factory=list, alias="checks")
+    refs: StepLedgerRefsModel = Field(default_factory=StepLedgerRefsModel, alias="refs")
+    artifacts: StepLedgerArtifactsModel = Field(
+        default_factory=StepLedgerArtifactsModel, alias="artifacts"
+    )
+    last_error: str | None = Field(None, alias="lastError")
+
+
+class StepLedgerSnapshotModel(BaseModel):
+    """Latest-run step-ledger query payload."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    run_scope: Literal["latest"] = Field("latest", alias="runScope")
+    steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -391,6 +492,7 @@ class ExecutionModel(BaseModel):
     source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: str = Field(..., alias="taskId")
     task_run_id: Optional[str] = Field(None, alias="taskRunId")
+    progress: ExecutionProgressModel | None = Field(None, alias="progress")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
@@ -448,6 +550,11 @@ class ExecutionModel(BaseModel):
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     repository: Optional[str] = Field(None, alias="repository")
+    pr_url: Optional[str] = Field(
+        None,
+        alias="prUrl",
+        description="URL of the pull request associated with this execution.",
+    )
     publish_mode: Optional[str] = Field(None, alias="publishMode")
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
@@ -473,6 +580,7 @@ class ExecutionModel(BaseModel):
     artifacts_count: int = Field(0, alias="artifactsCount")
     scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
     created_at: datetime = Field(..., alias="createdAt")
+    steps_href: Optional[str] = Field(None, alias="stepsHref")
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")

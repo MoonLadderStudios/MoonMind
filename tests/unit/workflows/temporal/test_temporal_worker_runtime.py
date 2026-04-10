@@ -164,6 +164,35 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/my-feature-branch"
+
+
+def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "PR-Resolver",
+                    "version": "1.0",
+                    "inputs": {"branch": "fix/from-tool-inputs"},
+                },
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert '"pr": "fix/from-tool-inputs"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/from-tool-inputs"
 
 
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
@@ -204,12 +233,29 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
 
-    store, supervisor, _launcher = _build_agent_runtime_deps()
+    store, supervisor, _launcher, _session_controller = _build_agent_runtime_deps()
 
     assert store.store_root == tmp_path / "managed_runs"
     assert supervisor._log_streamer._storage._root == artifacts_root
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
+
+
+def test_build_agent_runtime_deps_reuses_global_session_network(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
+    monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:5000")
+
+    _store, _supervisor, _launcher, session_controller = _build_agent_runtime_deps()
+
+    assert session_controller._network_name == "shared-moonmind-network"
+    assert session_controller._moonmind_url == "http://moonmind-api:5000"
 
 
 def _make_snapshot():
@@ -575,12 +621,16 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     mock_worker_cls.assert_called_once()
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.workflow"
+    from moonmind.workflows.temporal.workflows.agent_session import (
+        MoonMindAgentSessionWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     assert kwargs["workflows"] == [
         MoonMindRun,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
+        MoonMindAgentSessionWorkflow,
         MoonMindAgentRun,
         MoonMindOAuthSession,
     ]
@@ -673,7 +723,14 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     run_supervisor = MagicMock()
     run_supervisor.reconcile = AsyncMock(return_value=[])
     run_launcher = MagicMock()
-    mock_build_deps.return_value = (run_store, run_supervisor, run_launcher)
+    session_controller = MagicMock()
+    session_controller.reconcile = AsyncMock(return_value=[])
+    mock_build_deps.return_value = (
+        run_store,
+        run_supervisor,
+        run_launcher,
+        session_controller,
+    )
     @asynccontextmanager
     async def _fake_session_context():
         yield "session"
@@ -709,13 +766,10 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_jules_activities_cls.assert_called_once_with(
         artifact_service=ANY
     )
-    mock_agent_runtime_activities_cls.assert_called_once_with(
-        artifact_service=ANY,
-        run_store=ANY,
-        run_supervisor=ANY,
-        run_launcher=ANY,
-    )
-    run_supervisor.reconcile.assert_awaited_once()
+    mock_agent_runtime_activities_cls.assert_not_called()
+    mock_build_deps.assert_not_called()
+    run_supervisor.reconcile.assert_not_awaited()
+    session_controller.reconcile.assert_not_awaited()
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(
         dispatcher=mock_dispatcher_cls.return_value,
@@ -728,7 +782,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         skill_activities=mock_skill_activities_cls.return_value,
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
-        agent_runtime_activities=mock_agent_runtime_activities_cls.return_value,
+        agent_runtime_activities=None,
         proposal_activities=mock_proposal_activities_cls.return_value,
         review_activities=ANY,
         agent_skills_activities=ANY,
@@ -743,4 +797,93 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     assert callable(proposal_service_factory)
     import typing
     assert isinstance(proposal_service_factory(), typing.AsyncContextManager)
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
+async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agent_runtime_fleet(
+    mock_proposal_activities_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_dispatcher_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_agent_runtime_activities_cls,
+    mock_build_bindings,
+    mock_build_deps,
+):
+    run_store = MagicMock()
+    run_supervisor = MagicMock()
+    run_supervisor.reconcile = AsyncMock(return_value=[])
+    run_launcher = MagicMock()
+    session_controller = MagicMock()
+    session_controller.reconcile = AsyncMock(return_value=[])
+    mock_build_deps.return_value = (
+        run_store,
+        run_supervisor,
+        run_launcher,
+        session_controller,
+    )
+
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = AGENT_RUNTIME_FLEET
+
+    mock_binding = MagicMock()
+    mock_binding.handler = "agent_runtime_handler"
+    mock_build_bindings.return_value = [mock_binding]
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, handlers = await _build_runtime_activities(topology)
+
+    assert handlers == [
+        "agent_runtime_handler",
+        resolve_adapter_metadata,
+        get_activity_route,
+        resolve_external_adapter,
+        external_adapter_execution_style,
+    ]
+    mock_build_deps.assert_called_once_with()
+    run_supervisor.reconcile.assert_awaited_once()
+    session_controller.reconcile.assert_awaited_once()
+    mock_agent_runtime_activities_cls.assert_called_once_with(
+        artifact_service=ANY,
+        run_store=run_store,
+        run_supervisor=run_supervisor,
+        run_launcher=run_launcher,
+        session_controller=session_controller,
+    )
+    mock_build_bindings.assert_called_once_with(
+        fleet=AGENT_RUNTIME_FLEET,
+        artifact_activities=mock_artifact_activities_cls.return_value,
+        plan_activities=mock_plan_activities_cls.return_value,
+        skill_activities=mock_skill_activities_cls.return_value,
+        sandbox_activities=mock_sandbox_activities_cls.return_value,
+        integration_activities=mock_jules_activities_cls.return_value,
+        agent_runtime_activities=mock_agent_runtime_activities_cls.return_value,
+        proposal_activities=mock_proposal_activities_cls.return_value,
+        review_activities=ANY,
+        agent_skills_activities=ANY,
+    )
     await resources.aclose()

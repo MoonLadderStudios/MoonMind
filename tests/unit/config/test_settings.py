@@ -229,6 +229,64 @@ class TestFeatureFlagsSettings:
 
         monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
 
+    def test_live_logs_session_timeline_rollout_defaults_off(self, monkeypatch):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT", raising=False
+        )
+        monkeypatch.delenv("LIVE_LOGS_SESSION_TIMELINE_ROLLOUT", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_session_timeline_rollout == "off"
+        assert settings.live_logs_session_timeline_enabled is False
+
+    def test_live_logs_session_timeline_rollout_accepts_prefixed_env(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+            "codex_managed",
+        )
+        monkeypatch.delenv("LIVE_LOGS_SESSION_TIMELINE_ROLLOUT", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_session_timeline_rollout == "codex_managed"
+        assert settings.live_logs_session_timeline_enabled is True
+
+    def test_live_logs_session_timeline_rollout_rejects_unknown_values(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+            "maybe",
+        )
+
+        with pytest.raises(ValidationError):
+            FeatureFlagsSettings(_env_file=None)
+
+    def test_live_logs_structured_history_enabled_defaults_true(self, monkeypatch):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False
+        )
+        monkeypatch.delenv("LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_structured_history_enabled is True
+
+    def test_live_logs_structured_history_enabled_accepts_unprefixed_env(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False
+        )
+        monkeypatch.setenv("LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", "false")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_structured_history_enabled is False
+
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)

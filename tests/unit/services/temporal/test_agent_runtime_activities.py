@@ -8,6 +8,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.workflows.temporal.artifacts import ExecutionRef
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
@@ -51,19 +52,34 @@ async def test_publish_artifacts_writes_summary_artifact():
         failure_class=None,
     )
 
-    with patch(
-        "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
-    ) as mock_write:
-        mock_ref = MagicMock()
-        mock_ref.artifact_id = "art-456"
-        mock_write.return_value = mock_ref
+    with (
+        patch("moonmind.workflows.temporal.activity_runtime._write_json_artifact") as mock_write,
+        patch("temporalio.activity.info", return_value=SimpleNamespace(namespace="default", workflow_id="wf-1", workflow_run_id="run-1")),
+    ):
+        summary_ref = MagicMock()
+        summary_ref.artifact_id = "art-summary"
+        result_ref = MagicMock()
+        result_ref.artifact_id = "art-result"
+        mock_write.side_effect = [summary_ref, result_ref]
 
         result = await activities.agent_runtime_publish_artifacts(input_result)
 
     assert isinstance(result, AgentRunResult)
-    assert result.diagnostics_ref == "art-456"
+    assert result.diagnostics_ref == "art-result"
     assert result.summary == "Completed successfully"
-    mock_write.assert_called_once()
+    assert mock_write.await_count == 2
+    assert mock_write.await_args_list[0].kwargs["execution_ref"] == ExecutionRef(
+        namespace="default",
+        workflow_id="wf-1",
+        run_id="run-1",
+        link_type="output.summary",
+    )
+    assert mock_write.await_args_list[1].kwargs["execution_ref"] == ExecutionRef(
+        namespace="default",
+        workflow_id="wf-1",
+        run_id="run-1",
+        link_type="output.agent_result",
+    )
 
 
 @pytest.mark.asyncio
@@ -82,6 +98,83 @@ async def test_publish_artifacts_handles_write_failure_gracefully():
     # Should return the original result even if write fails
     assert isinstance(result, AgentRunResult)
     assert result.summary == "test"
+
+
+@pytest.mark.asyncio
+async def test_publish_artifacts_handles_input_reference_write_failure_gracefully():
+    activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
+    input_result = AgentRunResult(
+        summary="Completed successfully",
+        output_refs=[],
+        metadata={"instructionRef": "artifact:instructions"},
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime._write_json_artifact",
+        side_effect=RuntimeError("write failed"),
+    ):
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert isinstance(result, AgentRunResult)
+    assert result.summary == "Completed successfully"
+    assert result.metadata == {"instructionRef": "artifact:instructions"}
+
+
+@pytest.mark.asyncio
+async def test_publish_artifacts_writes_managed_session_input_reference_artifacts():
+    activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
+    input_result = AgentRunResult(
+        summary="Completed successfully",
+        output_refs=["artifact:stdout", "artifact:session-summary"],
+        metadata={
+            "managedSession": {"sessionId": "sess-1", "sessionEpoch": 1},
+            "instructionRef": "artifact:instructions",
+            "resolvedSkillsetRef": "artifact:skill-snapshot",
+        },
+    )
+
+    with (
+        patch("moonmind.workflows.temporal.activity_runtime._write_json_artifact") as mock_write,
+        patch("temporalio.activity.info", return_value=SimpleNamespace(namespace="default", workflow_id="wf-1", workflow_run_id="run-1")),
+    ):
+        refs = []
+        for artifact_id in ("art-input", "art-skill", "art-summary", "art-result"):
+            ref = MagicMock()
+            ref.artifact_id = artifact_id
+            refs.append(ref)
+        mock_write.side_effect = refs
+
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert isinstance(result, AgentRunResult)
+    assert result.diagnostics_ref == "art-result"
+    assert [call.kwargs["execution_ref"].link_type for call in mock_write.await_args_list] == [
+        "input.instructions",
+        "input.skill_snapshot",
+        "output.summary",
+        "output.agent_result",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_publish_artifacts_handles_object_without_metadata_mapping():
+    activities = TemporalAgentRuntimeActivities(artifact_service=MagicMock())
+    input_result = SimpleNamespace(diagnostics_ref=None)
+
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime._write_json_artifact"
+    ) as mock_write:
+        summary_ref = MagicMock()
+        summary_ref.artifact_id = "art-summary"
+        result_ref = MagicMock()
+        result_ref.artifact_id = "art-result"
+        mock_write.side_effect = [summary_ref, result_ref]
+
+        result = await activities.agent_runtime_publish_artifacts(input_result)
+
+    assert result is input_result
+    assert input_result.diagnostics_ref == "art-result"
+    assert not hasattr(input_result, "metadata")
 
 
 # ---------------------------------------------------------------------------

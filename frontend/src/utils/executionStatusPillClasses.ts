@@ -17,5 +17,6 @@ export function executionStatusPillClasses(status: string | null | undefined): s
     return 'status status-running';
   }
   if (key === 'awaiting_action' || key === 'awaiting_external') return 'status status-awaiting_action';
+  if (key === 'waiting' || key === 'waiting_on_dependencies') return 'status status-waiting';
   return 'status status-neutral';
 }

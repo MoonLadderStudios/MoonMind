@@ -1,0 +1,18 @@
+paths:
+  /api/executions/{workflow_id}/steps:
+    get:
+      summary: Fetch execution steps
+      description: Return the latest/current run step ledger for a MoonMind.Run execution.
+      parameters:
+        - in: path
+          name: workflow_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Latest/current run step ledger
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StepLedgerSnapshotModel"

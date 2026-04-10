@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -192,6 +193,112 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
 
     assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
     assert resolve_mission_control_dist_root() == bundled_dist_root
+
+
+def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_dist_root = tmp_path / "local-dist"
+    local_manifest_dir = local_dist_root / ".vite"
+    local_assets_dir = local_dist_root / "assets"
+    local_manifest_dir.mkdir(parents=True)
+    local_assets_dir.mkdir()
+    (local_manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "entrypoints/mission-control.tsx": {
+                    "file": "assets/mission-control.js",
+                    "css": ["assets/mission-control.css"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (local_assets_dir / "mission-control.js").write_text(
+        "console.log('older local dist');", encoding="utf-8"
+    )
+    (local_assets_dir / "mission-control.css").write_text(
+        "body { color: red; }", encoding="utf-8"
+    )
+
+    bundled_dist_root = tmp_path / "bundled-dist"
+    bundled_manifest_dir = bundled_dist_root / ".vite"
+    bundled_assets_dir = bundled_dist_root / "assets"
+    bundled_manifest_dir.mkdir(parents=True)
+    bundled_assets_dir.mkdir()
+    (bundled_manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "entrypoints/mission-control.tsx": {
+                    "file": "assets/mission-control.js",
+                    "css": ["assets/mission-control.css"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bundled_assets_dir / "mission-control.js").write_text(
+        "console.log('newer bundled dist');", encoding="utf-8"
+    )
+    (bundled_assets_dir / "mission-control.css").write_text(
+        "body { color: blue; }", encoding="utf-8"
+    )
+
+    older = 1_700_000_000
+    newer = older + 300
+    local_manifest = local_manifest_dir / "manifest.json"
+    bundled_manifest = bundled_manifest_dir / "manifest.json"
+    os.utime(local_manifest, (older, older))
+    os.utime(bundled_manifest, (newer, newer))
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
+    monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
+
+    html = ui_assets("mission-control")
+
+    assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
+    assert 'href="/static/task_dashboard/dist/assets/mission-control.css"' in html
+    assert resolve_mission_control_dist_root() == bundled_dist_root
+
+
+def test_resolve_mission_control_dist_root_returns_after_newest_usable_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_dist_root = tmp_path / "local-dist"
+    bundled_dist_root = tmp_path / "bundled-dist"
+    local_dist_root.mkdir()
+    bundled_dist_root.mkdir()
+
+    monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
+    monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
+    monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
+
+    mtimes = {
+        local_dist_root: 1,
+        bundled_dist_root: 2,
+    }
+    monkeypatch.setattr(
+        ui_assets_module,
+        "_dist_root_manifest_mtime_ns",
+        lambda dist_root: mtimes[dist_root],
+    )
+
+    checked_candidates: list[Path] = []
+
+    def fake_manifest_tree_is_usable(dist_root: Path, entrypoint: str | None = None) -> bool:
+        checked_candidates.append(dist_root)
+        return dist_root == bundled_dist_root
+
+    monkeypatch.setattr(
+        ui_assets_module,
+        "_manifest_tree_is_usable",
+        fake_manifest_tree_is_usable,
+    )
+
+    assert resolve_mission_control_dist_root() == bundled_dist_root
+    assert checked_candidates == [bundled_dist_root]
 
 
 def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(

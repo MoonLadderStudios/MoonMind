@@ -71,6 +71,7 @@ class ProviderProfileCreate(BaseModel):
     cooldown_after_429_seconds: int = Field(default=900, ge=0)
     rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
     enabled: bool = True
+    is_default: bool = False
     max_lease_duration_seconds: int = Field(default=7200, ge=60)
 
     @field_validator("env_template", mode="before")
@@ -131,6 +132,7 @@ class ProviderProfileUpdate(BaseModel):
         default=None, pattern="^(backoff|queue|fail_fast)$"
     )
     enabled: Optional[bool] = None
+    is_default: Optional[bool] = None
     max_lease_duration_seconds: Optional[int] = Field(default=None, ge=60)
 
     @field_validator("secret_refs", mode="after")
@@ -166,6 +168,7 @@ class ProviderProfileResponse(BaseModel):
     cooldown_after_429_seconds: int
     rate_limit_policy: str
     enabled: bool
+    is_default: bool
     max_lease_duration_seconds: int
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -201,6 +204,11 @@ async def list_profiles(
         stmt = stmt.where(ManagedAgentProviderProfile.runtime_id == runtime_id)
     if enabled_only:
         stmt = stmt.where(ManagedAgentProviderProfile.enabled.is_(True))
+    stmt = stmt.order_by(
+        ManagedAgentProviderProfile.is_default.desc(),
+        ManagedAgentProviderProfile.priority.desc(),
+        ManagedAgentProviderProfile.profile_id.asc(),
+    )
 
     result = await session.execute(stmt)
     rows = result.scalars().all()
@@ -251,9 +259,16 @@ async def create_profile(
         cooldown_after_429_seconds=body.cooldown_after_429_seconds,
         rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
         enabled=body.enabled,
+        is_default=False,
         max_lease_duration_seconds=body.max_lease_duration_seconds,
     )
     session.add(profile)
+    await session.flush()
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=body.runtime_id,
+        preferred_profile_id=profile.profile_id if body.is_default else None,
+    )
     await session.commit()
     await session.refresh(profile)
 
@@ -273,6 +288,7 @@ async def update_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    requested_is_default = update_data.pop("is_default", None)
     for key, value in update_data.items():
         if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)
@@ -282,6 +298,15 @@ async def update_profile(
             value = RuntimeMaterializationMode(value)
         setattr(profile, key, value)
 
+    if requested_is_default is False:
+        profile.is_default = False
+
+    await session.flush()
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+        preferred_profile_id=profile.profile_id if requested_is_default else None,
+    )
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
@@ -298,6 +323,8 @@ async def delete_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
     runtime_id = profile.runtime_id
     await session.delete(profile)
+    await session.flush()
+    await normalize_runtime_default_profile(session=session, runtime_id=runtime_id)
     await session.commit()
     await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
 
@@ -334,10 +361,14 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
             row.rate_limit_policy.value if row.rate_limit_policy else None
         ),
         "enabled": row.enabled,
+        "is_default": row.is_default,
         "max_lease_duration_seconds": row.max_lease_duration_seconds,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 
-from api_service.services.provider_profile_service import sync_provider_profile_manager
+from api_service.services.provider_profile_service import (
+    normalize_runtime_default_profile,
+    sync_provider_profile_manager,
+)

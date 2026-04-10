@@ -46,13 +46,6 @@ ARG INSTALL_CLAUDE_CLI
 ARG GITHUB_TOKEN
 ARG NPM_TOKEN
 
-# Keep complex platform-vendor installation logic out of the Dockerfile body.
-COPY --chmod=0755 api_service/docker/install_codex_platform_vendor.sh /usr/local/bin/install_codex_platform_vendor.sh
-
-# Ensure vendor directory exists so CLIs (like Codex) that might install
-# binaries there can detect it during the npm install process.
-RUN mkdir -p /usr/local/vendor
-
 # Install Codex, Gemini, and Claude CLIs globally so binaries can be copied to the
 # runtime image without shipping npm tooling alongside the Python stack.
 # If the packages are unavailable (for example, when the registry is private or
@@ -106,7 +99,9 @@ else
         echo "Warning: Failed to install @openai/codex; installing stub" >&2
         stub_codex
     else
-        /usr/local/bin/install_codex_platform_vendor.sh
+        # Keep the launcher anchored in node_modules after the multi-stage COPY.
+        # The upstream package already installs the platform-specific optional
+        # dependency, so do not duplicate its vendor payload elsewhere.
         # Resolve the symlink target created by npm install -g so we can replace it
         # with a durable wrapper script. Docker COPY can dereference symlinks
         # across stages, which would move this launcher away from node_modules and
@@ -173,14 +168,9 @@ fi
 npm cache clean --force || true
 BASH
 
-# Fail the build early if the Codex CLI binary is missing or
-# broken. Pre-create ~/.gemini so `gemini --version` can persist registry state.
+# Fail the build early if the bundled CLIs are missing or broken. Pre-create
+# ~/.gemini so `gemini --version` can persist registry state.
 RUN mkdir -p "${HOME}/.gemini" \
-    && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
-        if [ -d /usr/local/lib/node_modules/@openai/codex/vendor ]; then \
-            cp -r /usr/local/lib/node_modules/@openai/codex/vendor/* /usr/local/vendor/; \
-        fi; \
-    fi \
     && codex --version \
     && gemini --version \
     && claude --version
@@ -218,6 +208,7 @@ ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
+ARG MOONMIND_BUILD_ID
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
 # /bin/sh defaults or ignore unset variables. Keep the options explicit for
@@ -229,6 +220,10 @@ ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
 
 WORKDIR /app
 
+RUN build_id="${MOONMIND_BUILD_ID:-}" \
+    && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
+    && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
+
 # Copy Codex and Gemini/Claude artifacts from the tooling builder so the runtime
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
@@ -237,7 +232,6 @@ COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
 # Docker COPY dereferences the npm/npx symlinks from the Node image. Install
 # stable wrappers that keep npm's relative module resolution anchored in the
@@ -261,24 +255,19 @@ COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-cod
 # Install system packages required by the Python service along with the
 # Node.js runtime libraries that the bundled CLIs rely on.
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         bubblewrap \
-        build-essential \
-        pkg-config \
-        libcairo2-dev \
         libffi-dev \
         ripgrep \
         tesseract-ocr \
         tesseract-ocr-eng \
         git \
         gh \
-        ripgrep \
         curl \
         ca-certificates \
         openssh-client \
         procps \
-        gnupg \
-        nodejs && \
+        gnupg && \
     install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
     chmod a+r /etc/apt/keyrings/docker.gpg && \
@@ -315,7 +304,7 @@ RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
 RUN install -d -o root -g app -m 0750 /etc/codex
 COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/config.toml
 
-RUN pip install watchfiles
+RUN pip install --no-cache-dir watchfiles
 
 # Copy pyproject.toml and README.md first for better Docker layer caching
 COPY pyproject.toml /app/pyproject.toml
@@ -326,15 +315,15 @@ RUN mkdir -p /app/moonmind /app/api_service
 RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
 
 # Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
-RUN pip install -e .
-RUN pip install readmeai~=0.6.3 --no-deps && \
-    # Keep test runners available in all worker images (codex/gemini/claude).
-    pip install pytest pytest-xdist
+RUN pip install --no-cache-dir -e .
+# Keep test runners available in all worker images (codex/gemini/claude).
+RUN pip install --no-cache-dir readmeai~=0.6.3 --no-deps && \
+    pip install --no-cache-dir pytest pytest-xdist pytest-timeout
 
 # Install test extras when requested so compose-driven test runs have pytest and
 # related dependencies baked into the image, avoiding runtime network installs.
 RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
-        pip install -e .[tests]; \
+        pip install --no-cache-dir -e .[tests]; \
     fi
 
 # Copy source code AFTER installing dependencies

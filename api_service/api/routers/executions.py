@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +47,14 @@ from moonmind.schemas.temporal_models import (
     ExecutionDebugFieldsModel,
     ExecutionListResponse,
     ExecutionModel,
+    ExecutionProgressModel,
     ExecutionRefreshEnvelope,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
     ScheduleCreatedResponse,
     ScheduleParameters,
     SignalExecutionRequest,
+    StepLedgerSnapshotModel,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
     TASK_RUN_ID_MEMO_KEYS,
@@ -65,7 +69,7 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from api_service.api.schemas import CreateJobRequest
@@ -91,6 +95,18 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
 _TASK_SUMMARY_ELLIPSIS = "..."
+_GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
+    r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$",
+    re.IGNORECASE,
+)
+_PR_URL_CANDIDATE_SOURCES = (
+    ("memo", "pull_request_url"),
+    ("memo", "pullRequestUrl"),
+    ("search_attributes", "mm_pull_request_url"),
+    ("search_attributes", "pullRequestUrl"),
+    ("params", "prUrl"),
+    ("params", "pullRequestUrl"),
+)
 
 
 def _enum_value(value: object | None) -> str | None:
@@ -190,6 +206,40 @@ def _normalize_entry_value(value: object | None) -> str | None:
             first = inner.split(",", 1)[0].strip().strip("'\"")
             if first in {"run", "manifest"}:
                 return first
+    return None
+
+
+def _normalize_github_pull_request_url(value: object | None) -> str | None:
+    candidate = _coerce_temporal_scalar(value)
+    if not candidate:
+        return None
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() != "https" or parsed.netloc.lower() != "github.com":
+        return None
+    normalized_path = parsed.path.rstrip("/")
+    if not _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(normalized_path):
+        return None
+    return f"https://github.com{normalized_path}"
+
+
+def _extract_execution_pr_url(
+    memo: Mapping[str, object],
+    search_attributes: Mapping[str, object],
+    params: Mapping[str, object],
+) -> str | None:
+    sources = {
+        "memo": memo,
+        "search_attributes": search_attributes,
+        "params": params,
+    }
+    for source_name, key in _PR_URL_CANDIDATE_SOURCES:
+        value = sources[source_name].get(key)
+        normalized = _normalize_github_pull_request_url(value)
+        if normalized:
+            return normalized
     return None
 
 
@@ -485,11 +535,20 @@ def _serialize_execution(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+    pr_url = _extract_execution_pr_url(memo, search_attributes, params)
     is_admin = _is_execution_admin(user)
+    steps_href = (
+        settings.temporal_dashboard.steps_endpoint.replace(
+            "{workflowId}", record.workflow_id
+        )
+        if workflow_type_value == "MoonMind.Run"
+        else None
+    )
 
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,
+        progress=None,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,
@@ -524,6 +583,7 @@ def _serialize_execution(
         starting_branch=starting_branch,
         target_branch=target_branch,
         repository=repository,
+        pr_url=pr_url,
         publish_mode=publish_mode,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,
@@ -551,6 +611,7 @@ def _serialize_execution(
         artifacts_count=len(record.artifact_refs or []),
         scheduled_for=getattr(record, "scheduled_for", None),
         created_at=getattr(record, "created_at", None) or record.started_at,
+        steps_href=steps_href,
         actions=actions,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
@@ -676,6 +737,89 @@ def _resolve_task_run_id_from_managed_store(workflow_id: str) -> str | None:
     if record is None:
         return None
     return str(record.run_id or "").strip() or None
+
+
+async def _load_execution_progress(
+    *,
+    temporal_client: Client,
+    workflow_id: str,
+) -> tuple[ExecutionProgressModel | None, str | None]:
+    try:
+        payload = await query_workflow(temporal_client, workflow_id, "get_progress")
+    except Exception as exc:
+        logger.warning(
+            "Failed to query execution progress for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return None, None
+
+    if payload is None:
+        return None, None
+
+    queried_run_id = None
+    if isinstance(payload, Mapping):
+        queried_run_id = (
+            _coerce_temporal_scalar(payload.get("runId"))
+            or _coerce_temporal_scalar(payload.get("run_id"))
+            or None
+        )
+
+    try:
+        return ExecutionProgressModel.model_validate(payload), queried_run_id
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid execution progress payload for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return None, None
+
+
+async def _load_execution_step_ledger(
+    *,
+    temporal_client: Client,
+    workflow_id: str,
+) -> StepLedgerSnapshotModel:
+    try:
+        payload = await query_workflow(
+            temporal_client,
+            workflow_id,
+            "get_step_ledger",
+        )
+    except RPCError as exc:
+        logger.warning(
+            "Failed to query execution step ledger for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_unavailable",
+                "message": "Temporal step query unavailable.",
+            },
+        ) from exc
+
+    try:
+        return StepLedgerSnapshotModel.model_validate(payload)
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid execution step ledger payload for %s: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "invalid_execution_query_payload",
+                "message": "Execution step ledger query returned an invalid payload.",
+            },
+        ) from exc
 
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
@@ -1094,6 +1238,33 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
         return explicit
+    tool_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
+        task_payload.get("skill")
+    )
+    tool_name = ""
+    if tool_payload:
+        tool_name = str(
+            tool_payload.get("name") or tool_payload.get("id") or ""
+        ).strip()
+    if tool_name.lower() == "pr-resolver":
+        git_payload = _coerce_mapping(task_payload.get("git"))
+        inputs_payload = _coerce_mapping(task_payload.get("inputs"))
+        tool_inputs_payload = _coerce_mapping(
+            tool_payload.get("inputs") or tool_payload.get("args")
+        )
+        starting_branch = str(
+            git_payload.get("startingBranch")
+            or task_payload.get("startingBranch")
+            or git_payload.get("branch")
+            or task_payload.get("branch")
+            or inputs_payload.get("startingBranch")
+            or inputs_payload.get("branch")
+            or tool_inputs_payload.get("startingBranch")
+            or tool_inputs_payload.get("branch")
+            or ""
+        ).strip()
+        if starting_branch:
+            return starting_branch[:_MAX_TASK_TITLE_LENGTH]
     raw_steps = task_payload.get("steps")
     if isinstance(raw_steps, list):
         for item in raw_steps:
@@ -1271,6 +1442,9 @@ async def _create_execution_from_task_request(
         normalized_tool=normalized_tool,
         normalized_task_for_planner=normalized_task_for_planner,
     )
+    derived_task_title = _derive_task_title(task_payload)
+    if derived_task_title and "title" not in normalized_task_for_planner:
+        normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
     _SUPPORTED_TASK_RUNTIMES = frozenset({
@@ -1352,7 +1526,7 @@ async def _create_execution_from_task_request(
         record = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=user.id,
-            title=_derive_task_title(task_payload),
+            title=derived_task_title,
             input_artifact_ref=input_artifact_ref,
             plan_artifact_ref=plan_artifact_ref,
             manifest_artifact_ref=manifest_artifact_ref,
@@ -1921,6 +2095,41 @@ async def list_executions(
     )
 
 
+@router.get("/{workflow_id}/steps", response_model=StepLedgerSnapshotModel)
+async def describe_execution_steps(
+    workflow_id: str,
+    response: Response,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+    temporal_client: Client = Depends(get_temporal_client),
+) -> StepLedgerSnapshotModel:
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    record = await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+    )
+    workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
+    if workflow_type_value != "MoonMind.Run":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_query",
+                "message": "Step-ledger reads are only supported for MoonMind.Run executions.",
+            },
+        )
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+    return await _load_execution_step_ledger(
+        temporal_client=temporal_client,
+        workflow_id=canonical_workflow_id,
+    )
+
+
 @router.get("/{workflow_id}", response_model=ExecutionModel)
 async def describe_execution(
     workflow_id: str,
@@ -1992,6 +2201,16 @@ async def describe_execution(
     execution = _serialize_execution(record, user=user)
     execution = await _enrich_execution_dependencies(execution, service=service)
     execution = await _hydrate_provider_profile_metadata(execution, session)
+    if execution.workflow_type == "MoonMind.Run":
+        progress, queried_run_id = await _load_execution_progress(
+            temporal_client=temporal_client,
+            workflow_id=canonical_workflow_id,
+        )
+        update: dict[str, object] = {"progress": progress}
+        if queried_run_id:
+            update["run_id"] = queried_run_id
+            update["temporal_run_id"] = queried_run_id
+        execution = execution.model_copy(update=update)
     if not execution.task_run_id:
         task_run_id = await asyncio.to_thread(
             _resolve_task_run_id_from_managed_store,

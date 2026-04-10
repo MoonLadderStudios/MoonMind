@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from api_service.api.routers.task_dashboard_view_model import (
+    build_live_logs_feature_config,
     build_runtime_config,
     normalize_status,
     status_maps,
@@ -55,6 +56,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["temporal"]["list"] == "/api/executions"
     assert config["sources"]["temporal"]["create"] == "/api/executions"
     assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
+    assert config["sources"]["temporal"]["steps"] == "/api/executions/{workflowId}/steps"
     assert (
         config["sources"]["temporal"]["update"] == "/api/executions/{workflowId}/update"
     )
@@ -89,6 +91,15 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/artifacts/{artifactId}/download"
     )
+    assert config["sources"]["taskRuns"]["observabilitySummary"] == "/api/task-runs/{taskRunId}/observability-summary"
+    assert config["sources"]["taskRuns"]["observabilityEvents"] == "/api/task-runs/{taskRunId}/observability/events"
+    assert config["sources"]["taskRuns"]["logsStream"] == "/api/task-runs/{taskRunId}/logs/stream"
+    assert config["sources"]["taskRuns"]["logsStdout"] == "/api/task-runs/{taskRunId}/logs/stdout"
+    assert config["sources"]["taskRuns"]["logsStderr"] == "/api/task-runs/{taskRunId}/logs/stderr"
+    assert config["sources"]["taskRuns"]["logsMerged"] == "/api/task-runs/{taskRunId}/logs/merged"
+    assert config["sources"]["taskRuns"]["diagnostics"] == "/api/task-runs/{taskRunId}/diagnostics"
+    assert config["sources"]["taskRuns"]["artifactSession"] == "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}"
+    assert config["sources"]["taskRuns"]["artifactSessionControl"] == "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control"
     assert "speckit" not in config["sources"]
     assert "orchestrator" not in config["sources"]
     assert "externalRuns" not in config["sources"]
@@ -102,6 +113,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
+    assert "buildId" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex_cli", "gemini_cli", "claude_code")
     assert "defaultTaskModel" in config["system"]
     assert "defaultTaskEffort" in config["system"]
@@ -122,6 +134,28 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert attachment_policy["maxBytes"] >= 1
     assert attachment_policy["totalBytes"] >= attachment_policy["maxBytes"]
     assert "image/png" in attachment_policy["allowedContentTypes"]
+
+
+def test_build_runtime_config_includes_dashboard_build_metadata(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["buildId"] == "20260408.1703"
+
+
+def test_build_runtime_config_reads_baked_build_id_when_env_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    build_id_path = tmp_path / ".moonmind-build-id"
+    build_id_path.write_text("20260408.1703\n", encoding="utf-8")
+    monkeypatch.delenv("MOONMIND_BUILD_ID", raising=False)
+    monkeypatch.setenv("MOONMIND_BUILD_ID_PATH", str(build_id_path))
+
+    config = build_runtime_config("/tasks")
+
+    assert config["system"]["buildId"] == "20260408.1703"
 
 
 def test_build_runtime_config_normalizes_attachment_policy_settings(
@@ -247,6 +281,11 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     )
     monkeypatch.setattr(
         settings.temporal_dashboard,
+        "detail_endpoint",
+        "/gateway/api/executions/{workflowId}",
+    )
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
         "artifact_download_endpoint",
         "/api/temporal/artifacts/{artifactId}/download",
     )
@@ -262,6 +301,10 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         "debugFieldsEnabled": True,
     }
     assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"
+    assert (
+        config["sources"]["temporal"]["steps"]
+        == "/gateway/api/executions/{workflowId}/steps"
+    )
     assert (
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/temporal/artifacts/{artifactId}/download"
@@ -297,6 +340,76 @@ def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> Non
     monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "false")
     config = build_runtime_config("/tasks")
     assert config["features"]["logStreamingEnabled"] is False
+
+
+def test_build_runtime_config_session_timeline_rollout_defaults_off(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "off",
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["liveLogsSessionTimelineEnabled"] is False
+    assert config["features"]["liveLogsSessionTimelineRollout"] == "off"
+
+
+def test_build_runtime_config_session_timeline_rollout_is_exposed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "codex_managed",
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["liveLogsSessionTimelineEnabled"] is True
+    assert config["features"]["liveLogsSessionTimelineRollout"] == "codex_managed"
+
+
+def test_build_runtime_config_groups_live_logs_feature_flags(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "internal",
+    )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_structured_history_enabled",
+        False,
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["logStreamingEnabled"] is True
+    assert config["features"]["liveLogsSessionTimelineEnabled"] is True
+    assert config["features"]["liveLogsSessionTimelineRollout"] == "internal"
+    assert config["features"]["liveLogsStructuredHistoryEnabled"] is False
+
+
+def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "true")
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_session_timeline_rollout",
+        "all_managed",
+    )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_structured_history_enabled",
+        True,
+    )
+
+    feature_config = build_live_logs_feature_config()
+
+    assert feature_config == {
+        "logStreamingEnabled": True,
+        "liveLogsSessionTimelineEnabled": True,
+        "liveLogsSessionTimelineRollout": "all_managed",
+        "liveLogsStructuredHistoryEnabled": True,
+    }
 
 
 def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:

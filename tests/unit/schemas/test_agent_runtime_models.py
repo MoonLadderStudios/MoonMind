@@ -41,6 +41,46 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
         )
 
 
+def test_agent_execution_request_accepts_codex_managed_session_binding() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        managedSession={
+            "workflowId": "wf-run-1:session:codex_cli",
+            "taskRunId": "wf-run-1",
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "runtimeId": "codex_cli",
+        },
+    )
+
+    assert request.managed_session is not None
+    assert request.managed_session.runtime_id == "codex_cli"
+    assert request.managed_session.session_id == "sess:wf-run-1:codex_cli"
+
+
+def test_agent_execution_request_rejects_managed_session_for_non_codex_runtime() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="managedSession is only supported for managed Codex runtimes",
+    ):
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            managedSession={
+                "workflowId": "wf-run-1:session:codex_cli",
+                "taskRunId": "wf-run-1",
+                "sessionId": "sess:wf-run-1:codex_cli",
+                "sessionEpoch": 1,
+                "runtimeId": "codex_cli",
+            },
+        )
+
+
 def test_agent_run_status_terminal_helpers() -> None:
     status = AgentRunStatus(
         runId="run-1",
@@ -145,7 +185,7 @@ def test_managed_runtime_profile_coerces_legacy_file_templates_mapping() -> None
         runtimeId="codex_cli",
         commandTemplate=["codex", "exec"],
         fileTemplates={
-            "/tmp/codex.toml": 'model = "qwen/qwen3.6-plus:free"\n',
+            "/tmp/codex.toml": 'model = "qwen/qwen3.6-plus"\n',
         },
     )
 
@@ -153,7 +193,7 @@ def test_managed_runtime_profile_coerces_legacy_file_templates_mapping() -> None
     assert profile.file_templates[0].path == "/tmp/codex.toml"
     assert profile.file_templates[0].format == "text"
     assert profile.file_templates[0].merge_strategy == "replace"
-    assert profile.file_templates[0].content_template == 'model = "qwen/qwen3.6-plus:free"\n'
+    assert profile.file_templates[0].content_template == 'model = "qwen/qwen3.6-plus"\n'
 
 
 def test_managed_runtime_profile_coerces_empty_legacy_file_templates_mapping() -> None:
@@ -265,7 +305,10 @@ def test_build_canonical_result_maps_provider_fields_into_metadata() -> None:
     }
 
 def test_live_log_chunk_requires_valid_stream() -> None:
-    with pytest.raises(ValidationError, match="Input should be 'stdout', 'stderr' or 'system'"):
+    with pytest.raises(
+        ValidationError,
+        match="Input should be 'stdout', 'stderr', 'system' or 'session'",
+    ):
         LiveLogChunk(sequence=1, stream="invalid_stream", text="test\n", timestamp="2026-03-31T00:00:00Z")
 
 def test_live_log_chunk_accepts_valid_data() -> None:
@@ -293,8 +336,8 @@ def test_managed_agent_provider_profile_accepts_full_provider_contract() -> None
         runtimeId="codex_cli",
         providerId="openrouter",
         providerLabel="OpenRouter",
-        defaultModel="qwen/qwen3.6-plus:free",
-        modelOverrides={"small_fast": "qwen/qwen3.6-plus:free"},
+        defaultModel="qwen/qwen3.6-plus",
+        modelOverrides={"small_fast": "qwen/qwen3.6-plus"},
         credentialSource="secret_ref",
         runtimeMaterializationMode="composite",
         tags=["openrouter", "codex"],
@@ -411,7 +454,7 @@ def test_managed_runtime_profile_roundtrips_file_templates() -> None:
                 "format": "toml",
                 "contentTemplate": {
                     "model_provider": "openrouter",
-                    "model": "qwen/qwen3.6-plus:free",
+                    "model": "qwen/qwen3.6-plus",
                 },
             }
         ],
@@ -424,5 +467,5 @@ def test_managed_runtime_profile_roundtrips_file_templates() -> None:
     assert ft.format == "toml"
     assert ft.content_template == {
         "model_provider": "openrouter",
-        "model": "qwen/qwen3.6-plus:free",
+        "model": "qwen/qwen3.6-plus",
     }

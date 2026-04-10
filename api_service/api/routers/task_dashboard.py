@@ -258,11 +258,17 @@ def _render_react_page(
     boot_layout = dict(boot_initial_data.get("layout") or {})
     boot_layout["dataWidePanel"] = data_wide_panel
     boot_initial_data["layout"] = boot_layout
+    dashboard_config = dict(boot_initial_data.get("dashboardConfig") or {})
+    if not dashboard_config:
+        dashboard_config = build_runtime_config(current_path)
+        boot_initial_data["dashboardConfig"] = dashboard_config
 
     boot_payload = generate_boot_payload(page, initial_data=boot_initial_data)
     assets_html = _vite_assets_or_error(page)
     if isinstance(assets_html, HTMLResponse):
         return assets_html
+
+    system_config = dict(dashboard_config.get("system") or {})
 
     return templates.TemplateResponse(
         request,
@@ -272,6 +278,7 @@ def _render_react_page(
             "boot_payload": boot_payload,
             "assets_html": assets_html,
             "current_path": current_path,
+            "build_id": system_config.get("buildId"),
         },
     )
 

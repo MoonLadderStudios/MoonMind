@@ -77,3 +77,32 @@ def test_api_service_mounts_agent_runtime_workspace_volume():
     assert (
         found_mount
     ), "api service must mount agent_workspaces at /work/agent_jobs so observability APIs can read managed-run records"
+
+
+def test_agent_workspaces_init_avoids_recursive_permission_repair():
+    """Workspace init should only normalize hot directories, not recurse the whole volume."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text())
+    services = compose_data.get("services", {})
+    init_service = services.get("agent-workspaces-init")
+    assert isinstance(
+        init_service, dict
+    ), "agent-workspaces-init service is missing from docker-compose.yaml"
+
+    command = init_service.get("command", "")
+    assert "set -e" in command
+    assert "chown -R" not in command
+    assert "$$dir" in command
+    assert '"$dir"' not in command
+    for expected_dir in (
+        "/work/agent_jobs",
+        "/work/agent_jobs/artifacts",
+        "/work/agent_jobs/managed_runs",
+        "/work/agent_jobs/managed_sessions",
+        "/work/agent_jobs/workspaces",
+    ):
+        assert expected_dir in command

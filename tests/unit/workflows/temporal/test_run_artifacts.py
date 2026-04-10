@@ -1354,6 +1354,145 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
     )
 
 
+@pytest.mark.asyncio
+async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_native_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    captured_create_payload: dict[str, Any] = {}
+
+    async def fake_bind_task_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "repo.create_pr":
+            captured_create_payload["payload"] = _normalize_payload(payload)
+            return {
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1001",
+                "created": True,
+            }
+
+        if activity_type == "artifact.read":
+            if (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "auto",
+                                "version": "1.0",
+                                "description": "Auto",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Publish Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "node-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "codex_cli",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+                                "instructions": "Tighten the Mission Control title size.",
+                                "targetBranch": "planned-title-branch",
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Completed with status completed",
+            "metadata": {
+                "push_status": "pushed",
+                "push_branch": "actual-pushed-branch",
+            },
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+            "workspaceSpec": {"targetBranch": "planned-title-branch"},
+        },
+        plan_ref="art_plan_1",
+    )
+
+    assert captured_create_payload["payload"]["head"] == "actual-pushed-branch"
+
+
 def test_activity_result_failure_message_prefers_stderr_tail_over_progress_details() -> None:
     workflow = MoonMindRunWorkflow()
     message = workflow._activity_result_failure_message(
@@ -1726,3 +1865,24 @@ async def test_run_proposals_stage_uses_task_proposal_policy(
     assert "workflow_id" in captured_origin
     assert "temporal_run_id" in captured_origin
     assert "trigger_repo" in captured_origin
+
+
+def test_update_memo_persists_pull_request_url_under_canonical_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._title = "Temporal task"
+    workflow._summary = "Waiting on review."
+    workflow._pull_request_url = "https://github.com/MoonLadderStudios/MoonMind/pull/321"
+    captured_memo: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda memo: captured_memo.append(dict(memo)),
+    )
+
+    workflow._update_memo()
+
+    assert captured_memo[-1]["pull_request_url"] == "https://github.com/MoonLadderStudios/MoonMind/pull/321"
+    assert "pullRequestUrl" not in captured_memo[-1]

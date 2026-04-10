@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunHandle
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunHandle,
+    AgentRunResult,
+    AgentRunStatus,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -102,6 +107,8 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
     assert all(name != "integration.jules.send_message" for name, _ in routed_calls)
     assert run.run_id == "new-session-1"
     assert result.failure_class is None
+    assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
+    assert result.metadata["childRunId"] == "run-1"
 
 
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
@@ -258,3 +265,164 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     )
     assert fetch_payload["publish_mode"] == "pr"
     assert fetch_payload["commit_message"] == "Use producer commit text"
+    assert fetch_payload["target_branch"] == "main"
+
+
+async def test_agent_run_managed_preserves_task_scoped_session_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("ManagedAgentAdapter should not be used for managedSession requests")
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            return AgentRunHandle(
+                runId="managed-session-run-2",
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="completed",
+                startedAt=agent_run_module.workflow.now(),
+            )
+
+        async def status(self, run_id: str) -> AgentRunStatus:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId="codex_cli",
+                status="completed",
+            )
+
+        async def fetch_result(self, run_id: str) -> AgentRunResult:
+            raise AssertionError(
+                "Terminal managed-session runs should fetch results through "
+                "agent_runtime.fetch_result"
+            )
+
+    async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
+        run.completion_event.set()
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+        async def query(self, query_name: str) -> dict[str, Any]:
+            return {
+                "binding": {
+                    "workflowId": "wf-run-1:session:codex_cli",
+                    "taskRunId": "wf-run-1",
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "runtimeId": "codex_cli",
+                    "executionProfileRef": "codex-default",
+                },
+                "status": "active",
+                "containerId": None,
+                "threadId": None,
+                "activeTurnId": None,
+                "terminationRequested": False,
+            }
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        run.slot_assigned_event.set()
+        run._assigned_profile_id = execution_profile_ref or "default-managed"
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        return 1
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.fetch_result":
+            return {"summary": "Managed success", "metadata": {}}
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "ManagedAgentAdapter",
+        _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "CodexSessionAdapter",
+        _FakeCodexSessionAdapter,
+    )
+    monkeypatch.setattr(
+        run,
+        "_ensure_manager_and_signal",
+        fake_ensure_manager_and_signal,
+    )
+    monkeypatch.setattr(
+        run,
+        "_sync_manager_profiles",
+        fake_sync_manager_profiles,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="corr-managed-2",
+            idempotencyKey="idem-managed-2",
+            executionProfileRef="codex-default",
+            managedSession={
+                "workflowId": "wf-run-1:session:codex_cli",
+                "taskRunId": "wf-run-1",
+                "sessionId": "sess:wf-run-1:codex_cli",
+                "sessionEpoch": 1,
+                "runtimeId": "codex_cli",
+            },
+        )
+    )
+
+    fetch_payload = next(
+        payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
+    )
+    assert fetch_payload == {
+        "run_id": "wf-run-1",
+        "agent_id": "codex_cli",
+    }
+    assert result.metadata["managedSession"] == {
+        "workflowId": "wf-run-1:session:codex_cli",
+        "taskRunId": "wf-run-1",
+        "sessionId": "sess:wf-run-1:codex_cli",
+        "sessionEpoch": 1,
+        "runtimeId": "codex_cli",
+        "executionProfileRef": None,
+    }

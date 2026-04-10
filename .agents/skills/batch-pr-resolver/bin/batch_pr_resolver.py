@@ -345,6 +345,7 @@ def _build_queue_request(
         "repository": repo,
         "requiredCapabilities": ["gh"],
         "task": {
+            "title": branch,
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             "skill": {
                 "name": "pr-resolver",
@@ -492,7 +493,15 @@ async def _submit_jobs_via_http(
                 response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
-                job_id = str(data.get("taskId", "")) or "(unknown)"
+                job_id = (
+                    str(
+                        data.get("workflowId")
+                        or data.get("taskId")
+                        or data.get("id")
+                        or ""
+                    )
+                    or "(unknown)"
+                )
                 created.append(
                     {
                         "pr": submission.pr_number,
@@ -511,55 +520,10 @@ async def _submit_jobs_via_http(
     return created, errors
 
 
-async def _submit_jobs_via_db(
-    queue_requests: list[JobSubmission],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Fallback: submit jobs directly to the DB queue (skips Temporal routing)."""
-    from api_service.db.base import get_async_session_context
-    from moonmind.workflows import get_agent_queue_service
-
-    created: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    async with get_async_session_context() as session:
-        service = get_agent_queue_service(session)
-        for submission in queue_requests:
-            request = submission.queue_request
-            payload = request["payload"]
-            queue_type = str(request["type"])
-            priority = int(request.get("priority", 0))
-            max_attempts = int(request.get("maxAttempts", 3))
-            
-            kwargs = {
-                "job_type": queue_type,
-                "payload": payload,
-                "priority": priority,
-                "max_attempts": max_attempts,
-            }
-
-            try:
-                job = await service.create_job(**kwargs)
-                created.append(
-                    {
-                        "pr": submission.pr_number,
-                        "branch": submission.branch,
-                        "jobId": str(job.id),
-                    }
-                )
-            except Exception as exc:
-                errors.append(
-                    {
-                        "pr": submission.pr_number,
-                        "branch": submission.branch,
-                        "error": str(exc),
-                    }
-                )
-    return created, errors
-
-
 async def _submit_jobs(
     queue_requests: list[JobSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Submit jobs via the MoonMind HTTP API (Temporal-aware), with DB fallback."""
+    """Submit jobs through the MoonMind Temporal execution API."""
     moonmind_url = str(os.getenv("MOONMIND_URL", "")).strip()
     if moonmind_url:
         worker_token = _read_worker_token()
@@ -568,12 +532,19 @@ async def _submit_jobs(
             moonmind_url=moonmind_url,
             worker_token=worker_token,
         )
-    # Fallback for environments without a running API (e.g. direct invocation).
-    logger.warning(
-        "MOONMIND_URL is not set; submitting jobs directly to the DB queue. "
-        "This bypasses Temporal routing and should only be used in dev/test environments."
+
+    message = (
+        "MOONMIND_URL is not set; batch-pr-resolver requires the MoonMind "
+        "Temporal execution API and cannot submit via the removed legacy DB queue."
     )
-    return await _submit_jobs_via_db(queue_requests)
+    return [], [
+        {
+            "pr": submission.pr_number,
+            "branch": submission.branch,
+            "error": message,
+        }
+        for submission in queue_requests
+    ]
 
 
 def _build_request_records(

@@ -14,6 +14,13 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from moonmind.schemas.managed_session_models import (
+        CodexManagedSessionBinding,
+        CodexManagedSessionSnapshot,
+        CodexManagedSessionWorkflowInput,
+        TerminateCodexManagedSessionRequest,
+        canonical_codex_managed_runtime_id,
+    )
     from moonmind.schemas.temporal_activity_models import (
         ArtifactReadInput,
         ArtifactWriteCompleteInput,
@@ -34,11 +41,27 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
+        ExecutionProgressModel,
+        StepLedgerSnapshotModel,
         normalize_dependency_ids,
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
+from moonmind.workflows.skills.approval_policy import (
+    ReviewRequest,
+    build_feedback_input,
+    build_feedback_instruction,
+    parse_review_verdict,
+)
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
+from moonmind.workflows.temporal.step_ledger import (
+    build_initial_step_rows,
+    build_progress_summary,
+    build_step_ledger_snapshot,
+    refresh_ready_steps,
+    upsert_step_check,
+    update_step_row,
+)
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
@@ -62,6 +85,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
+_TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
@@ -121,6 +145,10 @@ _GITHUB_PR_URL_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
+# Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
+RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
+# Replay-stable patch id for task-scoped Codex terminate child-workflow updates.
+RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
@@ -255,6 +283,23 @@ class MoonMindRunWorkflow:
         self._assigned_runtime_id: Optional[str] = None
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
+        self._codex_session_handle: Any | None = None
+        self._codex_session_binding: CodexManagedSessionBinding | None = None
+        self._step_ledger_rows: list[dict[str, Any]] = []
+        self._progress_snapshot: dict[str, Any] = {
+            "total": 0,
+            "pending": 0,
+            "ready": 0,
+            "running": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": None,
+            "updatedAt": "1970-01-01T00:00:00+00:00",
+        }
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -429,6 +474,385 @@ class MoonMindRunWorkflow:
             )
         return [payload_by_id[node_id] for node_id in ordered_node_ids]
 
+    def _plan_dependency_map(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+        edges: tuple[Any, ...],
+    ) -> dict[str, list[str]]:
+        dependency_map = {
+            str(node.get("id") or "").strip(): set()
+            for node in ordered_nodes
+            if str(node.get("id") or "").strip()
+        }
+        bundle_id_by_member_id: dict[str, str] = {}
+        for node in ordered_nodes:
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            node_inputs = node.get("inputs")
+            candidates: list[Any] = [
+                node.get("bundledNodeIds"),
+                node.get("bundled_node_ids"),
+            ]
+            if isinstance(node_inputs, Mapping):
+                candidates.extend(
+                    [
+                        node_inputs.get("bundledNodeIds"),
+                        node_inputs.get("bundled_node_ids"),
+                        node_inputs.get("bundleNodeIds"),
+                        node_inputs.get("bundle_node_ids"),
+                    ]
+                )
+            for candidate in candidates:
+                if not isinstance(candidate, (list, tuple, set)):
+                    continue
+                for member_id in candidate:
+                    normalized_member_id = str(member_id or "").strip()
+                    if normalized_member_id and normalized_member_id != node_id:
+                        bundle_id_by_member_id[normalized_member_id] = node_id
+        for edge in edges:
+            from_node = str(getattr(edge, "from_node", "") or "").strip()
+            to_node = str(getattr(edge, "to_node", "") or "").strip()
+            if not from_node or not to_node:
+                continue
+            mapped_from_node = bundle_id_by_member_id.get(from_node, from_node)
+            mapped_to_node = bundle_id_by_member_id.get(to_node, to_node)
+            if mapped_from_node == mapped_to_node:
+                continue
+            if (
+                mapped_to_node not in dependency_map
+                or mapped_from_node not in dependency_map
+            ):
+                continue
+            dependency_map[mapped_to_node].add(mapped_from_node)
+        return {
+            node_id: sorted(dependencies)
+            for node_id, dependencies in dependency_map.items()
+        }
+
+    def _try_update_step_row(
+        self,
+        logical_step_id: str,
+        **update_kwargs: Any,
+    ) -> bool:
+        try:
+            update_step_row(
+                self._step_ledger_rows,
+                logical_step_id,
+                **update_kwargs,
+            )
+        except KeyError:
+            self._get_logger().warning(
+                "Skipping step-ledger update for unknown logical step id %s",
+                logical_step_id,
+                extra={
+                    "event": "step_ledger_unknown_step",
+                    "logical_step_id": logical_step_id,
+                },
+            )
+            return False
+        return True
+
+    def _sync_progress_snapshot(self, *, updated_at: datetime) -> None:
+        self._progress_snapshot = build_progress_summary(
+            self._step_ledger_rows,
+            updated_at=updated_at,
+        )
+
+    def _initialize_step_ledger(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+        dependency_map: dict[str, list[str]],
+        updated_at: datetime,
+    ) -> None:
+        self._step_ledger_rows = build_initial_step_rows(
+            ordered_nodes=ordered_nodes,
+            dependency_map=dependency_map,
+            updated_at=updated_at,
+        )
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _mark_step_running(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+        summary: str | None = None,
+    ) -> None:
+        if not self._try_update_step_row(
+            logical_step_id,
+            updated_at=updated_at,
+            status="running",
+            summary=summary,
+            waiting_reason=None,
+            attention_required=False,
+            increment_attempt=True,
+            set_started_at=True,
+        ):
+            return
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _mark_step_waiting(
+        self,
+        logical_step_id: str,
+        *,
+        status: str,
+        updated_at: datetime,
+        waiting_reason: str | None,
+        summary: str | None = None,
+        attention_required: bool = False,
+        refs: Mapping[str, Any] | None = None,
+        artifacts: Mapping[str, Any] | None = None,
+    ) -> None:
+        update_kwargs: dict[str, Any] = {
+            "updated_at": updated_at,
+            "status": status,
+            "summary": summary,
+            "waiting_reason": waiting_reason,
+            "attention_required": attention_required,
+        }
+        if refs is not None:
+            update_kwargs["refs"] = refs
+        if artifacts is not None:
+            update_kwargs["artifacts"] = artifacts
+        if not self._try_update_step_row(logical_step_id, **update_kwargs):
+            return
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _mark_step_terminal(
+        self,
+        logical_step_id: str,
+        *,
+        status: str,
+        updated_at: datetime,
+        summary: str | None = None,
+        last_error: str | None | object = _TERMINAL_LAST_ERROR_UNSET,
+    ) -> None:
+        update_kwargs: dict[str, Any] = {
+            "updated_at": updated_at,
+            "status": status,
+            "summary": summary,
+        }
+        if last_error is not _TERMINAL_LAST_ERROR_UNSET:
+            update_kwargs["last_error"] = last_error
+        if not self._try_update_step_row(
+            logical_step_id,
+            **update_kwargs,
+        ):
+            return
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _upsert_step_check(
+        self,
+        logical_step_id: str,
+        *,
+        kind: str,
+        status: str,
+        summary: str | None = None,
+        retry_count: int = 0,
+        artifact_ref: str | None = None,
+    ) -> bool:
+        try:
+            upsert_step_check(
+                self._step_ledger_rows,
+                logical_step_id,
+                kind=kind,
+                status=status,
+                summary=summary,
+                retry_count=retry_count,
+                artifact_ref=artifact_ref,
+            )
+        except KeyError:
+            self._get_logger().warning(
+                "Skipping step-check update for unknown logical step id %s",
+                logical_step_id,
+                extra={
+                    "event": "step_check_unknown_step",
+                    "logical_step_id": logical_step_id,
+                },
+            )
+            return False
+        return True
+
+    def _step_attempt_for(self, logical_step_id: str) -> int | None:
+        for row in self._step_ledger_rows:
+            if row.get("logicalStepId") == logical_step_id:
+                attempt = row.get("attempt")
+                if isinstance(attempt, bool):
+                    return None
+                if isinstance(attempt, (int, float)):
+                    return int(attempt)
+                return None
+        return None
+
+    def _record_step_result_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        execution_result: Any,
+        updated_at: datetime,
+    ) -> None:
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return
+
+        def _output_ref(*keys: str) -> str | None:
+            for key in keys:
+                value = outputs.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return None
+
+        def _output_ref_list(*keys: str) -> list[str]:
+            for key in keys:
+                value = outputs.get(key)
+                if isinstance(value, (list, tuple)):
+                    return [
+                        item.strip()
+                        for item in value
+                        if isinstance(item, str) and item.strip()
+                    ]
+            return []
+
+        output_refs = _output_ref_list("outputRefs", "output_refs")
+        agent_result_ref = _output_ref(
+            "outputAgentResultRef",
+            "output_agent_result_ref",
+        )
+
+        refs = {
+            "childWorkflowId": _output_ref("childWorkflowId", "child_workflow_id"),
+            "childRunId": _output_ref("childRunId", "child_run_id"),
+            "taskRunId": _output_ref("taskRunId", "task_run_id"),
+        }
+        artifacts = {
+            "outputSummary": _output_ref("outputSummaryRef", "output_summary_ref"),
+            "outputPrimary": _output_ref(
+                "outputPrimaryRef",
+                "output_primary_ref",
+            ),
+            "runtimeStdout": _output_ref("stdoutArtifactRef", "stdout_artifact_ref"),
+            "runtimeStderr": _output_ref("stderrArtifactRef", "stderr_artifact_ref"),
+            "runtimeMergedLogs": _output_ref(
+                "mergedLogArtifactRef",
+                "merged_log_artifact_ref",
+                "logArtifactRef",
+                "log_artifact_ref",
+            ),
+            "runtimeDiagnostics": _output_ref("diagnosticsRef", "diagnostics_ref"),
+            "providerSnapshot": _output_ref(
+                "providerSnapshotRef",
+                "provider_snapshot_ref",
+            ),
+        }
+
+        if artifacts["outputPrimary"] is None:
+            reserved_refs = {
+                value
+                for value in artifacts.values()
+                if isinstance(value, str) and value.strip()
+            }
+            fallback_primary = next(
+                (ref for ref in output_refs if ref not in reserved_refs),
+                None,
+            )
+            if fallback_primary is not None:
+                artifacts["outputPrimary"] = fallback_primary
+            elif agent_result_ref is not None:
+                artifacts["outputPrimary"] = agent_result_ref
+
+        if not self._try_update_step_row(
+            logical_step_id,
+            updated_at=updated_at,
+            refs=refs,
+            artifacts=artifacts,
+        ):
+            return
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
+        refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
+        self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _bounded_review_summary(self, value: Any, *, fallback: str) -> str:
+        summary = self._coerce_text(value, max_chars=240)
+        if summary:
+            return summary
+        return fallback
+
+    def _check_status_for_review_verdict(self, verdict: str) -> str:
+        normalized = str(verdict or "").strip().upper()
+        if normalized == "PASS":
+            return "passed"
+        if normalized == "FAIL":
+            return "failed"
+        return "inconclusive"
+
+    def _accepted_review_summary(self, verdict: str, *, retry_count: int) -> str:
+        normalized = str(verdict or "").strip().upper()
+        if normalized == "INCONCLUSIVE":
+            return "Review inconclusive; accepted execution"
+        if retry_count > 0:
+            retry_label = "retry" if retry_count == 1 else "retries"
+            return f"Approved after {retry_count} {retry_label}"
+        return "Approved by structured review"
+
+    def _review_gate_active(
+        self,
+        *,
+        approval_policy: Any,
+        tool_type: str,
+        tool_name: str,
+    ) -> bool:
+        if approval_policy is None or not getattr(approval_policy, "enabled", False):
+            return False
+        skip_tool_types = {
+            str(value).strip().lower()
+            for value in getattr(approval_policy, "skip_tool_types", ())
+            if str(value).strip()
+        }
+        normalized_tool_type = str(tool_type or "").strip().lower()
+        normalized_tool_name = str(tool_name or "").strip().lower()
+        return (
+            normalized_tool_type not in skip_tool_types
+            and normalized_tool_name not in skip_tool_types
+        )
+
+    def _inject_review_feedback_into_inputs(
+        self,
+        *,
+        tool_type: str,
+        original_inputs: Mapping[str, Any],
+        attempt: int,
+        feedback: str,
+        issues: tuple[Mapping[str, Any], ...],
+    ) -> dict[str, Any]:
+        merged_inputs = build_feedback_input(
+            original_inputs,
+            attempt,
+            feedback,
+            issues,
+        )
+        if tool_type == "agent_runtime":
+            for key in (
+                "instructions",
+                "instructionRef",
+                "instruction",
+                "instructionsText",
+                "instructions_text",
+            ):
+                instruction = merged_inputs.get(key)
+                if isinstance(instruction, str) and instruction.strip():
+                    merged_inputs[key] = build_feedback_instruction(
+                        instruction,
+                        attempt,
+                        feedback,
+                    )
+                    break
+        return merged_inputs
+
     def _dependency_ids_from_parameters(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
         if task_payload is None:
@@ -570,11 +994,50 @@ class MoonMindRunWorkflow:
 
         prerequisite_workflow_id = signal.prerequisite_workflow_id
         if prerequisite_workflow_id not in self._declared_dependencies:
+            self._get_logger().warning(
+                "Ignoring DependencyResolved signal for undeclared prerequisite %s",
+                prerequisite_workflow_id,
+                extra={
+                    "event": "dependency_signal_ignored_undeclared",
+                },
+            )
             return
+
+        # Normalize "succeeded" to "completed" so the outcome recorder
+        # (which only treats "completed" as success) can satisfy the gate.
+        terminal_state = signal.terminal_state
+        if terminal_state == "succeeded":
+            terminal_state = "completed"
+
+        is_terminal_failure = terminal_state != "completed"
+        if is_terminal_failure:
+            self._get_logger().warning(
+                "DependencyResolved signal indicates non-success terminal state %s for %s",
+                terminal_state,
+                prerequisite_workflow_id,
+                extra={
+                    "event": "dependency_signal_failure",
+                    "prerequisite_workflow_id": prerequisite_workflow_id,
+                    "terminal_state": terminal_state,
+                    "close_status": signal.close_status,
+                    "failure_category": signal.failure_category,
+                },
+            )
+        else:
+            self._get_logger().info(
+                "DependencyResolved signal received for %s",
+                prerequisite_workflow_id,
+                extra={
+                    "event": "dependency_signal_received",
+                    "prerequisite_workflow_id": prerequisite_workflow_id,
+                    "terminal_state": terminal_state,
+                    "close_status": signal.close_status,
+                },
+            )
 
         self._record_dependency_outcome(
             prerequisite_workflow_id=prerequisite_workflow_id,
-            terminal_state=signal.terminal_state,
+            terminal_state=terminal_state,
             close_status=signal.close_status,
             resolved_at=signal.resolved_at.isoformat(),
             failure_category=signal.failure_category,
@@ -603,6 +1066,15 @@ class MoonMindRunWorkflow:
         for dependency_id in dependency_ids:
             raw_entry = snapshot.get(dependency_id)
             if not isinstance(raw_entry, Mapping):
+                self._get_logger().warning(
+                    "Dependency reconciliation: prerequisite %s not found in snapshot",
+                    dependency_id,
+                    extra={
+                        "event": "dependency_reconciliation_mismatch",
+                        "prerequisite_workflow_id": dependency_id,
+                        "mismatch_type": "missing_from_snapshot",
+                    },
+                )
                 self._record_missing_dependency(dependency_id)
                 continue
 
@@ -657,6 +1129,17 @@ class MoonMindRunWorkflow:
             f"Prerequisite execution '{detail.get('failedDependencyId')}' "
             "did not complete successfully."
         )
+        self._get_logger().error(
+            "Dependency gate failed",
+            extra={
+                "event": "dependency_gate_failed",
+                "failed_dependency_id": detail.get("failedDependencyId"),
+                "terminal_state": detail.get("terminalState"),
+                "close_status": detail.get("closeStatus"),
+                "failure_category": detail.get("failureCategory"),
+                "wait_duration_ms": self._dependency_wait_duration_ms,
+            },
+        )
         raise DependencyFailureError(message, detail=detail)
 
     async def _wait_for_dependencies(self, dependency_ids: list[str]) -> None:
@@ -676,6 +1159,14 @@ class MoonMindRunWorkflow:
         self._set_state(
             STATE_WAITING_ON_DEPENDENCIES,
             summary=f"Waiting on {len(dependency_ids)} prerequisite execution(s).",
+        )
+        self._get_logger().info(
+            "Dependency gate entered",
+            extra={
+                "event": "dependency_gate_entered",
+                "dependency_count": len(dependency_ids),
+                "dependency_ids": dependency_ids,
+            },
         )
 
         try:
@@ -701,6 +1192,20 @@ class MoonMindRunWorkflow:
                     self._update_search_attributes()
                     self._update_memo()
             self._update_dependency_wait_duration()
+
+            if (
+                self._dependency_failure is None
+                and self._close_status != CLOSE_STATUS_CANCELED
+            ):
+                self._get_logger().info(
+                    "Dependency gate satisfied",
+                    extra={
+                        "event": "dependency_gate_satisfied",
+                        "dependency_count": len(dependency_ids),
+                        "wait_duration_ms": self._dependency_wait_duration_ms,
+                    },
+                )
+
             self._raise_for_dependency_failure()
         finally:
             self._waiting_reason = None
@@ -1071,6 +1576,15 @@ class MoonMindRunWorkflow:
             ordered_nodes = await self._bundle_ordered_nodes_for_execution(
                 ordered_nodes
             )
+        dependency_map = self._plan_dependency_map(
+            ordered_nodes=ordered_nodes,
+            edges=plan_definition.edges,
+        )
+        self._initialize_step_ledger(
+            ordered_nodes=ordered_nodes,
+            dependency_map=dependency_map,
+            updated_at=workflow.now(),
+        )
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         failure_mode = plan_definition.policy.failure_mode
@@ -1132,164 +1646,381 @@ class MoonMindRunWorkflow:
             ).strip()
             tool_version = str(selected_node.get("version") or "").strip()
             node_id = str(node.get("id") or "unknown")
-            node_inputs = dict(node.get("inputs", {}))
-
-            self._step_count = index
-            self._summary = (
-                f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
+            original_node_inputs = dict(node.get("inputs", {}))
+            approval_policy = plan_definition.policy.approval_policy
+            review_gate_active = self._review_gate_active(
+                approval_policy=approval_policy,
+                tool_type=tool_type,
+                tool_name=tool_name,
             )
-            self._update_memo()
+            max_review_attempts = (
+                int(getattr(approval_policy, "max_review_attempts", 0))
+                if review_gate_active
+                else 0
+            )
+            review_retry_count = 0
+            previous_review_feedback: str | None = None
+            previous_review_issues: tuple[Mapping[str, Any], ...] = ()
+            result_status: str | None = None
+            execution_result: Any = None
+            accepted_execution = False
+            current_review_attempt = 1
 
-            system_retries = 0
-            while system_retries <= 3:
-                if tool_type == "agent_runtime":
-                    # --- Agent dispatch: child workflow ---
-                    try:
-                        request = self._build_agent_execution_request(
-                            node_inputs=node_inputs,
-                            node_id=node_id,
-                            tool_name=tool_name,
-                            resolved_skillset_ref=registry_snapshot_ref,
-                        )
-                        child_workflow_id = (
-                            f"{workflow.info().workflow_id}:agent:{node_id}"
-                        )
-                        if system_retries > 0:
-                            child_workflow_id = (
-                                f"{child_workflow_id}:retry{system_retries}"
-                            )
-                        self._active_agent_child_workflow_id = child_workflow_id
-                        self._active_agent_id = request.agent_id
+            while current_review_attempt <= (max_review_attempts + 1):
+                node_inputs = dict(original_node_inputs)
+                if previous_review_feedback:
+                    node_inputs = self._inject_review_feedback_into_inputs(
+                        tool_type=tool_type,
+                        original_inputs=node_inputs,
+                        attempt=review_retry_count,
+                        feedback=previous_review_feedback,
+                        issues=previous_review_issues,
+                    )
+
+                self._step_count = index
+                self._summary = (
+                    f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
+                )
+                self._update_memo()
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._mark_step_running(
+                    node_id,
+                    updated_at=workflow.now(),
+                    summary=self._summary,
+                )
+
+                system_retries = 0
+                while system_retries <= 3:
+                    if tool_type == "agent_runtime":
+                        # --- Agent dispatch: child workflow ---
                         try:
-                            child_result = await workflow.execute_child_workflow(
-                                "MoonMind.AgentRun",
-                                request,
-                                id=child_workflow_id,
-                                task_queue=WORKFLOW_TASK_QUEUE,
+                            request = self._build_agent_execution_request(
+                                node_inputs=node_inputs,
+                                node_id=node_id,
+                                tool_name=tool_name,
+                                resolved_skillset_ref=registry_snapshot_ref,
                             )
-                        finally:
-                            self._active_agent_child_workflow_id = None
-                            self._active_agent_id = None
-                        execution_result = self._map_agent_run_result(child_result)
-                    except Exception:
-                        if failure_mode == "FAIL_FAST":
-                            raise
-                        result_status = "FAILED"
-                        break
-
-                elif tool_type == "skill":
-                    # --- Activity dispatch: existing skill path ---
-                    if not tool_name or not tool_version:
-                        raise ValueError("plan node tool name/version is required")
-                    invocation_payload = {
-                        "id": node_id,
-                        "tool": {
-                            "type": "skill",
-                            "name": tool_name,
-                            "version": tool_version,
-                        },
-                        "skill": {"name": tool_name, "version": tool_version},
-                        "inputs": node_inputs,
-                        "options": node.get("options", {}),
-                    }
-                    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "mm.skill.execute"
-                    )
-                    if skill_definitions_by_key:
-                        skill_key = (tool_name, tool_version)
-                        if skill_key not in skill_definitions_by_key:
-                            raise ValueError(
-                                "Tool "
-                                f"'{tool_name}:{tool_version}' was not found in pinned "
-                                "registry snapshot"
+                            request = await self._maybe_bind_task_scoped_session(request)
+                            child_workflow_id = (
+                                f"{workflow.info().workflow_id}:agent:{node_id}"
                             )
-                        route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
-                            skill_definitions_by_key[skill_key]
-                        )
-                    if route.activity_type not in {
-                        "mm.skill.execute",
-                        "mm.tool.execute",
-                    }:
-                        raise ValueError(
-                            "plan node tool executor "
-                            f"'{route.activity_type}' is unsupported by MoonMind.Run; "
-                            "expected mm.tool.execute or mm.skill.execute"
-                        )
+                            if system_retries > 0:
+                                child_workflow_id = (
+                                    f"{child_workflow_id}:retry{system_retries}"
+                                )
+                            self._active_agent_child_workflow_id = child_workflow_id
+                            self._active_agent_id = request.agent_id
+                            self._mark_step_waiting(
+                                node_id,
+                                status="awaiting_external",
+                                updated_at=workflow.now(),
+                                waiting_reason="Awaiting child workflow progress",
+                                summary=f"Awaiting child workflow for {tool_name}",
+                                refs={"childWorkflowId": child_workflow_id},
+                            )
+                            try:
+                                child_result = await workflow.execute_child_workflow(
+                                    "MoonMind.AgentRun",
+                                    request,
+                                    id=child_workflow_id,
+                                    task_queue=WORKFLOW_TASK_QUEUE,
+                                )
+                            finally:
+                                self._active_agent_child_workflow_id = None
+                                self._active_agent_id = None
+                            execution_result = self._map_agent_run_result(child_result)
+                        except Exception:
+                            self._mark_step_terminal(
+                                node_id,
+                                status="failed",
+                                updated_at=workflow.now(),
+                                summary=f"{tool_name} failed",
+                                last_error="execution_error",
+                            )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            result_status = "FAILED"
+                            break
 
-                    try:
-                        execute_payload = {
-                            "invocation_payload": invocation_payload,
-                            "principal": self._principal(),
-                            "registry_snapshot_ref": registry_snapshot_ref,
-                            "context": {
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                                "node_id": node_id,
+                    elif tool_type == "skill":
+                        # --- Activity dispatch: existing skill path ---
+                        if not tool_name or not tool_version:
+                            raise ValueError("plan node tool name/version is required")
+                        invocation_payload = {
+                            "id": node_id,
+                            "tool": {
+                                "type": "skill",
+                                "name": tool_name,
+                                "version": tool_version,
                             },
+                            "skill": {"name": tool_name, "version": tool_version},
+                            "inputs": node_inputs,
+                            "options": node.get("options", {}),
                         }
-                        if workflow.patched("idempotency_key_phase3"):
-                            execute_payload["idempotency_key"] = (
-                                f"{workflow.info().workflow_id}_{node_id}_execute"
+                        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                            "mm.skill.execute"
+                        )
+                        if skill_definitions_by_key:
+                            skill_key = (tool_name, tool_version)
+                            if skill_key not in skill_definitions_by_key:
+                                raise ValueError(
+                                    "Tool "
+                                    f"'{tool_name}:{tool_version}' was not found in pinned "
+                                    "registry snapshot"
+                                )
+                            route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
+                                skill_definitions_by_key[skill_key]
+                            )
+                        if route.activity_type not in {
+                            "mm.skill.execute",
+                            "mm.tool.execute",
+                        }:
+                            raise ValueError(
+                                "plan node tool executor "
+                                f"'{route.activity_type}' is unsupported by MoonMind.Run; "
+                                "expected mm.tool.execute or mm.skill.execute"
                             )
 
-                        execution_result = await workflow.execute_activity(
-                            route.activity_type,
-                            execute_payload,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(route),
+                        try:
+                            execute_payload = {
+                                "invocation_payload": invocation_payload,
+                                "principal": self._principal(),
+                                "registry_snapshot_ref": registry_snapshot_ref,
+                                "context": {
+                                    "workflow_id": workflow.info().workflow_id,
+                                    "run_id": workflow.info().run_id,
+                                    "node_id": node_id,
+                                },
+                            }
+                            if workflow.patched("idempotency_key_phase3"):
+                                execute_payload["idempotency_key"] = (
+                                    f"{workflow.info().workflow_id}_{node_id}_execute"
+                                )
+
+                            execution_result = await workflow.execute_activity(
+                                route.activity_type,
+                                execute_payload,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                **self._execute_kwargs_for_route(route),
+                            )
+                        except Exception:
+                            self._mark_step_terminal(
+                                node_id,
+                                status="failed",
+                                updated_at=workflow.now(),
+                                summary=f"{tool_name} failed",
+                                last_error="execution_error",
+                            )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            result_status = "FAILED"
+                            break
+
+                    else:
+                        raise ValueError(
+                            f"unsupported plan node tool.type: '{tool_type}'; "
+                            "expected 'skill' or 'agent_runtime'"
                         )
-                    except Exception:
+
+                    result_status = self._activity_result_status(execution_result)
+                    if result_status is None:
                         if failure_mode == "FAIL_FAST":
-                            raise
-                        result_status = "FAILED"
+                            raise ValueError(
+                                "plan node execution result is missing required status field"
+                            )
+                        break
+                    self._record_step_result_evidence(
+                        node_id,
+                        execution_result=execution_result,
+                        updated_at=workflow.now(),
+                    )
+                    if result_status != "COMPLETED":
+                        failure_message = self._activity_result_failure_message(
+                            execution_result
+                        )
+
+                        retryable = failure_message == "system_error" or (
+                            failure_message == "execution_error"
+                            and tool_type == "agent_runtime"
+                        )
+                        if retryable and system_retries < 3:
+                            self._mark_step_terminal(
+                                node_id,
+                                status="failed",
+                                updated_at=workflow.now(),
+                                summary=f"{tool_name} failed",
+                                last_error=failure_message,
+                            )
+                            system_retries += 1
+                            self._get_logger().info(
+                                f"Retrying plan node {node_id} after {failure_message} "
+                                f"(attempt {system_retries} of 3)"
+                            )
+                            self._mark_step_running(
+                                node_id,
+                                updated_at=workflow.now(),
+                                summary=self._summary,
+                            )
+                            continue
+
+                        self._mark_step_terminal(
+                            node_id,
+                            status="failed",
+                            updated_at=workflow.now(),
+                            summary=f"{tool_name} failed",
+                            last_error=failure_message,
+                        )
+                        if failure_mode == "FAIL_FAST":
+                            detail = (
+                                f" with error '{failure_message}'"
+                                if failure_message
+                                else ""
+                            )
+                            raise ValueError(
+                                f"plan node execution returned status {result_status}{detail}"
+                            )
                         break
 
-                else:
-                    raise ValueError(
-                        f"unsupported plan node tool.type: '{tool_type}'; "
-                        "expected 'skill' or 'agent_runtime'"
-                    )
-
-                result_status = self._activity_result_status(execution_result)
-                if result_status is None:
-                    if failure_mode == "FAIL_FAST":
-                        raise ValueError(
-                            "plan node execution result is missing required status field"
-                        )
                     break
-                if result_status != "COMPLETED":
-                    failure_message = self._activity_result_failure_message(
+
+                if result_status is None or result_status != "COMPLETED":
+                    break
+
+                if not review_gate_active:
+                    accepted_execution = True
+                    break
+
+                self._mark_step_waiting(
+                    node_id,
+                    status="reviewing",
+                    updated_at=workflow.now(),
+                    waiting_reason="Awaiting structured review result",
+                    summary="Structured review in progress",
+                )
+                self._upsert_step_check(
+                    node_id,
+                    kind="approval_policy",
+                    status="pending",
+                    summary="Structured review in progress",
+                    retry_count=review_retry_count,
+                    artifact_ref=None,
+                )
+
+                review_request = ReviewRequest(
+                    node_id=node_id,
+                    step_index=index,
+                    total_steps=len(ordered_nodes),
+                    review_attempt=current_review_attempt,
+                    tool_name=tool_name,
+                    tool_version=tool_version,
+                    tool_type=tool_type,
+                    inputs=node_inputs,
+                    execution_result=(
                         execution_result
+                        if isinstance(execution_result, Mapping)
+                        else {}
+                    ),
+                    workflow_context={
+                        "workflow_id": workflow.info().workflow_id,
+                        "run_id": workflow.info().run_id,
+                        "plan_title": plan_definition.metadata.title,
+                    },
+                    reviewer_model=str(
+                        getattr(approval_policy, "reviewer_model", "default")
+                    ),
+                    review_timeout_seconds=int(
+                        getattr(approval_policy, "review_timeout_seconds", 120)
+                    ),
+                    previous_feedback=previous_review_feedback,
+                )
+                review_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step.review")
+                review_verdict = parse_review_verdict(
+                    await workflow.execute_activity(
+                        "step.review",
+                        review_request.to_payload(),
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(review_route),
                     )
+                )
+                step_attempt = self._step_attempt_for(node_id) or 0
+                review_artifact_ref = await self._write_json_artifact(
+                    name=(
+                        "reports/review_"
+                        f"{node_id}_attempt_{step_attempt}.json"
+                    ),
+                    payload={
+                        "logicalStepId": node_id,
+                        "attempt": step_attempt,
+                        "reviewAttempt": current_review_attempt,
+                        "request": review_request.to_payload(),
+                        "verdict": review_verdict.to_payload(),
+                    },
+                )
+                review_check_status = self._check_status_for_review_verdict(
+                    review_verdict.verdict
+                )
 
-                    retryable = failure_message == "system_error" or (
-                        failure_message == "execution_error"
-                        and tool_type == "agent_runtime"
+                if review_verdict.verdict == "FAIL":
+                    review_retry_count += 1
+                    failed_review_summary = self._bounded_review_summary(
+                        review_verdict.feedback,
+                        fallback="Review failed; retrying step",
                     )
-                    if retryable and system_retries < 3:
-                        system_retries += 1
-                        self._get_logger().info(
-                            f"Retrying plan node {node_id} after {failure_message} "
-                            f"(attempt {system_retries} of 3)"
+                    self._upsert_step_check(
+                        node_id,
+                        kind="approval_policy",
+                        status=review_check_status,
+                        summary=failed_review_summary,
+                        retry_count=review_retry_count,
+                        artifact_ref=review_artifact_ref,
+                    )
+                    if review_retry_count <= max_review_attempts:
+                        previous_review_feedback = (
+                            review_verdict.feedback
+                            or "Structured review requested another retry."
                         )
+                        previous_review_issues = tuple(review_verdict.issues)
+                        current_review_attempt += 1
                         continue
-
+                    self._mark_step_terminal(
+                        node_id,
+                        status="failed",
+                        updated_at=workflow.now(),
+                        summary=failed_review_summary,
+                        last_error="review_failed",
+                    )
                     if failure_mode == "FAIL_FAST":
-                        detail = (
-                            f" with error '{failure_message}'"
-                            if failure_message
-                            else ""
-                        )
                         raise ValueError(
-                            f"plan node execution returned status {result_status}{detail}"
+                            f"plan node review failed after {review_retry_count} retry"
                         )
                     break
 
+                self._upsert_step_check(
+                    node_id,
+                    kind="approval_policy",
+                    status=review_check_status,
+                    summary=self._accepted_review_summary(
+                        review_verdict.verdict,
+                        retry_count=review_retry_count,
+                    ),
+                    retry_count=review_retry_count,
+                    artifact_ref=review_artifact_ref,
+                )
+                accepted_execution = True
                 break
 
-            if result_status is None or result_status != "COMPLETED":
+            if not accepted_execution:
                 continue
 
+            self._mark_step_terminal(
+                node_id,
+                status="succeeded",
+                updated_at=workflow.now(),
+                summary=self._get_from_result(execution_result, "summary")
+                or self._summary,
+                last_error=None,
+            )
+            self._refresh_step_readiness(updated_at=workflow.now())
             self._record_execution_context(
                 node_id=node_id,
                 execution_result=execution_result,
@@ -1383,7 +2114,8 @@ class MoonMindRunWorkflow:
                     ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
                 )
                 head_branch = (
-                    agent_outputs.get("branch")
+                    agent_outputs.get("push_branch")
+                    or agent_outputs.get("branch")
                     or agent_outputs.get("targetBranch")
                     or ws.get("targetBranch")
                     or ws.get("branch")
@@ -1525,6 +2257,133 @@ class MoonMindRunWorkflow:
             return ""
         normalized = value.strip().lower()
         return normalized if normalized in {"none", "branch", "pr"} else ""
+
+    def _managed_session_runtime_id(
+        self, request: AgentExecutionRequest
+    ) -> str | None:
+        if request.agent_kind != "managed":
+            return None
+        return canonical_codex_managed_runtime_id(request.agent_id)
+
+    def _task_scoped_session_workflow_id(self, runtime_id: str) -> str:
+        return f"{workflow.info().workflow_id}:session:{runtime_id}"
+
+    async def _ensure_task_scoped_codex_session(
+        self, request: AgentExecutionRequest
+    ) -> CodexManagedSessionBinding | None:
+        runtime_id = self._managed_session_runtime_id(request)
+        if runtime_id is None:
+            return None
+        if self._codex_session_binding is not None:
+            return self._codex_session_binding
+
+        session_input = CodexManagedSessionWorkflowInput(
+            taskRunId=workflow.info().workflow_id,
+            runtimeId=runtime_id,
+            executionProfileRef=request.execution_profile_ref,
+        )
+        session_workflow_id = self._task_scoped_session_workflow_id(runtime_id)
+        self._codex_session_handle = await workflow.start_child_workflow(
+            "MoonMind.AgentSession",
+            session_input,
+            id=session_workflow_id,
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        self._codex_session_binding = CodexManagedSessionBinding.from_input(
+            workflow_id=session_workflow_id,
+            session_input=session_input,
+        )
+        return self._codex_session_binding
+
+    async def _maybe_bind_task_scoped_session(
+        self, request: AgentExecutionRequest
+    ) -> AgentExecutionRequest:
+        binding = await self._ensure_task_scoped_codex_session(request)
+        if binding is None:
+            return request
+        return request.model_copy(update={"managed_session": binding})
+
+    async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
+        handle = self._codex_session_handle
+        binding = self._codex_session_binding
+        try:
+            if handle is not None and binding is not None:
+                if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+                    try:
+                        await handle.execute_update(
+                            "TerminateSession",
+                            {
+                                "reason": reason,
+                            },
+                        )
+                    except Exception as exc:
+                        self._get_logger().warning(
+                            "Task-scoped Codex terminate update failed for %s: %s",
+                            binding.session_id,
+                            exc,
+                        )
+                        await handle.signal(
+                            "control_action",
+                            {
+                                "action": "terminate_session",
+                                "reason": reason,
+                            },
+                        )
+                elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
+                    try:
+                        snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                            "agent_runtime.load_session_snapshot"
+                        )
+                        snapshot_payload = await workflow.execute_activity(
+                            snapshot_route.activity_type,
+                            binding.model_dump(mode="json", by_alias=True),
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            **self._execute_kwargs_for_route(snapshot_route),
+                        )
+                        snapshot = CodexManagedSessionSnapshot.model_validate(
+                            snapshot_payload
+                        )
+                        if snapshot.container_id and snapshot.thread_id:
+                            terminate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                                "agent_runtime.terminate_session"
+                            )
+                            await workflow.execute_activity(
+                                terminate_route.activity_type,
+                                TerminateCodexManagedSessionRequest(
+                                    sessionId=snapshot.binding.session_id,
+                                    sessionEpoch=snapshot.binding.session_epoch,
+                                    containerId=snapshot.container_id,
+                                    threadId=snapshot.thread_id,
+                                    reason=reason,
+                                ).model_dump(mode="json", by_alias=True),
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                **self._execute_kwargs_for_route(terminate_route),
+                            )
+                    except Exception as exc:
+                        self._get_logger().warning(
+                            "Task-scoped Codex terminate activity failed for %s; "
+                            "falling back to session signal: %s",
+                            binding.session_id,
+                            exc,
+                        )
+                    await handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
+                else:
+                    await handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
+        finally:
+            self._codex_session_handle = None
+            self._codex_session_binding = None
 
     def _coerce_text(
         self, value: Any, max_chars: int | None = None, *, flatten: bool = True
@@ -2024,6 +2883,26 @@ class MoonMindRunWorkflow:
                 else {}
             )
             moonmind_payload.update(bundle_payload)
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
+
+        step_attempt = self._step_attempt_for(node_id)
+        if step_attempt is not None:
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload["stepLedger"] = {
+                "logicalStepId": node_id,
+                "attempt": step_attempt,
+                "scope": "step",
+            }
             metadata_payload["moonmind"] = moonmind_payload
             parameters["metadata"] = metadata_payload
 
@@ -2568,6 +3447,12 @@ class MoonMindRunWorkflow:
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
         try:
+            await self._terminate_task_scoped_sessions(reason=status)
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to terminate task-scoped agent sessions: %s", exc
+            )
+        try:
             self._get_logger().info("Generating finish summary.")
 
             publish_mode = self._publish_mode(parameters)
@@ -2935,6 +3820,8 @@ class MoonMindRunWorkflow:
             memo_dict["logs_artifact_ref"] = self._logs_ref
         if self._summary_ref:
             memo_dict["summary_artifact_ref"] = self._summary_ref
+        if self._pull_request_url:
+            memo_dict["pull_request_url"] = self._pull_request_url
         memo_dict.update(self._dependency_metadata())
 
         try:
@@ -3276,3 +4163,24 @@ class MoonMindRunWorkflow:
             "awaiting_external": self._awaiting_external,
             "waiting_reason": self._waiting_reason,
         }
+
+    @workflow.query
+    def get_progress(self) -> dict[str, Any]:
+        payload = ExecutionProgressModel.model_validate(self._progress_snapshot).model_dump(
+            by_alias=True,
+            mode="json",
+        )
+        payload["runId"] = workflow.info().run_id
+        return payload
+
+    @workflow.query
+    def get_step_ledger(self) -> dict[str, Any]:
+        snapshot = build_step_ledger_snapshot(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            rows=self._step_ledger_rows,
+        )
+        return StepLedgerSnapshotModel.model_validate(snapshot).model_dump(
+            by_alias=True,
+            mode="json",
+        )

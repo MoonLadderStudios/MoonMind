@@ -16,6 +16,7 @@ export interface ProviderProfile {
   cooldown_after_429_seconds: number;
   rate_limit_policy: string;
   enabled: boolean;
+  is_default?: boolean;
   command_behavior?: Record<string, unknown> | null;
   tags?: string[] | null;
   priority?: number | null;
@@ -52,6 +53,7 @@ interface ProviderProfileFormState {
   cooldownAfter429Seconds: string;
   rateLimitPolicy: string;
   enabled: boolean;
+  isDefault: boolean;
   commandBehavior: string;
   tagsText: string;
   priority: string;
@@ -77,6 +79,7 @@ export function defaultFormState(): ProviderProfileFormState {
     cooldownAfter429Seconds: '300',
     rateLimitPolicy: 'backoff',
     enabled: true,
+    isDefault: false,
     commandBehavior: '{}',
     tagsText: '',
     priority: '',
@@ -101,6 +104,7 @@ export function toFormState(profile: ProviderProfile): ProviderProfileFormState 
     cooldownAfter429Seconds: String(profile.cooldown_after_429_seconds ?? 300),
     rateLimitPolicy: profile.rate_limit_policy ?? 'backoff',
     enabled: Boolean(profile.enabled),
+    isDefault: Boolean(profile.is_default),
     commandBehavior: profile.command_behavior ? JSON.stringify(profile.command_behavior, null, 2) : '{}',
     tagsText: (profile.tags ?? []).join(', '),
     priority: profile.priority != null ? String(profile.priority) : '',
@@ -181,6 +185,13 @@ export function ProviderProfilesManager({
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
 
   const isEditing = editingProfileId !== null;
+  const defaultFormValues = defaultFormState();
+
+  const resetForm = () => {
+    setEditingProfileId(null);
+    setForm(defaultFormState());
+    onNotice(null);
+  };
 
   const saveMutation = useMutation({
     mutationFn: async (event: FormEvent<HTMLFormElement>) => {
@@ -201,6 +212,7 @@ export function ProviderProfilesManager({
         cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
         rate_limit_policy: form.rateLimitPolicy,
         enabled: form.enabled,
+        is_default: form.isDefault,
         command_behavior: parseCommandBehavior(form.commandBehavior),
         tags: parseTags(form.tagsText),
         priority: parsePriority(form.priority),
@@ -330,22 +342,9 @@ export function ProviderProfilesManager({
         <div className="space-y-2">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Provider Profiles</h3>
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-            Configure the runtime and provider launch contract here. Use managed
-            secret refs such as <code>db://OPENAI_API_KEY</code> in the secret refs
-            JSON field.
+            Manage your configured provider profiles. Select a profile below to edit, or scroll down to create a new one.
           </p>
         </div>
-        <button
-          type="button"
-          className="inline-flex items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-          onClick={() => {
-            setEditingProfileId(null);
-            setForm(defaultFormState());
-            onNotice(null);
-          }}
-        >
-          {isEditing ? 'Create another profile' : 'Reset form'}
-        </button>
       </div>
 
       <div className="mt-6 overflow-x-auto">
@@ -373,6 +372,11 @@ export function ProviderProfilesManager({
                 <tr key={profile.profile_id}>
                   <td className="px-3 py-4">
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
+                    {profile.is_default ? (
+                      <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                        Runtime default
+                      </div>
+                    ) : null}
                     {profile.default_model ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">
                         Model: {profile.default_model}
@@ -461,343 +465,416 @@ export function ProviderProfilesManager({
         </table>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 dark:border-sky-900/50 dark:bg-sky-900/20 dark:text-sky-300">
-        <div className="font-medium">Available managed secret slugs</div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {secretSlugs.length === 0 ? (
-            <span className="text-sky-800 dark:text-sky-400">
-              No managed secrets yet. Create them in the Managed Secrets section below.
-            </span>
-          ) : (
-            secretSlugs.map((slug) => (
-              <code
-                key={slug}
-                className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-xs dark:border-sky-800 dark:bg-slate-800 dark:text-slate-300"
-              >
-                db://{slug}
-              </code>
-            ))
-          )}
-        </div>
-      </div>
-
-      <form className="mt-6 space-y-6" onSubmit={(event) => saveMutation.mutate(event)}>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Profile ID</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.profileId}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, profileId: event.target.value }))
-              }
-              disabled={isEditing}
-              required
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Runtime ID</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.runtimeId}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, runtimeId: event.target.value }))
-              }
-              placeholder="codex_cli"
-              disabled={isEditing}
-              required
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Provider ID</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.providerId}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, providerId: event.target.value }))
-              }
-              placeholder="openai"
-              required
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Provider label</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.providerLabel}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, providerLabel: event.target.value }))
-              }
-              placeholder="OpenAI"
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Credential source</span>
-            <select
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.credentialSource}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  credentialSource: event.target.value,
-                }))
-              }
-            >
-              <option value="secret_ref">secret_ref</option>
-              <option value="oauth_volume">oauth_volume</option>
-              <option value="none">none</option>
-            </select>
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Materialization mode</span>
-            <select
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.runtimeMaterializationMode}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  runtimeMaterializationMode: event.target.value,
-                }))
-              }
-            >
-              <option value="api_key_env">api_key_env</option>
-              <option value="env_bundle">env_bundle</option>
-              <option value="config_bundle">config_bundle</option>
-              <option value="composite">composite</option>
-              <option value="oauth_home">oauth_home</option>
-            </select>
-          </label>
-          <div className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Default model</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.defaultModel}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, defaultModel: event.target.value }))
-              }
-              placeholder={
-                defaultTaskModelByRuntime[form.runtimeId]
-                  ? `Inherited: ${defaultTaskModelByRuntime[form.runtimeId]}`
-                  : 'Leave blank to inherit runtime default'
-              }
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Leave blank to inherit the runtime default model
-              {defaultTaskModelByRuntime[form.runtimeId]
-                ? ` (${defaultTaskModelByRuntime[form.runtimeId]})`
-                : ''}.
-              Set an explicit value to override it for this profile.
+      {/* ── Form Section ── */}
+      <div className="mt-8 border-t border-slate-200 dark:border-slate-700 pt-8">
+        <div className="flex flex-col gap-1 mb-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+              {isEditing ? `Edit Profile: ${editingProfileId}` : 'Create Provider Profile'}
+            </h3>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Fields marked <span className="text-amber-600 dark:text-amber-400 font-semibold">*</span> are
+              required. Others have sensible defaults and can usually be left as-is.
             </p>
           </div>
-          <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <input
-              type="checkbox"
-              checked={form.enabled}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, enabled: event.target.checked }))
-              }
-            />
-            Enabled
-          </label>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Volume ref</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.volumeRef}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, volumeRef: event.target.value }))
-              }
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Volume mount path</span>
-            <input
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.volumeMountPath}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  volumeMountPath: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Max parallel runs</span>
-            <input
-              type="number"
-              min="1"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.maxParallelRuns}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  maxParallelRuns: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Cooldown after 429 (seconds)</span>
-            <input
-              type="number"
-              min="0"
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.cooldownAfter429Seconds}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  cooldownAfter429Seconds: event.target.value,
-                }))
-              }
-            />
-          </label>
-        </div>
+        <form className="space-y-6" onSubmit={(event) => saveMutation.mutate(event)}>
+          {/* ── Required: Identity ── */}
+          <fieldset className="rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
+              Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
+            </legend>
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.profileId}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, profileId: event.target.value }))
+                  }
+                  disabled={isEditing}
+                  required
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Runtime ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.runtimeId}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, runtimeId: event.target.value }))
+                  }
+                  placeholder="codex_cli"
+                  disabled={isEditing}
+                  required
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Provider ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.providerId}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, providerId: event.target.value }))
+                  }
+                  placeholder="openai"
+                  required
+                />
+              </label>
+            </div>
+          </fieldset>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,240px)]">
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Secret refs (JSON object of string refs)</span>
-            <textarea
-              rows={8}
-              className="w-full rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.secretRefsText}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  secretRefsText: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-            <span>Rate limit policy</span>
-            <select
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.rateLimitPolicy}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  rateLimitPolicy: event.target.value,
-                }))
-              }
-            >
-              <option value="backoff">backoff</option>
-              <option value="queue">queue</option>
-              <option value="fail_fast">fail_fast</option>
-            </select>
-          </label>
-        </div>
+          {/* ── Provider Settings (have smart defaults) ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Provider Settings <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
+            </legend>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Provider label</span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.providerLabel}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, providerLabel: event.target.value }))
+                  }
+                  placeholder="OpenAI"
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">Optional display name</p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Credential source</span>
+                <select
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.credentialSource}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      credentialSource: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="secret_ref">secret_ref</option>
+                  <option value="oauth_volume">oauth_volume</option>
+                  <option value="none">none</option>
+                </select>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.credentialSource}
+                </p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Materialization mode</span>
+                <select
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.runtimeMaterializationMode}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      runtimeMaterializationMode: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="api_key_env">api_key_env</option>
+                  <option value="env_bundle">env_bundle</option>
+                  <option value="config_bundle">config_bundle</option>
+                  <option value="composite">composite</option>
+                  <option value="oauth_home">oauth_home</option>
+                </select>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.runtimeMaterializationMode}
+                </p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 xl:col-span-2">
+                <span>Default model</span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.defaultModel}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, defaultModel: event.target.value }))
+                  }
+                  placeholder={
+                    defaultTaskModelByRuntime[form.runtimeId]
+                      ? `Inherited: ${defaultTaskModelByRuntime[form.runtimeId]}`
+                      : 'Leave blank to inherit runtime default'
+                  }
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Leave blank to inherit the runtime default
+                  {defaultTaskModelByRuntime[form.runtimeId]
+                    ? ` (${defaultTaskModelByRuntime[form.runtimeId]})`
+                    : ''}.
+                  Set a value to override.
+                </p>
+              </label>
+              <div className="flex gap-4 items-start xl:col-span-1">
+                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
+                  <input
+                    type="checkbox"
+                    checked={form.enabled}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, enabled: event.target.checked }))
+                    }
+                  />
+                  Enabled
+                </label>
+                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
+                  <input
+                    type="checkbox"
+                    checked={form.isDefault}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, isDefault: event.target.checked }))
+                    }
+                  />
+                  Runtime default
+                </label>
+              </div>
+            </div>
+          </fieldset>
 
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4 space-y-4">
-          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200">Advanced Options</h4>
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-              <span>Command behavior</span>
+          {/* ── Runtime Limits (have smart defaults) ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Runtime Limits <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
+            </legend>
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Max parallel runs</span>
+                <input
+                  type="number"
+                  min="1"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.maxParallelRuns}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      maxParallelRuns: event.target.value,
+                    }))
+                  }
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.maxParallelRuns}
+                </p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Cooldown after 429 (seconds)</span>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.cooldownAfter429Seconds}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      cooldownAfter429Seconds: event.target.value,
+                    }))
+                  }
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.cooldownAfter429Seconds}
+                </p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Rate limit policy</span>
+                <select
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.rateLimitPolicy}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      rateLimitPolicy: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="backoff">backoff</option>
+                  <option value="queue">queue</option>
+                  <option value="fail_fast">fail_fast</option>
+                </select>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.rateLimitPolicy}
+                </p>
+              </label>
+            </div>
+          </fieldset>
+
+          {/* ── Credentials & Volumes ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Credentials & Volumes <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; optional</span>
+            </legend>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
+              <div className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <label htmlFor="provider-profile-secret-refs">
+                  Secret refs (JSON object of string refs)
+                </label>
+                <textarea
+                  id="provider-profile-secret-refs"
+                  rows={6}
+                  className="w-full rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.secretRefsText}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      secretRefsText: event.target.value,
+                    }))
+                  }
+                />
+                {secretSlugs.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                    <span className="text-xs text-slate-400 dark:text-slate-500">Available slugs:</span>
+                    {secretSlugs.map((slug) => (
+                      <code
+                        key={slug}
+                        className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-400"
+                      >
+                        db://{slug}
+                      </code>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    No managed secrets yet. Create them in the Managed Secrets section below.
+                  </p>
+                )}
+              </div>
+              <div className="space-y-4">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span>Volume ref</span>
+                  <input
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                    value={form.volumeRef}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, volumeRef: event.target.value }))
+                    }
+                  />
+                  <p className="text-xs text-slate-400 dark:text-slate-500">Only needed for volume-based credentials</p>
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span>Volume mount path</span>
+                  <input
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                    value={form.volumeMountPath}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        volumeMountPath: event.target.value,
+                      }))
+                    }
+                  />
+                  <p className="text-xs text-slate-400 dark:text-slate-500">Only needed for volume-based credentials</p>
+                </label>
+              </div>
+            </div>
+          </fieldset>
+
+          {/* ── Advanced Options ── */}
+          <fieldset className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-5 space-y-4">
+            <legend className="px-2 text-sm font-semibold text-slate-700 dark:text-slate-300">
+              Advanced Options <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; optional</span>
+            </legend>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Command behavior</span>
+                <textarea
+                  rows={4}
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.commandBehavior}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      commandBehavior: event.target.value,
+                    }))
+                  }
+                  placeholder='{"suppress_default_model_flag": true}'
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Tags</span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.tagsText}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      tagsText: event.target.value,
+                    }))
+                  }
+                  placeholder="openrouter, qwen, codex"
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">Comma-separated</p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Priority</span>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.priority}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      priority: event.target.value,
+                    }))
+                  }
+                  placeholder="100"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Account label</span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.accountLabel}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      accountLabel: event.target.value,
+                    }))
+                  }
+                  placeholder="team-default"
+                />
+              </label>
+            </div>
+            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <span>Clear env keys</span>
               <textarea
-                rows={4}
+                rows={3}
                 className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
-                value={form.commandBehavior}
+                value={form.clearEnvKeysText}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
-                    commandBehavior: event.target.value,
+                    clearEnvKeysText: event.target.value,
                   }))
                 }
-                placeholder='{"suppress_default_model_flag": true}'
+                placeholder={"OPENAI_API_KEY\nOPENAI_BASE_URL"}
               />
+              <p className="text-xs text-slate-400 dark:text-slate-500">One key per line</p>
             </label>
-            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-              <span>Tags</span>
-              <input
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                value={form.tagsText}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    tagsText: event.target.value,
-                  }))
-                }
-                placeholder="openrouter, qwen, codex"
-              />
-            </label>
-            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-              <span>Priority</span>
-              <input
-                type="number"
-                min="0"
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                value={form.priority}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    priority: event.target.value,
-                  }))
-                }
-                placeholder="100"
-              />
-            </label>
-            <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-              <span>Account label</span>
-              <input
-                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                value={form.accountLabel}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    accountLabel: event.target.value,
-                  }))
-                }
-                placeholder="team-default"
-              />
-            </label>
-          </div>
-          <label className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-300 block">
-            <span>Clear env keys</span>
-            <textarea
-              rows={4}
-              className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
-              value={form.clearEnvKeysText}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  clearEnvKeysText: event.target.value,
-                }))
-              }
-              placeholder={"OPENAI_API_KEY\nOPENAI_BASE_URL"}
-            />
-          </label>
-        </div>
+          </fieldset>
 
-        <div className="flex flex-wrap gap-3">
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-            disabled={saveMutation.isPending}
-          >
-            {saveMutation.isPending
-              ? 'Saving...'
-              : isEditing
-                ? 'Update provider profile'
-                : 'Create provider profile'}
-          </button>
-          {isEditing ? (
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+              disabled={saveMutation.isPending}
+            >
+              {saveMutation.isPending
+                ? 'Saving...'
+                : isEditing
+                  ? 'Update provider profile'
+                  : 'Create provider profile'}
+            </button>
             <button
               type="button"
-              className="inline-flex items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-              onClick={() => {
-                setEditingProfileId(null);
-                setForm(defaultFormState());
-                onNotice(null);
-              }}
+              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+              onClick={resetForm}
             >
-              Cancel edit
+              {isEditing ? 'Cancel edit' : 'Reset form'}
             </button>
-          ) : null}
-        </div>
-      </form>
+          </div>
+        </form>
+      </div>
     </section>
   );
 }
