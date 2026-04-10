@@ -608,6 +608,7 @@ class CodexManagedSessionRuntime:
         if rollout_path is None:
             return ""
         last_text = ""
+        terminal_text = ""
         try:
             rollout_file = Path(rollout_path)
             if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
@@ -623,38 +624,70 @@ class CodexManagedSessionRuntime:
                         continue
                     if not isinstance(payload, Mapping):
                         continue
-                    if not self._payload_references_turn(payload, vendor_turn_id):
-                        continue
-                    entry_type = str(payload.get("type") or "").strip().lower()
-                    if entry_type == "response_item":
-                        response_payload = payload.get("payload")
-                        if not isinstance(response_payload, Mapping):
-                            continue
-                        if (
-                            str(response_payload.get("type") or "").strip().lower()
-                            != "message"
-                            or str(response_payload.get("role") or "").strip().lower()
-                            != "assistant"
-                        ):
-                            continue
-                        text = self._content_text(response_payload.get("content"))
+                    if self._payload_references_turn(payload, vendor_turn_id):
+                        text = self._assistant_text_from_rollout_entry(payload)
                         if text:
                             last_text = text
-                    elif entry_type == "event_msg":
-                        event_payload = payload.get("payload")
-                        if not isinstance(event_payload, Mapping):
-                            continue
-                        if (
-                            str(event_payload.get("type") or "").strip().lower()
-                            != "agent_message"
-                        ):
-                            continue
-                        text = str(event_payload.get("message") or "").strip()
-                        if text:
-                            last_text = text
+                    text = self._terminal_assistant_text_from_rollout_entry(payload)
+                    if text:
+                        terminal_text = text
         except OSError:
             return ""
-        return last_text
+        return last_text or terminal_text
+
+    @classmethod
+    def _assistant_text_from_rollout_entry(cls, payload: Mapping[str, Any]) -> str:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return ""
+            if (
+                str(response_payload.get("type") or "").strip().lower() != "message"
+                or str(response_payload.get("role") or "").strip().lower()
+                != "assistant"
+            ):
+                return ""
+            return cls._content_text(response_payload.get("content"))
+        if entry_type == "event_msg":
+            event_payload = payload.get("payload")
+            if not isinstance(event_payload, Mapping):
+                return ""
+            if str(event_payload.get("type") or "").strip().lower() != "agent_message":
+                return ""
+            return str(event_payload.get("message") or "").strip()
+        return ""
+
+    @classmethod
+    def _terminal_assistant_text_from_rollout_entry(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> str:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return ""
+            if (
+                str(response_payload.get("phase") or "").strip().lower()
+                != "final_answer"
+            ):
+                return ""
+            return cls._assistant_text_from_rollout_entry(payload)
+        if entry_type != "event_msg":
+            return ""
+        event_payload = payload.get("payload")
+        if not isinstance(event_payload, Mapping):
+            return ""
+        event_type = str(event_payload.get("type") or "").strip().lower()
+        if event_type == "task_complete":
+            return str(event_payload.get("last_agent_message") or "").strip()
+        if (
+            event_type == "agent_message"
+            and str(event_payload.get("phase") or "").strip().lower() == "final_answer"
+        ):
+            return cls._assistant_text_from_rollout_entry(payload)
+        return ""
 
     def _resolved_rollout_path(
         self,
