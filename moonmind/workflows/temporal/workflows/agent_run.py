@@ -388,6 +388,25 @@ class MoonMindAgentRun:
 
         return result.model_copy(update={"metadata": metadata})
 
+    def _managed_start_failure_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        error: Exception,
+    ) -> AgentRunResult:
+        summary = str(error).strip() or "Managed agent failed before execution started."
+        metadata: dict[str, Any] = {"phase": "start"}
+        if request.managed_session is not None:
+            metadata["managedSession"] = request.managed_session.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+        return AgentRunResult(
+            summary=summary,
+            failureClass="execution_error",
+            metadata=metadata,
+        )
+
     @staticmethod
     def _uses_codex_session_adapter(request: AgentExecutionRequest) -> bool:
         return request.agent_kind == "managed" and request.managed_session is not None
@@ -1248,20 +1267,37 @@ class MoonMindAgentRun:
                             type="ProfileResolutionError",
                             non_retryable=True,
                         ) from exc
-                    self.run_id = handle.run_id
-                    self.run_status = handle.status
-                    poll_interval = handle.poll_hint_seconds or 10
-                    if (
-                        uses_codex_session_adapter
-                        and handle.status in _TERMINAL_RUN_STATUSES
-                    ):
-                        self.final_result = await self._fetch_managed_result(
+                    except RuntimeError as exc:
+                        self._get_logger().warning(
+                            "Managed agent start failed",
+                            extra={
+                                "agent_id": request.agent_id,
+                                "workflow_id": workflow.info().workflow_id,
+                                "error": str(exc),
+                            },
+                        )
+                        self.run_status = RunStatus.failed
+                        self.final_result = self._managed_start_failure_result(
                             request=request,
-                            adapter=adapter,
-                            uses_codex_session_adapter=uses_codex_session_adapter,
-                            use_managed_status_activity=use_managed_status_activity,
+                            error=exc,
                         )
                         skip_poll_and_fetch = True
+                        handle = None
+                    if handle is not None:
+                        self.run_id = handle.run_id
+                        self.run_status = handle.status
+                        poll_interval = handle.poll_hint_seconds or 10
+                        if (
+                            uses_codex_session_adapter
+                            and handle.status in _TERMINAL_RUN_STATUSES
+                        ):
+                            self.final_result = await self._fetch_managed_result(
+                                request=request,
+                                adapter=adapter,
+                                uses_codex_session_adapter=uses_codex_session_adapter,
+                                use_managed_status_activity=use_managed_status_activity,
+                            )
+                            skip_poll_and_fetch = True
 
                 elif request.agent_kind == "external":
                     # Validate adapter availability and resolve execution style.
