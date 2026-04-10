@@ -8,6 +8,7 @@ import os
 import queue
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,7 @@ _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
+_LOG_RECOVERY_MAX_ROWS = 200
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -656,6 +658,121 @@ class CodexManagedSessionRuntime:
             return ""
         return last_text
 
+    def _rollout_terminal_metadata(
+        self,
+        vendor_thread_path: str | None,
+        *,
+        vendor_turn_id: str,
+    ) -> tuple[bool, str | None]:
+        rollout_path = self._allowed_rollout_path(vendor_thread_path)
+        if rollout_path is None:
+            return False, None
+        saw_task_complete = False
+        error_text: str | None = None
+        try:
+            rollout_file = Path(rollout_path)
+            if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
+                return False, None
+            with rollout_file.open(encoding="utf-8") as handle:
+                for raw_line in handle:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        payload = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, Mapping):
+                        continue
+                    if not self._payload_references_turn(payload, vendor_turn_id):
+                        continue
+                    entry_type = str(payload.get("type") or "").strip().lower()
+                    if entry_type != "event_msg":
+                        continue
+                    event_payload = payload.get("payload")
+                    if not isinstance(event_payload, Mapping):
+                        continue
+                    event_type = str(event_payload.get("type") or "").strip().lower()
+                    if event_type != "task_complete":
+                        continue
+                    saw_task_complete = True
+                    for field_name in ("error", "reason", "message"):
+                        value = event_payload.get(field_name)
+                        if isinstance(value, str) and value.strip():
+                            error_text = value.strip()
+                            break
+        except OSError:
+            return False, None
+        return saw_task_complete, error_text
+
+    def _extract_turn_error_from_logs(self, vendor_turn_id: str) -> str | None:
+        for log_path in sorted(self._codex_home_path.glob("logs_*.sqlite"), reverse=True):
+            if not log_path.is_file():
+                continue
+            try:
+                with sqlite3.connect(f"file:{log_path}?mode=ro", uri=True) as connection:
+                    column_rows = connection.execute(
+                        "PRAGMA table_info(logs)"
+                    ).fetchall()
+                    if not column_rows:
+                        continue
+                    available_columns = {str(row[1]) for row in column_rows if len(row) > 1}
+                    text_column = None
+                    for candidate in ("feedback_log_body", "message"):
+                        if candidate in available_columns:
+                            text_column = candidate
+                            break
+                    if text_column is None:
+                        continue
+                    rows = connection.execute(
+                        (
+                            f"SELECT {text_column} FROM logs "
+                            f"WHERE {text_column} LIKE ? ORDER BY id DESC LIMIT ?"
+                        ),
+                        (f"%{vendor_turn_id}%", _LOG_RECOVERY_MAX_ROWS),
+                    ).fetchall()
+            except sqlite3.Error:
+                continue
+            for (raw_text,) in rows:
+                text = str(raw_text or "").strip()
+                marker = "Turn error:"
+                marker_index = text.find(marker)
+                if marker_index >= 0:
+                    recovered = text[marker_index + len(marker) :].strip()
+                    if recovered:
+                        return recovered
+        return None
+
+    def _rollout_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> tuple[str, str | None] | None:
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        assistant_text = self._extract_assistant_text_from_rollout(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if assistant_text:
+            return "completed", None
+        saw_task_complete, rollout_error = self._rollout_terminal_metadata(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if not saw_task_complete and not rollout_error:
+            return None
+        return (
+            "failed",
+            rollout_error
+            or self._extract_turn_error_from_logs(vendor_turn_id)
+            or "codex app-server turn/completed produced no assistant output",
+        )
+
     def _resolved_rollout_path(
         self,
         *,
@@ -742,6 +859,13 @@ class CodexManagedSessionRuntime:
                 thread_outcome = self._terminal_thread_outcome(thread_payload)
                 if thread_outcome is not None:
                     return thread_payload, thread_outcome
+                rollout_outcome = self._rollout_terminal_outcome(
+                    state=self._load_state(),
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                )
+                if rollout_outcome is not None:
+                    return thread_payload, rollout_outcome
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -921,7 +1045,13 @@ class CodexManagedSessionRuntime:
         else:
             outcome = self._terminal_thread_outcome(thread_payload)
             if outcome is None:
-                return state
+                outcome = self._rollout_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=active_turn_id,
+                )
+                if outcome is None:
+                    return state
 
         status, error_text = outcome
         assistant_text = ""
