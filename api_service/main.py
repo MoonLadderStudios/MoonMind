@@ -522,6 +522,49 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
+    return [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "replace",
+            "content_template": {
+                "model_provider": "openrouter",
+                "profile": "openrouter_qwen36_plus",
+                "model_providers": {
+                    "openrouter": {
+                        "name": "OpenRouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "env_key": "OPENROUTER_API_KEY",
+                        "wire_api": "responses",
+                    },
+                },
+                "profiles": {
+                    "openrouter_qwen36_plus": {
+                        "model_provider": "openrouter",
+                        "model": "qwen/qwen3.6-plus:free",
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+
+
+def _should_reconcile_openrouter_codex_file_templates(
+    profile_id: str,
+    current_file_templates,
+    desired_file_templates,
+) -> bool:
+    if profile_id != "codex_openrouter_qwen36_plus":
+        return False
+    if desired_file_templates is None:
+        return False
+    if current_file_templates == desired_file_templates:
+        return False
+    return current_file_templates == _legacy_codex_openrouter_qwen36_plus_file_templates()
+
+
 async def _auto_seed_provider_profiles() -> list[str]:
     """Seed well-known provider profiles that are missing from the DB.
 
@@ -729,10 +772,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         needs_commit = True
                     desired_file_templates = profile_def.get("file_templates")
                     current_file_templates = existing_by_id[profile_id]["file_templates"]
-                    if (
-                        profile_id == "codex_openrouter_qwen36_plus"
-                        and desired_file_templates is not None
-                        and current_file_templates != desired_file_templates
+                    if _should_reconcile_openrouter_codex_file_templates(
+                        profile_id=profile_id,
+                        current_file_templates=current_file_templates,
+                        desired_file_templates=desired_file_templates,
                     ):
                         stmt = (
                             update(ManagedAgentProviderProfile)
