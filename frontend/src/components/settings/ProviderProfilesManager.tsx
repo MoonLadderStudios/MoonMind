@@ -185,6 +185,13 @@ export function ProviderProfilesManager({
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
 
   const isEditing = editingProfileId !== null;
+  const defaultFormValues = defaultFormState();
+
+  const resetForm = () => {
+    setEditingProfileId(null);
+    setForm(defaultFormState());
+    onNotice(null);
+  };
 
   const saveMutation = useMutation({
     mutationFn: async (event: FormEvent<HTMLFormElement>) => {
@@ -470,19 +477,6 @@ export function ProviderProfilesManager({
               required. Others have sensible defaults and can usually be left as-is.
             </p>
           </div>
-          {isEditing ? (
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-              onClick={() => {
-                setEditingProfileId(null);
-                setForm(defaultFormState());
-                onNotice(null);
-              }}
-            >
-              Cancel edit
-            </button>
-          ) : null}
         </div>
 
         <form className="space-y-6" onSubmit={(event) => saveMutation.mutate(event)}>
@@ -492,7 +486,7 @@ export function ProviderProfilesManager({
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
             <div className="grid gap-4 md:grid-cols-3">
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -504,7 +498,7 @@ export function ProviderProfilesManager({
                   required
                 />
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Runtime ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -517,7 +511,7 @@ export function ProviderProfilesManager({
                   required
                 />
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Provider ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -538,7 +532,7 @@ export function ProviderProfilesManager({
               Provider Settings <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
             </legend>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Provider label</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -550,7 +544,7 @@ export function ProviderProfilesManager({
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">Optional display name</p>
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Credential source</span>
                 <select
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -566,9 +560,11 @@ export function ProviderProfilesManager({
                   <option value="oauth_volume">oauth_volume</option>
                   <option value="none">none</option>
                 </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">Default: secret_ref</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.credentialSource}
+                </p>
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Materialization mode</span>
                 <select
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -586,9 +582,11 @@ export function ProviderProfilesManager({
                   <option value="composite">composite</option>
                   <option value="oauth_home">oauth_home</option>
                 </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">Default: api_key_env</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.runtimeMaterializationMode}
+                </p>
               </label>
-              <div className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 xl:col-span-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 xl:col-span-2">
                 <span>Default model</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -609,7 +607,7 @@ export function ProviderProfilesManager({
                     : ''}.
                   Set a value to override.
                 </p>
-              </div>
+              </label>
               <div className="flex gap-4 items-start xl:col-span-1">
                 <label className="flex items-center gap-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 flex-1">
                   <input
@@ -641,7 +639,7 @@ export function ProviderProfilesManager({
               Runtime Limits <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; defaults provided</span>
             </legend>
             <div className="grid gap-4 md:grid-cols-3">
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Max parallel runs</span>
                 <input
                   type="number"
@@ -655,9 +653,11 @@ export function ProviderProfilesManager({
                     }))
                   }
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Default: 1</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.maxParallelRuns}
+                </p>
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Cooldown after 429 (seconds)</span>
                 <input
                   type="number"
@@ -671,9 +671,11 @@ export function ProviderProfilesManager({
                     }))
                   }
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500">Default: 300</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.cooldownAfter429Seconds}
+                </p>
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Rate limit policy</span>
                 <select
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -689,7 +691,9 @@ export function ProviderProfilesManager({
                   <option value="queue">queue</option>
                   <option value="fail_fast">fail_fast</option>
                 </select>
-                <p className="text-xs text-slate-400 dark:text-slate-500">Default: backoff</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Default: {defaultFormValues.rateLimitPolicy}
+                </p>
               </label>
             </div>
           </fieldset>
@@ -700,9 +704,12 @@ export function ProviderProfilesManager({
               Credentials & Volumes <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; optional</span>
             </legend>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
-              <div className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Secret refs (JSON object of string refs)</span>
+              <div className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <label htmlFor="provider-profile-secret-refs">
+                  Secret refs (JSON object of string refs)
+                </label>
                 <textarea
+                  id="provider-profile-secret-refs"
                   rows={6}
                   className="w-full rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.secretRefsText}
@@ -732,7 +739,7 @@ export function ProviderProfilesManager({
                 )}
               </div>
               <div className="space-y-4">
-                <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                   <span>Volume ref</span>
                   <input
                     className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -743,7 +750,7 @@ export function ProviderProfilesManager({
                   />
                   <p className="text-xs text-slate-400 dark:text-slate-500">Only needed for volume-based credentials</p>
                 </label>
-                <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 block">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                   <span>Volume mount path</span>
                   <input
                     className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -767,7 +774,7 @@ export function ProviderProfilesManager({
               Advanced Options <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; optional</span>
             </legend>
             <div className="grid gap-4 md:grid-cols-2">
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Command behavior</span>
                 <textarea
                   rows={4}
@@ -782,7 +789,7 @@ export function ProviderProfilesManager({
                   placeholder='{"suppress_default_model_flag": true}'
                 />
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Tags</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -797,7 +804,7 @@ export function ProviderProfilesManager({
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">Comma-separated</p>
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Priority</span>
                 <input
                   type="number"
@@ -813,7 +820,7 @@ export function ProviderProfilesManager({
                   placeholder="100"
                 />
               </label>
-              <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Account label</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -828,7 +835,7 @@ export function ProviderProfilesManager({
                 />
               </label>
             </div>
-            <label className="space-y-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 block">
+            <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
               <span>Clear env keys</span>
               <textarea
                 rows={3}
@@ -849,7 +856,7 @@ export function ProviderProfilesManager({
           <div className="flex flex-wrap gap-3">
             <button
               type="submit"
-              className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+              className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
               disabled={saveMutation.isPending}
             >
               {saveMutation.isPending
@@ -858,19 +865,13 @@ export function ProviderProfilesManager({
                   ? 'Update provider profile'
                   : 'Create provider profile'}
             </button>
-            {isEditing ? (
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-full border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-                onClick={() => {
-                  setEditingProfileId(null);
-                  setForm(defaultFormState());
-                  onNotice(null);
-                }}
-              >
-                Cancel edit
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+              onClick={resetForm}
+            >
+              {isEditing ? 'Cancel edit' : 'Reset form'}
+            </button>
           </div>
         </form>
       </div>
