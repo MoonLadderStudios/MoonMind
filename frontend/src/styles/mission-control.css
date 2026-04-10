@@ -82,21 +82,22 @@ body {
 }
 
 .masthead {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.4rem 1.6rem;
-  border-radius: 1rem;
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--mm-panel) / 0.82) 0%,
-      rgb(var(--mm-panel) / 0.65) 45%,
-      rgb(var(--mm-panel) / 0.78) 100%
-    );
-  box-shadow: var(--mm-shadow), 0 0 0 1px rgb(var(--mm-accent) / 0.08);
+  padding: 1.4rem 0;
+}
+
+.masthead::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 100vw;
+  transform: translateX(-50%);
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
 }
 
 .masthead-copy {
