@@ -15,6 +15,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        _MAX_SUMMARY_CHARS,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
@@ -394,7 +395,11 @@ class MoonMindAgentRun:
         request: AgentExecutionRequest,
         error: Exception,
     ) -> AgentRunResult:
-        summary = str(error).strip() or "Managed agent failed before execution started."
+        summary = str(error).strip()
+        if len(summary) > _MAX_SUMMARY_CHARS:
+            summary = summary[: _MAX_SUMMARY_CHARS - 3] + "..."
+        if not summary:
+            summary = "Managed agent failed before execution started."
         metadata: dict[str, Any] = {"phase": "start"}
         if request.managed_session is not None:
             metadata["managedSession"] = request.managed_session.model_dump(
