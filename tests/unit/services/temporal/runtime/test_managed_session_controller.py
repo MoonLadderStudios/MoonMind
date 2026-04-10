@@ -1325,6 +1325,11 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         call.kwargs.get("metadata")
         for call in session_supervisor.emit_session_event.call_args_list
     ]
+    emitted_kinds = [
+        call.kwargs.get("kind")
+        for call in session_supervisor.emit_session_event.call_args_list
+    ]
+    assert emitted_kinds == ["turn_started", "turn_completed"]
     assert emitted_metadata == [
         {"action": "send_turn", "reason": "Operator follow-up"},
         {

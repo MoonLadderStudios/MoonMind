@@ -9,6 +9,7 @@ from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import (
     RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH,
+    RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH,
     MoonMindRunWorkflow,
 )
 
@@ -125,13 +126,62 @@ async def test_run_terminates_active_task_scoped_codex_session(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
+    update_calls: list[tuple[str, Any]] = []
+    signal_calls: list[tuple[str, Any]] = []
+    patch_calls: list[str] = []
+
+    def fake_patched(patch_id: str) -> bool:
+        patch_calls.append(patch_id)
+        return patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH
+
+    class _FakeHandle:
+        async def execute_update(self, update_name: str, payload: Any = None) -> None:
+            update_calls.append((update_name, payload))
+
+        async def signal(self, signal_name: str, payload: Any = None) -> None:
+            signal_calls.append((signal_name, payload))
+
+    monkeypatch.setattr(run_module.workflow, "patched", fake_patched)
+
+    workflow._codex_session_handle = _FakeHandle()
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        taskRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    await workflow._terminate_task_scoped_sessions(reason="success")
+
+    assert update_calls == [
+        (
+            "TerminateSession",
+            {
+                "reason": "success",
+            },
+        )
+    ]
+    assert signal_calls == []
+    assert patch_calls == [RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH]
+    assert workflow._codex_session_handle is None
+    assert workflow._codex_session_binding is None
+
+
+@pytest.mark.asyncio
+async def test_run_termination_uses_v1_patch_history_for_inflight_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
     signal_calls: list[tuple[str, Any]] = []
     activity_calls: list[tuple[str, Any]] = []
     patch_calls: list[str] = []
 
     def fake_patched(patch_id: str) -> bool:
         patch_calls.append(patch_id)
-        return True
+        return patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH
 
     class _FakeHandle:
         async def signal(self, signal_name: str, payload: Any = None) -> None:
@@ -209,20 +259,27 @@ async def test_run_terminates_active_task_scoped_codex_session(
             },
         )
     ]
-    assert patch_calls == [RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH]
+    assert patch_calls == [
+        RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH,
+        RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH,
+    ]
     assert workflow._codex_session_handle is None
     assert workflow._codex_session_binding is None
 
 
 @pytest.mark.asyncio
-async def test_run_termination_falls_back_to_session_signal_without_runtime_handles(
+async def test_run_termination_uses_v1_signal_fallback_without_runtime_handles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
     signal_calls: list[tuple[str, Any]] = []
     activity_calls: list[tuple[str, Any]] = []
-    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH,
+    )
 
     class _FakeHandle:
         async def signal(self, signal_name: str, payload: Any = None) -> None:
@@ -292,9 +349,13 @@ async def test_run_termination_keeps_legacy_signal_only_path_when_patch_unset(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
+    update_calls: list[tuple[str, Any]] = []
     signal_calls: list[tuple[str, Any]] = []
 
     class _FakeHandle:
+        async def execute_update(self, update_name: str, payload: Any = None) -> None:
+            update_calls.append((update_name, payload))
+
         async def signal(self, signal_name: str, payload: Any = None) -> None:
             signal_calls.append((signal_name, payload))
 
@@ -316,6 +377,7 @@ async def test_run_termination_keeps_legacy_signal_only_path_when_patch_unset(
 
     await workflow._terminate_task_scoped_sessions(reason="success")
 
+    assert update_calls == []
     assert signal_calls == [
         (
             "control_action",
@@ -330,7 +392,73 @@ async def test_run_termination_keeps_legacy_signal_only_path_when_patch_unset(
 
 
 @pytest.mark.asyncio
-async def test_run_termination_signals_session_when_terminate_activity_fails(
+async def test_run_termination_logs_when_terminate_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    update_calls: list[tuple[str, Any]] = []
+    signal_calls: list[tuple[str, Any]] = []
+    warnings: list[str] = []
+
+    class _FakeHandle:
+        async def execute_update(self, update_name: str, payload: Any = None) -> None:
+            update_calls.append((update_name, payload))
+            raise RuntimeError("terminate update failed")
+
+        async def signal(self, signal_name: str, payload: Any = None) -> None:
+            signal_calls.append((signal_name, payload))
+
+    class _FakeLogger:
+        def warning(self, message: str, *args: Any) -> None:
+            warnings.append(message % args)
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH,
+    )
+    monkeypatch.setattr(workflow, "_get_logger", lambda: _FakeLogger())
+
+    workflow._codex_session_handle = _FakeHandle()
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        taskRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    await workflow._terminate_task_scoped_sessions(reason="success")
+
+    assert update_calls == [
+        (
+            "TerminateSession",
+            {
+                "reason": "success",
+            },
+        )
+    ]
+    assert signal_calls == [
+        (
+            "control_action",
+            {
+                "action": "terminate_session",
+                "reason": "success",
+            },
+        )
+    ]
+    assert warnings == [
+        "Task-scoped Codex terminate update failed for sess:wf-run-1:codex_cli: "
+        "terminate update failed"
+    ]
+    assert workflow._codex_session_handle is None
+    assert workflow._codex_session_binding is None
+
+
+@pytest.mark.asyncio
+async def test_run_termination_signals_session_when_v1_terminate_activity_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -373,7 +501,11 @@ async def test_run_termination_signals_session_when_terminate_activity_fails(
             raise RuntimeError("terminate failed")
         raise AssertionError(f"unexpected activity {activity_name}")
 
-    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH,
+    )
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(workflow, "_get_logger", lambda: _FakeLogger())
 

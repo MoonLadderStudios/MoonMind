@@ -1463,6 +1463,40 @@ def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
     assert '"session_id"' not in response.text
 
 
+def test_stream_task_run_live_logs_rejects_non_live_capable_active_run(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = False
+    mock_record.workspace_path = "/tmp/workspace"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Live streaming is not supported for this run."
+
+
+def test_stream_task_run_live_logs_returns_gone_for_terminal_run(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    mock_record = MagicMock()
+    mock_record.status = "completed"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream")
+
+    assert response.status_code == 410
+    assert response.json()["detail"] == "Run is no longer active. Use artifact retrieval APIs."
+
+
 def test_stream_task_run_live_logs_ignores_metrics_emitter_failures(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
