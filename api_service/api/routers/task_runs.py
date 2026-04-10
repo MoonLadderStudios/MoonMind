@@ -345,21 +345,24 @@ def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]
     if not spool_path.is_file():
         return
 
-    with spool_path.open("r", encoding="utf-8", errors="replace") as spool_file:
-        for raw_line in spool_file:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            sequence = payload.get("sequence")
-            if not isinstance(sequence, int):
-                continue
-            yield payload
+    try:
+        with spool_path.open("r", encoding="utf-8", errors="replace") as spool_file:
+            for raw_line in spool_file:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                sequence = payload.get("sequence")
+                if not isinstance(sequence, int):
+                    continue
+                yield payload
+    except OSError:
+        return
 
 
 def _coerce_utc_datetime(value: object) -> datetime | None:
@@ -435,9 +438,12 @@ def _iter_spool_rendered_content(
 
 
 def _resolve_safe_artifact_path(ref: str | None, artifacts_root: Path) -> Path | None:
-    if not ref:
+    if not isinstance(ref, str):
         return None
-    artifact_path = (artifacts_root / ref).resolve()
+    normalized_ref = ref.strip()
+    if not normalized_ref:
+        return None
+    artifact_path = (artifacts_root / normalized_ref).resolve()
     try:
         is_safe = artifact_path.is_relative_to(artifacts_root)
     except Exception:
@@ -908,6 +914,67 @@ def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
 
 
+def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, datetime]:
+    sequence = _coerce_sequence(payload.get("sequence"))
+    timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
+    if sequence is not None and sequence > 0:
+        return (0, sequence, timestamp)
+    return (1, 2**31 - 1, timestamp)
+
+
+def _merged_event_header(payload: dict[str, object]) -> str:
+    stream = str(payload.get("stream") or "system").strip() or "system"
+    kind = str(payload.get("kind") or "").strip()
+    if stream == "session" and kind:
+        return f"{stream} ({kind})"
+    return stream
+
+
+def _iter_event_rendered_content(events: list[dict[str, object]]) -> Iterator[bytes]:
+    current_header: str | None = None
+    emitted_any = False
+
+    for event in sorted(events, key=_merged_event_sort_key):
+        text = str(event.get("text") or "")
+        if not text:
+            continue
+        header = _merged_event_header(event)
+        if header != current_header:
+            if emitted_any and not text.startswith("\n"):
+                yield b"\n"
+            yield f"--- {header} ---\n".encode("utf-8")
+            current_header = header
+        yield text.encode("utf-8")
+        emitted_any = True
+        if not text.endswith("\n"):
+            yield b"\n"
+
+
+def _collect_merged_journal_events(
+    record: object,
+    artifacts_root: Path,
+) -> list[dict[str, object]]:
+    event_journal_path = _resolve_safe_artifact_path(
+        getattr(record, "observability_events_ref", None),
+        artifacts_root,
+    )
+    if event_journal_path is None:
+        return []
+
+    raw_record_run_id = getattr(record, "run_id", None)
+    record_run_id = (
+        raw_record_run_id.strip()
+        if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
+        else None
+    )
+    events = [
+        event
+        for event in _iter_event_journal(event_journal_path, run_id=record_run_id)
+        if str(event.get("text") or "")
+    ]
+    return sorted(events, key=_merged_event_sort_key)
+
+
 def _emit_livelogs_metric_increment(
     metric: str,
     *,
@@ -1343,71 +1410,84 @@ async def stream_task_run_log(
     await _require_observability_access(record, _user)
 
     if stream_name == "merged":
-        target_ref = getattr(record, "merged_log_artifact_ref", None)
+        artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
+        journal_events = _collect_merged_journal_events(record, artifacts_root)
+        workspace_path = getattr(record, "workspace_path", None)
+        started_at = getattr(record, "started_at", None)
 
-        # Synthesize merged tail from stdout + stderr when no pre-built artifact exists.
-        if target_ref is None:
-            artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
-            workspace_path = getattr(record, "workspace_path", None)
-            started_at = getattr(record, "started_at", None)
-            if _spool_contains_renderable_chunks(
+        if journal_events:
+            content_stream = _iter_event_rendered_content(journal_events)
+            order_source = "journal"
+        elif _spool_contains_renderable_chunks(
+            workspace_path,
+            started_at=started_at,
+        ):
+            content_stream = _iter_spool_rendered_content(
                 workspace_path,
                 started_at=started_at,
-            ):
-                content_stream = _iter_spool_rendered_content(
-                    workspace_path,
-                    started_at=started_at,
-                )
-                order_source = "spool"
-            else:
-                stdout_path = _resolve_safe_artifact_path(
-                    getattr(record, "stdout_artifact_ref", None),
-                    artifacts_root,
-                )
-                stderr_path = _resolve_safe_artifact_path(
-                    getattr(record, "stderr_artifact_ref", None),
-                    artifacts_root,
-                )
-                legacy_log_path = _resolve_legacy_log_artifact_path(
-                    record,
-                    artifacts_root,
-                )
-                diagnostics_path = _resolve_safe_artifact_path(
-                    getattr(record, "diagnostics_ref", None),
-                    artifacts_root,
-                )
-                if legacy_log_path is not None:
-                    content_stream = _iter_file_chunks(legacy_log_path)
-                    order_source = "legacy-log-artifact"
-                elif not stdout_path and not stderr_path:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=(
-                            "Merged log artifact not found and no stdout/stderr or "
-                            "legacy log artifacts are available to synthesize from"
-                        ),
-                    )
-                else:
-                    content_stream = _iter_artifact_fallback_content(
-                        stdout_path,
-                        stderr_path,
-                        diagnostics_path=diagnostics_path,
-                    )
-                    order_source = "artifact-fallback"
-
-            return StreamingResponse(
-                content_stream,
-                media_type="text/plain",
-                headers={
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
-                    "X-Merged-Synthesized": "true",
-                    "X-Merged-Order-Source": order_source,
-                },
             )
+            order_source = "spool"
+        else:
+            merged_log_path = _resolve_safe_artifact_path(
+                getattr(record, "merged_log_artifact_ref", None),
+                artifacts_root,
+            )
+            stdout_path = _resolve_safe_artifact_path(
+                getattr(record, "stdout_artifact_ref", None),
+                artifacts_root,
+            )
+            stderr_path = _resolve_safe_artifact_path(
+                getattr(record, "stderr_artifact_ref", None),
+                artifacts_root,
+            )
+            legacy_log_path = _resolve_legacy_log_artifact_path(
+                record,
+                artifacts_root,
+            )
+            diagnostics_path = _resolve_safe_artifact_path(
+                getattr(record, "diagnostics_ref", None),
+                artifacts_root,
+            )
+            if merged_log_path is not None:
+                return FileResponse(
+                    path=merged_log_path,
+                    media_type="text/plain",
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    },
+                )
+            elif legacy_log_path is not None:
+                content_stream = _iter_file_chunks(legacy_log_path)
+                order_source = "legacy-log-artifact"
+            elif not stdout_path and not stderr_path:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        "Merged log artifact not found and no stdout/stderr or "
+                        "legacy log artifacts are available to synthesize from"
+                    ),
+                )
+            else:
+                content_stream = _iter_artifact_fallback_content(
+                    stdout_path,
+                    stderr_path,
+                    diagnostics_path=diagnostics_path,
+                )
+                order_source = "artifact-fallback"
 
-        missing_detail = "Merged log artifact not found"
+        return StreamingResponse(
+            content_stream,
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Merged-Synthesized": "true",
+                "X-Merged-Order-Source": order_source,
+            },
+        )
     else:
         target_ref = getattr(record, f"{stream_name}_artifact_ref", None)
         missing_detail = f"{stream_name} log artifact not found"
