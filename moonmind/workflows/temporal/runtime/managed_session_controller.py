@@ -690,7 +690,50 @@ class DockerCodexManagedSessionController:
             command,
             input_text=json.dumps(payload),
         )
-        return json.loads(stdout.strip() or "{}")
+        session_id = str(payload.get("sessionId") or "").strip()
+        target_label = (
+            f"managed-session action {action} for session {session_id} "
+            f"in container {container_id}"
+            if session_id
+            else f"managed-session action {action} in container {container_id}"
+        )
+
+        response_text = stdout.strip()
+        if not response_text:
+            rendered_command, _rendered_detail = self._scrub_command_failure(
+                command,
+                "stdout was blank",
+                extra_env=extra_env,
+            )
+            raise RuntimeError(
+                f"{target_label} returned no JSON output: {rendered_command}"
+            )
+
+        try:
+            response_payload = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                f"stdout={response_text}",
+                extra_env=extra_env,
+            )
+            raise RuntimeError(
+                f"{target_label} returned invalid JSON via {rendered_command}: "
+                f"{rendered_detail}"
+            ) from exc
+
+        if not isinstance(response_payload, dict):
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                f"stdout={response_text}",
+                extra_env=extra_env,
+            )
+            raise RuntimeError(
+                f"{target_label} returned a non-object JSON payload via {rendered_command}: "
+                f"{rendered_detail}"
+            )
+
+        return response_payload
 
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (

@@ -840,6 +840,78 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_controller_send_turn_rejects_blank_runtime_stdout() -> None:
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+    )
+
+    with pytest.raises(RuntimeError, match="managed-session action send_turn") as exc_info:
+        await controller.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "session sess-1" in message
+    assert "container ctr-1" in message
+    assert "returned no JSON output" in message
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_rejects_invalid_runtime_json() -> None:
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            return 0, "not-json", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+    )
+
+    with pytest.raises(RuntimeError, match="returned invalid JSON") as exc_info:
+        await controller.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "managed-session action send_turn" in message
+    assert "session sess-1" in message
+    assert "stdout=not-json" in message
+
+
+@pytest.mark.asyncio
 async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
     tmp_path: Path,
 ) -> None:
