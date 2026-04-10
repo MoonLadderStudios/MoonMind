@@ -655,8 +655,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "profile_id": "codex_default",
             "runtime_id": "codex_cli",
             "is_default": True,
-            "provider_id": "moonladder",
-            "provider_label": "MoonLadder",
+            "provider_id": "openai",
+            "provider_label": "OpenAI",
             "default_model": None,  # inherits runtime default: gpt-5.4
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
@@ -764,6 +764,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             existing_result = await session.execute(
                 select(
                     ManagedAgentProviderProfile.profile_id,
+                    ManagedAgentProviderProfile.provider_id,
+                    ManagedAgentProviderProfile.provider_label,
                     ManagedAgentProviderProfile.default_model,
                     ManagedAgentProviderProfile.file_templates,
                 )
@@ -771,6 +773,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             existing_rows = existing_result.all()
             existing_by_id = {
                 row.profile_id: {
+                    "provider_id": row.provider_id,
+                    "provider_label": row.provider_label,
                     "default_model": row.default_model,
                     "file_templates": row.file_templates,
                 }
@@ -785,6 +789,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_id = profile_def["profile_id"]
                 desired_default_model = profile_def.get("default_model")
                 if profile_id in existing_by_id:
+                    if profile_id == "codex_default":
+                        current_provider_id = str(
+                            existing_by_id[profile_id]["provider_id"] or ""
+                        ).strip()
+                        if current_provider_id == "moonladder":
+                            stmt = (
+                                update(ManagedAgentProviderProfile)
+                                .where(
+                                    ManagedAgentProviderProfile.profile_id == profile_id
+                                )
+                                .values(
+                                    provider_id=profile_def["provider_id"],
+                                    provider_label=profile_def.get("provider_label"),
+                                )
+                            )
+                            await session.execute(stmt)
+                            needs_commit = True
                     current_model = existing_by_id[profile_id]["default_model"]
                     # Only reconcile when the seeded profile has an explicit desired model
                     # (non-None) and the existing row is blank or contains an old

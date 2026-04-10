@@ -68,6 +68,10 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert runtime_defaults["gemini_default"] is True
     assert runtime_defaults["codex_default"] is True
     assert runtime_defaults["claude_anthropic"] is True
+    provider_ids = {p.profile_id: p.provider_id for p in profiles}
+    assert provider_ids["codex_default"] == "openai"
+    provider_labels = {p.profile_id: p.provider_label for p in profiles}
+    assert provider_labels["codex_default"] == "OpenAI"
 
 
 
@@ -199,6 +203,34 @@ async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module
         # User-set value must be preserved; reconciliation loop is a no-op
         # because desired_default_model is None for the standard profiles.
         assert profile.default_model == "gpt-user-custom"
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_reconciles_legacy_codex_default_provider(
+    _module_db, monkeypatch
+):
+    """Legacy codex_default rows should be corrected from MoonLadder to OpenAI."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "codex_default")
+        assert profile is not None
+        profile.provider_id = "moonladder"
+        profile.provider_label = "MoonLadder"
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "codex_default")
+        assert profile is not None
+        assert profile.provider_id == "openai"
+        assert profile.provider_label == "OpenAI"
 
 
 @pytest.mark.asyncio
