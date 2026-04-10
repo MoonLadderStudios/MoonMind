@@ -71,6 +71,7 @@ body {
   width: 100%;
   padding: 1.25rem 1rem 2.75rem;
   box-sizing: border-box;
+  container-type: inline-size;
 }
 
 /* Masthead + primary nav stay compact; table-first panels can widen below (see .panel--data-wide). */
@@ -82,21 +83,28 @@ body {
 }
 
 .masthead {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.4rem 1.6rem;
-  border-radius: 1rem;
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--mm-panel) / 0.82) 0%,
-      rgb(var(--mm-panel) / 0.65) 45%,
-      rgb(var(--mm-panel) / 0.78) 100%
-    );
-  box-shadow: var(--mm-shadow), 0 0 0 1px rgb(var(--mm-accent) / 0.08);
+  padding: 1.4rem 1rem;
+}
+
+.masthead::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+@supports (width: 1cqw) {
+  .masthead::after {
+    left: calc(50% - 50cqw - 1rem);
+    right: calc(50% - 50cqw - 1rem);
+  }
 }
 
 .masthead-copy {
