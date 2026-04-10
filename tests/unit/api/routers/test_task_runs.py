@@ -73,6 +73,21 @@ def test_get_observability_summary_returns_404_when_missing(
     assert "not found" in response.json()["detail"].lower()
 
 
+def test_get_observability_summary_emits_latency_metric_for_404(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    metrics = MagicMock()
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
+        with patch("api_service.api.routers.task_runs.get_metrics_emitter", return_value=metrics):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+
+    assert response.status_code == 404
+    assert metrics.observe.call_args.args[0] == "livelogs.summary.latency"
+    assert metrics.observe.call_args.kwargs["tags"] == {"stream": "livelogs"}
+
+
 def test_get_observability_summary_returns_200(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
