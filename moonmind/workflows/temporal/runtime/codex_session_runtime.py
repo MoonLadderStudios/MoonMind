@@ -494,6 +494,133 @@ class CodexManagedSessionRuntime:
         return ""
 
     @staticmethod
+    def _thread_status_type(thread_payload: Mapping[str, Any]) -> str:
+        thread = thread_payload.get("thread")
+        if not isinstance(thread, Mapping):
+            return ""
+        status = thread.get("status")
+        if not isinstance(status, Mapping):
+            return ""
+        return str(status.get("type") or "").strip().lower()
+
+    @staticmethod
+    def _thread_status_reason(thread_payload: Mapping[str, Any]) -> str | None:
+        thread = thread_payload.get("thread")
+        if not isinstance(thread, Mapping):
+            return None
+        status = thread.get("status")
+        if not isinstance(status, Mapping):
+            return None
+        for field_name in ("reason", "message", "error"):
+            value = status.get(field_name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, Mapping):
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type not in {"output_text", "input_text", "text"}:
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        return "\n".join(parts).strip()
+
+    def _extract_assistant_text_from_rollout(self, vendor_thread_path: str | None) -> str:
+        rollout_path = self._existing_thread_path(vendor_thread_path)
+        if rollout_path is None:
+            return ""
+        last_text = ""
+        try:
+            with Path(rollout_path).open(encoding="utf-8") as handle:
+                for raw_line in handle:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        payload = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, Mapping):
+                        continue
+                    entry_type = str(payload.get("type") or "").strip().lower()
+                    if entry_type == "response_item":
+                        response_payload = payload.get("payload")
+                        if not isinstance(response_payload, Mapping):
+                            continue
+                        if (
+                            str(response_payload.get("type") or "").strip().lower()
+                            != "message"
+                            or str(response_payload.get("role") or "").strip().lower()
+                            != "assistant"
+                        ):
+                            continue
+                        text = self._content_text(response_payload.get("content"))
+                        if text:
+                            last_text = text
+                    elif entry_type == "event_msg":
+                        event_payload = payload.get("payload")
+                        if not isinstance(event_payload, Mapping):
+                            continue
+                        if (
+                            str(event_payload.get("type") or "").strip().lower()
+                            != "agent_message"
+                        ):
+                            continue
+                        text = str(event_payload.get("message") or "").strip()
+                        if text:
+                            last_text = text
+        except OSError:
+            return ""
+        return last_text
+
+    def _resolved_vendor_thread_path(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+    ) -> str | None:
+        thread = thread_payload.get("thread")
+        runtime_path = None
+        if isinstance(thread, Mapping):
+            runtime_path = self._normalized_thread_path(thread.get("path"))
+        existing_runtime_path = self._existing_thread_path(runtime_path)
+        if existing_runtime_path is not None:
+            state.vendor_thread_path = existing_runtime_path
+            return existing_runtime_path
+        existing_state_path = self._existing_thread_path(state.vendor_thread_path)
+        if existing_state_path is not None:
+            return existing_state_path
+        recovered_path = self._find_vendor_thread_path(state.vendor_thread_id)
+        if recovered_path is not None:
+            state.vendor_thread_path = recovered_path
+        return recovered_path
+
+    def _assistant_text_for_completed_turn(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+    ) -> str:
+        assistant_text = self._extract_assistant_text(thread_payload)
+        if assistant_text:
+            return assistant_text
+        vendor_thread_path = self._resolved_vendor_thread_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        return self._extract_assistant_text_from_rollout(vendor_thread_path)
+
+    @staticmethod
     def _find_turn_payload(
         thread_payload: Mapping[str, Any],
         *,
@@ -531,6 +658,8 @@ class CodexManagedSessionRuntime:
                 outcome = self._terminal_turn_outcome(turn_payload)
                 if outcome is not None:
                     return thread_payload, outcome
+            elif self._thread_status_type(thread_payload) == "idle":
+                return thread_payload, ("completed", None)
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -685,15 +814,30 @@ class CodexManagedSessionRuntime:
             thread_payload,
             vendor_turn_id=active_turn_id,
         )
-        if not isinstance(turn_payload, Mapping):
-            return state
-
-        outcome = self._terminal_turn_outcome(turn_payload)
-        if outcome is None:
-            return state
+        outcome = None
+        if isinstance(turn_payload, Mapping):
+            outcome = self._terminal_turn_outcome(turn_payload)
+            if outcome is None:
+                return state
+        else:
+            status_type = self._thread_status_type(thread_payload)
+            if status_type == "idle":
+                outcome = ("completed", None)
+            elif status_type in {"failed", "error"}:
+                outcome = ("failed", self._thread_status_reason(thread_payload))
+            elif status_type in {"interrupted", "cancelled", "canceled"}:
+                outcome = (
+                    "interrupted",
+                    self._thread_status_reason(thread_payload) or status_type,
+                )
+            else:
+                return state
 
         status, error_text = outcome
-        assistant_text = self._extract_assistant_text(thread_payload)
+        assistant_text = self._assistant_text_for_completed_turn(
+            state=state,
+            thread_payload=thread_payload,
+        )
         if status == "completed" and not assistant_text:
             error_text = "codex app-server turn/completed produced no assistant output"
             self._append_spool(
@@ -841,7 +985,10 @@ class CodexManagedSessionRuntime:
                 metadata={"reason": message},
             )
 
-        assistant_text = self._extract_assistant_text(thread_payload)
+        assistant_text = self._assistant_text_for_completed_turn(
+            state=state,
+            thread_payload=thread_payload,
+        )
         metadata: dict[str, Any] = {}
         if status == "completed" and not assistant_text:
             error_text = "codex app-server turn/completed produced no assistant output"
