@@ -77,6 +77,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
         artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
         codexHomePath="/home/app/.codex",
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        turnCompletionTimeoutSeconds=1800,
     )
     commands: list[tuple[str, ...]] = []
 
@@ -132,6 +133,9 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert "--mount" in run_command
     assert "-v" not in run_command
     assert request.image_ref in run_command
+    assert (
+        "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
+    )
     assert "python3" in run_command
     assert "moonmind.workflows.temporal.runtime.codex_session_runtime" in run_command
     stored = session_store.load("sess-1")
@@ -837,6 +841,87 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
     assert exec_command[:3] == ("docker", "exec", "-i")
     assert "-c" not in exec_command
     assert exec_command[-2:] == ("invoke", "send_turn")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "stdout",
+        "stderr",
+        "expected_reason",
+        "expected_detail_fragments",
+        "unexpected_fragments",
+    ),
+    [
+        (
+            "   \n",
+            "",
+            "returned no JSON output",
+            ["stdout was blank"],
+            [],
+        ),
+        (
+            "invalid\njson",
+            "stderr\nline",
+            "returned invalid JSON",
+            [f"stdout={json.dumps('invalid\njson')}", f"stderr: {json.dumps('stderr\nline')}"],
+            ["invalid\njson", "stderr\nline"],
+        ),
+        (
+            "[1, 2, 3]",
+            "stderr\nline",
+            "returned a list payload instead of a JSON object",
+            [
+                f"stdout={json.dumps('[1, 2, 3]')}",
+                f"stderr: {json.dumps('stderr\nline')}",
+            ],
+            ["stderr\nline"],
+        ),
+    ],
+)
+async def test_controller_send_turn_rejects_malformed_transport_output(
+    stdout: str,
+    stderr: str,
+    expected_reason: str,
+    expected_detail_fragments: list[str],
+    unexpected_fragments: list[str],
+) -> None:
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            return 0, stdout, stderr
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+    )
+
+    with pytest.raises(RuntimeError, match=expected_reason) as exc_info:
+        await controller.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "managed-session action send_turn" in message
+    assert "session sess-1" in message
+    assert "container ctr-1" in message
+    for fragment in [expected_reason, *expected_detail_fragments]:
+        assert fragment in message
+    for fragment in unexpected_fragments:
+        assert fragment not in message
 
 
 @pytest.mark.asyncio

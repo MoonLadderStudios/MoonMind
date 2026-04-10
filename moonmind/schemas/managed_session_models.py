@@ -182,6 +182,11 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     artifact_spool_path: NonBlankStr = Field(..., alias="artifactSpoolPath")
     codex_home_path: NonBlankStr = Field(..., alias="codexHomePath")
     image_ref: NonBlankStr = Field(..., alias="imageRef")
+    turn_completion_timeout_seconds: int = Field(
+        3600,
+        alias="turnCompletionTimeoutSeconds",
+        ge=1,
+    )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
     workspace_spec: dict[str, Any] = Field(default_factory=dict, alias="workspaceSpec")
 

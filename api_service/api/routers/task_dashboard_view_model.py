@@ -128,6 +128,9 @@ def build_live_logs_feature_config() -> dict[str, object]:
         "liveLogsSessionTimelineRollout": str(
             settings.feature_flags.live_logs_session_timeline_rollout
         ),
+        "liveLogsStructuredHistoryEnabled": bool(
+            settings.feature_flags.live_logs_structured_history_enabled
+        ),
     }
 
 

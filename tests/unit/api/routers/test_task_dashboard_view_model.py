@@ -375,12 +375,18 @@ def test_build_runtime_config_groups_live_logs_feature_flags(monkeypatch) -> Non
         "live_logs_session_timeline_rollout",
         "internal",
     )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_structured_history_enabled",
+        False,
+    )
 
     config = build_runtime_config("/tasks")
 
     assert config["features"]["logStreamingEnabled"] is True
     assert config["features"]["liveLogsSessionTimelineEnabled"] is True
     assert config["features"]["liveLogsSessionTimelineRollout"] == "internal"
+    assert config["features"]["liveLogsStructuredHistoryEnabled"] is False
 
 
 def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch) -> None:
@@ -390,6 +396,11 @@ def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch)
         "live_logs_session_timeline_rollout",
         "all_managed",
     )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "live_logs_structured_history_enabled",
+        True,
+    )
 
     feature_config = build_live_logs_feature_config()
 
@@ -397,6 +408,7 @@ def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch)
         "logStreamingEnabled": True,
         "liveLogsSessionTimelineEnabled": True,
         "liveLogsSessionTimelineRollout": "all_managed",
+        "liveLogsStructuredHistoryEnabled": True,
     }
 
 

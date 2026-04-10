@@ -337,6 +337,51 @@ class DockerCodexManagedSessionController:
         rendered_detail = scrub_github_tokens(redactor.scrub(detail))
         return rendered_command, rendered_detail
 
+    @staticmethod
+    def _transport_output_snippet(text: str, *, max_chars: int = 500) -> str:
+        return json.dumps(text[:max_chars], ensure_ascii=True)
+
+    def _raise_transport_failure(
+        self,
+        command: Sequence[str],
+        *,
+        action: str,
+        container_id: str,
+        session_id: str | None = None,
+        reason: str,
+        stdout: str | None = None,
+        stderr: str,
+        extra_env: Mapping[str, str] | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        target_label = (
+            f"managed-session action {action} for session {session_id} "
+            f"in container {container_id}"
+            if session_id
+            else f"managed-session action {action} in container {container_id}"
+        )
+        rendered_detail = (
+            "stdout was blank"
+            if stdout is None
+            else f"stdout={self._transport_output_snippet(stdout)}"
+        )
+        stderr_text = stderr.strip()
+        if stderr_text:
+            rendered_detail += (
+                f"; stderr: {self._transport_output_snippet(stderr_text)}"
+            )
+        rendered_command, scrubbed_detail = self._scrub_command_failure(
+            command,
+            rendered_detail,
+            extra_env=extra_env,
+        )
+        error = RuntimeError(
+            f"{target_label} {reason} via {rendered_command}: {scrubbed_detail}"
+        )
+        if cause is not None:
+            raise error from cause
+        raise error
+
     async def _remove_container(
         self,
         container_identifier: str,
@@ -686,11 +731,52 @@ class DockerCodexManagedSessionController:
                 action,
             ]
         )
-        stdout, _stderr = await self._run(
+        stdout, stderr = await self._run(
             command,
             input_text=json.dumps(payload),
         )
-        return json.loads(stdout.strip() or "{}")
+        session_id = str(payload.get("sessionId") or "").strip() or None
+        stdout_text = stdout.strip()
+        if not stdout_text:
+            self._raise_transport_failure(
+                command,
+                action=action,
+                container_id=container_id,
+                session_id=session_id,
+                reason="returned no JSON output",
+                stdout=None,
+                stderr=stderr,
+                extra_env=extra_env,
+            )
+        try:
+            response_payload = json.loads(stdout_text)
+        except json.JSONDecodeError as exc:
+            self._raise_transport_failure(
+                command,
+                action=action,
+                container_id=container_id,
+                session_id=session_id,
+                reason="returned invalid JSON",
+                stdout=stdout_text,
+                stderr=stderr,
+                extra_env=extra_env,
+                cause=exc,
+            )
+        if not isinstance(response_payload, dict):
+            self._raise_transport_failure(
+                command,
+                action=action,
+                container_id=container_id,
+                session_id=session_id,
+                reason=(
+                    f"returned a {type(response_payload).__name__} payload instead "
+                    "of a JSON object"
+                ),
+                stdout=stdout_text,
+                stderr=stderr,
+                extra_env=extra_env,
+            )
+        return response_payload
 
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (
@@ -821,6 +907,9 @@ class DockerCodexManagedSessionController:
             f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
             "-e",
             f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
+            "-e",
+            "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
+            f"{request.turn_completion_timeout_seconds}",
         ]
         auth_volume_path = str(
             request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
