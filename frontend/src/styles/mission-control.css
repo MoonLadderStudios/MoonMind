@@ -71,6 +71,7 @@ body {
   width: 100%;
   padding: 1.25rem 1rem 2.75rem;
   box-sizing: border-box;
+  container-type: inline-size;
 }
 
 /* Masthead + primary nav stay compact; table-first panels can widen below (see .panel--data-wide). */
@@ -87,17 +88,23 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.4rem 0;
+  padding: 1.4rem 1rem;
 }
 
 .masthead::after {
   content: "";
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
   bottom: 0;
-  width: 100vw;
-  transform: translateX(-50%);
   border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+@supports (width: 1cqw) {
+  .masthead::after {
+    left: calc(50% - 50cqw - 1rem);
+    right: calc(50% - 50cqw - 1rem);
+  }
 }
 
 .masthead-copy {
