@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from temporalio import activity as _activity
 from temporalio import workflow
+from temporalio.service import RPCError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -460,7 +461,8 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                         try:
                             await manager_handle.signal(MockProviderProfileManager.shutdown)
                             await manager_handle.result()
-                        except Exception:
+                        except RPCError:
+                            # Best-effort teardown can race the worker shutdown path.
                             pass
 
                     assert isinstance(result, AgentRunResult)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,12 @@ from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
     _run_ready,
 )
+
+
+def _iso_timestamp(*, minutes_offset: int) -> str:
+    return (
+        datetime.now(UTC) + timedelta(minutes=minutes_offset)
+    ).isoformat().replace("+00:00", "Z")
 
 
 def _write_fake_app_server(
@@ -641,6 +648,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
     tmp_path: Path,
 ) -> None:
     request = _launch_request(tmp_path)
+    future_timestamp = _iso_timestamp(minutes_offset=5)
     transcript_path = (
         Path(request.codex_home_path)
         / "sessions"
@@ -655,7 +663,7 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
             (
                 json.dumps(
                     {
-                        "timestamp": "2026-04-10T07:21:32.088Z",
+                        "timestamp": future_timestamp,
                         "type": "event_msg",
                         "payload": {
                             "type": "task_started",
@@ -665,19 +673,19 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                 ),
                 json.dumps(
                     {
-                        "timestamp": "2026-04-10T07:21:40.000Z",
+                        "timestamp": future_timestamp,
                         "type": "event_msg",
                         "payload": {
                             "type": "agent_message",
                             "message": "Recovered final answer without vendor turn id",
-                            "phase": "final_answer",
+                            "phase": "final",
                             "memory_citation": None,
                         },
                     }
                 ),
                 json.dumps(
                     {
-                        "timestamp": "2026-04-10T07:21:40.001Z",
+                        "timestamp": future_timestamp,
                         "type": "response_item",
                         "payload": {
                             "type": "message",
@@ -688,13 +696,13 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
                                     "text": "Recovered final answer without vendor turn id",
                                 }
                             ],
-                            "phase": "final_answer",
+                            "phase": "final",
                         },
                     }
                 ),
                 json.dumps(
                     {
-                        "timestamp": "2026-04-10T07:21:40.002Z",
+                        "timestamp": future_timestamp,
                         "type": "event_msg",
                         "payload": {
                             "type": "task_complete",
@@ -758,10 +766,106 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
     )
 
 
+def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference(
+    tmp_path: Path,
+) -> None:
+    request = _launch_request(tmp_path)
+    past_timestamp = _iso_timestamp(minutes_offset=-5)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T07-21-32-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "timestamp": past_timestamp,
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "message": "Stale final answer from a previous turn",
+                            "phase": "final",
+                            "memory_citation": None,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": past_timestamp,
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "Stale final answer from a previous turn",
+                                }
+                            ],
+                            "phase": "final",
+                        },
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = _write_fake_app_server(
+        tmp_path,
+        omit_turns_on_read=True,
+        start_thread_path=str(transcript_path),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert (
+        response.metadata["reason"]
+        == "codex app-server turn/completed produced no assistant output"
+    )
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "failed"
+    assert handle.metadata["lastTurnStatus"] == "failed"
+
+
 def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     tmp_path: Path,
 ) -> None:
     request = _launch_request(tmp_path)
+    past_timestamp = _iso_timestamp(minutes_offset=-5)
     transcript_path = (
         Path(request.codex_home_path)
         / "sessions"
@@ -774,7 +878,7 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     transcript_path.write_text(
         json.dumps(
             {
-                "timestamp": "2026-04-10T07:21:32.088Z",
+                "timestamp": past_timestamp,
                 "type": "response_item",
                 "turnId": "vendor-turn-0",
                 "payload": {
@@ -786,7 +890,7 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
                             "text": "Stale text from a previous turn",
                         }
                     ],
-                    "phase": "final",
+                    "phase": "final_answer",
                 },
             }
         )
