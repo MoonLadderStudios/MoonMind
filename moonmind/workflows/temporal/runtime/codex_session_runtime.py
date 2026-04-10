@@ -866,6 +866,39 @@ class CodexManagedSessionRuntime:
                     return recovered
         return None
 
+    def _rollout_references_active_turn(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> bool:
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        rollout_path = self._allowed_rollout_path(vendor_thread_path)
+        if rollout_path is None:
+            return False
+        try:
+            rollout_file = Path(rollout_path)
+            if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
+                return False
+            with rollout_file.open(encoding="utf-8") as handle:
+                for raw_line in handle:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        payload = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if self._payload_references_turn(payload, vendor_turn_id):
+                        return True
+        except OSError:
+            return False
+        return False
+
     def _rollout_terminal_outcome(
         self,
         *,
@@ -982,16 +1015,25 @@ class CodexManagedSessionRuntime:
                 if outcome is not None:
                     return thread_payload, outcome
             else:
-                thread_outcome = self._terminal_thread_outcome(thread_payload)
-                if thread_outcome is not None:
-                    return thread_payload, thread_outcome
+                state = self._load_state()
                 rollout_outcome = self._rollout_terminal_outcome(
-                    state=self._load_state(),
+                    state=state,
                     thread_payload=thread_payload,
                     vendor_turn_id=vendor_turn_id,
                 )
                 if rollout_outcome is not None:
                     return thread_payload, rollout_outcome
+                thread_outcome = self._terminal_thread_outcome(thread_payload)
+                if thread_outcome is not None:
+                    if not (
+                        thread_outcome[0] == "completed"
+                        and self._rollout_references_active_turn(
+                            state=state,
+                            thread_payload=thread_payload,
+                            vendor_turn_id=vendor_turn_id,
+                        )
+                    ):
+                        return thread_payload, thread_outcome
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1169,13 +1211,23 @@ class CodexManagedSessionRuntime:
             if outcome is None:
                 return state
         else:
-            outcome = self._terminal_thread_outcome(thread_payload)
+            outcome = self._rollout_terminal_outcome(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=active_turn_id,
+            )
             if outcome is None:
-                outcome = self._rollout_terminal_outcome(
-                    state=state,
-                    thread_payload=thread_payload,
-                    vendor_turn_id=active_turn_id,
-                )
+                outcome = self._terminal_thread_outcome(thread_payload)
+                if (
+                    outcome is not None
+                    and outcome[0] == "completed"
+                    and self._rollout_references_active_turn(
+                        state=state,
+                        thread_payload=thread_payload,
+                        vendor_turn_id=active_turn_id,
+                    )
+                ):
+                    return state
                 if outcome is None:
                     return state
 
