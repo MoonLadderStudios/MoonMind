@@ -12,19 +12,18 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
-from tests.unit.services.temporal.runtime.test_codex_session_runtime import (
-    _launch_request,
-    _write_fake_app_server,
+from tests.helpers.codex_session_runtime import (
+    launch_request,
+    write_fake_app_server,
 )
 
-
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
 def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcript(
     tmp_path: Path,
 ) -> None:
-    request = _launch_request(tmp_path)
+    request = launch_request(tmp_path)
     transcript_path = (
         Path(request.codex_home_path)
         / "sessions"
@@ -65,7 +64,7 @@ def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcrip
         + "\n",
         encoding="utf-8",
     )
-    script = _write_fake_app_server(
+    script = write_fake_app_server(
         tmp_path,
         omit_turns_on_read=True,
         start_thread_path=str(transcript_path),
