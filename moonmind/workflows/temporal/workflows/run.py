@@ -2114,7 +2114,8 @@ class MoonMindRunWorkflow:
                     ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
                 )
                 head_branch = (
-                    agent_outputs.get("branch")
+                    agent_outputs.get("push_branch")
+                    or agent_outputs.get("branch")
                     or agent_outputs.get("targetBranch")
                     or ws.get("targetBranch")
                     or ws.get("branch")
