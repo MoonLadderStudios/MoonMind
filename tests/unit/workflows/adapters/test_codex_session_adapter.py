@@ -404,6 +404,7 @@ async def test_start_persists_running_record_before_turn_completes(
         assert persisted_record.container_id == "container-1"
         assert persisted_record.thread_id == "thread-1"
         assert persisted_record.active_turn_id is None
+        assert persisted_record.error_message is None
         send_turn_entered.set()
         await allow_send_turn_finish.wait()
         return _turn_response(
@@ -469,6 +470,7 @@ async def test_start_persists_running_record_before_turn_completes(
 async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path) -> None:
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
     summary_calls: list[Any] = []
     publication_calls: list[Any] = []
 
@@ -489,7 +491,7 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
         return _turn_response(
             session_id=binding.session_id,
-            session_epoch=binding.session_epoch,
+            session_epoch=binding.session_epoch + 1,
             container_id="container-1",
             thread_id="thread-1",
             status="failed",
@@ -526,7 +528,7 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
         runtime_id="codex_cli",
-        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        run_store=run_store,
         load_session_snapshot=_load_snapshot,
         launch_session=_launch_session,
         session_status=_session_status,
@@ -546,8 +548,128 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     with pytest.raises(RuntimeError, match="empty managed-session turn"):
         await adapter.start(_request(binding, workspace_path=str(workspace_path)))
 
+    persisted_record = run_store.load(binding.task_run_id)
+
     assert summary_calls == []
     assert publication_calls == []
+    assert persisted_record is not None
+    assert persisted_record.status == "failed"
+    assert persisted_record.error_message == "empty managed-session turn"
+    assert persisted_record.failure_class == "execution_error"
+    assert persisted_record.session_id == binding.session_id
+    assert persisted_record.session_epoch == binding.session_epoch + 1
+    assert persisted_record.live_stream_capable is True
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_message"),
+    [
+        ("prepare", "instructions unavailable"),
+        ("send_turn", "transport blew up"),
+        ("fetch_summary", "summary unavailable"),
+        ("publish_artifacts", "artifact publication failed"),
+    ],
+)
+async def test_start_finalizes_failed_record_for_post_save_exceptions(
+    tmp_path: Path,
+    failure_stage: str,
+    expected_message: str,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _session_status(_request: Any) -> CodexManagedSessionHandle:
+        raise AssertionError("session_status should not be used before launch")
+
+    async def _prepare(payload: dict[str, Any]) -> str:
+        if failure_stage == "prepare":
+            raise ValueError(expected_message)
+        return await _prepare_turn_instructions(payload)
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        if failure_stage == "send_turn":
+            raise RuntimeError(expected_message)
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch + 1,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
+        if failure_stage == "fetch_summary":
+            raise RuntimeError(expected_message)
+        return _summary(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch + 1,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        if failure_stage == "publish_artifacts":
+            raise RuntimeError(expected_message)
+        return _publication(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch + 1,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    with pytest.raises(Exception, match=expected_message):
+        await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    persisted_record = run_store.load(binding.task_run_id)
+
+    assert persisted_record is not None
+    assert persisted_record.status == "failed"
+    assert persisted_record.error_message == expected_message
+    assert persisted_record.failure_class == "execution_error"
+    assert persisted_record.session_id == binding.session_id
+    expected_epoch = binding.session_epoch if failure_stage in {"prepare", "send_turn"} else 2
+    assert persisted_record.session_epoch == expected_epoch
+    assert persisted_record.live_stream_capable is True
+
 
 
 async def test_start_passes_profile_materialization_payload_to_launch_session(
@@ -1243,6 +1365,7 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
 ) -> None:
     binding = _binding()
     interrupt_calls: list[Any] = []
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(
@@ -1273,7 +1396,7 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
         runtime_id="codex_cli",
-        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        run_store=run_store,
         load_session_snapshot=_load_snapshot,
         launch_session=_async_noop,
         session_status=_async_noop,
@@ -1311,11 +1434,15 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
 
     status = await adapter.cancel(run_id)
     result = await adapter.fetch_result(run_id)
+    persisted_record = run_store.load(run_id)
 
     assert interrupt_calls[0].turn_id == "turn-active"
     assert status.status == "canceled"
     assert result.failure_class == "user_error"
     assert result.summary == "Canceled Codex managed-session turn."
+    assert persisted_record is not None
+    assert persisted_record.session_id == binding.session_id
+    assert persisted_record.session_epoch == binding.session_epoch
 
 
 async def test_save_run_state_persists_blank_workspace_path_as_none(
@@ -1375,6 +1502,7 @@ async def test_save_run_state_persists_blank_workspace_path_as_none(
 
     assert persisted_record is not None
     assert persisted_record.workspace_path is None
+    assert persisted_record.live_stream_capable is False
 
 
 async def test_terminate_session_uses_remote_session_control_surface(
