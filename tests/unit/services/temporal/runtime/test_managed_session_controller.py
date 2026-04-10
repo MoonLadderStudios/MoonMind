@@ -943,6 +943,70 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
 
 
 @pytest.mark.asyncio
+async def test_controller_send_turn_does_not_poll_session_status_for_terminal_failure() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "exec", "-i") and "send_turn" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "failed",
+                "metadata": {"reason": "provider model deprecated"},
+            }
+            return 0, json.dumps(payload), ""
+        if command[:3] == ("docker", "exec", "-i") and "session_status" in command:
+            raise AssertionError("session_status should not be called for terminal failure")
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+        turn_poll_interval_seconds=0,
+    )
+
+    response = await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["reason"] == "provider model deprecated"
+    assert commands == [
+        (
+            "docker",
+            "exec",
+            "-i",
+            "ctr-1",
+            "python3",
+            "-m",
+            "moonmind.workflows.temporal.runtime.codex_session_runtime",
+            "invoke",
+            "send_turn",
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_controller_send_turn_recovers_from_blank_output_using_runtime_state(
     tmp_path: Path,
 ) -> None:

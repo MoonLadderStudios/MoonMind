@@ -211,6 +211,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
+            workspace_path=workspace_path,
             environment=launch_context.delta_env_overrides,
             profile=self._profile_for_launch(
                 runtime_id=runtime_id,
@@ -244,169 +245,183 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             finished_at=None,
             profile_id=launch_context.profile_id or None,
         )
-        instructions = await self._instructions_for_request(
-            binding=binding,
-            request=request,
-        )
+
+        current_locator = locator
+        current_active_turn_id = session_handle.session_state.active_turn_id
+        turn_id: str | None = None
+        failed_state_persisted = False
+
         try:
+            instructions = await self._instructions_for_request(
+                binding=binding,
+                request=request,
+                workspace_path=workspace_path,
+            )
             turn_response = await self._coerce_turn_response(
                 self._send_turn(
                     SendCodexManagedSessionTurnRequest(
-                        sessionId=locator.session_id,
-                        sessionEpoch=locator.session_epoch,
-                        containerId=locator.container_id,
-                        threadId=locator.thread_id,
-                        instructions=instructions,
-                    )
-                )
-            )
-        except Exception as exc:
-            self._persist_failed_run_state(
-                run_id=run_id,
-                agent_id=request.agent_id,
-                managed_run_id=binding.task_run_id,
-                binding=binding,
-                workspace_path=workspace_path,
-                locator=locator.model_dump(mode="json", by_alias=True),
-                active_turn_id=session_handle.session_state.active_turn_id,
-                summary=exc,
-                default_summary="Codex managed-session turn failed",
-                started_at=started_at,
-                finished_at=_current_time(),
-                instruction_ref=original_instruction_ref,
-                resolved_skillset_ref=original_skillset_ref,
-                profile_id=launch_context.profile_id or None,
-            )
-            raise
-        current_locator = self._locator_from_state(
-            session_state=turn_response.session_state,
-            runtime_epoch=turn_response.session_state.session_epoch,
-        )
-        if turn_response.status != "completed":
-            reason = _clamp_agent_run_result_summary(
-                turn_response.metadata.get("reason"),
-                default=(
-                    "Codex managed-session turn failed"
-                    f" with status '{turn_response.status}'"
-                ),
-            )
-            self._persist_failed_run_state(
-                run_id=run_id,
-                agent_id=request.agent_id,
-                managed_run_id=binding.task_run_id,
-                binding=binding,
-                workspace_path=workspace_path,
-                locator=current_locator.model_dump(mode="json", by_alias=True),
-                active_turn_id=turn_response.session_state.active_turn_id,
-                summary=reason,
-                default_summary=reason,
-                output_refs=turn_response.output_refs,
-                started_at=started_at,
-                finished_at=_current_time(),
-                instruction_ref=original_instruction_ref,
-                resolved_skillset_ref=original_skillset_ref,
-                turn_id=turn_response.turn_id,
-                profile_id=launch_context.profile_id or None,
-            )
-            raise RuntimeError(reason)
-
-        publication: CodexManagedSessionArtifactsPublication | None = None
-        try:
-            await self._signal_control_action(
-                action="send_turn",
-                reason=None,
-                container_id=turn_response.session_state.container_id,
-                thread_id=turn_response.session_state.thread_id,
-            )
-            summary = await self.fetch_session_summary(
-                binding=binding,
-                locator=current_locator,
-            )
-            publication = await self._coerce_publication(
-                self._publish_remote_artifacts(
-                    PublishCodexManagedSessionArtifactsRequest(
                         sessionId=current_locator.session_id,
                         sessionEpoch=current_locator.session_epoch,
                         containerId=current_locator.container_id,
                         threadId=current_locator.thread_id,
-                        taskRunId=binding.task_run_id,
-                        metadata={"runId": run_id, "workflowId": self._workflow_id},
+                        instructions=instructions,
                     )
                 )
             )
+            turn_id = turn_response.turn_id
+            current_locator = self._locator_from_state(
+                session_state=turn_response.session_state,
+                runtime_epoch=turn_response.session_state.session_epoch,
+            )
+            current_active_turn_id = turn_response.session_state.active_turn_id
+            if turn_response.status != "completed":
+                reason = _clamp_agent_run_result_summary(
+                    turn_response.metadata.get("reason"),
+                    default=(
+                        "Codex managed-session turn failed"
+                        f" with status '{turn_response.status}'"
+                    ),
+                )
+                self._persist_failed_run_state(
+                    run_id=run_id,
+                    agent_id=request.agent_id,
+                    managed_run_id=binding.task_run_id,
+                    binding=binding,
+                    workspace_path=workspace_path,
+                    locator=current_locator.model_dump(mode="json", by_alias=True),
+                    active_turn_id=current_active_turn_id,
+                    summary=reason,
+                    default_summary=reason,
+                    output_refs=turn_response.output_refs,
+                    started_at=started_at,
+                    finished_at=_current_time(),
+                    instruction_ref=original_instruction_ref,
+                    resolved_skillset_ref=original_skillset_ref,
+                    turn_id=turn_id,
+                    profile_id=launch_context.profile_id or None,
+                )
+                failed_state_persisted = True
+                raise RuntimeError(reason)
 
-            assistant_text = _clamp_agent_run_result_summary(
-                turn_response.metadata.get("assistantText")
-                or summary.metadata.get("lastAssistantText"),
-                default="Codex managed-session turn completed.",
-            )
-            output_refs = self._merge_output_refs(
-                turn_response.output_refs,
-                publication.published_artifact_refs,
-            )
-            result = AgentRunResult(
-                outputRefs=output_refs,
-                summary=assistant_text,
-                metadata={
-                    "instructionRef": original_instruction_ref,
-                    "resolvedSkillsetRef": original_skillset_ref,
-                    "sessionSummary": summary.model_dump(mode="json", by_alias=True),
-                    "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
-                    "turnId": turn_response.turn_id,
-                },
-            )
-        except Exception as exc:
-            self._persist_failed_run_state(
+            publication: CodexManagedSessionArtifactsPublication | None = None
+            try:
+                await self._signal_control_action(
+                    action="send_turn",
+                    reason=None,
+                    container_id=turn_response.session_state.container_id,
+                    thread_id=turn_response.session_state.thread_id,
+                )
+                summary = await self.fetch_session_summary(
+                    binding=binding,
+                    locator=current_locator,
+                )
+                publication = await self._coerce_publication(
+                    self._publish_remote_artifacts(
+                        PublishCodexManagedSessionArtifactsRequest(
+                            sessionId=current_locator.session_id,
+                            sessionEpoch=current_locator.session_epoch,
+                            containerId=current_locator.container_id,
+                            threadId=current_locator.thread_id,
+                            taskRunId=binding.task_run_id,
+                            metadata={"runId": run_id, "workflowId": self._workflow_id},
+                        )
+                    )
+                )
+
+                assistant_text = _clamp_agent_run_result_summary(
+                    turn_response.metadata.get("assistantText")
+                    or summary.metadata.get("lastAssistantText"),
+                    default="Codex managed-session turn completed.",
+                )
+                output_refs = self._merge_output_refs(
+                    turn_response.output_refs,
+                    publication.published_artifact_refs,
+                )
+                result = AgentRunResult(
+                    outputRefs=output_refs,
+                    summary=assistant_text,
+                    metadata={
+                        "instructionRef": original_instruction_ref,
+                        "resolvedSkillsetRef": original_skillset_ref,
+                        "sessionSummary": summary.model_dump(mode="json", by_alias=True),
+                        "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
+                        "turnId": turn_id,
+                    },
+                )
+            except Exception as exc:
+                self._persist_failed_run_state(
+                    run_id=run_id,
+                    agent_id=request.agent_id,
+                    managed_run_id=binding.task_run_id,
+                    binding=binding,
+                    workspace_path=workspace_path,
+                    locator=current_locator.model_dump(mode="json", by_alias=True),
+                    active_turn_id=current_active_turn_id,
+                    summary=exc,
+                    default_summary="Codex managed-session turn failed",
+                    output_refs=self._merge_output_refs(
+                        turn_response.output_refs,
+                        publication.published_artifact_refs if publication is not None else (),
+                    ),
+                    started_at=started_at,
+                    finished_at=_current_time(),
+                    instruction_ref=original_instruction_ref,
+                    resolved_skillset_ref=original_skillset_ref,
+                    turn_id=turn_id,
+                    profile_id=launch_context.profile_id or None,
+                )
+                failed_state_persisted = True
+                raise
+
+            self._save_run_state(
                 run_id=run_id,
                 agent_id=request.agent_id,
                 managed_run_id=binding.task_run_id,
                 binding=binding,
                 workspace_path=workspace_path,
                 locator=current_locator.model_dump(mode="json", by_alias=True),
-                active_turn_id=turn_response.session_state.active_turn_id,
-                summary=exc,
-                default_summary="Codex managed-session turn failed",
-                output_refs=self._merge_output_refs(
-                    turn_response.output_refs,
-                    publication.published_artifact_refs if publication is not None else (),
-                ),
+                active_turn_id=None,
+                result=result.model_dump(mode="json", by_alias=True),
+                status="completed",
                 started_at=started_at,
                 finished_at=_current_time(),
-                instruction_ref=original_instruction_ref,
-                resolved_skillset_ref=original_skillset_ref,
-                turn_id=turn_response.turn_id,
                 profile_id=launch_context.profile_id or None,
             )
+            return AgentRunHandle(
+                runId=run_id,
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="completed",
+                startedAt=started_at,
+                metadata={
+                    "profile_id": launch_context.profile_id,
+                    "credential_source": launch_context.credential_source,
+                    "env_keys_count": launch_context.env_keys_count,
+                    "sessionId": current_locator.session_id,
+                    "sessionEpoch": current_locator.session_epoch,
+                    "containerId": current_locator.container_id,
+                },
+            )
+        except Exception as exc:
+            if not failed_state_persisted:
+                self._persist_failed_run_state(
+                    run_id=run_id,
+                    agent_id=request.agent_id,
+                    managed_run_id=binding.task_run_id,
+                    binding=binding,
+                    workspace_path=workspace_path,
+                    locator=current_locator.model_dump(mode="json", by_alias=True),
+                    active_turn_id=current_active_turn_id,
+                    summary=exc,
+                    default_summary="Codex managed-session turn failed",
+                    started_at=started_at,
+                    finished_at=_current_time(),
+                    instruction_ref=original_instruction_ref,
+                    resolved_skillset_ref=original_skillset_ref,
+                    turn_id=turn_id,
+                    profile_id=launch_context.profile_id or None,
+                )
             raise
-        self._save_run_state(
-            run_id=run_id,
-            agent_id=request.agent_id,
-            managed_run_id=binding.task_run_id,
-            binding=binding,
-            workspace_path=workspace_path,
-            locator=current_locator.model_dump(mode="json", by_alias=True),
-            active_turn_id=None,
-            result=result.model_dump(mode="json", by_alias=True),
-            status="completed",
-            started_at=started_at,
-            finished_at=_current_time(),
-            profile_id=launch_context.profile_id or None,
-        )
-        return AgentRunHandle(
-            runId=run_id,
-            agentKind="managed",
-            agentId=request.agent_id,
-            status="completed",
-            startedAt=started_at,
-            metadata={
-                "profile_id": launch_context.profile_id,
-                "credential_source": launch_context.credential_source,
-                "env_keys_count": launch_context.env_keys_count,
-                "sessionId": current_locator.session_id,
-                "sessionEpoch": current_locator.session_epoch,
-                "containerId": current_locator.container_id,
-            },
-        )
 
     async def status(self, run_id: str) -> AgentRunStatus:
         state = self._load_run_state(run_id)
@@ -639,19 +654,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
+        workspace_path: str,
     ) -> str:
         if self._prepare_turn_instructions is None:
             return await self._legacy_instructions_for_request(
                 binding=binding,
                 request=request,
+                workspace_path=workspace_path,
             )
         prepared = await self._prepare_turn_instructions(
             {
                 "request": request.model_dump(by_alias=True, exclude_none=True),
-                "workspacePath": self._workspace_path_for_request(
-                    binding=binding,
-                    request=request,
-                ),
+                "workspacePath": workspace_path,
             }
         )
         if isinstance(prepared, Mapping):
@@ -668,14 +682,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
+        workspace_path: str,
     ) -> str:
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             from moonmind.rag.context_injection import ContextInjectionService
 
-            workspace_path = Path(
-                self._workspace_path_for_request(binding=binding, request=request)
-            )
+            workspace_path = Path(workspace_path)
             service = ContextInjectionService()
             await service.inject_context(
                 request=request,
@@ -701,6 +714,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
+        workspace_path: str,
         environment: dict[str, str],
         profile: ManagedRuntimeProfile,
     ) -> CodexManagedSessionHandle:
@@ -736,7 +750,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             sessionId=active_binding.session_id,
             sessionEpoch=active_binding.session_epoch,
             threadId=self._default_thread_id(active_binding),
-            workspacePath=self._workspace_path_for_request(binding=binding, request=request),
+            workspacePath=workspace_path,
             sessionWorkspacePath=str(self._session_root(binding) / "session"),
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
@@ -990,6 +1004,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
         runtime_id = self._runtime_id or "codex_cli"
         summary = str(result.get("summary") or "").strip() or None
+        raw_locator_session_epoch = locator.get("sessionEpoch")
+        locator_session_epoch: int | None
+        try:
+            locator_session_epoch = int(raw_locator_session_epoch)
+        except (TypeError, ValueError):
+            locator_session_epoch = None
+        if locator_session_epoch is not None and locator_session_epoch < 1:
+            locator_session_epoch = None
         resolved_workspace_path = (
             (str(workspace_path or "").strip() or None)
             if binding is not None
@@ -1050,12 +1072,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                 ),
             ),
-            errorMessage=summary if status != "completed" else None,
+            errorMessage=summary if status in {"failed", "canceled", "timed_out"} else None,
             failureClass=result.get("failureClass"),
             providerErrorCode=_artifact_ref(result.get("providerErrorCode")),
             liveStreamCapable=live_stream_capable,
-            sessionId=session_id or (binding.session_id if binding is not None else None),
-            sessionEpoch=session_epoch or (binding.session_epoch if binding is not None else None),
+            sessionId=session_id
+            or (binding.session_id if binding is not None else None)
+            or (existing.session_id if existing is not None else None),
+            sessionEpoch=session_epoch
+            or (binding.session_epoch if binding is not None else None)
+            or (existing.session_epoch if existing is not None else None),
             containerId=container_id or (existing.container_id if existing is not None else None),
             threadId=thread_id or (existing.thread_id if existing is not None else None),
             activeTurnId=active_turn_id,
