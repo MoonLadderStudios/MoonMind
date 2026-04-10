@@ -152,6 +152,38 @@ def _derive_pr_branch_prefix(
     return ""
 
 
+def _derive_pr_resolver_title(
+    task_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+) -> str:
+    selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
+        task_payload.get("skill")
+    )
+    selected_skill_name = str(
+        selected_skill_payload.get("name")
+        or selected_skill_payload.get("id")
+        or ""
+    ).strip()
+    if selected_skill_name.lower() != "pr-resolver":
+        return ""
+    git_payload = _coerce_mapping(task_payload.get("git"))
+    selected_skill_payload_inputs = _coerce_mapping(
+        selected_skill_payload.get("inputs")
+        or selected_skill_payload.get("args")
+    )
+    return str(
+        git_payload.get("startingBranch")
+        or task_payload.get("startingBranch")
+        or git_payload.get("branch")
+        or task_payload.get("branch")
+        or selected_skill_inputs.get("startingBranch")
+        or selected_skill_inputs.get("branch")
+        or selected_skill_payload_inputs.get("startingBranch")
+        or selected_skill_payload_inputs.get("branch")
+        or ""
+    ).strip()
+
+
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
@@ -366,9 +398,14 @@ def _build_runtime_planner():
                 )
 
         # --- Assemble plan ---
+        pr_resolver_title = _derive_pr_resolver_title(
+            task_payload,
+            selected_skill_inputs,
+        )
         title = str(
             task_payload.get("title")
             or parameter_payload.get("title")
+            or pr_resolver_title
             or ""
         ).strip() or "Generated Plan"
         created_at = (

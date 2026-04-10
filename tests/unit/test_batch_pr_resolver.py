@@ -85,6 +85,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
     assert task["runtime"]["providerProfile"] == "test-profile"
+    assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
@@ -389,6 +390,48 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     assert call_path == "/api/executions"
 
 
+def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
+    """The Temporal executions API returns workflowId rather than legacy taskId."""
+    module = _load_module()
+    submit_jobs_via_http = module["_submit_jobs_via_http"]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={"workflowId": "mm:wf-123", "status": "queued"}
+    )
+
+    mock_post = AsyncMock(return_value=fake_response)
+
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, path: str, **kwargs: Any) -> Any:
+            return await mock_post(path, **kwargs)
+
+    with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+        submission = _make_submission(module)
+        created, errors = asyncio.run(
+            submit_jobs_via_http(
+                [submission],
+                moonmind_url="http://api:5000",
+                worker_token=None,
+            )
+        )
+
+    assert errors == []
+    assert created[0]["jobId"] == "mm:wf-123"
+
+
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
     module = _load_module()
@@ -418,8 +461,8 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     assert errors == []
 
 
-def test_submit_jobs_reports_errors_when_no_url(monkeypatch: Any) -> None:
-    """_submit_jobs returns per-PR errors when MOONMIND_URL is absent."""
+def test_submit_jobs_errors_when_no_url(monkeypatch: Any) -> None:
+    """The removed legacy DB queue fallback must not be used."""
     module = _load_module()
     submit_jobs = module["_submit_jobs"]
 
@@ -430,16 +473,10 @@ def test_submit_jobs_reports_errors_when_no_url(monkeypatch: Any) -> None:
     created, errors = asyncio.run(submit_jobs([submission]))
 
     assert created == []
-    assert errors == [
-        {
-            "pr": 42,
-            "branch": "feature/test",
-            "error": (
-                "MOONMIND_URL is required to enqueue pr-resolver tasks from a managed "
-                "session; the legacy AgentQueueService DB fallback has been removed."
-            ),
-        }
-    ]
+    assert len(errors) == 1
+    assert errors[0]["pr"] == 42
+    assert "MOONMIND_URL is not set" in errors[0]["error"]
+    assert "removed legacy DB queue" in errors[0]["error"]
 
 
 def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:

@@ -345,6 +345,7 @@ def _build_queue_request(
         "repository": repo,
         "requiredCapabilities": ["gh"],
         "task": {
+            "title": branch,
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             "skill": {
                 "name": "pr-resolver",
@@ -492,7 +493,15 @@ async def _submit_jobs_via_http(
                 response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
-                job_id = str(data.get("taskId", "")) or "(unknown)"
+                job_id = (
+                    str(
+                        data.get("workflowId")
+                        or data.get("taskId")
+                        or data.get("id")
+                        or ""
+                    )
+                    or "(unknown)"
+                )
                 created.append(
                     {
                         "pr": submission.pr_number,
@@ -511,13 +520,22 @@ async def _submit_jobs_via_http(
     return created, errors
 
 
-async def _submit_jobs_via_db(
+async def _submit_jobs(
     queue_requests: list[JobSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return per-PR errors when no Temporal-aware API endpoint is available."""
+    """Submit jobs through the MoonMind Temporal execution API."""
+    moonmind_url = str(os.getenv("MOONMIND_URL", "")).strip()
+    if moonmind_url:
+        worker_token = _read_worker_token()
+        return await _submit_jobs_via_http(
+            queue_requests,
+            moonmind_url=moonmind_url,
+            worker_token=worker_token,
+        )
+
     message = (
-        "MOONMIND_URL is required to enqueue pr-resolver tasks from a managed "
-        "session; the legacy AgentQueueService DB fallback has been removed."
+        "MOONMIND_URL is not set; batch-pr-resolver requires the MoonMind "
+        "Temporal execution API and cannot submit via the removed legacy DB queue."
     )
     return [], [
         {
@@ -527,22 +545,6 @@ async def _submit_jobs_via_db(
         }
         for submission in queue_requests
     ]
-
-
-async def _submit_jobs(
-    queue_requests: list[JobSubmission],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Submit jobs via the MoonMind HTTP API (Temporal-aware)."""
-    moonmind_url = str(os.getenv("MOONMIND_URL", "")).strip()
-    if moonmind_url:
-        worker_token = _read_worker_token()
-        return await _submit_jobs_via_http(
-            queue_requests,
-            moonmind_url=moonmind_url,
-            worker_token=worker_token,
-        )
-    logger.error("MOONMIND_URL is not set; cannot enqueue pr-resolver tasks.")
-    return await _submit_jobs_via_db(queue_requests)
 
 
 def _build_request_records(

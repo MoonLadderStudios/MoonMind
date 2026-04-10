@@ -68,7 +68,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.task.publish.mode`: `none`
      - `payload.task.skill.name`: `pr-resolver`
      - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
-   - Submit via the internal Temporal-aware create endpoint (`POST /api/executions`);
+   - Submit via the internal Temporal execution API (`POST /api/executions`);
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
 4. Write one summary artifact at `artifacts/batch_pr_resolver_result.json`.
 5. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
@@ -79,3 +79,4 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
 - Use `state=open` by default to avoid accidental non-open PR dispatch.
 - `--include-forks` is rejected to avoid unreliable fork-branch checkout behavior in queued jobs.
 - Skip fork PRs by default.
+- Require `MOONMIND_URL` to reach the MoonMind API; the legacy direct-DB queue fallback is intentionally unsupported.
