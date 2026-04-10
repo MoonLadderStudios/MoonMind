@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -49,6 +50,7 @@ _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
+_ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
 
@@ -588,6 +590,24 @@ class CodexManagedSessionRuntime:
             )
         return False
 
+    @staticmethod
+    def _rollout_entry_timestamp(payload: Mapping[str, Any]) -> float | None:
+        timestamp_text = str(payload.get("timestamp") or "").strip()
+        if not timestamp_text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.timestamp()
+
+    @staticmethod
+    def _is_terminal_rollout_phase(value: Any) -> bool:
+        phase = str(value or "").strip().lower()
+        return phase in {"final", "final_answer"}
+
     def _allowed_rollout_path(self, path_value: str | None) -> str | None:
         normalized = self._normalized_thread_path(path_value)
         if normalized is None:
@@ -606,11 +626,18 @@ class CodexManagedSessionRuntime:
         vendor_thread_path: str | None,
         *,
         vendor_turn_id: str,
+        turn_started_at: float | None = None,
     ) -> str:
         rollout_path = self._allowed_rollout_path(vendor_thread_path)
         if rollout_path is None:
             return ""
         last_text = ""
+        terminal_text = ""
+        terminal_cutoff = None
+        if turn_started_at is not None:
+            terminal_cutoff = (
+                float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS
+            )
         try:
             rollout_file = Path(rollout_path)
             if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
@@ -626,39 +653,75 @@ class CodexManagedSessionRuntime:
                         continue
                     if not isinstance(payload, Mapping):
                         continue
-                    if not self._payload_references_turn(payload, vendor_turn_id):
-                        continue
-                    entry_type = str(payload.get("type") or "").strip().lower()
-                    if entry_type == "response_item":
-                        response_payload = payload.get("payload")
-                        if not isinstance(response_payload, Mapping):
-                            continue
-                        if (
-                            str(response_payload.get("type") or "").strip().lower()
-                            != "message"
-                            or str(response_payload.get("role") or "").strip().lower()
-                            != "assistant"
-                        ):
-                            continue
-                        text = self._content_text(response_payload.get("content"))
+                    references_turn = self._payload_references_turn(payload, vendor_turn_id)
+                    if references_turn:
+                        text = self._assistant_text_from_rollout_entry(payload)
                         if text:
                             last_text = text
-                    elif entry_type == "event_msg":
-                        event_payload = payload.get("payload")
-                        if not isinstance(event_payload, Mapping):
+                    text = self._terminal_assistant_text_from_rollout_entry(payload)
+                    if text:
+                        if references_turn:
+                            terminal_text = text
                             continue
-                        event_type = str(event_payload.get("type") or "").strip().lower()
-                        if event_type == "agent_message":
-                            text = str(event_payload.get("message") or "").strip()
-                        elif event_type == "task_complete":
-                            text = str(event_payload.get("last_agent_message") or "").strip()
-                        else:
+                        if terminal_cutoff is None:
                             continue
-                        if text:
-                            last_text = text
+                        entry_timestamp = self._rollout_entry_timestamp(payload)
+                        if entry_timestamp is None or entry_timestamp < terminal_cutoff:
+                            continue
+                        terminal_text = text
         except OSError:
             return ""
-        return last_text
+        return last_text or terminal_text
+
+    @classmethod
+    def _assistant_text_from_rollout_entry(cls, payload: Mapping[str, Any]) -> str:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return ""
+            if (
+                str(response_payload.get("type") or "").strip().lower() != "message"
+                or str(response_payload.get("role") or "").strip().lower()
+                != "assistant"
+            ):
+                return ""
+            return cls._content_text(response_payload.get("content"))
+        elif entry_type == "event_msg":
+            event_payload = payload.get("payload")
+            if not isinstance(event_payload, Mapping):
+                return ""
+            if str(event_payload.get("type") or "").strip().lower() != "agent_message":
+                return ""
+            return str(event_payload.get("message") or "").strip()
+        return ""
+
+    @classmethod
+    def _terminal_assistant_text_from_rollout_entry(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> str:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return ""
+            if not cls._is_terminal_rollout_phase(response_payload.get("phase")):
+                return ""
+            return cls._assistant_text_from_rollout_entry(payload)
+        elif entry_type == "event_msg":
+            event_payload = payload.get("payload")
+            if not isinstance(event_payload, Mapping):
+                return ""
+            event_type = str(event_payload.get("type") or "").strip().lower()
+            if event_type == "task_complete":
+                return str(event_payload.get("last_agent_message") or "").strip()
+            if (
+                event_type == "agent_message"
+                and cls._is_terminal_rollout_phase(event_payload.get("phase"))
+            ):
+                return cls._assistant_text_from_rollout_entry(payload)
+        return ""
 
     def _rollout_terminal_metadata(
         self,
@@ -853,6 +916,7 @@ class CodexManagedSessionRuntime:
         return self._extract_assistant_text_from_rollout(
             vendor_thread_path,
             vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
         )
 
     @staticmethod
