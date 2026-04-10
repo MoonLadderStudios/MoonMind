@@ -4822,6 +4822,22 @@ pytest-base-url = ">=1.0.0,<3.0.0"
 python-slugify = ">=6.0.0,<9.0.0"
 
 [[package]]
+name = "pytest-timeout"
+version = "2.4.0"
+description = "pytest plugin to abort hanging tests"
+optional = true
+python-versions = ">=3.7"
+groups = ["main"]
+markers = "extra == \"tests\""
+files = [
+    {file = "pytest_timeout-2.4.0-py3-none-any.whl", hash = "sha256:c42667e5cdadb151aeb5b26d114aff6bdf5a907f176a007a30b940d3d865b5c2"},
+    {file = "pytest_timeout-2.4.0.tar.gz", hash = "sha256:7e68e90b01f9eff71332b25001f85c75495fc4e3a836701876183c4bcfd0540a"},
+]
+
+[package.dependencies]
+pytest = ">=7.0.0"
+
+[[package]]
 name = "pytest-xdist"
 version = "3.8.0"
 description = "pytest xdist plugin for distributed testing, most importantly across multiple CPUs"
@@ -4922,7 +4938,7 @@ description = "Python for Window Extensions"
 optional = false
 python-versions = "*"
 groups = ["main"]
-markers = "sys_platform == \"win32\" or platform_system == \"Windows\""
+markers = "platform_system == \"Windows\" or sys_platform == \"win32\""
 files = [
     {file = "pywin32-311-cp310-cp310-win32.whl", hash = "sha256:d03ff496d2a0cd4a5893504789d4a15399133fe82517455e78bad62efbb7f0a3"},
     {file = "pywin32-311-cp310-cp310-win_amd64.whl", hash = "sha256:797c2772017851984b97180b0bebe4b620bb86328e8a884bb626156295a63b3b"},
@@ -5208,14 +5224,14 @@ shaping = ["uharfbuzz"]
 
 [[package]]
 name = "requests"
-version = "2.33.0"
+version = "2.33.1"
 description = "Python HTTP for Humans."
 optional = false
 python-versions = ">=3.10"
 groups = ["main", "dev"]
 files = [
-    {file = "requests-2.33.0-py3-none-any.whl", hash = "sha256:3324635456fa185245e24865e810cecec7b4caf933d7eb133dcde67d48cee69b"},
-    {file = "requests-2.33.0.tar.gz", hash = "sha256:c7ebc5e8b0f21837386ad0e1c8fe8b829fa5f544d8df3b2253bff14ef29d7652"},
+    {file = "requests-2.33.1-py3-none-any.whl", hash = "sha256:4e6d1ef462f3626a1f0a0a9c42dd93c63bad33f9f1c1937509b8c5c8718ab56a"},
+    {file = "requests-2.33.1.tar.gz", hash = "sha256:18817f8c57c6263968bc123d237e3b8b08ac046f5456bd1e307ee8f4250d3517"},
 ]
 
 [package.dependencies]
@@ -5226,7 +5242,6 @@ urllib3 = ">=1.26,<3"
 
 [package.extras]
 socks = ["PySocks (>=1.5.6,!=1.5.7)"]
-test = ["PySocks (>=1.5.6,!=1.5.7)", "pytest (>=3)", "pytest-cov", "pytest-httpbin (==2.1.0)", "pytest-mock", "pytest-xdist"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<8)"]
 
 [[package]]
@@ -6350,9 +6365,9 @@ test = ["big-O", "jaraco.functools", "jaraco.itertools", "jaraco.test", "more_it
 type = ["pytest-mypy"]
 
 [extras]
-tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
+tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xdist"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "cd6d0bd91bd34fe855a676e945f08050f7cbd8b57ddcd03f96a1ed67f395aec7"
+content-hash = "c122fce7a908ea2dc53dbd0d03dba6d2461557f3a099aa4c012cb934f8b9b6de"
