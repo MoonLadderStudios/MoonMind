@@ -567,12 +567,30 @@ class MoonMindProviderProfileManagerWorkflow:
         if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
 
+    @staticmethod
+    def _normalize_selector(
+        selector: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        if not selector:
+            return None
+        normalized: dict[str, Any] = {}
+        for key, value in selector.items():
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            normalized[key] = value
+        return normalized or None
+
     def _find_available_profile(
         self,
         selector: Optional[dict[str, Any]] = None,
         execution_profile_ref: str | None = None,
     ) -> Optional[ProfileSlotState]:
         """Find the best available profile matching the selector."""
+        selector = self._normalize_selector(selector)
         exact_profile_id = str(execution_profile_ref or "").strip()
         if exact_profile_id:
             exact_profile = self._profiles.get(exact_profile_id)
@@ -630,6 +648,14 @@ class MoonMindProviderProfileManagerWorkflow:
                 return eligible_profiles[0]
             if len(default_profiles) == 1:
                 return default_profiles[0]
+            if not default_profiles:
+                # Preserve lease assignment for in-flight manager state restored
+                # from payloads created before is_default existed.
+                eligible_profiles.sort(
+                    key=lambda p: (p.priority, p.available_slots),
+                    reverse=True,
+                )
+                return eligible_profiles[0]
             return None
 
         # Sort descending by priority, then by available slots

@@ -277,6 +277,56 @@ class TestProviderProfileManagerHelpers:
         assert best is not None
         assert best.profile_id == "p2"
 
+    def test_find_available_profile_treats_empty_selector_as_no_selector(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+            priority=500,
+        )
+        wf._profiles["p2"] = ProfileSlotState(
+            profile_id="p2",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            priority=100,
+        )
+
+        best = wf._find_available_profile({"tagsAny": [], "tagsAll": []})
+        assert best is not None
+        assert best.profile_id == "p2"
+
+    def test_find_available_profile_falls_back_to_priority_when_no_default_exists(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+            priority=100,
+        )
+        wf._profiles["p2"] = ProfileSlotState(
+            profile_id="p2",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+            priority=300,
+        )
+
+        best = wf._find_available_profile()
+        assert best is not None
+        assert best.profile_id == "p2"
+
     def test_find_available_profile_none_available(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(

@@ -847,6 +847,7 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
 async def test_controller_send_turn_polls_session_status_until_completed() -> None:
     commands: list[tuple[str, ...]] = []
     session_status_calls = 0
+    session_status_payloads: list[dict[str, object]] = []
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -871,6 +872,7 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
             }
             return 0, json.dumps(payload), ""
         if command[:3] == ("docker", "exec", "-i") and "session_status" in command:
+            session_status_payloads.append(json.loads(input_text or "{}"))
             session_status_calls += 1
             if session_status_calls == 1:
                 payload = {
@@ -927,6 +929,14 @@ async def test_controller_send_turn_polls_session_status_until_completed() -> No
     assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata["assistantText"] == "OK"
+    assert len(session_status_payloads) == 2
+    for payload in session_status_payloads:
+        assert payload["sessionId"] == "sess-1"
+        assert payload["sessionEpoch"] == 1
+        assert payload["containerId"] == "ctr-1"
+        assert payload["threadId"] == "logical-thread-1"
+        assert "instructions" not in payload
+        assert "reason" not in payload
     assert any(command[-2:] == ("invoke", "send_turn") for command in commands)
     assert any(command[-2:] == ("invoke", "session_status") for command in commands)
 
@@ -1022,6 +1032,144 @@ async def test_controller_send_turn_recovers_from_blank_output_using_runtime_sta
     assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata["assistantText"] == "Recovered OK"
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_does_not_recover_stale_completed_turn_state(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    session_workspace = tmp_path / "work" / "session"
+    session_workspace.mkdir(parents=True, exist_ok=True)
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath=str(session_workspace),
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    (session_workspace / ".moonmind-codex-session-state.json").write_text(
+        json.dumps(
+            {
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "logicalThreadId": "logical-thread-1",
+                "vendorThreadId": "vendor-thread-1",
+                "containerId": "ctr-1",
+                "activeTurnId": None,
+                "lastControlAction": "send_turn",
+                "lastTurnId": "vendor-turn-prior",
+                "lastTurnStatus": "completed",
+                "lastAssistantText": "stale output",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "send_turn" in command:
+            return 0, "   \n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    with pytest.raises(RuntimeError, match="returned no JSON output"):
+        await controller.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_times_out_when_session_never_reaches_terminal_state(
+) -> None:
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "send_turn" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                    "activeTurnId": "vendor-turn-1",
+                },
+                "turnId": "vendor-turn-1",
+                "status": "running",
+                "metadata": {},
+            }
+            return 0, json.dumps(payload), ""
+        if command[:3] == ("docker", "exec", "-i") and "session_status" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                    "activeTurnId": "vendor-turn-1",
+                },
+                "status": "busy",
+                "metadata": {
+                    "lastTurnId": "vendor-turn-1",
+                    "lastTurnStatus": "running",
+                },
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+        turn_poll_interval_seconds=0,
+        turn_poll_timeout_seconds=0,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="timed out waiting for terminal managed-session turn status",
+    ):
+        await controller.send_turn(
+            SendCodexManagedSessionTurnRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                instructions="Reply with exactly the word OK",
+            )
+        )
 
 
 @pytest.mark.asyncio

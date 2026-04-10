@@ -62,11 +62,10 @@ def upgrade() -> None:
     for runtime_id, runtime_profiles in runtime_rows.items():
         runtime_profiles.sort(
             key=lambda row: (
-                1 if row.enabled else 0,
-                row.priority if row.priority is not None else 100,
+                0 if row.enabled else 1,
+                -(row.priority if row.priority is not None else 100),
                 str(row.profile_id),
             ),
-            reverse=True,
         )
         default_profile_id = runtime_profiles[0].profile_id
         bind.execute(
@@ -91,4 +90,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError("One-way migration: provider profile runtime defaults")
+    op.drop_index(
+        "ux_provider_profiles_runtime_default",
+        table_name="managed_agent_provider_profiles",
+    )
+    op.drop_column("managed_agent_provider_profiles", "is_default")

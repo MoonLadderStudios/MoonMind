@@ -9,6 +9,7 @@ import os
 import posixpath
 import re
 import shutil
+import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
@@ -29,6 +30,9 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
+)
+from moonmind.workflows.codex_session_timeouts import (
+    DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
@@ -113,6 +117,9 @@ class DockerCodexManagedSessionController:
         ready_poll_interval_seconds: float = 1.0,
         ready_poll_attempts: int = 30,
         turn_poll_interval_seconds: float = 1.0,
+        turn_poll_timeout_seconds: float = (
+            DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
+        ),
         command_runner: CommandRunner = _default_command_runner,
     ) -> None:
         self._workspace_volume_name = workspace_volume_name
@@ -125,6 +132,7 @@ class DockerCodexManagedSessionController:
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
         self._ready_poll_attempts = ready_poll_attempts
         self._turn_poll_interval_seconds = turn_poll_interval_seconds
+        self._turn_poll_timeout_seconds = turn_poll_timeout_seconds
         self._command_runner = command_runner
 
     def _docker_env(self) -> dict[str, str]:
@@ -868,16 +876,14 @@ class DockerCodexManagedSessionController:
         if str(state_payload.get("logicalThreadId") or "").strip() != request.thread_id:
             return None
 
-        turn_id = str(
-            state_payload.get("lastTurnId") or state_payload.get("activeTurnId") or ""
-        ).strip()
-        if not turn_id:
-            return None
-        status = str(state_payload.get("lastTurnStatus") or "").strip().lower()
         active_turn_id = str(state_payload.get("activeTurnId") or "").strip() or None
+        if not active_turn_id:
+            return None
+        turn_id = active_turn_id
+        status = str(state_payload.get("lastTurnStatus") or "").strip().lower()
         if not status:
             status = "running" if active_turn_id else ""
-        if status not in {"accepted", "running", "completed", "interrupted", "failed"}:
+        if status not in {"accepted", "running"}:
             return None
 
         metadata: dict[str, Any] = {}
@@ -908,11 +914,15 @@ class DockerCodexManagedSessionController:
         initial_response: CodexManagedSessionTurnResponse,
     ) -> CodexManagedSessionTurnResponse:
         turn_id = initial_response.turn_id
+        locator_payload = self._locator_from_session_state(
+            initial_response.session_state
+        ).model_dump(by_alias=True)
+        deadline = time.monotonic() + self._turn_poll_timeout_seconds
         while True:
             payload = await self._invoke_json(
                 container_id=request.container_id,
                 action="session_status",
-                payload=request.model_dump(by_alias=True),
+                payload=locator_payload,
             )
             handle = CodexManagedSessionHandle.model_validate(payload)
             metadata = dict(handle.metadata)
@@ -922,8 +932,12 @@ class DockerCodexManagedSessionController:
             reason = str(metadata.get("lastTurnError") or "").strip()
 
             if handle.status == "busy" and handle.session_state.active_turn_id:
-                if self._turn_poll_interval_seconds > 0:
-                    await asyncio.sleep(self._turn_poll_interval_seconds)
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "timed out waiting for terminal managed-session turn status "
+                        f"after {self._turn_poll_timeout_seconds} seconds"
+                    )
+                await asyncio.sleep(self._turn_poll_interval_seconds)
                 continue
 
             if handle.status == "failed" or last_turn_status == "failed":
@@ -953,8 +967,12 @@ class DockerCodexManagedSessionController:
                     metadata=metadata,
                 )
 
-            if self._turn_poll_interval_seconds > 0:
-                await asyncio.sleep(self._turn_poll_interval_seconds)
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "timed out waiting for terminal managed-session turn status "
+                    f"after {self._turn_poll_timeout_seconds} seconds"
+                )
+            await asyncio.sleep(self._turn_poll_interval_seconds)
 
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (
