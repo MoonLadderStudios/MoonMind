@@ -167,6 +167,34 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
     assert plan["metadata"]["title"] == "fix/my-feature-branch"
 
 
+def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "PR-Resolver",
+                    "version": "1.0",
+                    "inputs": {"branch": "fix/from-tool-inputs"},
+                },
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert '"pr": "fix/from-tool-inputs"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/from-tool-inputs"
+
+
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

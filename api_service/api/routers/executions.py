@@ -1238,19 +1238,20 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
         return explicit
-    tool_payload = task_payload.get("tool")
-    if not isinstance(tool_payload, Mapping):
-        tool_payload = task_payload.get("skill")
+    tool_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
+        task_payload.get("skill")
+    )
     tool_name = ""
-    if isinstance(tool_payload, Mapping):
-        tool_name = str(tool_payload.get("name") or tool_payload.get("id") or "").strip()
-    if tool_name == "pr-resolver":
-        git_payload = task_payload.get("git")
-        if not isinstance(git_payload, Mapping):
-            git_payload = {}
-        inputs_payload = task_payload.get("inputs")
-        if not isinstance(inputs_payload, Mapping):
-            inputs_payload = {}
+    if tool_payload:
+        tool_name = str(
+            tool_payload.get("name") or tool_payload.get("id") or ""
+        ).strip()
+    if tool_name.lower() == "pr-resolver":
+        git_payload = _coerce_mapping(task_payload.get("git"))
+        inputs_payload = _coerce_mapping(task_payload.get("inputs"))
+        tool_inputs_payload = _coerce_mapping(
+            tool_payload.get("inputs") or tool_payload.get("args")
+        )
         starting_branch = str(
             git_payload.get("startingBranch")
             or task_payload.get("startingBranch")
@@ -1258,6 +1259,8 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
             or task_payload.get("branch")
             or inputs_payload.get("startingBranch")
             or inputs_payload.get("branch")
+            or tool_inputs_payload.get("startingBranch")
+            or tool_inputs_payload.get("branch")
             or ""
         ).strip()
         if starting_branch:

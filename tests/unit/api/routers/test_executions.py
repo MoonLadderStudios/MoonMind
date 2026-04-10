@@ -755,6 +755,37 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     }
 
 
+def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "PR-Resolver",
+                        "version": "1.0",
+                        "inputs": {"startingBranch": "feature/from-tool-inputs"},
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "feature/from-tool-inputs"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert initial_parameters["task"]["title"] == "feature/from-tool-inputs"
+
+
 def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

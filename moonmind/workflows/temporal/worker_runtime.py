@@ -164,9 +164,13 @@ def _derive_pr_resolver_title(
         or selected_skill_payload.get("id")
         or ""
     ).strip()
-    if selected_skill_name != "pr-resolver":
+    if selected_skill_name.lower() != "pr-resolver":
         return ""
     git_payload = _coerce_mapping(task_payload.get("git"))
+    selected_skill_payload_inputs = _coerce_mapping(
+        selected_skill_payload.get("inputs")
+        or selected_skill_payload.get("args")
+    )
     return str(
         git_payload.get("startingBranch")
         or task_payload.get("startingBranch")
@@ -174,6 +178,8 @@ def _derive_pr_resolver_title(
         or task_payload.get("branch")
         or selected_skill_inputs.get("startingBranch")
         or selected_skill_inputs.get("branch")
+        or selected_skill_payload_inputs.get("startingBranch")
+        or selected_skill_payload_inputs.get("branch")
         or ""
     ).strip()
 
