@@ -389,6 +389,48 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     assert call_path == "/api/executions"
 
 
+def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
+    """The Temporal executions API returns workflowId rather than legacy taskId."""
+    module = _load_module()
+    submit_jobs_via_http = module["_submit_jobs_via_http"]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={"workflowId": "mm:wf-123", "status": "queued"}
+    )
+
+    mock_post = AsyncMock(return_value=fake_response)
+
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, path: str, **kwargs: Any) -> Any:
+            return await mock_post(path, **kwargs)
+
+    with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+        submission = _make_submission(module)
+        created, errors = asyncio.run(
+            submit_jobs_via_http(
+                [submission],
+                moonmind_url="http://api:5000",
+                worker_token=None,
+            )
+        )
+
+    assert errors == []
+    assert created[0]["jobId"] == "mm:wf-123"
+
+
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
     module = _load_module()
@@ -418,27 +460,22 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     assert errors == []
 
 
-def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
-    """_submit_jobs falls back to DB path and logs a warning when MOONMIND_URL is absent."""
+def test_submit_jobs_errors_when_no_url(monkeypatch: Any) -> None:
+    """The removed legacy DB queue fallback must not be used."""
     module = _load_module()
     submit_jobs = module["_submit_jobs"]
 
     monkeypatch.delenv("MOONMIND_URL", raising=False)
 
-    db_called = []
-
-    async def fake_db(requests: list) -> tuple:
-        db_called.append(True)
-        return [{"pr": 1, "branch": "b", "jobId": "y"}], []
-
     submission = _make_submission(module)
 
-    monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
     created, errors = asyncio.run(submit_jobs([submission]))
 
-    assert db_called == [True]
-    assert len(created) == 1
-    assert errors == []
+    assert created == []
+    assert len(errors) == 1
+    assert errors[0]["pr"] == 42
+    assert "MOONMIND_URL is not set" in errors[0]["error"]
+    assert "removed legacy DB queue" in errors[0]["error"]
 
 
 def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:

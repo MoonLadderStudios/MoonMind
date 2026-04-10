@@ -13,6 +13,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
+from urllib.parse import urlparse
 
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -54,6 +55,35 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
 _GIT_COMMAND_LOCALE = {"LC_ALL": "C", "LANG": "C"}
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 logger = logging.getLogger(__name__)
+
+
+def _managed_session_docker_network(
+    request_environment: Mapping[str, str] | None = None,
+) -> str | None:
+    """Return the Docker network managed session containers should join."""
+
+    for env_key in (
+        "MOONMIND_MANAGED_SESSION_DOCKER_NETWORK",
+        "MOONMIND_DOCKER_NETWORK",
+    ):
+        raw_value = os.environ.get(env_key)
+        if raw_value is None:
+            continue
+        value = raw_value.strip()
+        if value.lower() in {"", "none", "disabled", "off"}:
+            return None
+        return value
+
+    moonmind_url = ""
+    if request_environment is not None:
+        moonmind_url = str(request_environment.get("MOONMIND_URL") or "").strip()
+    if not moonmind_url:
+        moonmind_url = os.environ.get("MOONMIND_URL", "").strip()
+    if moonmind_url:
+        hostname = (urlparse(moonmind_url).hostname or "").strip().lower()
+        if hostname in {"api", "moonmind-api", "moonmind-api-1"}:
+            return "local-network"
+    return None
 
 
 class CommandRunner(Protocol):
@@ -1091,22 +1121,29 @@ class DockerCodexManagedSessionController:
             _MANAGED_SESSION_CONTAINER_USER,
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
-            "-e",
-            f"MOONMIND_SESSION_WORKSPACE_PATH={request.workspace_path}",
-            "-e",
-            f"MOONMIND_SESSION_WORKSPACE_STATE_PATH={request.session_workspace_path}",
-            "-e",
-            f"MOONMIND_SESSION_ARTIFACT_SPOOL_PATH={request.artifact_spool_path}",
-            "-e",
-            f"MOONMIND_SESSION_CODEX_HOME_PATH={request.codex_home_path}",
-            "-e",
-            f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
-            "-e",
-            f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
-            "-e",
-            "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
-            f"{request.turn_completion_timeout_seconds}",
         ]
+        docker_network = _managed_session_docker_network(request.environment)
+        if docker_network:
+            run_command.extend(["--network", docker_network])
+        run_command.extend(
+            [
+                "-e",
+                f"MOONMIND_SESSION_WORKSPACE_PATH={request.workspace_path}",
+                "-e",
+                f"MOONMIND_SESSION_WORKSPACE_STATE_PATH={request.session_workspace_path}",
+                "-e",
+                f"MOONMIND_SESSION_ARTIFACT_SPOOL_PATH={request.artifact_spool_path}",
+                "-e",
+                f"MOONMIND_SESSION_CODEX_HOME_PATH={request.codex_home_path}",
+                "-e",
+                f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
+                "-e",
+                f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
+                "-e",
+                "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
+                f"{request.turn_completion_timeout_seconds}",
+            ]
+        )
         auth_volume_path = str(
             request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
         ).strip()

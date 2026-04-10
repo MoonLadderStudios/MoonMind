@@ -128,6 +128,7 @@ async def _run_command(cmd, **kwargs):
     return CmdRes(stdout)
 
 logger = getLogger(__name__)
+_NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
 PlanGenerator = Callable[
@@ -2811,6 +2812,10 @@ class TemporalAgentRuntimeActivities:
                     profile=profile,
                 )
             )
+        for key in _NON_SECRET_MANAGED_SESSION_ENV_KEYS:
+            value = os.environ.get(key)
+            if value is not None and value.strip() and key not in environment:
+                environment[key] = value
         environment = await shape_launch_github_auth_environment(
             environment,
             ambient_github_token=os.environ.get("GITHUB_TOKEN"),
