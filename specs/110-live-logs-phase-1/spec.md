@@ -36,6 +36,39 @@ The system automatically and transparently captures raw stdout and stderr for al
 
 1. **Given** an launched agent run, **When** it emits high-volume stdio data, **Then** the log streamer buffers it continuously and writes durable `.log` and `.json` artifacts at the end of the run without exhausting pipe buffers causing stalls.
 
+### User Story 2 - Runtime metadata remains operator-visible after completion (Priority: P1)
+
+Managed runs must persist the artifact references and summary metadata that Mission Control needs after the process exits, times out, or fails.
+
+**Why this priority**: Live log capture is incomplete if the final run record does not retain the stdout/stderr/diagnostics refs and terminal summary fields the UI reads later.
+
+**Independent Test**: Can be tested by supervising successful, failed, and timed-out processes and asserting the resulting `ManagedRunRecord` and diagnostics artifact contain the expected refs and status metadata.
+
+**Acceptance Scenarios**:
+
+1. **Given** a managed run finishes, **When** supervision finalizes the run, **Then** the `ManagedRunRecord` stores `stdout.log`, `stderr.log`, and `diagnostics.json` refs together with summary metadata and timestamps.
+2. **Given** a managed run fails or times out, **When** supervision classifies the terminal state, **Then** the diagnostics artifact and run record preserve exit code, failure class, summary, and timestamps needed by the UI.
+
+### User Story 3 - Heartbeat and timeout handling do not block capture (Priority: P1)
+
+Heartbeat updates and timeout enforcement must run alongside stream draining so large-output processes do not deadlock and terminal cleanup still completes deterministically.
+
+**Why this priority**: Concurrency between heartbeating and stream draining is the mechanism that prevents pipe-buffer stalls and preserves unattended execution.
+
+**Independent Test**: Can be tested with long-running and high-volume subprocesses that would block if log streaming started only after process wait completion.
+
+**Acceptance Scenarios**:
+
+1. **Given** a process emits more than a pipe buffer of interleaved stdout/stderr, **When** the supervisor runs, **Then** heartbeat/timeout handling and stream draining proceed concurrently and the process completes without pipe stalls.
+2. **Given** a process exceeds its timeout, **When** the supervisor terminates it, **Then** the final diagnostics and persisted run metadata still reflect the timeout outcome and captured output up to termination.
+
+### Edge Cases
+
+- A process exits abruptly before emitting a trailing newline.
+- A process emits large interleaved stdout and stderr chunks that exceed the default OS pipe buffer.
+- The frontend never connects to a live-log stream while the run is executing.
+- Timeout-driven termination occurs after partial output has already been captured.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
@@ -46,6 +79,12 @@ The system automatically and transparently captures raw stdout and stderr for al
 - **FR-004**: System MUST record references to these durables within the `ManagedRunRecord`. (Maps to DOC-REQ-009, DOC-REQ-010)
 - **FR-005**: System MUST run the log extraction in a concurrent task alongside heartbeating to prevent deadlocking. (Maps to DOC-REQ-003, DOC-REQ-012)
 - **FR-006**: System MUST not wrap command invocations inside `tmate`. (Maps to DOC-REQ-002)
+
+### Non-Functional Requirements
+
+- **NFR-001**: Log capture MUST preserve raw subprocess output ordering within each stream and must not rewrite it into framework log formats before artifact persistence. (Maps to DOC-REQ-004)
+- **NFR-002**: The runtime path MUST tolerate high-volume output beyond the nominal OS pipe buffer without deadlocking supervised processes. (Maps to DOC-REQ-005, DOC-REQ-014)
+- **NFR-003**: The feature MUST remain observer-independent: artifact generation succeeds even when no live-log UI client connects. (Maps to DOC-REQ-011)
 
 ## Success Criteria *(mandatory)*
 
