@@ -24,6 +24,7 @@ def _write_fake_app_server(
     *,
     completion_notification_method: str | None = "turn/completed",
     complete_turn_on_read: bool = True,
+    assistant_text: str = "OK",
     fail_thread_resume: bool = False,
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
@@ -57,6 +58,7 @@ START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
 COMPLETION_NOTIFICATION_METHOD = __COMPLETION_NOTIFICATION_METHOD__
 COMPLETE_TURN_ON_READ = __COMPLETE_TURN_ON_READ__
+ASSISTANT_TEXT = __ASSISTANT_TEXT__
 turn_completed = False
 
 for line in sys.stdin:
@@ -205,14 +207,14 @@ __COMPLETION_BLOCK__
         turn_items = []
         if turn_completed:
             turn_items = [
-                {"type": "agentMessage", "id": "msg-1", "text": "OK", "phase": "final_answer", "memoryCitation": None}
+                {"type": "agentMessage", "id": "msg-1", "text": ASSISTANT_TEXT, "phase": "final_answer", "memoryCitation": None}
             ]
         sys.stdout.write(json.dumps({
             "id": msg_id,
             "result": {
                 "thread": {
                     "id": thread_id,
-                    "preview": "OK",
+                    "preview": ASSISTANT_TEXT,
                     "ephemeral": False,
                     "modelProvider": "openai",
                     "createdAt": 1,
@@ -266,6 +268,7 @@ __COMPLETION_BLOCK__
         )
         .replace("__START_THREAD_ID__", repr(start_thread_id))
         .replace("__START_THREAD_PATH__", repr(start_thread_path))
+        .replace("__ASSISTANT_TEXT__", repr(assistant_text))
         .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )
@@ -380,6 +383,65 @@ def test_runtime_send_turn_returns_running_response_then_session_status_complete
     assert handle.status == "ready"
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastAssistantText"] == "OK"
+
+
+def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_output(
+    tmp_path: Path,
+) -> None:
+    script = _write_fake_app_server(tmp_path, assistant_text="")
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "running"
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "failed"
+    assert (
+        handle.metadata["lastTurnError"]
+        == "codex app-server turn/completed produced no assistant output"
+    )
+
+    state_payload = json.loads(
+        (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state_payload.get("activeTurnId") is None
+    assert (
+        state_payload.get("lastTurnError")
+        == "codex app-server turn/completed produced no assistant output"
+    )
+    stderr_path = Path(request.artifact_spool_path) / "stderr.log"
+    assert "turn completed without assistant output" in stderr_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_runtime_send_turn_accepts_item_completed_notification_contract(

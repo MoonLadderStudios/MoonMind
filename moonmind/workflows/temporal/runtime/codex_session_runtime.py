@@ -702,6 +702,16 @@ class CodexManagedSessionRuntime:
 
         status, error_text = outcome
         assistant_text = self._extract_assistant_text(thread_payload)
+        if status == "completed" and not assistant_text:
+            error_text = "codex app-server turn/completed produced no assistant output"
+            self._append_spool(
+                "stderr",
+                (
+                    "codex app-server turn completed without assistant output: "
+                    f"{active_turn_id}\n"
+                ),
+            )
+            status = "failed"
         self._finalize_turn(
             state=state,
             turn_id=active_turn_id,

@@ -259,6 +259,8 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
             "merge_strategy": "replace",
             "content_template": {
                 "model_provider": "openrouter",
+                "model_reasoning_effort": "high",
+                "model": "qwen/qwen3.6-plus:free",
                 "profile": "openrouter_qwen36_plus",
                 "model_providers": {
                     "openrouter": {
@@ -287,3 +289,93 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
 
     codex_default = next(p for p in profiles if p.profile_id == "codex_default")
     assert codex_default.is_default is True
+
+@pytest.mark.asyncio
+async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existing_profile(
+    _module_db, monkeypatch
+):
+    from api_service.main import (
+        _auto_seed_provider_profiles,
+        _legacy_codex_openrouter_qwen36_plus_file_templates,
+    )
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+        profile.file_templates = _legacy_codex_openrouter_qwen36_plus_file_templates()
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+
+    content_template = profile.file_templates[0]["content_template"]
+    assert content_template["model_provider"] == "openrouter"
+    assert content_template["model_reasoning_effort"] == "high"
+    assert content_template["model"] == "qwen/qwen3.6-plus:free"
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_does_not_overwrite_custom_openrouter_codex_config_template(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    await _auto_seed_provider_profiles()
+
+    custom_template = [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "replace",
+            "content_template": {
+                "model_provider": "openrouter",
+                "model_reasoning_effort": "medium",
+                "model": "openrouter/custom-model",
+                "profile": "openrouter_qwen36_plus",
+                "model_providers": {
+                    "openrouter": {
+                        "name": "OpenRouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "env_key": "OPENROUTER_API_KEY",
+                        "wire_api": "responses",
+                    }
+                },
+                "profiles": {
+                    "openrouter_qwen36_plus": {
+                        "model_provider": "openrouter",
+                        "model": "openrouter/custom-model",
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+        profile.file_templates = custom_template
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+
+    assert profile.file_templates == custom_template

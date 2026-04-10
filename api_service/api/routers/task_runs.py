@@ -46,6 +46,9 @@ from moonmind.observability.transport import SpoolLogReader
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])
 
 _HISTORICAL_EVENT_CHUNK_SIZE = 65536
+_OBSERVABILITY_TERMINAL_STATUSES = frozenset(
+    {"completed", "failed", "canceled", "cancelled", "timed_out"}
+)
 
 
 # Live Session legacy endpoints removed in Phase 6. Use /observability-summary and /logs/stream.
@@ -1011,42 +1014,43 @@ async def get_observability_summary(
 ) -> dict:
     """Fetch the observability summary for a task run from the shared agent jobs volume."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    
-    record = await asyncio.to_thread(store.load, str(id))
-    if not record:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Observability record not found for this task run",
-        )
-    await _require_observability_access(record, _user)
     started = time.perf_counter()
 
-    terminal_statuses = {"completed", "failed", "canceled", "cancelled", "timed_out"}
-    run_status = getattr(record, "status", None)
-    is_terminal = run_status in terminal_statuses
+    try:
+        record = await asyncio.to_thread(store.load, str(id))
+        if not record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Observability record not found for this task run",
+            )
+        await _require_observability_access(record, _user)
 
-    raw_live_stream_capable = getattr(record, "live_stream_capable", None)
-    if is_terminal:
-        supports_live = False
-        live_stream_status = "ended"
-    elif raw_live_stream_capable is True:
-        supports_live = True
-        live_stream_status = "available"
-    else:  # Catches False and None
-        supports_live = False
-        live_stream_status = "unavailable"
+        run_status = getattr(record, "status", None)
+        is_terminal = run_status in _OBSERVABILITY_TERMINAL_STATUSES
 
-    base = record.model_dump(by_alias=True)
-    session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
-    base["supportsLiveStreaming"] = supports_live
-    base["liveStreamStatus"] = live_stream_status
-    base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
-    _emit_livelogs_metric_observe(
-        "livelogs.summary.latency",
-        value=time.perf_counter() - started,
-        tags={"stream": "livelogs"},
-    )
-    return {"summary": base}
+        raw_live_stream_capable = getattr(record, "live_stream_capable", None)
+        if is_terminal:
+            supports_live = False
+            live_stream_status = "ended"
+        elif raw_live_stream_capable is True:
+            supports_live = True
+            live_stream_status = "available"
+        else:  # Catches False and None
+            supports_live = False
+            live_stream_status = "unavailable"
+
+        base = record.model_dump(by_alias=True)
+        session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
+        base["supportsLiveStreaming"] = supports_live
+        base["liveStreamStatus"] = live_stream_status
+        base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
+        return {"summary": base}
+    finally:
+        _emit_livelogs_metric_observe(
+            "livelogs.summary.latency",
+            value=time.perf_counter() - started,
+            tags={"stream": "livelogs"},
+        )
 
 
 @router.get(
@@ -1241,14 +1245,13 @@ async def stream_task_run_live_logs(
     await _require_observability_access(record, _user)
 
     # Check if run ended => artifact fallback
-    terminal_statuses = ["completed", "failed", "canceled", "cancelled", "timed_out"]
-    if getattr(record, "status", None) in terminal_statuses:
+    if getattr(record, "status", None) in _OBSERVABILITY_TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Run is no longer active. Use artifact retrieval APIs.",
         )
-        
-    # Check capabilities 
+
+    # Check capabilities
     if not getattr(record, "live_stream_capable", False):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -3403,8 +3403,16 @@ describe('LiveLogsPanel', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/do not have permission to view observability for this run/i),
-      ).toBeTruthy();
-    });
+        fetchSpy.mock.calls.some(([url]) => String(url).includes('/observability-summary')),
+      ).toBe(true);
+    }, { timeout: 5000 });
+
+    expect(
+      await screen.findByText(
+        /do not have permission to view observability for this run/i,
+        {},
+        { timeout: 5000 },
+      ),
+    ).toBeTruthy();
   });
 });
