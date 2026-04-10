@@ -85,6 +85,7 @@ from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
+    _managed_session_docker_network,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -612,15 +613,14 @@ def _build_agent_runtime_deps() -> tuple[
         or os.environ.get("SYSTEM_DOCKER_HOST")
         or "tcp://docker-proxy:2375"
     )
-    session_network_name = (
-        os.environ.get("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK")
-        or "local-network"
-    ).strip() or None
     session_moonmind_url = (
         os.environ.get("MOONMIND_MANAGED_SESSION_MOONMIND_URL")
         or os.environ.get("MOONMIND_URL")
         or "http://api:5000"
     ).strip() or None
+    session_network_name = _managed_session_docker_network(
+        {"MOONMIND_URL": session_moonmind_url or ""}
+    )
     session_controller = DockerCodexManagedSessionController(
         workspace_volume_name=workspace_volume_name,
         codex_volume_name=codex_volume_name,

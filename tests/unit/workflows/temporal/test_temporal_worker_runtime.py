@@ -241,6 +241,23 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert not (artifacts_root / "artifacts").exists()
 
 
+def test_build_agent_runtime_deps_reuses_global_session_network(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
+    monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:5000")
+
+    _store, _supervisor, _launcher, session_controller = _build_agent_runtime_deps()
+
+    assert session_controller._network_name == "shared-moonmind-network"
+    assert session_controller._moonmind_url == "http://moonmind-api:5000"
+
+
 def _make_snapshot():
     return SimpleNamespace(
         digest="reg:sha256:test",

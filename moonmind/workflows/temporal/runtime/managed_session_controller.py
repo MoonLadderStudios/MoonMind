@@ -1128,7 +1128,9 @@ class DockerCodexManagedSessionController:
         ]
         session_environment = dict(request.environment)
         if self._moonmind_url:
-            session_environment.setdefault("MOONMIND_URL", self._moonmind_url)
+            existing_moonmind_url = session_environment.get("MOONMIND_URL")
+            if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
+                session_environment["MOONMIND_URL"] = self._moonmind_url
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
         )

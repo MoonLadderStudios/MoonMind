@@ -197,6 +197,6 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
         assert body["payload"]["task"]["inputs"]["pr"] == "1337"
     finally:
-        server.shutdown()
+        await asyncio.to_thread(server.shutdown)
         await asyncio.to_thread(server.server_close)
         server_thread.join(timeout=2)
