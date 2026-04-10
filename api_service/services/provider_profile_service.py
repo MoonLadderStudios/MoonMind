@@ -1,15 +1,74 @@
 import logging
+from typing import Any
+
+from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any
 
 from api_service.db.models import ManagedAgentProviderProfile
 
 logger = logging.getLogger(__name__)
 
+
+async def normalize_runtime_default_profile(
+    *,
+    session: AsyncSession,
+    runtime_id: str,
+    preferred_profile_id: str | None = None,
+) -> str | None:
+    """Ensure exactly one provider profile is marked default for a runtime."""
+
+    normalized_runtime_id = str(runtime_id or "").strip()
+    if not normalized_runtime_id:
+        raise ValueError("runtime_id is required")
+
+    stmt = (
+        select(ManagedAgentProviderProfile)
+        .where(ManagedAgentProviderProfile.runtime_id == normalized_runtime_id)
+        .order_by(
+            case((ManagedAgentProviderProfile.enabled.is_(True), 1), else_=0).desc(),
+            case((ManagedAgentProviderProfile.is_default.is_(True), 1), else_=0).desc(),
+            ManagedAgentProviderProfile.priority.desc(),
+            ManagedAgentProviderProfile.profile_id.asc(),
+        )
+    )
+    result = await session.execute(stmt)
+    rows = list(result.scalars().all())
+    if not rows:
+        return None
+
+    enabled_rows = [row for row in rows if row.enabled]
+    candidates = enabled_rows or rows
+
+    selected = None
+    if preferred_profile_id:
+        selected = next(
+            (row for row in candidates if row.profile_id == preferred_profile_id),
+            None,
+        )
+    if selected is None:
+        selected = next((row for row in candidates if row.is_default), None)
+    if selected is None:
+        selected = candidates[0]
+
+    selected_id = selected.profile_id
+    changed = False
+    for row in rows:
+        should_be_default = row.profile_id == selected_id
+        if row.is_default != should_be_default:
+            row.is_default = should_be_default
+            changed = True
+
+    if changed:
+        await session.flush()
+
+    return selected_id
+
+
 def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     return {
         "profile_id": row.profile_id,
+        "is_default": row.is_default,
         "runtime_id": row.runtime_id,
         "provider_id": row.provider_id,
         "provider_label": row.provider_label,
@@ -43,9 +102,17 @@ async def sync_provider_profile_manager(
     runtime_id: str,
 ) -> None:
     """Ensure runtime manager exists and push the latest enabled profiles."""
-    stmt = select(ManagedAgentProviderProfile).where(
-        ManagedAgentProviderProfile.runtime_id == runtime_id,
-        ManagedAgentProviderProfile.enabled.is_(True),
+    stmt = (
+        select(ManagedAgentProviderProfile)
+        .where(
+            ManagedAgentProviderProfile.runtime_id == runtime_id,
+            ManagedAgentProviderProfile.enabled.is_(True),
+        )
+        .order_by(
+            ManagedAgentProviderProfile.is_default.desc(),
+            ManagedAgentProviderProfile.priority.desc(),
+            ManagedAgentProviderProfile.profile_id.asc(),
+        )
     )
     result = await session.execute(stmt)
     rows = result.scalars().all()

@@ -7,6 +7,7 @@ import pytest
 
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
+    CodexManagedSessionLocator,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
     SendCodexManagedSessionTurnRequest,
@@ -340,7 +341,7 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     assert "vendorThreadPath" not in state_payload
 
 
-def test_runtime_send_turn_returns_completed_response_with_assistant_text(
+def test_runtime_send_turn_returns_running_response_then_session_status_completes_turn(
     tmp_path: Path,
 ) -> None:
     script = _write_fake_app_server(tmp_path)
@@ -367,13 +368,24 @@ def test_runtime_send_turn_returns_completed_response_with_assistant_text(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
     assert response.turn_id == "vendor-turn-1"
-    assert response.session_state.active_turn_id is None
-    assert response.metadata["assistantText"] == "OK"
+    assert response.session_state.active_turn_id == "vendor-turn-1"
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert handle.session_state.active_turn_id is None
+    assert handle.metadata["lastAssistantText"] == "OK"
 
 
-def test_runtime_send_turn_raises_when_completed_turn_has_no_assistant_output(
+def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_output(
     tmp_path: Path,
 ) -> None:
     script = _write_fake_app_server(tmp_path, assistant_text="")
@@ -390,19 +402,31 @@ def test_runtime_send_turn_raises_when_completed_turn_has_no_assistant_output(
     )
     runtime.launch_session(request)
 
-    with pytest.raises(
-        RuntimeError,
-        match="codex app-server turn/completed produced no assistant output",
-    ):
-        runtime.send_turn(
-            SendCodexManagedSessionTurnRequest(
-                sessionId="sess-1",
-                sessionEpoch=1,
-                containerId="ctr-1",
-                threadId="logical-thread-1",
-                instructions="Reply with exactly the word OK",
-            )
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
         )
+    )
+
+    assert response.status == "running"
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "failed"
+    assert (
+        handle.metadata["lastTurnError"]
+        == "codex app-server turn/completed produced no assistant output"
+    )
 
     state_payload = json.loads(
         (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
@@ -410,6 +434,10 @@ def test_runtime_send_turn_raises_when_completed_turn_has_no_assistant_output(
         )
     )
     assert state_payload.get("activeTurnId") is None
+    assert (
+        state_payload.get("lastTurnError")
+        == "codex app-server turn/completed produced no assistant output"
+    )
     stderr_path = Path(request.artifact_spool_path) / "stderr.log"
     assert "turn completed without assistant output" in stderr_path.read_text(
         encoding="utf-8"
@@ -446,9 +474,18 @@ def test_runtime_send_turn_accepts_item_completed_notification_contract(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
     assert response.turn_id == "vendor-turn-1"
-    assert response.metadata["assistantText"] == "OK"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert handle.metadata["lastAssistantText"] == "OK"
 
 
 def test_runtime_send_turn_completes_via_thread_read_without_notification(
@@ -481,10 +518,20 @@ def test_runtime_send_turn_completes_via_thread_read_without_notification(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
     assert response.turn_id == "vendor-turn-1"
-    assert response.session_state.active_turn_id is None
-    assert response.metadata["assistantText"] == "OK"
+    assert response.session_state.active_turn_id == "vendor-turn-1"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
+    assert handle.session_state.active_turn_id is None
+    assert handle.metadata["lastAssistantText"] == "OK"
 
 
 def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
@@ -530,7 +577,16 @@ def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state["vendorThreadPath"] == str(recovered_path)
 
@@ -562,7 +618,16 @@ def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
     updated_state = json.loads(
         (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
             encoding="utf-8"
@@ -603,7 +668,16 @@ def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_n
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
     updated_state = json.loads(
         (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(
             encoding="utf-8"
@@ -648,7 +722,16 @@ def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
         )
     )
 
-    assert response.status == "completed"
+    assert response.status == "running"
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "ready"
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state["vendorThreadId"] == "vendor-thread-1"
     assert updated_state["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
@@ -685,7 +768,7 @@ def test_runtime_clear_session_rotates_logical_thread_and_epoch(tmp_path: Path) 
     assert handle.metadata["vendorThreadId"] == "vendor-thread-1"
 
 
-def test_runtime_send_turn_times_out_without_completion_notification(
+def test_runtime_session_status_remains_busy_without_completion_notification(
     tmp_path: Path,
 ) -> None:
     script = _write_fake_app_server(
@@ -707,16 +790,26 @@ def test_runtime_send_turn_times_out_without_completion_notification(
     )
     runtime.launch_session(request)
 
-    with pytest.raises(RuntimeError, match="timed out waiting for codex app-server turn completion"):
-        runtime.send_turn(
-            SendCodexManagedSessionTurnRequest(
-                sessionId="sess-1",
-                sessionEpoch=1,
-                containerId="ctr-1",
-                threadId="logical-thread-1",
-                instructions="Reply with exactly the word OK",
-            )
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
         )
+    )
+    assert response.status == "running"
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+    assert handle.status == "busy"
 
     state_payload = json.loads(
         (Path(request.session_workspace_path) / ".moonmind-codex-session-state.json").read_text(

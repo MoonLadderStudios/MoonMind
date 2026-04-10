@@ -585,6 +585,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
         RuntimeMaterializationMode,
         ManagedAgentRateLimitPolicy,
     )
+    from api_service.services.provider_profile_service import (
+        normalize_runtime_default_profile,
+    )
 
     if os.environ.get("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
         logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
@@ -595,6 +598,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "gemini_default",
             "runtime_id": "gemini_cli",
+            "is_default": True,
             "provider_id": "google",
             "provider_label": "Google",
             "default_model": None,  # inherits runtime default: gemini-3.1-pro-preview
@@ -607,6 +611,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "codex_default",
             "runtime_id": "codex_cli",
+            "is_default": True,
             "provider_id": "moonladder",
             "provider_label": "MoonLadder",
             "default_model": None,  # inherits runtime default: gpt-5.4
@@ -619,6 +624,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "claude_anthropic",
             "runtime_id": "claude_code",
+            "is_default": True,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
             "default_model": None,  # inherits runtime default: Sonnet 4.6
@@ -637,6 +643,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         _DEFAULT_PROFILES.append({
             "profile_id": "claude_minimax",
             "runtime_id": "claude_code",
+            "is_default": False,
             "provider_id": "minimax",
             "provider_label": "MiniMax",
             "default_model": "MiniMax-M2.7",
@@ -668,6 +675,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         _DEFAULT_PROFILES.append({
             "profile_id": "codex_openrouter_qwen36_plus",
             "runtime_id": "codex_cli",
+            "is_default": False,
             "provider_id": "openrouter",
             "provider_label": "OpenRouter",
             "default_model": "qwen/qwen3.6-plus:free",
@@ -795,6 +803,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 len(to_insert),
             )
 
+            touched_runtime_ids: set[str] = set()
             for profile_def in to_insert:
                 profile = ManagedAgentProviderProfile(
                     profile_id=profile_def["profile_id"],
@@ -822,12 +831,22 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         ManagedAgentRateLimitPolicy.BACKOFF,
                     ),
                     enabled=True,
+                    is_default=bool(profile_def.get("is_default", False)),
                     max_lease_duration_seconds=profile_def.get(
                         "max_lease_duration_seconds", 7200
                     ),
                 )
                 session.add(profile)
-                seeded.append(profile_def["runtime_id"])
+                runtime_id = profile_def["runtime_id"]
+                touched_runtime_ids.add(runtime_id)
+                seeded.append(runtime_id)
+
+            await session.flush()
+            for runtime_id in touched_runtime_ids:
+                await normalize_runtime_default_profile(
+                    session=session,
+                    runtime_id=runtime_id,
+                )
 
             await session.commit()
             logger.info(

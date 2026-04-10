@@ -1841,6 +1841,13 @@ class ManagedAgentProviderProfile(Base):
         Index("ix_provider_profiles_runtime", "runtime_id"),
         Index("ix_provider_profiles_provider", "provider_id"),
         Index("ix_provider_profiles_enabled", "enabled"),
+        Index(
+            "ux_provider_profiles_runtime_default",
+            "runtime_id",
+            unique=True,
+            sqlite_where=text("is_default = 1"),
+            postgresql_where=text("is_default = true"),
+        ),
     )
 
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -1879,7 +1886,10 @@ class ManagedAgentProviderProfile(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
-    
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
 

@@ -643,6 +643,20 @@ class ManagedAgentAdapter:
             result: dict[str, Any] = await fetch_res
         profiles: list[dict[str, Any]] = result.get("profiles", [])
 
+        normalized_selector: dict[str, Any] | None = None
+        if profile_selector:
+            selector_payload: dict[str, Any] = {}
+            for key, value in profile_selector.items():
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                if isinstance(value, list) and not value:
+                    continue
+                selector_payload[key] = value
+            if selector_payload:
+                normalized_selector = selector_payload
+
         if not profiles:
             raise ProfileResolutionError(
                 f"No enabled provider profiles found for runtime_id='{runtime_id}'"
@@ -665,18 +679,18 @@ class ManagedAgentAdapter:
         for profile in profiles:
             if not profile.get("enabled", True):
                 continue
-            if profile_selector:
-                if profile_selector.get("providerId") and profile.get("provider_id") != profile_selector.get("providerId"):
+            if normalized_selector:
+                if normalized_selector.get("providerId") and profile.get("provider_id") != normalized_selector.get("providerId"):
                     continue
-                if profile_selector.get("runtimeMaterializationMode") and profile.get("runtime_materialization_mode") != profile_selector.get("runtimeMaterializationMode"):
+                if normalized_selector.get("runtimeMaterializationMode") and profile.get("runtime_materialization_mode") != normalized_selector.get("runtimeMaterializationMode"):
                     continue
-                
-                tags_any = profile_selector.get("tagsAny", [])
+
+                tags_any = normalized_selector.get("tagsAny", [])
                 profile_tags = set(profile.get("tags") or [])
                 if tags_any and not set(tags_any).intersection(profile_tags):
                     continue
-                    
-                tags_all = profile_selector.get("tagsAll", [])
+
+                tags_all = normalized_selector.get("tagsAll", [])
                 if tags_all and not set(tags_all).issubset(profile_tags):
                     continue
 
@@ -685,6 +699,18 @@ class ManagedAgentAdapter:
         if not eligible_profiles:
             raise ProfileResolutionError(
                 f"No eligible provider profiles found for runtime_id='{runtime_id}' matching selector constraints."
+            )
+
+        if not normalized_selector:
+            default_profiles = [
+                profile for profile in eligible_profiles if profile.get("is_default")
+            ]
+            if len(eligible_profiles) == 1:
+                return eligible_profiles[0]
+            if len(default_profiles) == 1:
+                return default_profiles[0]
+            raise ProfileResolutionError(
+                f"No default provider profile configured for runtime_id='{runtime_id}'"
             )
 
         eligible_profiles.sort(

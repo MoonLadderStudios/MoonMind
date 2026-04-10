@@ -187,10 +187,18 @@ async def test_resolve_profile_by_id():
     assert ("slot_request", "wf-123", "gemini_cli") not in calls
 
 
-async def test_resolve_profile_auto_picks_first():
+async def test_resolve_profile_auto_picks_runtime_default():
     profiles = [
-        {"profile_id": "first", "credential_source": "secret_ref"},
-        {"profile_id": "second", "credential_source": "oauth_volume"},
+        {
+            "profile_id": "first",
+            "credential_source": "secret_ref",
+            "is_default": False,
+        },
+        {
+            "profile_id": "second",
+            "credential_source": "oauth_volume",
+            "is_default": True,
+        },
     ]
 
     adapter = ManagedAgentAdapter(
@@ -211,7 +219,7 @@ async def test_resolve_profile_auto_picks_first():
         idempotencyKey="idem-auto",
     )
     handle = await adapter.start(request)
-    assert handle.metadata["profile_id"] == "first"
+    assert handle.metadata["profile_id"] == "second"
 
 
 async def test_resolve_profile_selector_filters():

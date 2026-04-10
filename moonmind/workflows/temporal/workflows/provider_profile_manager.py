@@ -119,6 +119,7 @@ class ProfileSlotState:
     cooldown_after_429_seconds: int
     rate_limit_policy: str
     enabled: bool
+    is_default: bool = False
     max_lease_duration_seconds: int = _MAX_LEASE_DURATION_SECONDS
     current_leases: list[str] = field(default_factory=list)
     lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
@@ -186,6 +187,7 @@ class ProfileSlotState:
             "cooldown_after_429_seconds": self.cooldown_after_429_seconds,
             "rate_limit_policy": self.rate_limit_policy,
             "enabled": self.enabled,
+            "is_default": self.is_default,
             "max_lease_duration_seconds": self.max_lease_duration_seconds,
             "current_leases": list(self.current_leases),
             "lease_granted_at": dict(self.lease_granted_at),
@@ -444,6 +446,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
+                is_default=p.get("is_default", False),
                 max_lease_duration_seconds=p.get(
                     "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
                 ),
@@ -476,6 +479,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     "rate_limit_policy", existing.rate_limit_policy
                 )
                 existing.enabled = p.get("enabled", existing.enabled)
+                existing.is_default = p.get("is_default", existing.is_default)
                 existing.max_lease_duration_seconds = p.get(
                     "max_lease_duration_seconds", existing.max_lease_duration_seconds
                 )
@@ -494,6 +498,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     ),
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),
+                    is_default=p.get("is_default", False),
                     max_lease_duration_seconds=p.get(
                         "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
                     ),
@@ -562,12 +567,30 @@ class MoonMindProviderProfileManagerWorkflow:
         if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
 
+    @staticmethod
+    def _normalize_selector(
+        selector: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        if not selector:
+            return None
+        normalized: dict[str, Any] = {}
+        for key, value in selector.items():
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            normalized[key] = value
+        return normalized or None
+
     def _find_available_profile(
         self,
         selector: Optional[dict[str, Any]] = None,
         execution_profile_ref: str | None = None,
     ) -> Optional[ProfileSlotState]:
         """Find the best available profile matching the selector."""
+        selector = self._normalize_selector(selector)
         exact_profile_id = str(execution_profile_ref or "").strip()
         if exact_profile_id:
             exact_profile = self._profiles.get(exact_profile_id)
@@ -597,17 +620,17 @@ class MoonMindProviderProfileManagerWorkflow:
         for profile in self._profiles.values():
             if not profile.is_available():
                 continue
-                
+
             if selector:
                 if selector.get("providerId") and profile.provider_id != selector.get("providerId"):
                     continue
                 if selector.get("runtimeMaterializationMode") and profile.runtime_materialization_mode != selector.get("runtimeMaterializationMode"):
                     continue
-                
+
                 tags_any = selector.get("tagsAny", [])
                 if tags_any and not set(tags_any).intersection(set(profile.tags)):
                     continue
-                    
+
                 tags_all = selector.get("tagsAll", [])
                 if tags_all and not set(tags_all).issubset(set(profile.tags)):
                     continue
@@ -616,7 +639,25 @@ class MoonMindProviderProfileManagerWorkflow:
 
         if not eligible_profiles:
             return None
-            
+
+        if not selector:
+            default_profiles = [
+                profile for profile in eligible_profiles if profile.is_default
+            ]
+            if len(eligible_profiles) == 1:
+                return eligible_profiles[0]
+            if len(default_profiles) == 1:
+                return default_profiles[0]
+            if not default_profiles:
+                # Preserve lease assignment for in-flight manager state restored
+                # from payloads created before is_default existed.
+                eligible_profiles.sort(
+                    key=lambda p: (p.priority, p.available_slots),
+                    reverse=True,
+                )
+                return eligible_profiles[0]
+            return None
+
         # Sort descending by priority, then by available slots
         eligible_profiles.sort(key=lambda p: (p.priority, p.available_slots), reverse=True)
         return eligible_profiles[0]
@@ -727,6 +768,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     "cooldown_after_429_seconds": state.cooldown_after_429_seconds,
                     "rate_limit_policy": state.rate_limit_policy,
                     "enabled": state.enabled,
+                    "is_default": state.is_default,
                     "max_lease_duration_seconds": state.max_lease_duration_seconds,
                     "provider_id": state.provider_id,
                     "tags": list(state.tags),
