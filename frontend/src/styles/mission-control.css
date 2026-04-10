@@ -140,14 +140,14 @@ body {
   white-space: nowrap;
   line-height: 1.2;
   margin-left: auto;
-  opacity: 0.45;
+  opacity: 0.7;
 }
 
 .version-badge-value {
   font-family: "IBM Plex Mono", "Fira Code", monospace;
   font-size: 0.62rem;
   font-weight: 400;
-  color: rgb(var(--mm-muted) / 0.8);
+  color: rgb(var(--mm-muted) / 0.98);
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
 }
