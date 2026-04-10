@@ -252,6 +252,8 @@ file_templates:
     merge_strategy: replace
     content_template:
       model_provider: openrouter
+      model_reasoning_effort: high
+      model: qwen/qwen3.6-plus:free
       profile: openrouter_qwen36_plus
       model_providers:
         openrouter:
@@ -288,6 +290,8 @@ The rendered config file should be equivalent to:
 
 ```toml
 model_provider = "openrouter"
+model_reasoning_effort = "high"
+model = "qwen/qwen3.6-plus:free"
 profile = "openrouter_qwen36_plus"
 
 [model_providers.openrouter]
@@ -307,6 +311,13 @@ This gives MoonMind two useful behaviors:
 
 - a stable runtime default profile for normal runs
 - a clean place to hang future profile-specific overrides without mutating the global top-level shape
+
+For managed sessions specifically, the generated config should also carry a top-level
+`model` (and `model_reasoning_effort` when desired) instead of relying only on the
+named profile block. MoonMind launches Codex through the app-server/session plane,
+which behaves like the VS Code extension path, and upstream Codex has had bugs in
+that path where custom-provider sessions respect the provider but ignore model
+selection stored only under `[profiles.<name>]`.
 
 In the first implementation, MoonMind can rely on the generated config’s default profile rather than requiring a special Codex CLI flag.
 

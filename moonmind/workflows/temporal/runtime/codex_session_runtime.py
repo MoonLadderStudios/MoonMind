@@ -701,6 +701,15 @@ class CodexManagedSessionRuntime:
         state.active_turn_id = None
         state.last_assistant_text = assistant_text or None
         self._save_state(state)
+        if not assistant_text:
+            self._append_spool(
+                "stderr",
+                (
+                    "codex app-server turn completed without assistant output: "
+                    f"{vendor_turn_id}\n"
+                ),
+            )
+            raise RuntimeError("codex app-server turn/completed produced no assistant output")
         if assistant_text:
             self._append_spool("stdout", f"assistant: {assistant_text}\n")
         return CodexManagedSessionTurnResponse(
