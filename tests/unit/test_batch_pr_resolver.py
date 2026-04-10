@@ -85,6 +85,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
     assert task["runtime"]["providerProfile"] == "test-profile"
+    assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
