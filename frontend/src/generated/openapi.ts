@@ -4110,6 +4110,11 @@ export interface components {
              */
             enabled: boolean;
             /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /**
              * Max Lease Duration Seconds
              * @default 7200
              */
@@ -4178,6 +4183,8 @@ export interface components {
             rate_limit_policy: string;
             /** Enabled */
             enabled: boolean;
+            /** Is Default */
+            is_default: boolean;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds: number;
             /** Created At */
@@ -4241,6 +4248,8 @@ export interface components {
             rate_limit_policy?: string | null;
             /** Enabled */
             enabled?: boolean | null;
+            /** Is Default */
+            is_default?: boolean | null;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds?: number | null;
         };

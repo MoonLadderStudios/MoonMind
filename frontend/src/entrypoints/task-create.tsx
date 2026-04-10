@@ -101,8 +101,9 @@ function resolveDefaultProviderProfileId(
   if (explicitDefault) {
     return explicitDefault.profile_id;
   }
-  if (profiles.length === 1) {
-    return profiles[0].profile_id;
+  const onlyProfile = profiles[0];
+  if (profiles.length === 1 && onlyProfile) {
+    return onlyProfile.profile_id;
   }
   return profiles[0]?.profile_id || "";
 }
