@@ -247,7 +247,7 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     assert profile.runtime_id == "codex_cli"
     assert profile.provider_id == "openrouter"
     assert profile.is_default is False
-    assert profile.default_model == "qwen/qwen3.6-plus:free"
+    assert profile.default_model == "qwen/qwen3.6-plus"
     assert profile.secret_refs == {"provider_api_key": "env://OPENROUTER_API_KEY"}
     assert profile.env_template == {
         "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
@@ -260,7 +260,7 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
             "content_template": {
                 "model_provider": "openrouter",
                 "model_reasoning_effort": "high",
-                "model": "qwen/qwen3.6-plus:free",
+                "model": "qwen/qwen3.6-plus",
                 "profile": "openrouter_qwen36_plus",
                 "model_providers": {
                     "openrouter": {
@@ -273,7 +273,7 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
                 "profiles": {
                     "openrouter_qwen36_plus": {
                         "model_provider": "openrouter",
-                        "model": "qwen/qwen3.6-plus:free",
+                        "model": "qwen/qwen3.6-plus",
                     }
                 },
             },
@@ -321,7 +321,48 @@ async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existin
     content_template = profile.file_templates[0]["content_template"]
     assert content_template["model_provider"] == "openrouter"
     assert content_template["model_reasoning_effort"] == "high"
-    assert content_template["model"] == "qwen/qwen3.6-plus:free"
+    assert content_template["model"] == "qwen/qwen3.6-plus"
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_reconciles_deprecated_openrouter_codex_seed_model(
+    _module_db, monkeypatch
+):
+    from api_service.main import (
+        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL,
+        _auto_seed_provider_profiles,
+        _codex_openrouter_qwen36_plus_file_templates,
+    )
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+        profile.default_model = _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
+        profile.file_templates = _codex_openrouter_qwen36_plus_file_templates(
+            _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
+        )
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openrouter_qwen36_plus"
+        )
+
+    assert profile.default_model == "qwen/qwen3.6-plus"
+    content_template = profile.file_templates[0]["content_template"]
+    assert content_template["model"] == "qwen/qwen3.6-plus"
+    assert (
+        content_template["profiles"]["openrouter_qwen36_plus"]["model"]
+        == "qwen/qwen3.6-plus"
+    )
 
 
 @pytest.mark.asyncio
