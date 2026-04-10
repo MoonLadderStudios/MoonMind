@@ -194,9 +194,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             raise ValueError(
                 "CodexSessionAdapter does not support inputRefs for managed session turns"
             )
+        workspace_path = self._workspace_path_for_request(
+            binding=binding,
+            request=request,
+        )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
+            workspace_path=workspace_path,
             environment=launch_context.delta_env_overrides,
             profile=self._profile_for_launch(
                 runtime_id=runtime_id,
@@ -207,10 +212,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         locator = self._locator_from_state(
             session_state=session_handle.session_state,
             runtime_epoch=session_handle.session_state.session_epoch,
-        )
-        workspace_path = self._workspace_path_for_request(
-            binding=binding,
-            request=request,
         )
         self._save_run_state(
             run_id=run_id,
@@ -239,6 +240,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             instructions = await self._instructions_for_request(
                 binding=binding,
                 request=request,
+                workspace_path=workspace_path,
             )
             turn_response = await self._coerce_turn_response(
                 self._send_turn(
@@ -620,19 +622,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
+        workspace_path: str,
     ) -> str:
         if self._prepare_turn_instructions is None:
             return await self._legacy_instructions_for_request(
                 binding=binding,
                 request=request,
+                workspace_path=workspace_path,
             )
         prepared = await self._prepare_turn_instructions(
             {
                 "request": request.model_dump(by_alias=True, exclude_none=True),
-                "workspacePath": self._workspace_path_for_request(
-                    binding=binding,
-                    request=request,
-                ),
+                "workspacePath": workspace_path,
             }
         )
         if isinstance(prepared, Mapping):
@@ -649,14 +650,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
+        workspace_path: str,
     ) -> str:
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             from moonmind.rag.context_injection import ContextInjectionService
 
-            workspace_path = Path(
-                self._workspace_path_for_request(binding=binding, request=request)
-            )
+            workspace_path = Path(workspace_path)
             service = ContextInjectionService()
             await service.inject_context(
                 request=request,
@@ -682,6 +682,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         *,
         binding: CodexManagedSessionBinding,
         request: AgentExecutionRequest,
+        workspace_path: str,
         environment: dict[str, str],
         profile: ManagedRuntimeProfile,
     ) -> CodexManagedSessionHandle:
@@ -717,7 +718,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             sessionId=active_binding.session_id,
             sessionEpoch=active_binding.session_epoch,
             threadId=self._default_thread_id(active_binding),
-            workspacePath=self._workspace_path_for_request(binding=binding, request=request),
+            workspacePath=workspace_path,
             sessionWorkspacePath=str(self._session_root(binding) / "session"),
             artifactSpoolPath=str(self._session_root(binding) / "artifacts"),
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),

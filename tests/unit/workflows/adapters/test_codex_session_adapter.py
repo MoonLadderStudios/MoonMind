@@ -1160,6 +1160,88 @@ async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
 
 
+async def test_start_resolves_workspace_path_once_per_turn(tmp_path: Path) -> None:
+    binding = _binding()
+    expected_workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    workspace_path_calls = 0
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed-runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    original_workspace_path_for_request = adapter._workspace_path_for_request
+
+    def _counting_workspace_path_for_request(
+        *,
+        binding: CodexManagedSessionBinding,
+        request: AgentExecutionRequest,
+    ) -> str:
+        nonlocal workspace_path_calls
+        workspace_path_calls += 1
+        return original_workspace_path_for_request(binding=binding, request=request)
+
+    adapter._workspace_path_for_request = _counting_workspace_path_for_request
+
+    await adapter.start(_request(binding, workspace_path=str(expected_workspace_path)))
+
+    assert workspace_path_calls == 1
+
+
 async def test_start_rejects_non_text_input_refs_for_session_turns(
     tmp_path: Path,
 ) -> None:
