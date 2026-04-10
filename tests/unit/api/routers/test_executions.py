@@ -744,9 +744,12 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     )
 
     assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "feature/resolve-pr"
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
+    assert initial_parameters["task"]["title"] == "feature/resolve-pr"
     assert initial_parameters["task"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }

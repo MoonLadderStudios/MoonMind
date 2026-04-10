@@ -164,6 +164,7 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/my-feature-branch"
 
 
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():

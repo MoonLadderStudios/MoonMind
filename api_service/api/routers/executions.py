@@ -1238,6 +1238,30 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
         return explicit
+    tool_payload = task_payload.get("tool")
+    if not isinstance(tool_payload, Mapping):
+        tool_payload = task_payload.get("skill")
+    tool_name = ""
+    if isinstance(tool_payload, Mapping):
+        tool_name = str(tool_payload.get("name") or tool_payload.get("id") or "").strip()
+    if tool_name == "pr-resolver":
+        git_payload = task_payload.get("git")
+        if not isinstance(git_payload, Mapping):
+            git_payload = {}
+        inputs_payload = task_payload.get("inputs")
+        if not isinstance(inputs_payload, Mapping):
+            inputs_payload = {}
+        starting_branch = str(
+            git_payload.get("startingBranch")
+            or task_payload.get("startingBranch")
+            or git_payload.get("branch")
+            or task_payload.get("branch")
+            or inputs_payload.get("startingBranch")
+            or inputs_payload.get("branch")
+            or ""
+        ).strip()
+        if starting_branch:
+            return starting_branch[:_MAX_TASK_TITLE_LENGTH]
     raw_steps = task_payload.get("steps")
     if isinstance(raw_steps, list):
         for item in raw_steps:
@@ -1415,6 +1439,9 @@ async def _create_execution_from_task_request(
         normalized_tool=normalized_tool,
         normalized_task_for_planner=normalized_task_for_planner,
     )
+    derived_task_title = _derive_task_title(task_payload)
+    if derived_task_title and "title" not in normalized_task_for_planner:
+        normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
     _SUPPORTED_TASK_RUNTIMES = frozenset({
@@ -1496,7 +1523,7 @@ async def _create_execution_from_task_request(
         record = await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=user.id,
-            title=_derive_task_title(task_payload),
+            title=derived_task_title,
             input_artifact_ref=input_artifact_ref,
             plan_artifact_ref=plan_artifact_ref,
             manifest_artifact_ref=manifest_artifact_ref,

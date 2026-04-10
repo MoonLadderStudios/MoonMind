@@ -345,6 +345,7 @@ def _build_queue_request(
         "repository": repo,
         "requiredCapabilities": ["gh"],
         "task": {
+            "title": branch,
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             "skill": {
                 "name": "pr-resolver",
