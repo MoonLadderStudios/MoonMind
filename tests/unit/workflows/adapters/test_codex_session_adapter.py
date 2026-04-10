@@ -226,6 +226,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     attach_calls: list[dict[str, Any]] = []
     control_calls: list[dict[str, Any]] = []
     send_turn_calls: list[Any] = []
+    running_record_during_turn: ManagedRunRecord | None = None
 
     async def _load_snapshot(workflow_id: str) -> CodexManagedSessionSnapshot:
         assert workflow_id == binding.workflow_id
@@ -244,7 +245,9 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         raise AssertionError("session_status should not be used before launch")
 
     async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
+        nonlocal running_record_during_turn
         send_turn_calls.append(request)
+        running_record_during_turn = run_store.load(binding.task_run_id)
         return _turn_response(
             session_id=binding.session_id,
             session_epoch=binding.session_epoch,
@@ -326,6 +329,19 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
 
+    assert running_record_during_turn is not None
+    assert running_record_during_turn.run_id == binding.task_run_id
+    assert running_record_during_turn.status == "running"
+    assert running_record_during_turn.finished_at is None
+    assert running_record_during_turn.workspace_path == str(workspace_path)
+    assert running_record_during_turn.live_stream_capable is True
+    assert running_record_during_turn.session_id == binding.session_id
+    assert running_record_during_turn.session_epoch == binding.session_epoch
+    assert running_record_during_turn.container_id == "container-1"
+    assert running_record_during_turn.thread_id == "thread-1"
+    assert running_record_during_turn.active_turn_id is None
+    assert running_record_during_turn.observability_events_ref is None
+
     assert handle.status == "completed"
     assert handle.metadata["sessionId"] == binding.session_id
     assert handle.metadata["containerId"] == "container-1"
@@ -342,7 +358,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         persisted_record.observability_events_ref
         == "artifact:observability.events.jsonl"
     )
-    assert persisted_record.live_stream_capable is False
+    assert persisted_record.live_stream_capable is True
     assert status.status == "completed"
     assert result.summary == "Implemented through the session container."
     assert result.output_refs == [

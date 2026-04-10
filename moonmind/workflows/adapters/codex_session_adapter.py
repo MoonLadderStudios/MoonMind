@@ -208,6 +208,30 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_state=session_handle.session_state,
             runtime_epoch=session_handle.session_state.session_epoch,
         )
+        workspace_path = self._workspace_path_for_request(
+            binding=binding,
+            request=request,
+        )
+        self._save_run_state(
+            run_id=run_id,
+            agent_id=request.agent_id,
+            managed_run_id=binding.task_run_id,
+            binding=binding,
+            workspace_path=workspace_path,
+            locator=locator.model_dump(mode="json", by_alias=True),
+            active_turn_id=None,
+            result={
+                "summary": "Codex managed-session turn in progress.",
+                "metadata": {
+                    "instructionRef": original_instruction_ref,
+                    "resolvedSkillsetRef": original_skillset_ref,
+                },
+            },
+            status="running",
+            started_at=started_at,
+            finished_at=None,
+            profile_id=launch_context.profile_id or None,
+        )
         instructions = await self._instructions_for_request(
             binding=binding,
             request=request,
@@ -282,10 +306,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             agent_id=request.agent_id,
             managed_run_id=binding.task_run_id,
             binding=binding,
-            workspace_path=self._workspace_path_for_request(
-                binding=binding,
-                request=request,
-            ),
+            workspace_path=workspace_path,
             locator=current_locator.model_dump(mode="json", by_alias=True),
             active_turn_id=None,
             result=result.model_dump(mode="json", by_alias=True),
@@ -899,6 +920,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         )
         container_id = str(locator.get("containerId") or "").strip() or None
         thread_id = str(locator.get("threadId") or "").strip() or None
+        session_epoch = locator.get("sessionEpoch")
+        resolved_session_epoch = (
+            session_epoch if isinstance(session_epoch, int) and session_epoch >= 1 else None
+        )
         record = ManagedRunRecord(
             runId=record_key,
             workflowId=self._workflow_id,
@@ -945,9 +970,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             errorMessage=summary if status != "completed" else None,
             failureClass=result.get("failureClass"),
             providerErrorCode=_artifact_ref(result.get("providerErrorCode")),
-            liveStreamCapable=False,
+            liveStreamCapable=bool(resolved_workspace_path),
             sessionId=binding.session_id if binding is not None else None,
-            sessionEpoch=binding.session_epoch if binding is not None else None,
+            sessionEpoch=resolved_session_epoch
+            or (binding.session_epoch if binding is not None else None),
             containerId=container_id or (existing.container_id if existing is not None else None),
             threadId=thread_id or (existing.thread_id if existing is not None else None),
             activeTurnId=active_turn_id or (existing.active_turn_id if existing is not None else None),
