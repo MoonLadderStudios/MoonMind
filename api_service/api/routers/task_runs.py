@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -914,14 +914,6 @@ def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
 
 
-def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, datetime]:
-    sequence = _coerce_sequence(payload.get("sequence"))
-    timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
-    if sequence is not None and sequence > 0:
-        return (0, sequence, timestamp)
-    return (1, 2**31 - 1, timestamp)
-
-
 def _merged_event_header(payload: dict[str, object]) -> str:
     stream = str(payload.get("stream") or "system").strip() or "system"
     kind = str(payload.get("kind") or "").strip()
@@ -930,11 +922,11 @@ def _merged_event_header(payload: dict[str, object]) -> str:
     return stream
 
 
-def _iter_event_rendered_content(events: list[dict[str, object]]) -> Iterator[bytes]:
+def _iter_event_rendered_content(events: Iterable[dict[str, object]]) -> Iterator[bytes]:
     current_header: str | None = None
     emitted_any = False
 
-    for event in sorted(events, key=_merged_event_sort_key):
+    for event in events:
         text = str(event.get("text") or "")
         if not text:
             continue
@@ -950,16 +942,16 @@ def _iter_event_rendered_content(events: list[dict[str, object]]) -> Iterator[by
             yield b"\n"
 
 
-def _collect_merged_journal_events(
+def _iter_merged_journal_events(
     record: object,
     artifacts_root: Path,
-) -> list[dict[str, object]]:
+) -> Iterator[dict[str, object]]:
     event_journal_path = _resolve_safe_artifact_path(
         getattr(record, "observability_events_ref", None),
         artifacts_root,
     )
     if event_journal_path is None:
-        return []
+        return
 
     raw_record_run_id = getattr(record, "run_id", None)
     record_run_id = (
@@ -967,12 +959,13 @@ def _collect_merged_journal_events(
         if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
         else None
     )
-    events = [
-        event
-        for event in _iter_event_journal(event_journal_path, run_id=record_run_id)
-        if str(event.get("text") or "")
-    ]
-    return sorted(events, key=_merged_event_sort_key)
+    for event in _iter_event_journal(event_journal_path, run_id=record_run_id):
+        if str(event.get("text") or ""):
+            yield event
+
+
+def _merged_journal_has_renderable_events(record: object, artifacts_root: Path) -> bool:
+    return next(_iter_merged_journal_events(record, artifacts_root), None) is not None
 
 
 def _emit_livelogs_metric_increment(
@@ -1411,12 +1404,13 @@ async def stream_task_run_log(
 
     if stream_name == "merged":
         artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
-        journal_events = _collect_merged_journal_events(record, artifacts_root)
         workspace_path = getattr(record, "workspace_path", None)
         started_at = getattr(record, "started_at", None)
 
-        if journal_events:
-            content_stream = _iter_event_rendered_content(journal_events)
+        if _merged_journal_has_renderable_events(record, artifacts_root):
+            content_stream = _iter_event_rendered_content(
+                _iter_merged_journal_events(record, artifacts_root)
+            )
             order_source = "journal"
         elif _spool_contains_renderable_chunks(
             workspace_path,

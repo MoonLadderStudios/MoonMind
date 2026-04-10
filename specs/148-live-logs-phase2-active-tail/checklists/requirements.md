@@ -6,9 +6,9 @@
 
 ## Content Quality
 
-- [X] No implementation details (languages, frameworks, APIs)
+- [X] Implementation details are limited to required API surfaces and validation commands
 - [X] Focused on user value and business needs
-- [X] Written for non-technical stakeholders
+- [X] Written for MoonMind maintainers and implementation agents
 - [X] All mandatory sections completed
 
 ## Requirement Completeness
@@ -27,8 +27,8 @@
 - [X] All functional requirements have clear acceptance criteria
 - [X] User scenarios cover primary flows
 - [X] Feature meets measurable outcomes defined in Success Criteria
-- [X] No implementation details leak into specification
+- [X] Technical details in the specification are intentional and required for the implementation slice
 
 ## Notes
 
-- Runtime deliverables and validation tests are explicitly required by FR-009 and SC-005.
+- Runtime deliverables and validation tests are explicitly required by FR-009 and SC-005, so this checklist uses a technical implementation audience.

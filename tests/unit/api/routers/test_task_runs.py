@@ -572,18 +572,6 @@ def test_stream_task_run_log_merged_prefers_event_journal_before_prebuilt_artifa
                 json.dumps(
                     {
                         "runId": "run-1",
-                        "sequence": 3,
-                        "stream": "session",
-                        "text": "Session started.\n",
-                        "timestamp": "2026-04-08T00:00:03Z",
-                        "kind": "session_started",
-                        "sessionId": "sess-1",
-                        "sessionEpoch": 1,
-                    }
-                ),
-                json.dumps(
-                    {
-                        "runId": "run-1",
                         "sequence": 1,
                         "stream": "stdout",
                         "text": "first stdout\n",
@@ -599,6 +587,18 @@ def test_stream_task_run_log_merged_prefers_event_journal_before_prebuilt_artifa
                         "text": "turn accepted\n",
                         "timestamp": "2026-04-08T00:00:02Z",
                         "kind": "system_annotation",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 3,
+                        "stream": "session",
+                        "text": "Session started.\n",
+                        "timestamp": "2026-04-08T00:00:03Z",
+                        "kind": "session_started",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 1,
                     }
                 ),
             ]
@@ -732,6 +732,44 @@ def test_stream_task_run_log_merged_skips_malformed_active_rows(
     assert response.headers["x-merged-order-source"] == "journal"
     assert "bad" not in response.text
     assert "valid warning" in response.text
+
+
+def test_stream_task_run_log_merged_journal_probe_stops_after_first_renderable_event(
+    tmp_path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text("placeholder\n", encoding="utf-8")
+    record = SimpleNamespace(
+        run_id="run-1",
+        observability_events_ref="run-1/observability.events.jsonl",
+    )
+    consumed = 0
+
+    def fake_iter_event_journal(path, *, run_id=None):
+        nonlocal consumed
+        consumed += 1
+        yield {
+            "runId": run_id,
+            "sequence": 1,
+            "stream": "stdout",
+            "text": "first row\n",
+            "timestamp": "2026-04-08T00:00:01Z",
+        }
+        consumed += 1
+        raise AssertionError("probe should not consume the rest of the journal")
+
+    with patch(
+        "api_service.api.routers.task_runs._iter_event_journal",
+        side_effect=fake_iter_event_journal,
+    ):
+        assert task_runs_router._merged_journal_has_renderable_events(
+            record,
+            artifacts_root,
+        )
+
+    assert consumed == 1
 
 
 def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
