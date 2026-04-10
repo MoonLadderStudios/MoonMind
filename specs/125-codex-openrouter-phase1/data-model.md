@@ -24,7 +24,7 @@
 - `profile_id`: `codex_openrouter_qwen36_plus`
 - `runtime_id`: `codex_cli`
 - `provider_id`: `openrouter`
-- `default_model`: `qwen/qwen3.6-plus:free`
+- `default_model`: `qwen/qwen3.6-plus`
 - `secret_refs.provider_api_key`: `env://OPENROUTER_API_KEY`
 - `env_template.OPENROUTER_API_KEY`: `{"from_secret_ref": "provider_api_key"}`
 - `file_templates[0]`: `{{runtime_support_dir}}/codex-home/config.toml`

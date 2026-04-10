@@ -2642,7 +2642,7 @@ async def test_controller_launch_normalizes_materialized_codex_home_for_containe
     codex_home_path = workspace_root / "task-1" / ".moonmind" / "codex-home"
     codex_home_path.mkdir(parents=True, exist_ok=True)
     config_path = codex_home_path / "config.toml"
-    config_path.write_text("model = 'qwen/qwen3.6-plus:free'\n", encoding="utf-8")
+    config_path.write_text("model = 'qwen/qwen3.6-plus'\n", encoding="utf-8")
     request = LaunchCodexManagedSessionRequest(
         taskRunId="task-1",
         sessionId="sess-1",

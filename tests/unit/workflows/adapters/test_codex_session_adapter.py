@@ -869,7 +869,7 @@ async def test_start_passes_profile_materialization_payload_to_launch_session(
                     "profile_id": "codex_openrouter_qwen36_plus",
                     "provider_id": "openrouter",
                     "credential_source": "secret_ref",
-                    "default_model": "qwen/qwen3.6-plus:free",
+                    "default_model": "qwen/qwen3.6-plus",
                     "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
                     "home_path_overrides": {
                         "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
@@ -878,7 +878,7 @@ async def test_start_passes_profile_materialization_payload_to_launch_session(
                     "file_templates": [
                         {
                             "path": "{{runtime_support_dir}}/codex-home/config.toml",
-                            "contentTemplate": "model = 'qwen/qwen3.6-plus:free'",
+                            "contentTemplate": "model = 'qwen/qwen3.6-plus'",
                         }
                     ],
                 }
@@ -937,7 +937,7 @@ async def test_start_passes_profile_materialization_payload_to_launch_session(
     profile = launch_payload["profile"]
     assert profile["profileId"] == "codex_openrouter_qwen36_plus"
     assert profile["credentialSource"] == "secret_ref"
-    assert profile["defaultModel"] == "qwen/qwen3.6-plus:free"
+    assert profile["defaultModel"] == "qwen/qwen3.6-plus"
     assert profile["secretRefs"] == {"provider_api_key": "env://OPENROUTER_API_KEY"}
     assert profile["homePathOverrides"] == {
         "CODEX_HOME": "{{runtime_support_dir}}/codex-home"

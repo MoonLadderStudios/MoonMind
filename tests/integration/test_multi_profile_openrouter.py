@@ -96,7 +96,7 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
                     provider_label="OpenRouter",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
-                    default_model="qwen/qwen3.6-plus:free",
+                    default_model="qwen/qwen3.6-plus",
                     priority=100,
                     max_parallel_runs=4,
                     cooldown_after_429_seconds=300,
@@ -145,7 +145,7 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
             profile_map = {p["profile_id"]: p for p in profiles}
             assert (
                 profile_map["codex_openrouter_qwen36_plus"]["default_model"]
-                == "qwen/qwen3.6-plus:free"
+                == "qwen/qwen3.6-plus"
             )
             assert (
                 profile_map["codex_openrouter_claude_sonnet"]["default_model"]
@@ -173,7 +173,7 @@ async def test_priority_based_selection_selects_higher_priority() -> None:
             "runtime_materialization_mode": "composite",
             "provider_id": "openrouter",
             "priority": 50,
-            "default_model": "qwen/qwen3.6-plus:free",
+            "default_model": "qwen/qwen3.6-plus",
         },
         {
             "profile_id": "or-high",
@@ -222,7 +222,7 @@ async def test_priority_based_selection_falls_back_when_higher_disabled() -> Non
             "runtime_materialization_mode": "composite",
             "provider_id": "openrouter",
             "priority": 50,
-            "default_model": "qwen/qwen3.6-plus:free",
+            "default_model": "qwen/qwen3.6-plus",
             "enabled": True,
         },
         {
@@ -280,7 +280,7 @@ async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> No
                     provider_label="OpenRouter (Test)",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
-                    default_model="qwen/qwen3.6-plus:free",
+                    default_model="qwen/qwen3.6-plus",
                     secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
                     clear_env_keys=["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
                     env_template={
@@ -338,7 +338,7 @@ async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> No
             assert p["provider_label"] == "OpenRouter (Test)"
             assert p["credential_source"] == "secret_ref"
             assert p["runtime_materialization_mode"] == "composite"
-            assert p["default_model"] == "qwen/qwen3.6-plus:free"
+            assert p["default_model"] == "qwen/qwen3.6-plus"
             assert p["secret_refs"] == {"provider_api_key": "env://OPENROUTER_API_KEY"}
             assert p["clear_env_keys"] == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
             assert p["env_template"] == {

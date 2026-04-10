@@ -535,7 +535,7 @@ async def test_launch_session_materializes_profile_into_request_environment(
                 "fileTemplates": [
                     {
                         "path": "{{runtime_support_dir}}/codex-home/config.toml",
-                        "contentTemplate": {"model": "qwen/qwen3.6-plus:free"},
+                        "contentTemplate": {"model": "qwen/qwen3.6-plus"},
                         "format": "toml",
                     }
                 ],
@@ -549,7 +549,7 @@ async def test_launch_session_materializes_profile_into_request_environment(
     assert launched_request.environment["CODEX_HOME"] == str(codex_home_path)
     assert launched_request.environment["MANAGED_ACCOUNT_LABEL"] == "Codex CLI via OpenRouter"
     assert (codex_home_path / "config.toml").is_file()
-    assert "qwen/qwen3.6-plus:free" in (codex_home_path / "config.toml").read_text(
+    assert "qwen/qwen3.6-plus" in (codex_home_path / "config.toml").read_text(
         encoding="utf-8"
     )
 

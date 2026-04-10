@@ -507,7 +507,7 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
             "provider_label": "OpenRouter",
             "credential_source": "secret_ref",
             "runtime_materialization_mode": "composite",
-            "default_model": "qwen/qwen3.6-plus:free",
+            "default_model": "qwen/qwen3.6-plus",
             "command_behavior": {"suppress_default_model_flag": True},
             "env_template": {
                 "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"},

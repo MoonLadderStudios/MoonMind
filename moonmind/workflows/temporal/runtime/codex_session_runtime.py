@@ -794,6 +794,27 @@ class CodexManagedSessionRuntime:
             raise ValueError(f"unsupported sqlite identifier: {identifier!r}")
         return f'"{normalized}"'
 
+    @staticmethod
+    def _extract_quoted_log_field(text: str, field_name: str) -> str | None:
+        marker = f'{field_name}="'
+        marker_index = text.find(marker)
+        if marker_index < 0:
+            return None
+        cursor = marker_index + len(marker)
+        characters: list[str] = []
+        while cursor < len(text):
+            character = text[cursor]
+            if character == "\\" and cursor + 1 < len(text):
+                characters.append(text[cursor + 1])
+                cursor += 2
+                continue
+            if character == '"':
+                break
+            characters.append(character)
+            cursor += 1
+        recovered = "".join(characters).strip()
+        return recovered or None
+
     def _extract_turn_error_from_logs(self, vendor_turn_id: str) -> str | None:
         for log_path in sorted(
             self._codex_home_path.glob("logs_*.sqlite"),
@@ -840,6 +861,9 @@ class CodexManagedSessionRuntime:
                     recovered = text[marker_index + len(marker) :].strip()
                     if recovered:
                         return recovered
+                recovered = self._extract_quoted_log_field(text, "error.message")
+                if recovered:
+                    return recovered
         return None
 
     def _rollout_terminal_outcome(

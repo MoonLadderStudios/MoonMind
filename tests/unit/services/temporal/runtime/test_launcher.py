@@ -370,7 +370,7 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     profile = _make_profile(
         runtime_id="codex_cli",
         command_template=["codex", "exec"],
-        default_model="qwen/qwen3.6-plus:free",
+        default_model="qwen/qwen3.6-plus",
     )
     request = _make_request(instruction_ref="Do work")
 

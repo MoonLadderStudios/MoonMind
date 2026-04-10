@@ -522,6 +522,43 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+_CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
+_LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
+
+
+def _codex_openrouter_qwen36_plus_file_templates(
+    model: str,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "replace",
+            "content_template": {
+                "model_provider": "openrouter",
+                "model_reasoning_effort": "high",
+                "model": model,
+                "profile": "openrouter_qwen36_plus",
+                "model_providers": {
+                    "openrouter": {
+                        "name": "OpenRouter",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "env_key": "OPENROUTER_API_KEY",
+                        "wire_api": "responses",
+                    },
+                },
+                "profiles": {
+                    "openrouter_qwen36_plus": {
+                        "model_provider": "openrouter",
+                        "model": model,
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+
+
 def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
     return [
         {
@@ -542,7 +579,7 @@ def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, obje
                 "profiles": {
                     "openrouter_qwen36_plus": {
                         "model_provider": "openrouter",
-                        "model": "qwen/qwen3.6-plus:free",
+                        "model": _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL,
                     }
                 },
             },
@@ -562,7 +599,13 @@ def _should_reconcile_openrouter_codex_file_templates(
         return False
     if current_file_templates == desired_file_templates:
         return False
-    return current_file_templates == _legacy_codex_openrouter_qwen36_plus_file_templates()
+    deprecated_seed_templates = _codex_openrouter_qwen36_plus_file_templates(
+        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
+    )
+    return current_file_templates in (
+        deprecated_seed_templates,
+        _legacy_codex_openrouter_qwen36_plus_file_templates(),
+    )
 
 
 async def _auto_seed_provider_profiles() -> list[str]:
@@ -678,7 +721,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "is_default": False,
             "provider_id": "openrouter",
             "provider_label": "OpenRouter",
-            "default_model": "qwen/qwen3.6-plus:free",
+            "default_model": _CODEX_OPENROUTER_QWEN36_PLUS_MODEL,
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
             "secret_refs": {
@@ -696,34 +739,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "from_secret_ref": "provider_api_key",
                 },
             },
-            "file_templates": [
-                {
-                    "path": "{{runtime_support_dir}}/codex-home/config.toml",
-                    "format": "toml",
-                    "merge_strategy": "replace",
-                    "content_template": {
-                        "model_provider": "openrouter",
-                        "model_reasoning_effort": "high",
-                        "model": "qwen/qwen3.6-plus:free",
-                        "profile": "openrouter_qwen36_plus",
-                        "model_providers": {
-                            "openrouter": {
-                                "name": "OpenRouter",
-                                "base_url": "https://openrouter.ai/api/v1",
-                                "env_key": "OPENROUTER_API_KEY",
-                                "wire_api": "responses",
-                            },
-                        },
-                        "profiles": {
-                            "openrouter_qwen36_plus": {
-                                "model_provider": "openrouter",
-                                "model": "qwen/qwen3.6-plus:free",
-                            },
-                        },
-                    },
-                    "permissions": "0600",
-                },
-            ],
+            "file_templates": _codex_openrouter_qwen36_plus_file_templates(
+                _CODEX_OPENROUTER_QWEN36_PLUS_MODEL
+            ),
             "home_path_overrides": {
                 "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
             },
@@ -769,8 +787,19 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 if profile_id in existing_by_id:
                     current_model = existing_by_id[profile_id]["default_model"]
                     # Only reconcile when the seeded profile has an explicit desired model
-                    # (non-None) and the existing row is blank — never clear user-set values.
-                    if desired_default_model is not None and not str(current_model or "").strip():
+                    # (non-None) and the existing row is blank or contains an old
+                    # deprecated seed value; never clear user-set values.
+                    current_model_text = str(current_model or "").strip()
+                    legacy_openrouter_model = (
+                        _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL
+                    )
+                    should_reconcile_deprecated_model = (
+                        profile_id == "codex_openrouter_qwen36_plus"
+                        and current_model_text == legacy_openrouter_model
+                    )
+                    if desired_default_model is not None and (
+                        not current_model_text or should_reconcile_deprecated_model
+                    ):
                         stmt = (
                             update(ManagedAgentProviderProfile)
                             .where(ManagedAgentProviderProfile.profile_id == profile_id)
