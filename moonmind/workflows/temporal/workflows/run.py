@@ -17,8 +17,8 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionSnapshot,
-        TerminateCodexManagedSessionRequest,
         CodexManagedSessionWorkflowInput,
+        TerminateCodexManagedSessionRequest,
         canonical_codex_managed_runtime_id,
     )
     from moonmind.schemas.temporal_activity_models import (
@@ -145,8 +145,10 @@ _GITHUB_PR_URL_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
-# Replay-stable patch id for task-scoped Codex terminate activities during finalization.
+# Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
 RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
+# Replay-stable patch id for task-scoped Codex terminate child-workflow updates.
+RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
@@ -2305,7 +2307,28 @@ class MoonMindRunWorkflow:
         binding = self._codex_session_binding
         try:
             if handle is not None and binding is not None:
-                if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
+                if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+                    try:
+                        await handle.execute_update(
+                            "TerminateSession",
+                            {
+                                "reason": reason,
+                            },
+                        )
+                    except Exception as exc:
+                        self._get_logger().warning(
+                            "Task-scoped Codex terminate update failed for %s: %s",
+                            binding.session_id,
+                            exc,
+                        )
+                        await handle.signal(
+                            "control_action",
+                            {
+                                "action": "terminate_session",
+                                "reason": reason,
+                            },
+                        )
+                elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
                     try:
                         snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                             "agent_runtime.load_session_snapshot"
@@ -2342,13 +2365,21 @@ class MoonMindRunWorkflow:
                             binding.session_id,
                             exc,
                         )
-                await handle.signal(
-                    "control_action",
-                    {
-                        "action": "terminate_session",
-                        "reason": reason,
-                    },
-                )
+                    await handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
+                else:
+                    await handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
         finally:
             self._codex_session_handle = None
             self._codex_session_binding = None
