@@ -50,6 +50,7 @@ _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _LOG_RECOVERY_MAX_ROWS = 200
+_LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -705,12 +706,44 @@ class CodexManagedSessionRuntime:
             return False, None
         return saw_task_complete, error_text
 
+    @staticmethod
+    def _log_shard_sort_key(log_path: Path) -> tuple[int, str]:
+        filename = log_path.name
+        prefix = "logs_"
+        suffix = ".sqlite"
+        if filename.startswith(prefix) and filename.endswith(suffix):
+            shard_suffix = filename[len(prefix) : -len(suffix)]
+            try:
+                return int(shard_suffix), filename
+            except ValueError:
+                pass
+        return -1, filename
+
+    @staticmethod
+    def _quoted_sqlite_identifier(identifier: str) -> str:
+        normalized = identifier.strip()
+        if not normalized:
+            raise ValueError("sqlite identifier must not be blank")
+        if not (normalized[0].isalpha() or normalized[0] == "_"):
+            raise ValueError(f"unsupported sqlite identifier: {identifier!r}")
+        if any(not (character.isalnum() or character == "_") for character in normalized):
+            raise ValueError(f"unsupported sqlite identifier: {identifier!r}")
+        return f'"{normalized}"'
+
     def _extract_turn_error_from_logs(self, vendor_turn_id: str) -> str | None:
-        for log_path in sorted(self._codex_home_path.glob("logs_*.sqlite"), reverse=True):
+        for log_path in sorted(
+            self._codex_home_path.glob("logs_*.sqlite"),
+            key=self._log_shard_sort_key,
+            reverse=True,
+        ):
             if not log_path.is_file():
                 continue
             try:
-                with sqlite3.connect(f"file:{log_path}?mode=ro", uri=True) as connection:
+                with sqlite3.connect(
+                    f"file:{log_path}?mode=ro",
+                    uri=True,
+                    timeout=_LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS,
+                ) as connection:
                     column_rows = connection.execute(
                         "PRAGMA table_info(logs)"
                     ).fetchall()
@@ -724,14 +757,16 @@ class CodexManagedSessionRuntime:
                             break
                     if text_column is None:
                         continue
+                    quoted_text_column = self._quoted_sqlite_identifier(text_column)
                     rows = connection.execute(
                         (
-                            f"SELECT {text_column} FROM logs "
-                            f"WHERE {text_column} LIKE ? ORDER BY id DESC LIMIT ?"
+                            f"SELECT {quoted_text_column} FROM \"logs\" "
+                            f"WHERE {quoted_text_column} LIKE ? "
+                            f"ORDER BY \"id\" DESC LIMIT ?"
                         ),
                         (f"%{vendor_turn_id}%", _LOG_RECOVERY_MAX_ROWS),
                     ).fetchall()
-            except sqlite3.Error:
+            except (ValueError, sqlite3.Error):
                 continue
             for (raw_text,) in rows:
                 text = str(raw_text or "").strip()
@@ -758,20 +793,22 @@ class CodexManagedSessionRuntime:
             vendor_thread_path,
             vendor_turn_id=vendor_turn_id,
         )
-        if assistant_text:
-            return "completed", None
         saw_task_complete, rollout_error = self._rollout_terminal_metadata(
             vendor_thread_path,
             vendor_turn_id=vendor_turn_id,
         )
-        if not saw_task_complete and not rollout_error:
-            return None
-        return (
-            "failed",
-            rollout_error
-            or self._extract_turn_error_from_logs(vendor_turn_id)
-            or "codex app-server turn/completed produced no assistant output",
-        )
+        if saw_task_complete or rollout_error:
+            recovered_error = rollout_error or self._extract_turn_error_from_logs(
+                vendor_turn_id
+            )
+            if recovered_error:
+                return "failed", recovered_error
+            if saw_task_complete and assistant_text:
+                return "completed", None
+            return "failed", "codex app-server turn/completed produced no assistant output"
+        if assistant_text:
+            return "completed", None
+        return None
 
     def _resolved_rollout_path(
         self,

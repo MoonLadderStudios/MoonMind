@@ -325,8 +325,9 @@ def _write_fake_codex_logs(
     codex_home_path: str | Path,
     *,
     entries: list[str],
+    filename: str = "logs_1.sqlite",
 ) -> Path:
-    log_path = Path(codex_home_path) / "logs_1.sqlite"
+    log_path = Path(codex_home_path) / filename
     connection = sqlite3.connect(log_path)
     try:
         connection.execute(
@@ -886,6 +887,118 @@ def test_runtime_send_turn_fails_from_rollout_completion_when_thread_read_is_not
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["lastTurnError"] == expected_reason
+
+
+def test_runtime_send_turn_prefers_rollout_task_complete_failure_over_agent_message(
+    tmp_path: Path,
+) -> None:
+    request = _launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T07-21-32-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        (
+            json.dumps(
+                {
+                    "timestamp": "2026-04-10T07:21:32.088Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "turn_id": "vendor-turn-1",
+                        "message": "Interim text that should not mask a failure",
+                    },
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "timestamp": "2026-04-10T07:21:33.088Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_complete",
+                        "turn_id": "vendor-turn-1",
+                        "error": "provider returned exit code 1",
+                    },
+                }
+            )
+            + "\n"
+        ),
+        encoding="utf-8",
+    )
+    script = _write_fake_app_server(
+        tmp_path,
+        omit_turns_on_read=True,
+        start_thread_path=str(transcript_path),
+        thread_status_type="notLoaded",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["reason"] == "provider returned exit code 1"
+
+
+def test_runtime_extract_turn_error_from_logs_prefers_highest_numeric_shard(
+    tmp_path: Path,
+) -> None:
+    request = _launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    _write_fake_codex_logs(
+        request.codex_home_path,
+        filename="logs_9.sqlite",
+        entries=[
+            (
+                "session_loop{thread_id=vendor-thread-1}:turn{turn.id=vendor-turn-1}: "
+                "Turn error: stale shard"
+            )
+        ],
+    )
+    _write_fake_codex_logs(
+        request.codex_home_path,
+        filename="logs_10.sqlite",
+        entries=[
+            (
+                "session_loop{thread_id=vendor-thread-1}:turn{turn.id=vendor-turn-1}: "
+                "Turn error: latest shard"
+            )
+        ],
+    )
+
+    assert runtime._extract_turn_error_from_logs("vendor-turn-1") == "latest shard"
 
 
 @pytest.mark.parametrize(
