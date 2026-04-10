@@ -34,13 +34,16 @@ from moonmind.schemas.managed_session_models import (
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
+from moonmind.workflows.codex_session_timeouts import (
+    DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
+)
 
 
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
-# Reserve a minute for the activity to return cleanly before Temporal's
-# start-to-close timeout fires.
-_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = 3540.0
+_DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
+    float(DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
+)
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")

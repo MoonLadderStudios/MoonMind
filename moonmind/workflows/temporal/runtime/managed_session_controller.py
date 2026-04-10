@@ -346,12 +346,25 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         action: str,
-        detail: str,
+        container_id: str,
+        session_id: str | None = None,
+        reason: str,
+        stdout: str | None = None,
         stderr: str,
         extra_env: Mapping[str, str] | None = None,
         cause: Exception | None = None,
     ) -> None:
-        rendered_detail = f"managed session action {action} {detail}"
+        target_label = (
+            f"managed-session action {action} for session {session_id} "
+            f"in container {container_id}"
+            if session_id
+            else f"managed-session action {action} in container {container_id}"
+        )
+        rendered_detail = (
+            "stdout was blank"
+            if stdout is None
+            else f"stdout={self._transport_output_snippet(stdout)}"
+        )
         stderr_text = stderr.strip()
         if stderr_text:
             rendered_detail += (
@@ -362,7 +375,9 @@ class DockerCodexManagedSessionController:
             rendered_detail,
             extra_env=extra_env,
         )
-        error = RuntimeError(f"{rendered_command}: {scrubbed_detail}")
+        error = RuntimeError(
+            f"{target_label} {reason} via {rendered_command}: {scrubbed_detail}"
+        )
         if cause is not None:
             raise error from cause
         raise error
@@ -720,41 +735,48 @@ class DockerCodexManagedSessionController:
             command,
             input_text=json.dumps(payload),
         )
+        session_id = str(payload.get("sessionId") or "").strip() or None
         stdout_text = stdout.strip()
         if not stdout_text:
             self._raise_transport_failure(
                 command,
                 action=action,
-                detail="returned no JSON output",
+                container_id=container_id,
+                session_id=session_id,
+                reason="returned no JSON output",
+                stdout=None,
                 stderr=stderr,
                 extra_env=extra_env,
             )
         try:
-            parsed = json.loads(stdout_text)
+            response_payload = json.loads(stdout_text)
         except json.JSONDecodeError as exc:
             self._raise_transport_failure(
                 command,
                 action=action,
-                detail=(
-                    "returned invalid JSON: "
-                    f"{self._transport_output_snippet(stdout_text)}"
-                ),
+                container_id=container_id,
+                session_id=session_id,
+                reason="returned invalid JSON",
+                stdout=stdout_text,
                 stderr=stderr,
                 extra_env=extra_env,
                 cause=exc,
             )
-        if not isinstance(parsed, dict):
+        if not isinstance(response_payload, dict):
             self._raise_transport_failure(
                 command,
                 action=action,
-                detail=(
-                    f"returned a {type(parsed).__name__} payload instead of a "
-                    "JSON object"
+                container_id=container_id,
+                session_id=session_id,
+                reason=(
+                    f"returned a {type(response_payload).__name__} payload instead "
+                    "of a JSON object"
                 ),
+                stdout=stdout_text,
                 stderr=stderr,
                 extra_env=extra_env,
             )
-        return parsed
+        return response_payload
 
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (
@@ -885,6 +907,9 @@ class DockerCodexManagedSessionController:
             f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
             "-e",
             f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
+            "-e",
+            "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
+            f"{request.turn_completion_timeout_seconds}",
         ]
         auth_volume_path = str(
             request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
