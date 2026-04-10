@@ -1004,7 +1004,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
         runtime_id = self._runtime_id or "codex_cli"
         summary = str(result.get("summary") or "").strip() or None
-        locator_session_id = str(locator.get("sessionId") or "").strip() or None
         raw_locator_session_epoch = locator.get("sessionEpoch")
         locator_session_epoch: int | None
         try:
