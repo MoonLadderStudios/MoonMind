@@ -686,11 +686,45 @@ class DockerCodexManagedSessionController:
                 action,
             ]
         )
-        stdout, _stderr = await self._run(
+        stdout, stderr = await self._run(
             command,
             input_text=json.dumps(payload),
         )
-        return json.loads(stdout.strip() or "{}")
+        stdout_text = stdout.strip()
+        if not stdout_text:
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                (
+                    f"managed session action {action} returned no JSON output"
+                    + (f"; stderr: {stderr.strip()}" if stderr.strip() else "")
+                ),
+                extra_env=extra_env,
+            )
+            raise RuntimeError(f"{rendered_command}: {rendered_detail}")
+        try:
+            parsed = json.loads(stdout_text)
+        except json.JSONDecodeError as exc:
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                (
+                    f"managed session action {action} returned invalid JSON: "
+                    f"{stdout_text[:500]}"
+                    + (f"; stderr: {stderr.strip()}" if stderr.strip() else "")
+                ),
+                extra_env=extra_env,
+            )
+            raise RuntimeError(f"{rendered_command}: {rendered_detail}") from exc
+        if not isinstance(parsed, dict):
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                command,
+                (
+                    f"managed session action {action} returned a "
+                    f"{type(parsed).__name__} payload instead of a JSON object"
+                ),
+                extra_env=extra_env,
+            )
+            raise RuntimeError(f"{rendered_command}: {rendered_detail}")
+        return parsed
 
     async def _wait_ready(self, *, container_id: str) -> None:
         command = (
