@@ -14,9 +14,10 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +54,14 @@ _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class _RolloutTurnScan:
+    references_turn: bool = False
+    assistant_text: str = ""
+    saw_task_complete: bool = False
+    error_text: str | None = None
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -628,50 +637,93 @@ class CodexManagedSessionRuntime:
         vendor_turn_id: str,
         turn_started_at: float | None = None,
     ) -> str:
+        return self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=turn_started_at,
+        ).assistant_text
+
+    def _scan_rollout_for_turn(
+        self,
+        vendor_thread_path: str | None,
+        *,
+        vendor_turn_id: str,
+        turn_started_at: float | None = None,
+    ) -> _RolloutTurnScan:
         rollout_path = self._allowed_rollout_path(vendor_thread_path)
         if rollout_path is None:
-            return ""
+            return _RolloutTurnScan()
         last_text = ""
         terminal_text = ""
         terminal_cutoff = None
+        references_active_turn = False
+        saw_task_complete = False
+        error_text: str | None = None
         if turn_started_at is not None:
             terminal_cutoff = (
                 float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS
             )
         try:
             rollout_file = Path(rollout_path)
-            if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
-                return ""
-            with rollout_file.open(encoding="utf-8") as handle:
-                for raw_line in handle:
-                    stripped = raw_line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        payload = json.loads(stripped)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(payload, Mapping):
-                        continue
-                    references_turn = self._payload_references_turn(payload, vendor_turn_id)
-                    if references_turn:
-                        text = self._assistant_text_from_rollout_entry(payload)
-                        if text:
-                            last_text = text
-                    text = self._terminal_assistant_text_from_rollout_entry(payload)
+            for stripped in self._iter_rollout_lines(rollout_file):
+                if not stripped:
+                    continue
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, Mapping):
+                    continue
+                references_turn = self._payload_references_turn(payload, vendor_turn_id)
+                if references_turn:
+                    references_active_turn = True
+                    text = self._assistant_text_from_rollout_entry(payload)
                     if text:
-                        if references_turn:
-                            terminal_text = text
-                            continue
-                        if terminal_cutoff is None:
-                            continue
-                        entry_timestamp = self._rollout_entry_timestamp(payload)
-                        if entry_timestamp is None or entry_timestamp < terminal_cutoff:
-                            continue
+                        last_text = text
+                text = self._terminal_assistant_text_from_rollout_entry(payload)
+                if text:
+                    if references_turn:
                         terminal_text = text
+                    elif terminal_cutoff is not None:
+                        entry_timestamp = self._rollout_entry_timestamp(payload)
+                        if entry_timestamp is not None and entry_timestamp >= terminal_cutoff:
+                            terminal_text = text
+                if not references_turn:
+                    continue
+                entry_type = str(payload.get("type") or "").strip().lower()
+                if entry_type != "event_msg":
+                    continue
+                event_payload = payload.get("payload")
+                if not isinstance(event_payload, Mapping):
+                    continue
+                event_type = str(event_payload.get("type") or "").strip().lower()
+                if event_type != "task_complete":
+                    continue
+                saw_task_complete = True
+                for field_name in ("error", "reason", "message"):
+                    value = event_payload.get(field_name)
+                    if isinstance(value, str) and value.strip():
+                        error_text = value.strip()
+                        break
         except OSError:
-            return ""
-        return last_text or terminal_text
+            return _RolloutTurnScan()
+        return _RolloutTurnScan(
+            references_turn=references_active_turn,
+            assistant_text=last_text or terminal_text,
+            saw_task_complete=saw_task_complete,
+            error_text=error_text,
+        )
+
+    @staticmethod
+    def _iter_rollout_lines(rollout_file: Path) -> Iterator[str]:
+        file_size = rollout_file.stat().st_size
+        start_offset = max(0, file_size - _ROLLOUT_RECOVERY_MAX_BYTES)
+        with rollout_file.open("rb") as handle:
+            if start_offset:
+                handle.seek(start_offset)
+                handle.readline()
+            for raw_line in handle:
+                yield raw_line.decode("utf-8", errors="replace").strip()
 
     @classmethod
     def _assistant_text_from_rollout_entry(cls, payload: Mapping[str, Any]) -> str:
@@ -722,53 +774,6 @@ class CodexManagedSessionRuntime:
             ):
                 return cls._assistant_text_from_rollout_entry(payload)
         return ""
-
-    def _rollout_terminal_metadata(
-        self,
-        vendor_thread_path: str | None,
-        *,
-        vendor_turn_id: str,
-    ) -> tuple[bool, str | None]:
-        rollout_path = self._allowed_rollout_path(vendor_thread_path)
-        if rollout_path is None:
-            return False, None
-        saw_task_complete = False
-        error_text: str | None = None
-        try:
-            rollout_file = Path(rollout_path)
-            if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
-                return False, None
-            with rollout_file.open(encoding="utf-8") as handle:
-                for raw_line in handle:
-                    stripped = raw_line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        payload = json.loads(stripped)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(payload, Mapping):
-                        continue
-                    if not self._payload_references_turn(payload, vendor_turn_id):
-                        continue
-                    entry_type = str(payload.get("type") or "").strip().lower()
-                    if entry_type != "event_msg":
-                        continue
-                    event_payload = payload.get("payload")
-                    if not isinstance(event_payload, Mapping):
-                        continue
-                    event_type = str(event_payload.get("type") or "").strip().lower()
-                    if event_type != "task_complete":
-                        continue
-                    saw_task_complete = True
-                    for field_name in ("error", "reason", "message"):
-                        value = event_payload.get(field_name)
-                        if isinstance(value, str) and value.strip():
-                            error_text = value.strip()
-                            break
-        except OSError:
-            return False, None
-        return saw_task_complete, error_text
 
     @staticmethod
     def _log_shard_sort_key(log_path: Path) -> tuple[int, str]:
@@ -866,68 +871,22 @@ class CodexManagedSessionRuntime:
                     return recovered
         return None
 
-    def _rollout_references_active_turn(
+    def _rollout_terminal_outcome_from_scan(
         self,
+        scan: _RolloutTurnScan,
         *,
-        state: CodexSessionRuntimeState,
-        thread_payload: Mapping[str, Any],
-        vendor_turn_id: str,
-    ) -> bool:
-        vendor_thread_path = self._resolved_rollout_path(
-            state=state,
-            thread_payload=thread_payload,
-        )
-        rollout_path = self._allowed_rollout_path(vendor_thread_path)
-        if rollout_path is None:
-            return False
-        try:
-            rollout_file = Path(rollout_path)
-            if rollout_file.stat().st_size > _ROLLOUT_RECOVERY_MAX_BYTES:
-                return False
-            with rollout_file.open(encoding="utf-8") as handle:
-                for raw_line in handle:
-                    stripped = raw_line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        payload = json.loads(stripped)
-                    except json.JSONDecodeError:
-                        continue
-                    if self._payload_references_turn(payload, vendor_turn_id):
-                        return True
-        except OSError:
-            return False
-        return False
-
-    def _rollout_terminal_outcome(
-        self,
-        *,
-        state: CodexSessionRuntimeState,
-        thread_payload: Mapping[str, Any],
         vendor_turn_id: str,
     ) -> tuple[str, str | None] | None:
-        vendor_thread_path = self._resolved_rollout_path(
-            state=state,
-            thread_payload=thread_payload,
-        )
-        assistant_text = self._extract_assistant_text_from_rollout(
-            vendor_thread_path,
-            vendor_turn_id=vendor_turn_id,
-        )
-        saw_task_complete, rollout_error = self._rollout_terminal_metadata(
-            vendor_thread_path,
-            vendor_turn_id=vendor_turn_id,
-        )
-        if rollout_error:
-            return "failed", rollout_error
-        if saw_task_complete:
-            if assistant_text:
+        if scan.error_text:
+            return "failed", scan.error_text
+        if scan.saw_task_complete:
+            if scan.assistant_text:
                 return "completed", None
             recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
             if recovered_error:
                 return "failed", recovered_error
             return "failed", "codex app-server turn/completed produced no assistant output"
-        if assistant_text:
+        if scan.assistant_text:
             return "completed", None
         return None
 
@@ -996,6 +955,35 @@ class CodexManagedSessionRuntime:
             return turn
         return None
 
+    def _missing_turn_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> tuple[str, str | None] | None:
+        thread_outcome = self._terminal_thread_outcome(thread_payload)
+        if thread_outcome is not None and thread_outcome[0] != "completed":
+            return thread_outcome
+
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        rollout_scan = self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+        )
+        rollout_outcome = self._rollout_terminal_outcome_from_scan(
+            rollout_scan,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if rollout_outcome is not None:
+            return rollout_outcome
+        if thread_outcome is not None and not rollout_scan.references_turn:
+            return thread_outcome
+        return None
+
     def _wait_for_turn_completion(
         self,
         *,
@@ -1016,24 +1004,13 @@ class CodexManagedSessionRuntime:
                     return thread_payload, outcome
             else:
                 state = self._load_state()
-                rollout_outcome = self._rollout_terminal_outcome(
+                outcome = self._missing_turn_terminal_outcome(
                     state=state,
                     thread_payload=thread_payload,
                     vendor_turn_id=vendor_turn_id,
                 )
-                if rollout_outcome is not None:
-                    return thread_payload, rollout_outcome
-                thread_outcome = self._terminal_thread_outcome(thread_payload)
-                if thread_outcome is not None:
-                    if not (
-                        thread_outcome[0] == "completed"
-                        and self._rollout_references_active_turn(
-                            state=state,
-                            thread_payload=thread_payload,
-                            vendor_turn_id=vendor_turn_id,
-                        )
-                    ):
-                        return thread_payload, thread_outcome
+                if outcome is not None:
+                    return thread_payload, outcome
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1211,25 +1188,13 @@ class CodexManagedSessionRuntime:
             if outcome is None:
                 return state
         else:
-            outcome = self._rollout_terminal_outcome(
+            outcome = self._missing_turn_terminal_outcome(
                 state=state,
                 thread_payload=thread_payload,
                 vendor_turn_id=active_turn_id,
             )
             if outcome is None:
-                outcome = self._terminal_thread_outcome(thread_payload)
-                if (
-                    outcome is not None
-                    and outcome[0] == "completed"
-                    and self._rollout_references_active_turn(
-                        state=state,
-                        thread_payload=thread_payload,
-                        vendor_turn_id=active_turn_id,
-                    )
-                ):
-                    return state
-                if outcome is None:
-                    return state
+                return state
 
         status, error_text = outcome
         assistant_text = ""

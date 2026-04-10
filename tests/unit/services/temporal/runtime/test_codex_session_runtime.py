@@ -16,6 +16,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
+    _ROLLOUT_RECOVERY_MAX_BYTES,
     _run_ready,
 )
 from tests.helpers.codex_session_runtime import (
@@ -524,6 +525,67 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     )
     assert handle.status == "busy"
     assert handle.metadata["lastTurnStatus"] == "running"
+
+
+def test_runtime_send_turn_stays_running_when_large_rollout_tail_has_active_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        ("x" * (_ROLLOUT_RECOVERY_MAX_BYTES + 16))
+        + "\n"
+        + json.dumps(
+            {
+                "timestamp": "2026-04-10T17:55:16.922Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "vendor-turn-1",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = write_fake_app_server(
+        tmp_path,
+        omit_turns_on_read=True,
+        start_thread_path=str(transcript_path),
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+        turn_completion_timeout_seconds=0.01,
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "running"
+    assert response.session_state.active_turn_id == "vendor-turn-1"
 
 
 def test_runtime_send_turn_ignores_transient_log_error_when_rollout_has_final_answer(
@@ -1130,6 +1192,74 @@ def test_runtime_send_turn_prefers_rollout_task_complete_failure_over_agent_mess
     assert response.metadata["reason"] == "provider returned exit code 1"
 
 
+def test_runtime_send_turn_prefers_failed_thread_status_over_rollout_success(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T07-21-32-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-10T07:21:32.088Z",
+                "type": "response_item",
+                "turnId": "vendor-turn-1",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Do not hide the thread failure",
+                        }
+                    ],
+                    "phase": "final",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = write_fake_app_server(
+        tmp_path,
+        omit_turns_on_read=True,
+        start_thread_path=str(transcript_path),
+        thread_status_type="failed",
+        thread_status_reason="provider failed the thread",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata["reason"] == "provider failed the thread"
+
+
 def test_runtime_extract_turn_error_from_logs_prefers_highest_numeric_shard(
     tmp_path: Path,
 ) -> None:
@@ -1530,6 +1660,82 @@ def test_runtime_session_status_remains_busy_without_completion_notification(
         )
     )
     assert state_payload["activeTurnId"] == "vendor-turn-1"
+
+
+def test_runtime_session_status_prefers_failed_thread_status_over_rollout_success(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "10"
+        / "rollout-2026-04-10T07-21-32-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-10T07:21:32.088Z",
+                "type": "response_item",
+                "turnId": "vendor-turn-1",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Do not hide the refreshed thread failure",
+                        }
+                    ],
+                    "phase": "final",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = write_fake_app_server(
+        tmp_path,
+        omit_turns_on_read=True,
+        omit_turns_when_incomplete=True,
+        start_thread_path=str(transcript_path),
+        thread_status_type="failed",
+        thread_status_reason="refresh saw a provider failure",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["activeTurnId"] = "vendor-turn-1"
+    state_payload["lastTurnId"] = "vendor-turn-1"
+    state_payload["lastTurnStatus"] = "running"
+    state_path.write_text(json.dumps(state_payload) + "\n", encoding="utf-8")
+
+    handle = runtime.session_status(
+        CodexManagedSessionLocator(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert handle.status == "failed"
+    assert handle.session_state.active_turn_id is None
+    assert handle.metadata["lastTurnStatus"] == "failed"
+    assert handle.metadata["lastTurnError"] == "refresh saw a provider failure"
 
 
 def test_runtime_interrupt_turn_uses_app_server_transport(tmp_path: Path) -> None:
