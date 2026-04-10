@@ -46,6 +46,9 @@ from moonmind.observability.transport import SpoolLogReader
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])
 
 _HISTORICAL_EVENT_CHUNK_SIZE = 65536
+_OBSERVABILITY_TERMINAL_STATUSES = frozenset(
+    {"completed", "failed", "canceled", "cancelled", "timed_out"}
+)
 
 
 # Live Session legacy endpoints removed in Phase 6. Use /observability-summary and /logs/stream.
@@ -1022,9 +1025,8 @@ async def get_observability_summary(
             )
         await _require_observability_access(record, _user)
 
-        terminal_statuses = {"completed", "failed", "canceled", "cancelled", "timed_out"}
         run_status = getattr(record, "status", None)
-        is_terminal = run_status in terminal_statuses
+        is_terminal = run_status in _OBSERVABILITY_TERMINAL_STATUSES
 
         raw_live_stream_capable = getattr(record, "live_stream_capable", None)
         if is_terminal:
@@ -1243,14 +1245,13 @@ async def stream_task_run_live_logs(
     await _require_observability_access(record, _user)
 
     # Check if run ended => artifact fallback
-    terminal_statuses = ["completed", "failed", "canceled", "cancelled", "timed_out"]
-    if getattr(record, "status", None) in terminal_statuses:
+    if getattr(record, "status", None) in _OBSERVABILITY_TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Run is no longer active. Use artifact retrieval APIs.",
         )
-        
-    # Check capabilities 
+
+    # Check capabilities
     if not getattr(record, "live_stream_capable", False):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
