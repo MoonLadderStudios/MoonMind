@@ -575,10 +575,21 @@ def _build_agent_runtime_deps() -> tuple[
         or os.environ.get("SYSTEM_DOCKER_HOST")
         or "tcp://docker-proxy:2375"
     )
+    session_network_name = (
+        os.environ.get("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK")
+        or "local-network"
+    ).strip() or None
+    session_moonmind_url = (
+        os.environ.get("MOONMIND_MANAGED_SESSION_MOONMIND_URL")
+        or os.environ.get("MOONMIND_URL")
+        or "http://api:5000"
+    ).strip() or None
     session_controller = DockerCodexManagedSessionController(
         workspace_volume_name=workspace_volume_name,
         codex_volume_name=codex_volume_name,
         workspace_root=workspace_root,
+        network_name=session_network_name,
+        moonmind_url=session_moonmind_url,
         session_store=session_store,
         session_supervisor=session_supervisor,
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),

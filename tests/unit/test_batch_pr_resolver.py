@@ -418,27 +418,28 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     assert errors == []
 
 
-def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
-    """_submit_jobs falls back to DB path and logs a warning when MOONMIND_URL is absent."""
+def test_submit_jobs_reports_errors_when_no_url(monkeypatch: Any) -> None:
+    """_submit_jobs returns per-PR errors when MOONMIND_URL is absent."""
     module = _load_module()
     submit_jobs = module["_submit_jobs"]
 
     monkeypatch.delenv("MOONMIND_URL", raising=False)
 
-    db_called = []
-
-    async def fake_db(requests: list) -> tuple:
-        db_called.append(True)
-        return [{"pr": 1, "branch": "b", "jobId": "y"}], []
-
     submission = _make_submission(module)
 
-    monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
     created, errors = asyncio.run(submit_jobs([submission]))
 
-    assert db_called == [True]
-    assert len(created) == 1
-    assert errors == []
+    assert created == []
+    assert errors == [
+        {
+            "pr": 42,
+            "branch": "feature/test",
+            "error": (
+                "MOONMIND_URL is required to enqueue pr-resolver tasks from a managed "
+                "session; the legacy AgentQueueService DB fallback has been removed."
+            ),
+        }
+    ]
 
 
 def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:

@@ -110,6 +110,8 @@ class DockerCodexManagedSessionController:
         workspace_volume_name: str,
         codex_volume_name: str,
         workspace_root: str,
+        network_name: str | None = None,
+        moonmind_url: str | None = None,
         session_store: ManagedSessionStore | None = None,
         session_supervisor: ManagedSessionSupervisor | Any | None = None,
         docker_binary: str = "docker",
@@ -125,6 +127,8 @@ class DockerCodexManagedSessionController:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
         self._workspace_root = workspace_root
+        self._network_name = str(network_name or "").strip() or None
+        self._moonmind_url = str(moonmind_url or "").strip() or None
         self._session_store = session_store
         self._session_supervisor = session_supervisor
         self._docker_binary = docker_binary
@@ -1107,6 +1111,8 @@ class DockerCodexManagedSessionController:
             "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
             f"{request.turn_completion_timeout_seconds}",
         ]
+        if self._network_name:
+            run_command.extend(["--network", self._network_name])
         auth_volume_path = str(
             request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
         ).strip()
@@ -1117,7 +1123,10 @@ class DockerCodexManagedSessionController:
                     self._volume_mount(self._codex_volume_name, auth_volume_path),
                 ]
             )
-        for key, value in sorted(request.environment.items()):
+        session_environment = dict(request.environment)
+        if self._moonmind_url:
+            session_environment.setdefault("MOONMIND_URL", self._moonmind_url)
+        for key, value in sorted(session_environment.items()):
             run_command.extend(["-e", f"{key}={value}"])
         run_command.extend(
             [

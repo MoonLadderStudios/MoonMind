@@ -66,9 +66,10 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
      - `payload.task.publish.mode`: `none`
-     - `payload.task.skill.id`: `pr-resolver`
-     - `payload.task.skill.args`: `{ repo, pr, branch, mergeMethod, maxIterations }`
-   - Submit via internal queue service (`AgentQueueService`).
+     - `payload.task.skill.name`: `pr-resolver`
+     - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
+   - Submit via the internal Temporal-aware create endpoint (`POST /api/executions`);
+     `MOONMIND_URL` must point at the MoonMind API from the managed session.
 4. Write one summary artifact at `artifacts/batch_pr_resolver_result.json`.
 5. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
 
