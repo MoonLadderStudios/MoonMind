@@ -262,6 +262,51 @@ def test_get_observability_summary_uses_record_snapshot_when_session_record_miss
     assert body["sessionSnapshot"]["threadId"] == "thread-3"
 
 
+def test_get_observability_summary_preserves_active_record_snapshot_and_events_ref(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {
+        "status": "running",
+        "sessionId": "sess-active",
+        "sessionEpoch": 2,
+        "containerId": "ctr-active",
+        "threadId": "thread-active",
+        "activeTurnId": "turn-active",
+        "observabilityEventsRef": "run-active/observability.events.jsonl",
+    }
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.session_id = "sess-active"
+    mock_record.session_epoch = 2
+    mock_record.container_id = "ctr-active"
+    mock_record.thread_id = "thread-active"
+    mock_record.active_turn_id = "turn-active"
+    mock_record.observability_events_ref = "run-active/observability.events.jsonl"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._load_task_run_session_record",
+            return_value=None,
+        ):
+            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    body = response.json()["summary"]
+    assert body["supportsLiveStreaming"] is True
+    assert body["liveStreamStatus"] == "available"
+    assert body["observabilityEventsRef"] == "run-active/observability.events.jsonl"
+    assert body["sessionSnapshot"] == {
+        "sessionId": "sess-active",
+        "sessionEpoch": 2,
+        "containerId": "ctr-active",
+        "threadId": "thread-active",
+        "activeTurnId": "turn-active",
+    }
+
+
 def test_get_observability_summary_live_stream_ended_for_terminal_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -511,6 +556,220 @@ def test_stream_task_run_log_merged_synthesized_from_spool(
     assert body.index("--- stderr ---") > body.index("hello from stdout")
     assert body.index("warning from stderr") > body.index("--- stderr ---")
     assert body.index("goodbye from stdout") > body.index("warning from stderr")
+
+
+def test_stream_task_run_log_merged_prefers_event_journal_before_prebuilt_artifact(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 1,
+                        "stream": "stdout",
+                        "text": "first stdout\n",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "stdout_chunk",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 2,
+                        "stream": "system",
+                        "text": "turn accepted\n",
+                        "timestamp": "2026-04-08T00:00:02Z",
+                        "kind": "system_annotation",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 3,
+                        "stream": "session",
+                        "text": "Session started.\n",
+                        "timestamp": "2026-04-08T00:00:03Z",
+                        "kind": "session_started",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 1,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "merged.log").write_text("final artifact should not win\n", encoding="utf-8")
+
+    mock_record = MagicMock()
+    mock_record.run_id = "run-1"
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+    mock_record.merged_log_artifact_ref = "run-1/merged.log"
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.workspace_path = str(tmp_path / "workspace-without-spool")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-synthesized"] == "true"
+    assert response.headers["x-merged-order-source"] == "journal"
+    body = response.text
+    assert "final artifact should not win" not in body
+    assert body.index("first stdout") < body.index("turn accepted")
+    assert body.index("turn accepted") < body.index("Session started.")
+    assert "--- session (session_started) ---" in body
+
+
+def test_stream_task_run_log_merged_falls_back_to_spool_when_event_journal_empty(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(["not-json", json.dumps({"sequence": 1, "stream": "stdout"})]) + "\n",
+        encoding="utf-8",
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "live_streams.spool").write_text(
+        json.dumps(
+            {
+                "sequence": 2,
+                "stream": "stdout",
+                "text": "spool still renders\n",
+                "timestamp": "2026-04-08T00:00:02Z",
+                "kind": "stdout_chunk",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.run_id = "run-1"
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.workspace_path = str(workspace_path)
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "spool"
+    assert "spool still renders" in response.text
+
+
+def test_stream_task_run_log_merged_skips_malformed_active_rows(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                "not-json",
+                json.dumps({"sequence": "bad", "stream": "stdout", "text": "bad\n"}),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 4,
+                        "stream": "stderr",
+                        "text": "valid warning\n",
+                        "timestamp": "2026-04-08T00:00:04Z",
+                        "kind": "stderr_chunk",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.run_id = "run-1"
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+    mock_record.merged_log_artifact_ref = None
+    mock_record.stdout_artifact_ref = None
+    mock_record.stderr_artifact_ref = None
+    mock_record.workspace_path = str(tmp_path / "workspace-without-spool")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
+
+    assert response.status_code == 200
+    assert response.headers["x-merged-order-source"] == "journal"
+    assert "bad" not in response.text
+    assert "valid warning" in response.text
+
+
+def test_stream_task_run_log_merged_journal_probe_stops_after_first_renderable_event(
+    tmp_path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text("placeholder\n", encoding="utf-8")
+    record = SimpleNamespace(
+        run_id="run-1",
+        observability_events_ref="run-1/observability.events.jsonl",
+    )
+    consumed = 0
+
+    def fake_iter_event_journal(path, *, run_id=None):
+        nonlocal consumed
+        consumed += 1
+        yield {
+            "runId": run_id,
+            "sequence": 1,
+            "stream": "stdout",
+            "text": "first row\n",
+            "timestamp": "2026-04-08T00:00:01Z",
+        }
+        consumed += 1
+        raise AssertionError("probe should not consume the rest of the journal")
+
+    with patch(
+        "api_service.api.routers.task_runs._iter_event_journal",
+        side_effect=fake_iter_event_journal,
+    ):
+        assert task_runs_router._merged_journal_has_renderable_events(
+            record,
+            artifacts_root,
+        )
+
+    assert consumed == 1
 
 
 def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
