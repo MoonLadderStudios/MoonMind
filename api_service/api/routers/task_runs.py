@@ -1116,9 +1116,10 @@ async def control_task_run_artifact_session(
     if payload.action == "send_follow_up":
         await client.update_workflow(
             workflow_id,
-            "SendFollowUp",
+            "SendTurn",
             {
                 "message": payload.message,
+                "sessionEpoch": record.session_epoch,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1127,6 +1128,7 @@ async def control_task_run_artifact_session(
             workflow_id,
             "ClearSession",
             {
+                "sessionEpoch": record.session_epoch,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )

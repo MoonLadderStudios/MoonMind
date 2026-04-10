@@ -538,6 +538,7 @@ class CodexManagedSessionSendFollowUpRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     message: NonBlankStr = Field(..., alias="message")
+    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     reason: str | None = Field(None, alias="reason")
 
     @model_validator(mode="after")
@@ -583,6 +584,7 @@ class CodexManagedSessionWorkflowControlRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     reason: str | None = Field(None, alias="reason")
 
     @model_validator(mode="after")

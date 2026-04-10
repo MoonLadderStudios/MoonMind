@@ -2201,9 +2201,10 @@ def test_post_task_run_artifact_session_control_routes_send_follow_up_and_return
     assert response.status_code == 200
     client_adapter.update_workflow.assert_awaited_once_with(
         "wf-task-1:session:codex_cli",
-        "SendFollowUp",
+        "SendTurn",
         {
             "message": "Continue reusing the current session.",
+            "sessionEpoch": 2,
             "reason": "Operator clarification",
         },
     )
@@ -2260,6 +2261,7 @@ def test_post_task_run_artifact_session_control_routes_clear_session_and_returns
         "wf-task-1:session:codex_cli",
         "ClearSession",
         {
+            "sessionEpoch": 3,
             "reason": "Reset stale context",
         },
     )

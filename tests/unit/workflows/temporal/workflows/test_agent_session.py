@@ -75,6 +75,27 @@ def test_agent_session_send_follow_up_validator_requires_runtime_handles(
         workflow.validate_send_follow_up({"message": "Continue the task-scoped session."})
 
 
+def test_agent_session_send_turn_validator_rejects_stale_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    )
+
+    with pytest.raises(ValueError, match="stale sessionEpoch"):
+        workflow.validate_send_turn(
+            {
+                "message": "Continue the task-scoped session.",
+                "sessionEpoch": 2,
+            }
+        )
+
+
 def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -123,6 +144,52 @@ def test_agent_session_clear_session_validator_rejects_when_already_clearing(
 
     with pytest.raises(ValueError, match="already clearing"):
         workflow.validate_clear_session({})
+
+
+def test_agent_session_clear_session_validator_rejects_stale_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    )
+
+    with pytest.raises(ValueError, match="stale sessionEpoch"):
+        workflow.validate_clear_session({"sessionEpoch": 2})
+
+
+def test_agent_session_cancel_and_terminate_validators_require_runtime_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    with pytest.raises(ValueError, match="runtime handles are not attached yet"):
+        workflow.validate_cancel_session({"sessionEpoch": 1})
+    with pytest.raises(ValueError, match="runtime handles are not attached yet"):
+        workflow.validate_terminate_session({"sessionEpoch": 1})
+
+
+def test_agent_session_cancel_and_terminate_validators_reject_stale_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    )
+
+    with pytest.raises(ValueError, match="stale sessionEpoch"):
+        workflow.validate_cancel_session({"sessionEpoch": 2})
+    with pytest.raises(ValueError, match="stale sessionEpoch"):
+        workflow.validate_terminate_session({"sessionEpoch": 2})
 
 
 @pytest.mark.asyncio
@@ -360,6 +427,85 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
         assert kwargs["start_to_close_timeout"] == timedelta(
             seconds=route.timeouts.start_to_close_seconds
         )
+
+
+@pytest.mark.asyncio
+async def test_agent_session_send_turn_update_is_canonical_send_update_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    )
+
+    captured: list[str] = []
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        captured.append(activity_name)
+        if activity_name == "agent_runtime.send_turn":
+            assert payload["sessionEpoch"] == 1
+            assert payload["instructions"] == "Continue the task-scoped session."
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-2",
+                "status": "completed",
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    result = await workflow.send_turn_update(
+        {
+            "message": "Continue the task-scoped session.",
+            "sessionEpoch": 1,
+        }
+    )
+
+    assert result["turnId"] == "turn-2"
+    assert captured == [
+        "agent_runtime.send_turn",
+        "agent_runtime.fetch_session_summary",
+        "agent_runtime.publish_session_artifacts",
+    ]
+    assert workflow.get_status()["lastControlAction"] == "send_turn"
 
 
 @pytest.mark.asyncio

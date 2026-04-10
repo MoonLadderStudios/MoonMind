@@ -130,6 +130,10 @@ class MoonMindAgentSessionWorkflow:
                 f"stale sessionEpoch {session_epoch}; current epoch is {self._binding.session_epoch}"
             )
 
+    def _validate_optional_epoch(self, session_epoch: int | None) -> None:
+        if session_epoch is not None:
+            self._validate_current_epoch(session_epoch)
+
     def _require_active_turn(self) -> str:
         if not self._active_turn_id:
             raise ValueError("Managed session has no active turn to control")
@@ -329,8 +333,9 @@ class MoonMindAgentSessionWorkflow:
         )
         return snapshot.model_dump(mode="json", by_alias=True)
 
-    @workflow.update(name="SendFollowUp")
-    async def send_follow_up(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _send_turn_update(
+        self, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
         locator = self._require_locator()
         response = CodexManagedSessionTurnResponse.model_validate(
@@ -362,11 +367,29 @@ class MoonMindAgentSessionWorkflow:
             **continuity,
         }
 
-    @send_follow_up.validator
-    def validate_send_follow_up(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
+    @workflow.update(name="SendTurn")
+    async def send_turn_update(
+        self, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return await self._send_turn_update(payload)
+
+    @send_turn_update.validator
+    def validate_send_turn(self, payload: dict[str, Any] | None = None) -> None:
+        request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
         self._require_locator()
+        self._validate_optional_epoch(request.session_epoch)
+
+    @workflow.update(name="SendFollowUp")
+    async def send_follow_up(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._send_turn_update(payload)
+
+    @send_follow_up.validator
+    def validate_send_follow_up(self, payload: dict[str, Any] | None = None) -> None:
+        request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
+        self._validate_mutation_allowed()
+        self._require_locator()
+        self._validate_optional_epoch(request.session_epoch)
 
     @workflow.update(name="InterruptTurn")
     async def interrupt_turn_update(
@@ -501,9 +524,10 @@ class MoonMindAgentSessionWorkflow:
 
     @clear_session_update.validator
     def validate_clear_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
         self._require_locator()
+        self._validate_optional_epoch(request.session_epoch)
         if self._status == AGENT_SESSION_STATUS_CLEARING:
             raise ValueError("Managed session is already clearing")
 
@@ -520,8 +544,10 @@ class MoonMindAgentSessionWorkflow:
 
     @cancel_session_update.validator
     def validate_cancel_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
+        self._require_locator()
+        self._validate_optional_epoch(request.session_epoch)
 
     @workflow.update(name="TerminateSession")
     async def terminate_session_update(
@@ -563,5 +589,7 @@ class MoonMindAgentSessionWorkflow:
 
     @terminate_session_update.validator
     def validate_terminate_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
+        self._require_locator()
+        self._validate_optional_epoch(request.session_epoch)

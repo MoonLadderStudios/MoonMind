@@ -2,7 +2,7 @@
 
 Status: Desired state
 Owners: MoonMind Platform
-Last updated: 2026-04-09
+Last updated: 2026-04-10
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
@@ -111,6 +111,21 @@ The canonical Phase 1 control actions are:
 - `terminate_session`
 
 These actions are the stable MoonMind-side vocabulary for the Codex managed session plane. Runtime-specific transport details stay behind the adapter boundary.
+
+Production workflow mutations are exposed as typed Temporal Updates, not as a
+generic action signal:
+
+- `SendTurn`
+- `InterruptTurn`
+- `SteerTurn`
+- `ClearSession`
+- `CancelSession`
+- `TerminateSession`
+
+`SendFollowUp` may remain available as a compatibility alias for existing
+operator clients, but new production callers should use `SendTurn`. The legacy
+`control_action` signal is reserved for replaying already-recorded histories and
+must not be used as the normal production mutation surface.
 
 ## 6. Clear / Reset Semantics
 
