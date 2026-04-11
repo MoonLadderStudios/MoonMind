@@ -234,14 +234,14 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "0.87.0"
+version = "0.94.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "anthropic-0.87.0-py3-none-any.whl", hash = "sha256:e2669b86d42c739d3df163f873c51719552e263a3d85179297180fb4fa00a236"},
-    {file = "anthropic-0.87.0.tar.gz", hash = "sha256:098fef3753cdd3c0daa86f95efb9c8d03a798d45c5170329525bb4653f6702d0"},
+    {file = "anthropic-0.94.0-py3-none-any.whl", hash = "sha256:42550b401eed8fcd7f6654234560f99c428306301bca726d32bca4bfb6feb748"},
+    {file = "anthropic-0.94.0.tar.gz", hash = "sha256:dde8c57de73538c5136c1bca9b16da92e75446b53a73562cc911574e4934435c"},
 ]
 
 [package.dependencies]
@@ -259,6 +259,7 @@ typing-extensions = ">=4.14,<5"
 
 [package.extras]
 aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
+aws = ["boto3 (>=1.28.57)", "botocore (>=1.31.57)"]
 bedrock = ["boto3 (>=1.28.57)", "botocore (>=1.31.57)"]
 mcp = ["mcp (>=1.0) ; python_version >= \"3.10\""]
 vertex = ["google-auth[requests] (>=2,<3)"]
@@ -6370,4 +6371,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "77b2b46896e0ab0eda9ce84d6b1ace259119f66745adf8726736ec15f54b4bfb"
+content-hash = "1ab4caeff8ea9e56b1be50f31c7ce4b1a803c25bb2ecb52b6f3a750a975e9d89"
