@@ -621,6 +621,36 @@ def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides
     assert initial_parameters["task"]["publish"]["prBody"] == "Adds integration tests and updates callback routing."
 
 
+def test_create_task_shaped_execution_defaults_runtime_into_parameters(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "title": "Resolve queued PR",
+                    "instructions": "Run pr-resolver for the branch.",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["task"]["runtime"]["mode"] == "codex_cli"
+
+
 def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1183,6 +1213,24 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
     assert payload.target_runtime == "gemini_cli"
     dumped = payload.model_dump(by_alias=True)
     assert dumped["targetRuntime"] == "gemini_cli"
+
+
+def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.memo = {
+        "title": "Temporal task",
+        "summary": "Launching agent...",
+        "waiting_reason": "provider_profile_slot",
+    }
+    record.waiting_reason = None
+
+    payload = _serialize_execution(
+        record,
+        user=SimpleNamespace(is_superuser=True, id=record.owner_id),
+    )
+
+    assert payload.state == "executing"
+    assert payload.waiting_reason is None
 
 
 def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:

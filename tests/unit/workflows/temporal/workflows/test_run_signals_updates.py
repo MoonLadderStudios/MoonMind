@@ -10,6 +10,7 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_RECONCILE_INTERVAL,
+    STATE_AWAITING_SLOT,
     STATE_WAITING_ON_DEPENDENCIES,
     MoonMindRunWorkflow,
 )
@@ -420,6 +421,26 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
         (memo.get("dependencies") or {}).get("declaredIds") == ["dep-1", "dep-2"]
         for memo in memo_updates
     )
+
+
+def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    workflow_instance.child_state_changed(
+        "awaiting_slot",
+        "Managed provider capacity exhausted.",
+    )
+
+    assert workflow_instance._state == STATE_AWAITING_SLOT
+    assert workflow_instance._summary == "Managed provider capacity exhausted."
+    assert workflow_instance._waiting_reason == "provider_profile_slot"
+    assert workflow_instance._attention_required is False
+
+    workflow_instance.child_state_changed("launching", "Slot acquired.")
+
+    assert workflow_instance._waiting_reason is None
 
 
 @pytest.mark.asyncio

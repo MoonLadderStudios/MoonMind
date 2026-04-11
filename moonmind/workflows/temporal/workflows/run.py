@@ -147,7 +147,9 @@ INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 # Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
 RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
-# Replay-stable patch id for task-scoped Codex terminate child-workflow updates.
+# Replay-stable patch id for the v2 task-scoped Codex termination path. The
+# identifier says "update" for in-flight history continuity, but current
+# Temporal external workflow handles expose the session control surface by signal.
 RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
@@ -2311,26 +2313,13 @@ class MoonMindRunWorkflow:
                     binding.workflow_id
                 )
                 if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
-                    try:
-                        await session_handle.execute_update(
-                            "TerminateSession",
-                            {
-                                "reason": reason,
-                            },
-                        )
-                    except Exception as exc:
-                        self._get_logger().warning(
-                            "Task-scoped Codex terminate update failed for %s: %s",
-                            binding.session_id,
-                            exc,
-                        )
-                        await session_handle.signal(
-                            "control_action",
-                            {
-                                "action": "terminate_session",
-                                "reason": reason,
-                            },
-                        )
+                    await session_handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
                 elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
                     try:
                         snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
@@ -3837,10 +3826,14 @@ class MoonMindRunWorkflow:
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
         if new_state == "awaiting_slot":
+            self._waiting_reason = "provider_profile_slot"
+            self._attention_required = False
             self._set_state(STATE_AWAITING_SLOT, summary=reason)
         elif new_state == "launching":
+            self._waiting_reason = None
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
+            self._waiting_reason = None
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
         elif new_state in ("completed", "failed", "canceled", "timed_out"):
             # Child has reached a terminal state. If we have an assigned profile

@@ -927,6 +927,7 @@ class MoonMindAgentRun:
         use_managed_status_activity = workflow.patched(
             MANAGED_STATUS_ACTIVITY_PATCH_ID
         )
+        requested_execution_profile_ref = request.execution_profile_ref
 
         try:
             while True:
@@ -1728,6 +1729,7 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
+                        request.execution_profile_ref = requested_execution_profile_ref
                         self.run_status = RunStatus.awaiting_slot
                         continue # Retries loop
                     else:
@@ -1735,6 +1737,7 @@ class MoonMindAgentRun:
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                         self.completion_event.clear()
                         self.final_result = None
+                        request.execution_profile_ref = requested_execution_profile_ref
                         continue # Retries loop
 
                 # Not a 429 or external agent
