@@ -899,6 +899,19 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="workload.run",
+            family="workload",
+            capability_class="docker_workload",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(3600, 3900),
+            retries=_activity_retries(
+                max_attempts=1,
+                max_interval_seconds=300,
+                non_retryable=NON_RETRYABLE_ERRORS,
+            ),
+        ),
+        TemporalActivityDefinition(
             activity_type="proposal.generate",
             family="proposal",
             capability_class="llm",
@@ -1033,9 +1046,14 @@ def build_default_activity_catalog(
         TemporalWorkerFleet(
             fleet=AGENT_RUNTIME_FLEET,
             task_queues=(cfg.activity_agent_runtime_task_queue,),
-            capabilities=("agent_runtime",),
-            privileges=("isolated_process_execution", "auth_volume_mounts"),
-            scaling_notes="Long-lived supervised runtime executions.",
+            capabilities=("agent_runtime", "docker_workload"),
+            privileges=(
+                "isolated_process_execution",
+                "auth_volume_mounts",
+                "docker_proxy",
+                "agent_workspaces_volume",
+            ),
+            scaling_notes="Long-lived supervised runtime executions and bounded Docker workload launches.",
             activity_types=tuple(
                 list(
                     entry.activity_type

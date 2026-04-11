@@ -1,14 +1,14 @@
 # DockerOutOfDocker Remaining Work
 
 Source doc: [`docs/ManagedAgents/DockerOutOfDocker.md`](../../ManagedAgents/DockerOutOfDocker.md)
-Status: Phase 0 and Phase 1 complete; Phases 2 through 7 pending
-Last updated: 2026-04-10
+Status: Phases 0 through 2 complete; Phases 3 through 7 pending
+Last updated: 2026-04-11
 
 ## Phase checklist
 
 - [x] Phase 0: Lock the contract and carve the boundary across the canonical DooD, session-plane, and execution-model docs.
 - [x] Phase 1: Define the control-plane workload contract (`WorkloadRequest`, `WorkloadResult`, `RunnerProfile`, ownership metadata, validation rules).
-- [ ] Phase 2: Build the Docker workload launcher on the existing Docker-capable `agent_runtime` worker fleet.
+- [x] Phase 2: Build the Docker workload launcher on the existing Docker-capable `agent_runtime` worker fleet.
 - [ ] Phase 3: Expose DooD through executable tools such as `container.run_workload` and `unreal.run_tests`.
 - [ ] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
 - [ ] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
@@ -28,6 +28,15 @@ Last updated: 2026-04-10
 - A deployment-owned runner profile registry can load JSON/YAML profile files and fails closed when no registry exists.
 - Profile-aware validation rejects unknown profiles, unsafe images/mounts/network/device policy, disallowed env overrides, workspace paths outside the configured root, excessive resource overrides, and timeout overrides above profile limits.
 - Focused unit tests cover valid request construction, deterministic `moonmind.*` labels, registry loading, fail-closed behavior, and policy denials.
+
+## Phase 2 completion notes
+
+- `DockerWorkloadLauncher` executes a profile-validated workload request through the configured Docker CLI / `DOCKER_HOST` path and returns bounded `WorkloadResult` metadata.
+- Docker run construction is deterministic for container name, labels, workspace/cache mounts, approved artifacts directory reachability, workdir, network policy, env overrides, resource flags, entrypoint/wrapper, image, and command.
+- Timeout and cancellation cleanup paths stop, kill, and remove ephemeral workload containers according to profile cleanup policy.
+- `DockerContainerJanitor` supports `docker stop`, `docker kill`, `docker rm`, and orphan lookup by ownership labels.
+- The Temporal activity catalog exposes `workload.run` as a separate `docker_workload` capability on the existing `agent_runtime` fleet rather than overloading managed-session verbs.
+- Focused unit tests cover launcher argument construction, cleanup, orphan lookup, activity routing, and worker topology.
 
 ## Guardrails to preserve during later phases
 
