@@ -178,11 +178,12 @@ Every managed Codex step must remain execution-centric even when a container is 
 At minimum, each step must produce durable evidence through the existing artifact system, including step outputs and runtime diagnostics. Session continuity should be represented with summary, checkpoint, and control-boundary artifacts rather than inferred from container state.
 
 For the current production path, `managed_session_controller` plus the managed-session
-supervisor are the production artifact publishers for summary/checkpoint/control/reset
-refs and related session observability. The transitional in-container
-`fetch_session_summary()` and `publish_session_artifacts()` helpers may still exist as
-fallback or bring-up helpers, but they are not the production publication path while
-they return empty publication refs.
+supervisor are the only production artifact publishers for
+summary/checkpoint/control/reset refs and related session observability. The
+transitional in-container `fetch_session_summary()` and
+`publish_session_artifacts()` helpers may exist for fallback diagnostics or bring-up
+only. Production flows must not rely on those helpers while they return empty
+publication refs.
 
 ## 9. Non-goals for This Contract Slice
 

@@ -1168,7 +1168,7 @@ class MoonMindAgentRun:
                         async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
                             await session_handle.signal("attach_runtime_handles", payload)
 
-                        async def _apply_session_control_action(payload: dict[str, Any]) -> None:
+                        async def _update_session_projection(payload: dict[str, Any]) -> None:
                             signal_payload = {
                                 key: value
                                 for key, value in payload.items()
@@ -1271,7 +1271,7 @@ class MoonMindAgentRun:
                             fetch_remote_summary=_fetch_session_summary,
                             publish_remote_artifacts=_publish_session_artifacts,
                             attach_runtime_handles=_attach_runtime_handles,
-                            apply_session_control_action=_apply_session_control_action,
+                            update_session_projection=_update_session_projection,
                             workspace_root=_MANAGED_RUNTIME_STORE_ROOT,
                             session_image_ref=_DEFAULT_SESSION_IMAGE_REF,
                             launch_context_builder=_launch_context_builder,

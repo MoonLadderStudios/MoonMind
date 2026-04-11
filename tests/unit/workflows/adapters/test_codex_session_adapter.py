@@ -273,7 +273,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
         attach_calls.append(payload)
 
-    async def _apply_control_action(payload: dict[str, Any]) -> None:
+    async def _update_projection(payload: dict[str, Any]) -> None:
         control_calls.append(payload)
 
     run_store = ManagedRunStore(tmp_path / "managed_runs")
@@ -298,7 +298,7 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_attach_runtime_handles,
-        apply_session_control_action=_apply_control_action,
+        update_session_projection=_update_projection,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -439,7 +439,7 @@ async def test_start_persists_running_live_capable_record_before_send_turn_compl
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -547,7 +547,7 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -638,7 +638,7 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
         fetch_remote_summary=AsyncMock(),
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -703,7 +703,7 @@ async def test_publish_failure_artifacts_logs_best_effort_failure(
         fetch_remote_summary=AsyncMock(),
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -761,7 +761,7 @@ async def test_publish_failure_artifacts_preserves_cancellation(
         fetch_remote_summary=AsyncMock(),
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -869,7 +869,7 @@ async def test_start_finalizes_failed_record_for_post_save_exceptions(
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -923,7 +923,7 @@ async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
     async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
         raise RuntimeError(summary_error)
 
-    async def _signal_action(payload: dict[str, Any]) -> None:
+    async def _update_projection(payload: dict[str, Any]) -> None:
         signal_calls.append(payload)
 
     adapter = CodexSessionAdapter(
@@ -947,7 +947,7 @@ async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=AsyncMock(),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_signal_action,
+        update_session_projection=_update_projection,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1030,7 +1030,7 @@ async def test_start_resolves_workspace_path_once_per_turn(tmp_path: Path) -> No
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1131,7 +1131,7 @@ async def test_start_passes_profile_materialization_payload_to_launch_session(
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1213,7 +1213,7 @@ async def test_start_passes_task_timeout_policy_to_launch_session(
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1291,7 +1291,7 @@ async def test_start_uses_profile_default_timeout_when_request_timeout_missing(
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1363,7 +1363,7 @@ async def test_start_clamps_requested_timeout_to_supported_send_turn_budget(
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1444,7 +1444,7 @@ async def test_start_falls_back_to_clamped_profile_default_on_timeout_overflow(
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1528,7 +1528,7 @@ async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
             )
         ),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1566,7 +1566,7 @@ async def test_start_rejects_non_text_input_refs_for_session_turns(
         fetch_remote_summary=AsyncMock(),
         publish_remote_artifacts=AsyncMock(),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1629,7 +1629,7 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
             thread_id="thread-existing",
         )
 
-    async def _apply_control_action(payload: dict[str, Any]) -> None:
+    async def _update_projection(payload: dict[str, Any]) -> None:
         control_calls.append(payload)
 
     adapter = CodexSessionAdapter(
@@ -1653,7 +1653,7 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
         fetch_remote_summary=_fetch_summary,
         publish_remote_artifacts=_publish_artifacts,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_apply_control_action,
+        update_session_projection=_update_projection,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1697,7 +1697,7 @@ async def test_clear_session_rotates_epoch_and_signals_session_workflow(
     async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
         attach_calls.append(payload)
 
-    async def _apply_control_action(payload: dict[str, Any]) -> None:
+    async def _update_projection(payload: dict[str, Any]) -> None:
         control_calls.append(payload)
 
     adapter = CodexSessionAdapter(
@@ -1721,7 +1721,7 @@ async def test_clear_session_rotates_epoch_and_signals_session_workflow(
         fetch_remote_summary=_async_noop,
         publish_remote_artifacts=_async_noop,
         attach_runtime_handles=_attach_runtime_handles,
-        apply_session_control_action=_apply_control_action,
+        update_session_projection=_update_projection,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1788,7 +1788,7 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
         fetch_remote_summary=_async_noop,
         publish_remote_artifacts=_async_noop,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1847,7 +1847,7 @@ async def test_save_run_state_persists_blank_workspace_path_as_none(
         fetch_remote_summary=AsyncMock(),
         publish_remote_artifacts=AsyncMock(),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1907,7 +1907,7 @@ async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
         fetch_remote_summary=AsyncMock(),
         publish_remote_artifacts=AsyncMock(),
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -1985,7 +1985,7 @@ async def test_terminate_session_uses_remote_session_control_surface(
             status="terminated",
         )
 
-    async def _apply_control_action(payload: dict[str, Any]) -> None:
+    async def _update_projection(payload: dict[str, Any]) -> None:
         control_calls.append(payload)
 
     adapter = CodexSessionAdapter(
@@ -2009,7 +2009,7 @@ async def test_terminate_session_uses_remote_session_control_surface(
         fetch_remote_summary=_async_noop,
         publish_remote_artifacts=_async_noop,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_apply_control_action,
+        update_session_projection=_update_projection,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -2072,7 +2072,7 @@ async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
         fetch_remote_summary=_async_noop,
         publish_remote_artifacts=_async_noop,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -2154,7 +2154,7 @@ async def test_fetch_result_maps_blocked_pr_resolver_artifact_for_completed_run(
         fetch_remote_summary=_async_noop,
         publish_remote_artifacts=_async_noop,
         attach_runtime_handles=_async_noop,
-        apply_session_control_action=_async_noop,
+        update_session_projection=_async_noop,
         workspace_root=str(tmp_path / "agent_jobs"),
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )

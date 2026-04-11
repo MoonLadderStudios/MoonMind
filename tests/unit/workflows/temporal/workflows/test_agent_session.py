@@ -122,7 +122,17 @@ def test_agent_session_clear_session_validator_rejects_when_already_clearing(
     workflow._status = AGENT_SESSION_STATUS_CLEARING
 
     with pytest.raises(ValueError, match="already clearing"):
-        workflow.validate_clear_session({})
+        workflow.validate_clear_session({"sessionEpoch": 1})
+
+
+def test_agent_session_terminate_validator_requires_runtime_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    with pytest.raises(ValueError, match="runtime handles are not attached yet"):
+        workflow.validate_terminate_session({"sessionEpoch": 1, "reason": "done"})
 
 
 @pytest.mark.asyncio
@@ -132,7 +142,7 @@ async def test_agent_session_terminate_update_marks_termination_requested(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
 
-    status = await workflow.terminate_session_update({"reason": "done"})
+    status = await workflow.terminate_session_update({"sessionEpoch": 1, "reason": "done"})
 
     assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
     assert status["terminationRequested"] is True
@@ -184,7 +194,7 @@ async def test_agent_session_terminate_update_executes_remote_terminate_when_han
         _execute_activity,
     )
 
-    status = await workflow.terminate_session_update({"reason": "done"})
+    status = await workflow.terminate_session_update({"sessionEpoch": 1, "reason": "done"})
 
     assert [name for name, _, _ in captured] == ["agent_runtime.terminate_session"]
     assert captured[0][1]["containerId"] == "container-1"
@@ -246,7 +256,7 @@ async def test_agent_session_terminate_update_keeps_terminating_when_remote_term
         _execute_activity,
     )
 
-    status = await workflow.terminate_session_update({"reason": "done"})
+    status = await workflow.terminate_session_update({"sessionEpoch": 1, "reason": "done"})
 
     assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
     assert status["terminationRequested"] is True
@@ -620,7 +630,7 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
         _execute_activity,
     )
 
-    result = await workflow.clear_session_update({"reason": "Reset stale context"})
+    result = await workflow.clear_session_update({"sessionEpoch": 1, "reason": "Reset stale context"})
 
     assert result["sessionState"]["sessionEpoch"] == 2
     assert result["latestResetBoundaryRef"] == "art-reset-epoch-2"
@@ -638,34 +648,13 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
     assert status["lastControlReason"] == "Reset stale context"
 
 
-def test_agent_session_legacy_control_action_signal_replays_clear_session(
+def test_agent_session_does_not_expose_legacy_control_action_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
-    workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
-    )
 
-    workflow.apply_control_action(
-        {
-            "action": "clear_session",
-            "reason": "Replay old clear event",
-            "threadId": "thread-2",
-        }
-    )
-
-    status = workflow.get_status()
-    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
-    assert status["binding"]["sessionEpoch"] == 2
-    assert status["threadId"] == "thread-2"
-    assert status["activeTurnId"] is None
-    assert status["lastControlAction"] == "clear_session"
-    assert status["lastControlReason"] == "Replay old clear event"
+    assert not hasattr(workflow, "apply_control_action")
 
 
 @pytest.mark.asyncio
@@ -702,7 +691,7 @@ async def test_agent_session_clear_session_update_preserves_concurrent_terminati
                 "metadata": {},
             }
         if activity_name == "agent_runtime.clear_session":
-            await workflow.terminate_session_update({"reason": "Shutdown now"})
+            await workflow.terminate_session_update({"sessionEpoch": 1, "reason": "Shutdown now"})
             return {
                 "sessionState": {
                     "sessionId": "sess:wf-run-1:codex_cli",
@@ -755,7 +744,7 @@ async def test_agent_session_clear_session_update_preserves_concurrent_terminati
         _execute_activity,
     )
 
-    await workflow.clear_session_update({"reason": "Reset stale context"})
+    await workflow.clear_session_update({"sessionEpoch": 1, "reason": "Reset stale context"})
 
     status = workflow.get_status()
     assert status["status"] == AGENT_SESSION_STATUS_TERMINATING

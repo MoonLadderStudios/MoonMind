@@ -2665,6 +2665,7 @@ def test_post_task_run_artifact_session_control_routes_clear_session_and_returns
         "wf-task-1:session:codex_cli",
         "ClearSession",
         {
+            "sessionEpoch": 3,
             "reason": "Reset stale context",
         },
     )

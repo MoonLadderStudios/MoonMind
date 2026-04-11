@@ -1774,7 +1774,10 @@ class TemporalExecutionService:
             await self._client_adapter.update_workflow(
                 session_workflow_id,
                 "TerminateSession",
-                {"reason": reason},
+                {
+                    "sessionEpoch": session_record.session_epoch,
+                    "reason": reason,
+                },
             )
         except Exception:
             logger.warning(

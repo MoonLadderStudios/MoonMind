@@ -60,7 +60,7 @@ SessionSnapshotLoader = Callable[
     [str], Awaitable[CodexManagedSessionSnapshot | Mapping[str, Any]]
 ]
 SessionHandleSignaler = Callable[[dict[str, Any]], Awaitable[None]]
-SessionControlSignaler = Callable[[dict[str, Any]], Awaitable[None]]
+SessionProjectionUpdater = Callable[[dict[str, Any]], Awaitable[None]]
 LaunchSessionFunc = Callable[
     [Mapping[str, Any] | LaunchCodexManagedSessionRequest],
     Awaitable[CodexManagedSessionHandle | Mapping[str, Any]],
@@ -150,7 +150,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         fetch_remote_summary: FetchSummaryFunc,
         publish_remote_artifacts: PublishArtifactsFunc,
         attach_runtime_handles: SessionHandleSignaler,
-        apply_session_control_action: SessionControlSignaler,
+        update_session_projection: SessionProjectionUpdater,
         workspace_root: str,
         session_image_ref: str,
         **kwargs: Any,
@@ -167,7 +167,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self._fetch_remote_summary = fetch_remote_summary
         self._publish_remote_artifacts = publish_remote_artifacts
         self._attach_runtime_handles = attach_runtime_handles
-        self._apply_session_control_action = apply_session_control_action
+        self._update_session_projection = update_session_projection
         self._workspace_root = Path(workspace_root).resolve()
         self._session_image_ref = str(session_image_ref).strip()
         self._run_states: dict[str, CodexSessionExecutionState] = {}
@@ -337,7 +337,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
             publication: CodexManagedSessionArtifactsPublication | None = None
             try:
-                await self._signal_control_action(
+                await self._update_session_projection_from_control_result(
                     action="send_turn",
                     reason=None,
                     container_id=turn_response.session_state.container_id,
@@ -547,7 +547,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                 )
             )
-            await self._signal_control_action(
+            await self._update_session_projection_from_control_result(
                 action="interrupt_turn",
                 reason="step canceled",
                 container_id=response.session_state.container_id,
@@ -609,7 +609,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "threadId": handle.session_state.thread_id,
             }
         )
-        await self._signal_control_action(
+        await self._update_session_projection_from_control_result(
             action="clear_session",
             reason=reason,
             container_id=handle.session_state.container_id,
@@ -637,7 +637,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 )
             )
         )
-        await self._signal_control_action(
+        await self._update_session_projection_from_control_result(
             action="interrupt_turn",
             reason=reason,
             container_id=response.session_state.container_id,
@@ -682,7 +682,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 )
             )
         )
-        await self._apply_session_control_action(
+        await self._update_session_projection(
             {
                 "action": "terminate_session",
                 "reason": reason,
@@ -771,7 +771,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                 )
             )
-            await self._signal_control_action(
+            await self._update_session_projection_from_control_result(
                 action="resume_session",
                 reason=None,
                 container_id=handle.session_state.container_id,
@@ -815,7 +815,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "threadId": handle.session_state.thread_id,
             }
         )
-        await self._signal_control_action(
+        await self._update_session_projection_from_control_result(
             action="start_session",
             reason=None,
             container_id=handle.session_state.container_id,
@@ -891,7 +891,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             threadId=snapshot.thread_id,
         )
 
-    async def _signal_control_action(
+    async def _update_session_projection_from_control_result(
         self,
         *,
         action: str,
@@ -909,7 +909,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             payload["threadId"] = thread_id
         if active_turn_id is not None:
             payload["activeTurnId"] = active_turn_id
-        await self._apply_session_control_action(payload)
+        await self._update_session_projection(payload)
 
     def _workspace_path_for_request(
         self,

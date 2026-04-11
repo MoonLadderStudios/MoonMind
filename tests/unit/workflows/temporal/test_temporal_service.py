@@ -1564,7 +1564,7 @@ async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
-                    {"reason": "stop"},
+                    {"sessionEpoch": 1, "reason": "stop"},
                 ),
                 call.cancel_workflow(created.workflow_id),
             ],
@@ -1630,7 +1630,7 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
                 call.update_workflow(
                     f"{created.workflow_id}:session:codex_cli",
                     "TerminateSession",
-                    {"reason": "stop"},
+                    {"sessionEpoch": 1, "reason": "stop"},
                 ),
                 call.cancel_workflow(created.workflow_id),
             ],

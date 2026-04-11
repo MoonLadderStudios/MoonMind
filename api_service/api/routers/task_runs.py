@@ -1247,6 +1247,7 @@ async def control_task_run_artifact_session(
             workflow_id,
             "ClearSession",
             {
+                "sessionEpoch": record.session_epoch,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
