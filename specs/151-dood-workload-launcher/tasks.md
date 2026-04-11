@@ -51,15 +51,15 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T009 [P] [US1] Add Docker run argument tests for deterministic names, labels, workspace mount, cache mounts, workdir, env, timeout, and resource controls in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T010 [P] [US1] Add stream capture and bounded diagnostics tests for success and non-zero exits in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [ ] T009 [P] [US1] Add Docker run argument tests for deterministic names, labels, workspace mount, approved artifacts directory handling, cache mounts, workdir, env, timeout, and resource controls in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [ ] T010 [P] [US1] Add stream capture, bounded diagnostics, and normal-completion container removal tests for success and non-zero exits in `tests/unit/workloads/test_docker_workload_launcher.py`
 - [ ] T011 [P] [US1] Add `workload.run` request-envelope validation and launcher-call tests in `tests/unit/workflows/temporal/test_workload_run_activity.py`
 
 ### Implementation for User Story 1
 
 - [ ] T012 [US1] Implement deterministic workload identity, ownership labels, and Docker argument construction in `moonmind/workloads/docker_launcher.py`
-- [ ] T013 [US1] Implement bounded Docker process execution, stdout/stderr capture, exit-code capture, timing, and diagnostics metadata in `moonmind/workloads/docker_launcher.py`
-- [ ] T014 [US1] Implement profile-approved workspace/cache mount resolution and task repo workdir handling in `moonmind/workloads/docker_launcher.py`
+- [ ] T013 [US1] Implement bounded Docker process execution, stdout/stderr capture, exit-code capture, timing, diagnostics metadata, and cleanup-policy removal after normal completion in `moonmind/workloads/docker_launcher.py`
+- [ ] T014 [US1] Implement profile-approved workspace mount, approved artifacts directory handling, cache mount resolution, and task repo workdir handling in `moonmind/workloads/docker_launcher.py`
 - [ ] T015 [US1] Export `DockerWorkloadLauncher` and launcher result helpers from `moonmind/workloads/__init__.py`
 - [ ] T016 [US1] Bind the `workload.run` activity to validated request parsing and launcher execution in `moonmind/workflows/temporal/activity_runtime.py`
 
