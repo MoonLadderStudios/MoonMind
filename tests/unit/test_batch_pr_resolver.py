@@ -509,8 +509,10 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
-    
+
     monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
     args = type(
         "Args",
