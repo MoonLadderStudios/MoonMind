@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skil
 logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
+IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 
 @dataclass
@@ -238,6 +240,57 @@ def _session_artifact_spool_path() -> Path | None:
     return Path(raw)
 
 
+def _resolve_path(path: Path) -> Path:
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return path
+
+
+def _default_artifacts_dir_requested(raw_artifacts_dir: str) -> bool:
+    raw = str(raw_artifacts_dir or "").strip()
+    if not raw:
+        return True
+    candidate = Path(raw)
+    return not candidate.is_absolute() and candidate.parts == ("artifacts",)
+
+
+def _artifacts_dir_from_task_context_path(path: Path) -> Path | None:
+    resolved = _resolve_path(path)
+    if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
+        return resolved.parent
+    return None
+
+
+def _looks_like_parent_run_scope(value: str) -> bool:
+    if re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        value,
+    ):
+        return True
+    return bool(re.fullmatch(r"(?:mm:|task-)[A-Za-z0-9_.:-]+", value))
+
+
+def _stable_scope_from_path(path: Path) -> str:
+    resolved = _resolve_path(path)
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:24]
+    return f"path:{digest}"
+
+
+def _parent_run_scope_from_artifacts_dir(path: Path) -> str | None:
+    resolved = _resolve_path(path)
+    if resolved.name != "artifacts":
+        return _stable_scope_from_path(resolved)
+
+    parent_name = resolved.parent.name
+    if not parent_name:
+        return _stable_scope_from_path(resolved)
+    if _looks_like_parent_run_scope(parent_name):
+        return parent_name
+    return _stable_scope_from_path(resolved.parent)
+
+
 def _parent_run_scope(task_context_path: str | None = None) -> str | None:
     for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
         value = _runtime_text(os.getenv(env_key))
@@ -245,18 +298,13 @@ def _parent_run_scope(task_context_path: str | None = None) -> str | None:
             return value
 
     spool_path = _session_artifact_spool_path()
-    if spool_path is not None and spool_path.parent.name:
-        return spool_path.parent.name
+    if spool_path is not None:
+        return _parent_run_scope_from_artifacts_dir(spool_path)
 
     for candidate in _repo_context_candidates(task_context_path):
-        try:
-            resolved = candidate.resolve(strict=False)
-        except OSError:
-            resolved = candidate
-        if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
-            parent_name = resolved.parent.parent.name
-            if parent_name:
-                return parent_name
+        artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
+        if artifacts_dir is not None:
+            return _parent_run_scope_from_artifacts_dir(artifacts_dir)
     return None
 
 
@@ -265,7 +313,7 @@ def _resolve_artifacts_dir(
     task_context_path: str | None = None,
 ) -> Path:
     raw = str(raw_artifacts_dir or "").strip()
-    if raw and raw != "artifacts":
+    if not _default_artifacts_dir_requested(raw):
         return Path(raw)
 
     spool_path = _session_artifact_spool_path()
@@ -273,12 +321,9 @@ def _resolve_artifacts_dir(
         return spool_path
 
     for candidate in _repo_context_candidates(task_context_path):
-        try:
-            resolved = candidate.resolve(strict=False)
-        except OSError:
-            resolved = candidate
-        if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
-            return resolved.parent
+        artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
+        if artifacts_dir is not None:
+            return artifacts_dir
 
     return Path(raw or "artifacts")
 
@@ -293,7 +338,19 @@ def _child_idempotency_key(
     scope = _runtime_text(batch_scope)
     if not scope:
         return None
-    return f"batch-pr-resolver:{scope}:{repo}:pr:{pr_number}:branch:{branch}"[:512]
+
+    components = {
+        "scope": scope,
+        "repo": repo,
+        "pr": str(pr_number),
+        "branch": branch,
+    }
+    canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    key = f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
+    if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
+        raise RuntimeError("generated child idempotency key exceeds storage limit")
+    return key
 
 
 def _load_parent_runtime_selection(

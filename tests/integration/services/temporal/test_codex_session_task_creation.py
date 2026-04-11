@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import runpy
 import threading
@@ -71,6 +72,27 @@ def _run_command_env(command: tuple[str, ...]) -> dict[str, str]:
             continue
         index += 1
     return env
+
+
+def _expected_child_idempotency_key(
+    *,
+    batch_scope: str,
+    repo: str,
+    pr_number: int | str,
+    branch: str,
+) -> str:
+    canonical = json.dumps(
+        {
+            "scope": batch_scope,
+            "repo": repo,
+            "pr": str(pr_number),
+            "branch": branch,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
 
 
 @pytest.mark.asyncio
@@ -195,9 +217,11 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         body = captured["body"]
         assert body["type"] == "task"
         assert body["payload"]["targetRuntime"] == "codex_cli"
-        assert body["payload"]["idempotencyKey"] == (
-            "batch-pr-resolver:task-parent:MoonLadderStudios/MoonMind:"
-            "pr:1337:branch:codex/session-child-task"
+        assert body["payload"]["idempotencyKey"] == _expected_child_idempotency_key(
+            batch_scope="task-parent",
+            repo="MoonLadderStudios/MoonMind",
+            pr_number=1337,
+            branch="codex/session-child-task",
         )
         assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
         assert body["payload"]["task"]["inputs"]["pr"] == "1337"

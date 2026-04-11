@@ -63,7 +63,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.
    - Build a canonical queue task with:
      - `type: "task"`
-     - `payload.idempotencyKey`: stable per parent batch run and PR, so rerunning the same batch task does not create duplicate resolver workflows.
+     - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
      - `payload.task.publish.mode`: `none`
