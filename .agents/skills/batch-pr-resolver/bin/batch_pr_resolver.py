@@ -424,13 +424,20 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
-    runtime_provider_profile = _runtime_text(getattr(args, "runtime_provider_profile", None))
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
+    runtime_execution_profile_ref = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
+    )
     if runtime_model is None and inherited is not None:
         runtime_model = inherited.model
     if runtime_effort is None and inherited is not None:
         runtime_effort = inherited.effort
     if runtime_provider_profile is None and inherited is not None:
         runtime_provider_profile = inherited.provider_profile
+    if runtime_provider_profile is None:
+        runtime_provider_profile = runtime_execution_profile_ref
 
     return RuntimeSelection(
         mode=runtime_mode,
@@ -463,6 +470,7 @@ def _build_queue_request(
         runtime_payload["effort"] = runtime.effort
     if runtime.provider_profile:
         runtime_payload["providerProfile"] = runtime.provider_profile
+        runtime_payload["executionProfileRef"] = runtime.provider_profile
 
     payload_dict: dict[str, Any] = {
         "repository": repo,

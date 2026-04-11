@@ -112,6 +112,10 @@ def build_managed_profile_launch_context(
     if account_label:
         delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = str(account_label)
 
+    profile_id = str(profile.get("profile_id") or "").strip()
+    if profile_id:
+        delta_env_overrides["MOONMIND_EXECUTION_PROFILE_REF"] = profile_id
+
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
         for key, value in runtime_env_overrides.items():
@@ -127,7 +131,7 @@ def build_managed_profile_launch_context(
 
     passthrough_env_keys = list(_SECRET_ENV_PASSTHROUGH_KEYS)
     return ManagedProfileLaunchContext(
-        profile_id=str(profile.get("profile_id") or "").strip(),
+        profile_id=profile_id,
         credential_source=credential_source,
         delta_env_overrides=delta_env_overrides,
         passthrough_env_keys=passthrough_env_keys,
