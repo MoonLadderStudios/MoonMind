@@ -16,6 +16,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionHandle,
+    CodexManagedSessionLocator,
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
@@ -579,7 +580,11 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
     run_store = ManagedRunStore(tmp_path / "managed_runs")
-    reason = "We're currently experiencing high demand, which may cause temporary errors."
+    reason = (
+        "provider emitted verbose diagnostics "
+        + ("x" * 5000)
+        + " http 503 high demand"
+    )
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
         return _snapshot(binding=binding)
@@ -645,6 +650,7 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "provider_capacity"
     assert result.retry_recommendation == "retry_after_cooldown"
+    assert "high demand" not in result.summary
     assert result.output_refs == [
         "artifact:turn-output",
         "artifact:stdout",
@@ -664,6 +670,113 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"
+
+
+async def test_publish_failure_artifacts_logs_best_effort_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    binding = _binding()
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        raise RuntimeError("artifact store unavailable")
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=AsyncMock(),
+        launch_session=AsyncMock(),
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=AsyncMock(),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(),
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    caplog.set_level(
+        "WARNING",
+        logger="moonmind.workflows.adapters.codex_session_adapter",
+    )
+
+    publication = await adapter._publish_failure_artifacts(
+        locator=CodexManagedSessionLocator(
+            sessionId=binding.session_id,
+            sessionEpoch=binding.session_epoch,
+            containerId="container-1",
+            threadId="thread-1",
+        ),
+        managed_run_id=binding.task_run_id,
+        run_id="run-1",
+    )
+
+    assert publication is None
+    assert (
+        "Failed to publish Codex session failure artifacts for run run-1"
+        in caplog.text
+    )
+    assert "artifact store unavailable" in caplog.text
+
+
+async def test_publish_failure_artifacts_preserves_cancellation(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        raise asyncio.CancelledError
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=AsyncMock(),
+        launch_session=AsyncMock(),
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=AsyncMock(),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(),
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter._publish_failure_artifacts(
+            locator=CodexManagedSessionLocator(
+                sessionId=binding.session_id,
+                sessionEpoch=binding.session_epoch,
+                containerId="container-1",
+                threadId="thread-1",
+            ),
+            managed_run_id=binding.task_run_id,
+            run_id="run-1",
+        )
 
 
 @pytest.mark.parametrize(

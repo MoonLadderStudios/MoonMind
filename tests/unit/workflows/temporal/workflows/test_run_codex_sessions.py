@@ -180,6 +180,53 @@ async def test_run_terminates_active_task_scoped_codex_session(
 
 
 @pytest.mark.asyncio
+async def test_run_terminates_task_scoped_codex_session_with_binding_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    _configure_workflow_runtime(monkeypatch)
+    update_calls: list[tuple[str, Any]] = []
+
+    class _FakeHandle:
+        async def execute_update(self, update_name: str, payload: Any = None) -> None:
+            update_calls.append((update_name, payload))
+
+        async def signal(self, _signal_name: str, _payload: Any = None) -> None:
+            raise AssertionError("signal should not be used when update succeeds")
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH,
+    )
+
+    external_handle = _FakeHandle()
+    _use_external_handle(monkeypatch, external_handle)
+    workflow._codex_session_handle = None
+    workflow._codex_session_binding = CodexManagedSessionBinding(
+        workflowId="wf-run-1:session:codex_cli",
+        taskRunId="wf-run-1",
+        sessionId="sess:wf-run-1:codex_cli",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+
+    await workflow._terminate_task_scoped_sessions(reason="success")
+
+    assert update_calls == [
+        (
+            "TerminateSession",
+            {
+                "reason": "success",
+            },
+        )
+    ]
+    assert workflow._codex_session_handle is None
+    assert workflow._codex_session_binding is None
+
+
+@pytest.mark.asyncio
 async def test_run_termination_uses_v1_patch_history_for_inflight_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

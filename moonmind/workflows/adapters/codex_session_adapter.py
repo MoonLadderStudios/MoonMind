@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +95,7 @@ PublishArtifactsFunc = Callable[
 ]
 
 _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS = 4096
+logger = logging.getLogger(__name__)
 
 
 def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
@@ -284,8 +287,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
             current_active_turn_id = turn_response.session_state.active_turn_id
             if turn_response.status != "completed":
+                raw_reason = turn_response.metadata.get("reason")
                 reason = _clamp_agent_run_result_summary(
-                    turn_response.metadata.get("reason"),
+                    raw_reason,
                     default=(
                         "Codex managed-session turn failed"
                         f" with status '{turn_response.status}'"
@@ -304,7 +308,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     workspace_path=workspace_path,
                     locator=current_locator.model_dump(mode="json", by_alias=True),
                     active_turn_id=current_active_turn_id,
-                    summary=reason,
+                    summary=raw_reason,
                     default_summary=reason,
                     output_refs=self._merge_output_refs(
                         turn_response.output_refs,
@@ -1148,11 +1152,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         turn_status: str | None = None,
         turn_metadata: Mapping[str, Any] | None = None,
     ) -> AgentRunResult:
+        classification_source = (
+            summary if str(summary or "").strip() else default_summary
+        )
+        classification = classify_retryable_provider_failure(classification_source)
         summary_text = _clamp_agent_run_result_summary(
             summary,
             default=default_summary,
         )
-        classification = classify_retryable_provider_failure(summary_text)
         metadata: dict[str, Any] = {
             "instructionRef": instruction_ref,
             "resolvedSkillsetRef": resolved_skillset_ref,
@@ -1171,7 +1178,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             metadata["providerFailure"] = {
                 "providerErrorCode": classification.provider_error_code,
                 "retryRecommendation": classification.retry_recommendation,
-                "reason": classification.reason,
+                "reason": summary_text,
             }
         failure_result = AgentRunResult(
             outputRefs=list(output_refs),
@@ -1229,7 +1236,15 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                 )
             )
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Failed to publish Codex session failure artifacts for run %s: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
             return None
 
     def _merge_output_refs(self, *groups: Any) -> list[str]:
