@@ -2388,6 +2388,47 @@ class TemporalArtifactActivities:
         )
         return {"reset": True, "workflow_id": workflow_id}
 
+    async def provider_profile_manager_state(
+        self,
+        *,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """Return the ProviderProfileManager query state for slot-wait diagnosis."""
+
+        from temporalio.service import RPCError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            workflow_id_for_runtime,
+        )
+
+        workflow_id = workflow_id_for_runtime(runtime_id)
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+
+        try:
+            state = await client.get_workflow_handle(workflow_id).query("get_state")
+        except RPCError as exc:
+            return {
+                "running": False,
+                "workflow_id": workflow_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+        if not isinstance(state, dict):
+            return {
+                "running": False,
+                "workflow_id": workflow_id,
+                "error_type": "InvalidQueryPayload",
+            }
+
+        return {
+            "running": True,
+            "workflow_id": workflow_id,
+            "state": state,
+        }
+
     async def provider_profile_verify_lease_holders(
         self,
         *,

@@ -582,6 +582,26 @@ def test_provider_profile_sync_slot_leases_in_catalog():
     assert route.fleet == "artifacts"
 
 
+def test_provider_profile_manager_state_activity_in_catalog():
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
+    )
+
+    catalog = build_default_activity_catalog()
+    route = catalog.resolve_activity("provider_profile.manager_state")
+    assert route.task_queue == "mm.activity.artifacts"
+    assert route.fleet == "artifacts"
+
+
+def test_provider_profile_manager_state_runtime_binding():
+    from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
+
+    assert _ACTIVITY_HANDLER_ATTRS["provider_profile.manager_state"] == (
+        "artifacts",
+        "provider_profile_manager_state",
+    )
+
+
 # ---------------------------------------------------------------------------
 # DB Lease Sync: workflow-side behavior tests
 # ---------------------------------------------------------------------------
@@ -793,3 +813,9 @@ def test_verify_lease_holders_exists():
     assert hasattr(MoonMindProviderProfileManagerWorkflow, "_verify_lease_holders")
     verify_lease_holders = getattr(MoonMindProviderProfileManagerWorkflow, "_verify_lease_holders")
     assert callable(verify_lease_holders)
+
+
+def test_provider_profile_manager_state_activity_exists():
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    assert hasattr(TemporalArtifactActivities, "provider_profile_manager_state")

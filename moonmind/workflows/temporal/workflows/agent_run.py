@@ -106,6 +106,7 @@ MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
 MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-prepare-turn-instructions-activity-v1"
 )
+MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -596,13 +597,18 @@ class MoonMindAgentRun:
             signal_payload["profile_selector"] = profile_selector
         if not request_slot:
             return manager_handle
-        try:
-            await manager_handle.signal("request_slot", signal_payload)
-        except ApplicationError as exc:
-            if "ExternalWorkflowExecutionNotFound" not in (
-                getattr(exc, "type", None) or str(exc)
-            ):
-                raise
+
+        for attempt in range(2):
+            try:
+                await manager_handle.signal("request_slot", signal_payload)
+                return manager_handle
+            except ApplicationError as exc:
+                if "ExternalWorkflowExecutionNotFound" not in (
+                    getattr(exc, "type", None) or str(exc)
+                ):
+                    raise
+                if attempt > 0:
+                    raise
             self._get_logger().warning(
                 "ProviderProfileManager %s not found, auto-starting via activity",
                 manager_id,
@@ -612,10 +618,25 @@ class MoonMindAgentRun:
                 {"runtime_id": runtime_id},
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
-            # Re-acquire handle and retry signal once.
+            # Re-acquire handle and retry the signal.
             manager_handle = workflow.get_external_workflow_handle(manager_id)
-            await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
+
+    async def _manager_state_for_slot_wait(
+        self,
+        *,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """Fetch a compact manager-health snapshot before resetting it."""
+
+        result = await self._execute_routed_activity(
+            "provider_profile.manager_state",
+            {"runtime_id": runtime_id},
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if isinstance(result, dict):
+            return result
+        return {"running": False, "error": "invalid_manager_state_payload"}
 
     async def _reset_and_request_slot(
         self,
@@ -639,18 +660,13 @@ class MoonMindAgentRun:
             {"runtime_id": runtime_id},
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
-        # Re-acquire handle and request slot from the fresh manager.
-        manager_handle = workflow.get_external_workflow_handle(manager_id)
-        signal_payload = {
-            "requester_workflow_id": workflow.info().workflow_id,
-            "runtime_id": runtime_id,
-        }
-        if execution_profile_ref:
-            signal_payload["execution_profile_ref"] = execution_profile_ref
-        if profile_selector:
-            signal_payload["profile_selector"] = profile_selector
-        await manager_handle.signal("request_slot", signal_payload)
-        return manager_handle
+        return await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=True,
+            execution_profile_ref=execution_profile_ref,
+            profile_selector=profile_selector,
+        )
 
     async def _sync_manager_profiles(
         self,
@@ -1024,12 +1040,42 @@ class MoonMindAgentRun:
                                         type="SlotAcquisitionTimeout",
                                         non_retryable=True,
                                     )
+                                if workflow.patched(MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID):
+                                    manager_state = await self._manager_state_for_slot_wait(
+                                        runtime_id=runtime_id,
+                                    )
+                                    if manager_state.get("running") is True:
+                                        selector_payload = request.profile_selector.model_dump(
+                                            by_alias=True,
+                                            exclude_none=True,
+                                        )
+                                        self._get_logger().warning(
+                                            "Auth profile manager %s is responsive while %s waits for a slot; re-requesting without reset",
+                                            manager_id,
+                                            workflow.info().workflow_id,
+                                        )
+                                        manager_handle = await self._ensure_manager_and_signal(
+                                            manager_id,
+                                            runtime_id,
+                                            request_slot=True,
+                                            execution_profile_ref=request.execution_profile_ref,
+                                            profile_selector=selector_payload,
+                                        )
+                                        await self._sync_manager_profiles(
+                                            manager_handle=manager_handle,
+                                            runtime_id=runtime_id,
+                                        )
+                                        continue
                                 self.slot_assigned_event.clear()
+                                selector_payload = request.profile_selector.model_dump(
+                                    by_alias=True,
+                                    exclude_none=True,
+                                )
                                 manager_handle = await self._reset_and_request_slot(
-                                    manager_id, 
+                                    manager_id,
                                     runtime_id,
                                     execution_profile_ref=request.execution_profile_ref,
-                                    profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
+                                    profile_selector=selector_payload,
                                 )
                                 await self._sync_manager_profiles(
                                     manager_handle=manager_handle,
