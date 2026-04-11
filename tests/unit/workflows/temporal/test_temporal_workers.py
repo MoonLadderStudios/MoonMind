@@ -32,6 +32,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
+from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
@@ -112,7 +113,24 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     assert topology.fleet == SANDBOX_FLEET
     assert topology.task_queues == (settings.temporal.activity_sandbox_task_queue,)
     assert topology.concurrency_limit == 3
-    assert topology.forbidden_capabilities == ("llm", "integration:jules", "integration:openclaw", "agent_runtime")
+    assert topology.forbidden_capabilities == (
+        "llm",
+        "integration:jules",
+        "integration:openclaw",
+        "agent_runtime",
+        "docker_workload",
+    )
+
+
+def test_agent_runtime_topology_exposes_docker_workload_capability():
+    topology = describe_configured_worker(
+        temporal_settings=settings.temporal.model_copy(
+            update={"worker_fleet": AGENT_RUNTIME_FLEET}
+        )
+    )
+
+    assert "docker_workload" in topology.capabilities
+    assert "workload.run" in topology.activity_types
 
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
@@ -192,6 +210,47 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
             assert (
                 mm_skill_bindings[0].task_queue
                 == settings.temporal.activity_sandbox_task_queue
+            )
+        finally:
+            await session.close()
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_fleet(
+    tmp_path: Path,
+):
+    async def _run() -> None:
+        service, session, engine = await _artifact_service(tmp_path)
+        try:
+            bindings = build_worker_activity_bindings(
+                fleet=AGENT_RUNTIME_FLEET,
+                catalog=build_default_activity_catalog(),
+                artifact_activities=TemporalArtifactActivities(service),
+                plan_activities=TemporalPlanActivities(artifact_service=service),
+                skill_activities=TemporalSkillActivities(
+                    dispatcher=SkillActivityDispatcher()
+                ),
+                sandbox_activities=TemporalSandboxActivities(artifact_service=service),
+                integration_activities=TemporalIntegrationActivities(
+                    artifact_service=service,
+                    client_factory=lambda: None,
+                ),
+                agent_runtime_activities=TemporalAgentRuntimeActivities(),
+                proposal_activities=TemporalProposalActivities(
+                    artifact_service=service,
+                ),
+                agent_skills_activities=AgentSkillsActivities(),
+            )
+
+            workload_bindings = [
+                binding for binding in bindings if binding.activity_type == "workload.run"
+            ]
+            assert len(workload_bindings) == 1
+            assert (
+                workload_bindings[0].task_queue
+                == settings.temporal.activity_agent_runtime_task_queue
             )
         finally:
             await session.close()
