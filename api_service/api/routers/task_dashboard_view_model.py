@@ -162,9 +162,7 @@ def _build_jira_runtime_config() -> dict[str, Any] | None:
             "enabled": True,
             "defaultProjectKey": settings.feature_flags.jira_create_page_default_project_key,
             "defaultBoardId": settings.feature_flags.jira_create_page_default_board_id,
-            "rememberLastBoardInSession": bool(
-                settings.feature_flags.jira_create_page_remember_last_board_in_session
-            ),
+            "rememberLastBoardInSession": settings.feature_flags.jira_create_page_remember_last_board_in_session,
         },
     }
 

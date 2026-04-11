@@ -333,6 +333,30 @@ class TestFeatureFlagsSettings:
         assert settings.jira_create_page_default_board_id == "42"
         assert settings.jira_create_page_remember_last_board_in_session is False
 
+    def test_jira_create_page_accepts_unprefixed_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", raising=False
+        )
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", raising=False
+        )
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
+            raising=False,
+        )
+        monkeypatch.setenv("JIRA_CREATE_PAGE_ENABLED", "true")
+        monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", "ops")
+        monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", "84")
+        monkeypatch.setenv("JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION", "false")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.jira_create_page_enabled is True
+        assert settings.jira_create_page_default_project_key == "OPS"
+        assert settings.jira_create_page_default_board_id == "84"
+        assert settings.jira_create_page_remember_last_board_in_session is False
+
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)

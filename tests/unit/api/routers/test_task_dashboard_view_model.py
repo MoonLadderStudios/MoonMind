@@ -49,6 +49,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
 
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
