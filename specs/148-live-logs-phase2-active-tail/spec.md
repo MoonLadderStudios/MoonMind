@@ -3,7 +3,7 @@
 **Feature Branch**: `148-live-logs-phase2-active-tail`  
 **Created**: 2026-04-10  
 **Status**: Draft  
-**Input**: User description: "$speckit-orchestrate Implement Phase 2 using test-driven development from the Live Logs plan: keep the current Live Logs UI and API path, feed it correctly from active Codex managed-session observability, synthesize /logs/merged from the durable observability journal or live spool while runs are active, expose session snapshot fields consistently in observability summary, keep existing SSE lifecycle behavior, and ship production runtime code changes plus validation tests."
+**Input**: User description: "Implement Phase 2 using test-driven development from the Live Logs plan: keep the current Live Logs UI and API path, feed it correctly from active Codex managed-session observability, synthesize /logs/merged from the durable observability journal or live spool while runs are active, expose session snapshot fields consistently in observability summary, keep existing SSE lifecycle behavior, avoid blocking the first fix on a frontend rewrite, and preserve fallback behavior for historical and partially migrated runs. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -72,7 +72,7 @@ Mission Control operators need the existing SSE stream behavior to remain unchan
 - **FR-006**: `/api/task-runs/{id}/observability-summary` MUST expose `observabilityEventsRef` when the managed-run record has one.
 - **FR-007**: The active-history changes MUST NOT change the existing SSE availability contract: active capable runs can stream, active incapable runs are unavailable, and terminal runs are ended.
 - **FR-008**: Invalid journal or spool rows MUST be ignored without failing the entire merged-log response when at least one valid fallback source exists.
-- **FR-009**: This phase MUST ship production runtime code changes under `api_service/` or `moonmind/` and automated validation tests under `tests/`; docs-only edits are insufficient.
+- **FR-009**: Required deliverables MUST include production runtime code changes (not docs/spec-only) plus validation tests.
 
 ### Key Entities *(include if feature involves data)*
 

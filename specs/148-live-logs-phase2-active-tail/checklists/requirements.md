@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Runtime deliverables and validation tests are explicitly required by FR-009 and SC-005, so this checklist uses a technical implementation audience.
+- Runtime deliverables and validation tests are explicitly required by FR-009 and SC-005: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
