@@ -367,7 +367,7 @@ def _serialize_execution(
         and not bool(getattr(record, "paused", False))
         and not attention_required
     ):
-        waiting_reason = ""
+        waiting_reason = None
     dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(record.state, "queued")
     actions = _build_action_capabilities(record)
     intervention_audit = _parse_intervention_audit_entries(memo)

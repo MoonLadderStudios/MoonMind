@@ -1215,7 +1215,9 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
     assert dumped["targetRuntime"] == "gemini_cli"
 
 
-def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run() -> None:
+def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.memo = {
         "title": "Temporal task",
@@ -1223,6 +1225,7 @@ def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run() ->
         "waiting_reason": "provider_profile_slot",
     }
     record.waiting_reason = None
+    monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
 
     payload = _serialize_execution(
         record,
@@ -1231,6 +1234,8 @@ def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run() ->
 
     assert payload.state == "executing"
     assert payload.waiting_reason is None
+    assert payload.debug_fields is not None
+    assert payload.debug_fields.waiting_reason is None
 
 
 def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
