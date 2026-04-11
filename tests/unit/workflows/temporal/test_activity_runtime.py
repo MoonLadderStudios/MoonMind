@@ -473,6 +473,45 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     assert ("auto", "1.0") not in keyset
 
 
+async def test_default_skill_registry_payload_uses_dood_tool_definitions():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "steps": [
+                    {
+                        "tool": {
+                            "type": "skill",
+                            "name": "container.run_workload",
+                            "version": "1.0",
+                        }
+                    },
+                    {
+                        "tool": {
+                            "type": "skill",
+                            "name": "unreal.run_tests",
+                            "version": "1.0",
+                        }
+                    },
+                ]
+            }
+        }
+    )
+
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    tools = {item["name"]: item for item in skills}
+    assert tools["container.run_workload"]["requirements"]["capabilities"] == [
+        "docker_workload"
+    ]
+    assert tools["unreal.run_tests"]["requirements"]["capabilities"] == [
+        "docker_workload"
+    ]
+    assert (
+        tools["container.run_workload"]["executor"]["activity_type"]
+        == "mm.tool.execute"
+    )
+
+
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
 ):

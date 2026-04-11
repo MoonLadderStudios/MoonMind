@@ -100,6 +100,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
 
     llm_route = catalog.resolve_skill(_skill_definition(capabilities=["llm"]))
     sandbox_route = catalog.resolve_skill(_skill_definition(capabilities=["sandbox"]))
+    docker_workload_route = catalog.resolve_skill(
+        _skill_definition(capabilities=["docker_workload"])
+    )
     integration_route = catalog.resolve_skill(
         _skill_definition(capabilities=["integration:jules"])
     )
@@ -111,6 +114,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     assert llm_route.task_queue == LLM_TASK_QUEUE
     assert sandbox_route.fleet == SANDBOX_FLEET
     assert sandbox_route.task_queue == SANDBOX_TASK_QUEUE
+    assert docker_workload_route.fleet == AGENT_RUNTIME_FLEET
+    assert docker_workload_route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert docker_workload_route.capability_class == "docker_workload"
     assert integration_route.fleet == INTEGRATIONS_FLEET
     assert integration_route.task_queue == INTEGRATIONS_TASK_QUEUE
     assert artifact_route.fleet == ARTIFACTS_FLEET

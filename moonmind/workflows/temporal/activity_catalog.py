@@ -142,6 +142,8 @@ def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, st
         categories.add("llm")
     if "sandbox" in required_capabilities:
         categories.add("sandbox")
+    if "docker_workload" in required_capabilities:
+        categories.add("docker_workload")
     if integration_caps:
         categories.add("integrations")
 
@@ -162,6 +164,8 @@ def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, st
         return LLM_FLEET, "llm"
     if category == "sandbox":
         return SANDBOX_FLEET, "sandbox"
+    if category == "docker_workload":
+        return AGENT_RUNTIME_FLEET, "docker_workload"
     return INTEGRATIONS_FLEET, integration_caps[0]
 
 
