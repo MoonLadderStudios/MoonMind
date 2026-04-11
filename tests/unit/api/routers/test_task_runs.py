@@ -1319,6 +1319,58 @@ def test_get_task_run_observability_events_prefers_persisted_event_artifact(
     assert "run_id" not in body["events"][0]
 
 
+def test_get_task_run_observability_events_falls_back_to_spool_when_event_journal_empty(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(["not-json", json.dumps({"sequence": 1, "stream": "stdout"})]) + "\n",
+        encoding="utf-8",
+    )
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "live_streams.spool").write_text(
+        json.dumps(
+            {
+                "sequence": 2,
+                "stream": "session",
+                "text": "spool fallback renders\n",
+                "timestamp": "2026-04-08T00:00:02Z",
+                "kind": "turn_started",
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(workspace_path)
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["truncated"] is False
+    assert [event["sequence"] for event in body["events"]] == [2]
+    assert body["events"][0]["text"] == "spool fallback renders\n"
+    assert body["events"][0]["kind"] == "turn_started"
+    assert body["events"][0]["sessionId"] == "sess-1"
+
+
 def test_get_task_run_observability_events_applies_since_stream_and_kind_filters(
     client: tuple[TestClient, AsyncMock],
     tmp_path,

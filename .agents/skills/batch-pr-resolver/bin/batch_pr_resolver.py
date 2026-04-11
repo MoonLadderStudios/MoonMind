@@ -292,6 +292,11 @@ def _parent_run_scope_from_artifacts_dir(path: Path) -> str | None:
 
 
 def _parent_run_scope(task_context_path: str | None = None) -> str | None:
+    if task_context_path:
+        artifacts_dir = _artifacts_dir_from_task_context_path(Path(task_context_path))
+        if artifacts_dir is not None:
+            return _parent_run_scope_from_artifacts_dir(artifacts_dir)
+
     for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
         value = _runtime_text(os.getenv(env_key))
         if value:

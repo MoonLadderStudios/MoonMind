@@ -806,7 +806,11 @@ def _load_task_run_observability_events(
         if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
         else None
     )
-    if event_journal_path is not None:
+    journal_has_events = event_journal_path is not None and next(
+        _iter_event_journal(event_journal_path, run_id=record_run_id),
+        None,
+    ) is not None
+    if journal_has_events:
         events.extend(
             _collect_matching_observability_events(
                 _iter_event_journal(event_journal_path, run_id=record_run_id),
