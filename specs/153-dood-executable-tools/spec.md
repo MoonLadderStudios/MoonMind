@@ -63,6 +63,14 @@ As a managed Codex session user, I need sessions to request workload tools throu
 - A plan attempts to route Docker-backed workload execution through `tool.type = "agent_runtime"` instead of the executable tool path.
 - The Docker-capable fleet is unavailable or lacks the required workload capability.
 
+### Assumptions
+
+- Phase 1 workload request and runner profile validation contracts already exist and remain authoritative for profile policy decisions.
+- Phase 2 workload launching already exists and can launch, bound, clean up, and report one-shot workload containers.
+- The initial Docker-capable execution host is the existing control-plane-owned worker fleet that already has Docker workload authority.
+- Rich artifact publication, live-log presentation, and broader operational hardening remain later phases unless needed to validate the Phase 3 tool path.
+- Managed session metadata, when present, is grouping context only and does not make a workload container part of session identity.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
