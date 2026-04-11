@@ -734,42 +734,59 @@ def test_stream_task_run_log_merged_skips_malformed_active_rows(
     assert "valid warning" in response.text
 
 
-def test_stream_task_run_log_merged_journal_probe_stops_after_first_renderable_event(
+def test_stream_task_run_log_merged_reads_event_journal_once_and_sorts_by_sequence(
+    client: tuple[TestClient, AsyncMock],
     tmp_path,
 ) -> None:
+    test_client, _ = client
     artifacts_root = tmp_path / "artifacts"
     run_dir = artifacts_root / "run-1"
     run_dir.mkdir(parents=True)
     (run_dir / "observability.events.jsonl").write_text("placeholder\n", encoding="utf-8")
-    record = SimpleNamespace(
+    record = MagicMock()
+    record.configure_mock(
         run_id="run-1",
         observability_events_ref="run-1/observability.events.jsonl",
+        merged_log_artifact_ref=None,
+        stdout_artifact_ref=None,
+        stderr_artifact_ref=None,
+        workspace_path=str(tmp_path / "workspace-without-spool"),
+        started_at=datetime(2026, 4, 8, 0, 0, tzinfo=UTC),
     )
-    consumed = 0
+    calls = 0
 
     def fake_iter_event_journal(path, *, run_id=None):
-        nonlocal consumed
-        consumed += 1
+        nonlocal calls
+        calls += 1
+        yield {
+            "runId": run_id,
+            "sequence": 2,
+            "stream": "stdout",
+            "text": "second by sequence\n",
+            "timestamp": "2026-04-08T00:00:01Z",
+        }
         yield {
             "runId": run_id,
             "sequence": 1,
-            "stream": "stdout",
-            "text": "first row\n",
-            "timestamp": "2026-04-08T00:00:01Z",
+            "stream": "stderr",
+            "text": "first by sequence\n",
+            "timestamp": "2026-04-08T00:00:02Z",
         }
-        consumed += 1
-        raise AssertionError("probe should not consume the rest of the journal")
 
-    with patch(
-        "api_service.api.routers.task_runs._iter_event_journal",
-        side_effect=fake_iter_event_journal,
-    ):
-        assert task_runs_router._merged_journal_has_renderable_events(
-            record,
-            artifacts_root,
-        )
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._iter_event_journal",
+                side_effect=fake_iter_event_journal,
+            ):
+                response = test_client.get(f"/api/task-runs/{uuid4()}/logs/merged")
 
-    assert consumed == 1
+    assert response.status_code == 200
+    assert calls == 1
+    assert response.text.index("first by sequence") < response.text.index("second by sequence")
 
 
 def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(

@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -419,12 +419,25 @@ def _iter_spool_rendered_content(
     *,
     started_at: object = None,
 ) -> Iterator[bytes]:
+    return _iter_grouped_rendered_content(
+        _iter_run_spool_chunks(workspace_path, started_at=started_at),
+        header_for_item=lambda chunk: str(chunk.get("stream", "system")),
+        text_for_item=lambda chunk: str(chunk.get("text", "")),
+    )
+
+
+def _iter_grouped_rendered_content(
+    items: Iterable[dict[str, object]],
+    *,
+    header_for_item: Callable[[dict[str, object]], str],
+    text_for_item: Callable[[dict[str, object]], str],
+) -> Iterator[bytes]:
     current_stream: str | None = None
     emitted_any = False
 
-    for chunk in _iter_run_spool_chunks(workspace_path, started_at=started_at):
-        stream = str(chunk.get("stream", "system"))
-        text = str(chunk.get("text", ""))
+    for item in items:
+        stream = header_for_item(item)
+        text = text_for_item(item)
         if stream != current_stream:
             if emitted_any and not text.startswith("\n"):
                 yield b"\n"
@@ -914,6 +927,14 @@ def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
 
 
+def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, datetime]:
+    sequence = _coerce_sequence(payload.get("sequence"))
+    timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
+    if sequence is not None and sequence > 0:
+        return (0, sequence, timestamp)
+    return (1, 2**31 - 1, timestamp)
+
+
 def _merged_event_header(payload: dict[str, object]) -> str:
     stream = str(payload.get("stream") or "system").strip() or "system"
     kind = str(payload.get("kind") or "").strip()
@@ -923,35 +944,30 @@ def _merged_event_header(payload: dict[str, object]) -> str:
 
 
 def _iter_event_rendered_content(events: Iterable[dict[str, object]]) -> Iterator[bytes]:
-    current_header: str | None = None
-    emitted_any = False
-
-    for event in events:
-        text = str(event.get("text") or "")
-        if not text:
-            continue
-        header = _merged_event_header(event)
-        if header != current_header:
-            if emitted_any and not text.startswith("\n"):
-                yield b"\n"
-            yield f"--- {header} ---\n".encode("utf-8")
-            current_header = header
-        yield text.encode("utf-8")
-        emitted_any = True
-        if not text.endswith("\n"):
-            yield b"\n"
+    return _iter_grouped_rendered_content(
+        (event for event in events if str(event.get("text") or "")),
+        header_for_item=_merged_event_header,
+        text_for_item=lambda event: str(event.get("text") or ""),
+    )
 
 
 def _iter_merged_journal_events(
     record: object,
     artifacts_root: Path,
 ) -> Iterator[dict[str, object]]:
+    yield from _load_merged_journal_events(record, artifacts_root)
+
+
+def _load_merged_journal_events(
+    record: object,
+    artifacts_root: Path,
+) -> list[dict[str, object]]:
     event_journal_path = _resolve_safe_artifact_path(
         getattr(record, "observability_events_ref", None),
         artifacts_root,
     )
     if event_journal_path is None:
-        return
+        return []
 
     raw_record_run_id = getattr(record, "run_id", None)
     record_run_id = (
@@ -959,13 +975,17 @@ def _iter_merged_journal_events(
         if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
         else None
     )
-    for event in _iter_event_journal(event_journal_path, run_id=record_run_id):
-        if str(event.get("text") or ""):
-            yield event
+    events = [
+        event
+        for event in _iter_event_journal(event_journal_path, run_id=record_run_id)
+        if str(event.get("text") or "")
+    ]
+    events.sort(key=_merged_event_sort_key)
+    return events
 
 
 def _merged_journal_has_renderable_events(record: object, artifacts_root: Path) -> bool:
-    return next(_iter_merged_journal_events(record, artifacts_root), None) is not None
+    return bool(_load_merged_journal_events(record, artifacts_root))
 
 
 def _emit_livelogs_metric_increment(
@@ -1407,10 +1427,9 @@ async def stream_task_run_log(
         workspace_path = getattr(record, "workspace_path", None)
         started_at = getattr(record, "started_at", None)
 
-        if _merged_journal_has_renderable_events(record, artifacts_root):
-            content_stream = _iter_event_rendered_content(
-                _iter_merged_journal_events(record, artifacts_root)
-            )
+        journal_events = _load_merged_journal_events(record, artifacts_root)
+        if journal_events:
+            content_stream = _iter_event_rendered_content(journal_events)
             order_source = "journal"
         elif _spool_contains_renderable_chunks(
             workspace_path,
