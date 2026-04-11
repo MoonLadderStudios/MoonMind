@@ -288,6 +288,12 @@ h1 {
   animation: panel-enter 220ms cubic-bezier(.2,.8,.2,1);
 }
 
+.panel:has(.queue-submit-form) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
 .panel.panel--data-wide {
   max-width: min(112rem, calc(100vw - 2rem));
 }
