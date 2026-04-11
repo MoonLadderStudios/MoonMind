@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import ValidationError
 
@@ -27,6 +27,18 @@ DOOD_TOOL_NAMES = frozenset({CONTAINER_RUN_WORKLOAD_TOOL, UNREAL_RUN_TESTS_TOOL}
 
 def is_dood_tool(name: str) -> bool:
     return str(name or "").strip() in DOOD_TOOL_NAMES
+
+
+def _resources_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "cpu": {"type": "string", "minLength": 1},
+            "memory": {"type": "string", "minLength": 1},
+            "shmSize": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    }
 
 
 def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, Any]:
@@ -54,7 +66,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                     "additionalProperties": {"type": "string"},
                 },
                 "timeoutSeconds": {"type": "integer", "minimum": 1},
-                "resources": {"type": "object"},
+                "resources": _resources_schema(),
                 "sessionId": {"type": "string", "minLength": 1},
                 "sessionEpoch": {"type": "integer", "minimum": 1},
                 "sourceTurnId": {"type": "string", "minLength": 1},
@@ -81,7 +93,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                 },
-                "resources": {"type": "object"},
+                "resources": _resources_schema(),
                 "sessionId": {"type": "string", "minLength": 1},
                 "sessionEpoch": {"type": "integer", "minimum": 1},
                 "sourceTurnId": {"type": "string", "minLength": 1},
@@ -108,6 +120,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                     "profileId": {"type": "string"},
                     "workloadStatus": {"type": "string"},
                     "exitCode": {"type": ["integer", "null"]},
+                    "outputRefs": {"type": "object"},
                 },
                 "additionalProperties": True,
             }
@@ -202,9 +215,12 @@ def _build_workload_request(
     if not isinstance(inputs, Mapping):
         raise ValueError("workload tool inputs must be an object")
     request_payload = dict(inputs)
-    request_payload.setdefault("taskRunId", _context_text(context, "workflow_id"))
-    request_payload.setdefault("stepId", _context_text(context, "node_id"))
-    request_payload.setdefault("attempt", _context_int(context, "attempt", default=1))
+    if "taskRunId" not in request_payload:
+        request_payload["taskRunId"] = _context_text(context, "workflow_id")
+    if "stepId" not in request_payload:
+        request_payload["stepId"] = _context_text(context, "node_id")
+    if "attempt" not in request_payload:
+        request_payload["attempt"] = _context_int(context, "attempt", default=1)
     request_payload["toolName"] = tool_name
 
     for source_key, target_key in (

@@ -66,6 +66,18 @@ def test_container_run_workload_tool_definition_routes_to_docker_workload() -> N
     assert "image" not in definition["inputs"]["schema"]["properties"]
     assert "mounts" not in definition["inputs"]["schema"]["properties"]
     assert "devices" not in definition["inputs"]["schema"]["properties"]
+    resources_schema = definition["inputs"]["schema"]["properties"]["resources"]
+    assert resources_schema == {
+        "type": "object",
+        "properties": {
+            "cpu": {"type": "string", "minLength": 1},
+            "memory": {"type": "string", "minLength": 1},
+            "shmSize": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    }
+    output_properties = definition["outputs"]["schema"]["properties"]
+    assert output_properties["outputRefs"] == {"type": "object"}
 
 
 def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
@@ -85,6 +97,16 @@ def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
     assert "image" not in definition["inputs"]["schema"]["properties"]
     assert "mounts" not in definition["inputs"]["schema"]["properties"]
     assert "devices" not in definition["inputs"]["schema"]["properties"]
+    resources_schema = definition["inputs"]["schema"]["properties"]["resources"]
+    assert resources_schema == {
+        "type": "object",
+        "properties": {
+            "cpu": {"type": "string", "minLength": 1},
+            "memory": {"type": "string", "minLength": 1},
+            "shmSize": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -128,6 +150,40 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
     assert launcher.validated.request.session_id == "session-1"
     assert launcher.validated.request.source_turn_id == "turn-1"
     assert result.outputs["workloadResult"]["status"] == "succeeded"
+    assert result.outputs["outputRefs"] == {}
+
+
+@pytest.mark.asyncio
+async def test_container_run_workload_handler_accepts_explicit_ids_without_context() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "profileId": "local-python",
+            "taskRunId": "task-explicit",
+            "stepId": "step-explicit",
+            "attempt": 3,
+            "repoDir": "/work/agent_jobs/task-explicit/repo",
+            "artifactsDir": "/work/agent_jobs/task-explicit/artifacts/step-explicit",
+            "command": ["python", "-V"],
+        },
+        None,
+    )
+
+    assert result.status == "COMPLETED"
+    assert launcher.validated is not None
+    assert launcher.validated.request.task_run_id == "task-explicit"
+    assert launcher.validated.request.step_id == "step-explicit"
+    assert launcher.validated.request.attempt == 3
 
 
 @pytest.mark.asyncio
