@@ -86,6 +86,14 @@ A task author receives clear signals when Jira import affects preset inputs or t
 - Browser session memory is disabled or contains a project or board that is no longer available.
 - Jira browser operations fail while the user is otherwise ready to submit a manual task.
 
+### Assumptions
+
+- `docs/UI/CreatePage.md` remains the canonical desired-state contract for the Create page during this feature.
+- Jira is an optional instruction source for task authoring, not a replacement task type or execution substrate.
+- Existing manual step authoring, preset application, dependency selection, scheduling, and task submission behavior must remain usable when Jira is disabled or unavailable.
+- Existing trusted Jira configuration, policy, and secret handling are the required security boundary for browser-facing Jira data.
+- Jira provenance is local Create-page state for the initial delivery and is not persisted into submitted task payloads.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
