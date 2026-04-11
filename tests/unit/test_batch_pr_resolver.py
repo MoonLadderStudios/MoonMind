@@ -107,7 +107,8 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["mode"] == "codex"
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
-    assert task["runtime"]["providerProfile"] == "test-profile"
+    assert task["runtime"]["executionProfileRef"] == "test-profile"
+    assert "providerProfile" not in task["runtime"]
     assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
@@ -422,6 +423,59 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     assert runtime.model == "claude-3.7-sonnet"
     assert runtime.effort == "low"
     assert runtime.provider_profile == "inherited-profile"
+
+
+def test_resolve_runtime_selection_uses_execution_profile_env(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": None,
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "codex_cli"
+    assert runtime.provider_profile == "codex_default"
+
+
+def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": "gemini_cli",
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "gemini_cli"
+    assert runtime.provider_profile is None
 
 
 def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Path):

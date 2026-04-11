@@ -41,7 +41,7 @@ with workflow.unsafe.imports_passed_through():
         workflow_id_for_runtime,
     )
     from moonmind.workflows.provider_failures import (
-        classify_retryable_provider_failure,
+        classify_provider_failure,
         provider_error_requires_cooldown,
     )
 
@@ -410,7 +410,7 @@ class MoonMindAgentRun:
                 mode="json",
                 by_alias=True,
             )
-        classification = classify_retryable_provider_failure(summary)
+        classification = classify_provider_failure(summary)
         if classification is not None:
             metadata["providerFailure"] = {
                 "providerErrorCode": classification.provider_error_code,

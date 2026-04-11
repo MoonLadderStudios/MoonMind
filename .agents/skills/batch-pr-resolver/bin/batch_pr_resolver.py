@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
+from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 
 
 logger = logging.getLogger(__name__)
@@ -233,6 +234,12 @@ def _runtime_text(value: Any) -> str | None:
     return text or None
 
 
+def _runtime_modes_match(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return normalize_runtime_id(left) == normalize_runtime_id(right)
+
+
 def _session_artifact_spool_path() -> Path | None:
     raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
     if not raw:
@@ -424,13 +431,28 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
-    runtime_provider_profile = _runtime_text(getattr(args, "runtime_provider_profile", None))
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
+    runtime_execution_profile_ref = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
+    )
+    runtime_execution_profile_runtime = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_RUNTIME")
+    )
+    if runtime_mode is None and runtime_execution_profile_ref:
+        runtime_mode = _normalize_runtime_mode(runtime_execution_profile_runtime)
     if runtime_model is None and inherited is not None:
         runtime_model = inherited.model
     if runtime_effort is None and inherited is not None:
         runtime_effort = inherited.effort
     if runtime_provider_profile is None and inherited is not None:
         runtime_provider_profile = inherited.provider_profile
+    if runtime_provider_profile is None and _runtime_modes_match(
+        runtime_mode,
+        runtime_execution_profile_runtime,
+    ):
+        runtime_provider_profile = runtime_execution_profile_ref
 
     return RuntimeSelection(
         mode=runtime_mode,
@@ -462,7 +484,7 @@ def _build_queue_request(
     if runtime.effort:
         runtime_payload["effort"] = runtime.effort
     if runtime.provider_profile:
-        runtime_payload["providerProfile"] = runtime.provider_profile
+        runtime_payload["executionProfileRef"] = runtime.provider_profile
 
     payload_dict: dict[str, Any] = {
         "repository": repo,
@@ -759,7 +781,7 @@ async def main() -> int:
             "mode": runtime.mode,
             "model": runtime.model,
             "effort": runtime.effort,
-            "providerProfile": runtime.provider_profile,
+            "executionProfileRef": runtime.provider_profile,
         },
         "requested": len(open_prs),
         "created": len(created),

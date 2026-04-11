@@ -36,6 +36,7 @@ from moonmind.auth.env_shaping import (
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ProfileResolutionError,
+    build_managed_profile_launch_context,
 )
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -144,6 +145,55 @@ async def test_shape_environment_for_api_key_without_ref():
     shaped = shape_environment_for_api_key(base, api_key_ref=None, account_label=None)
     assert "MANAGED_API_KEY_REF" not in shaped
     assert "MANAGED_ACCOUNT_LABEL" not in shaped
+
+
+async def test_launch_context_exports_execution_profile_ref() -> None:
+    context = build_managed_profile_launch_context(
+        profile={
+            "profile_id": "codex_default",
+            "credential_source": "oauth_volume",
+        },
+        runtime_for_profile="codex_cli",
+        workflow_id="wf-agent-run-1",
+        default_credential_source="oauth_volume",
+    )
+
+    assert context.profile_id == "codex_default"
+    assert (
+        context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_REF"]
+        == "codex_default"
+    )
+    assert (
+        context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"]
+        == "codex_cli"
+    )
+
+
+async def test_launch_context_reserved_execution_profile_keys_cannot_be_overridden() -> None:
+    context = build_managed_profile_launch_context(
+        profile={
+            "profile_id": "codex_default",
+            "credential_source": "oauth_volume",
+            "runtime_env_overrides": {
+                "MOONMIND_EXECUTION_PROFILE_REF": "wrong-profile",
+                "MOONMIND_EXECUTION_PROFILE_RUNTIME": "gemini_cli",
+                "SAFE_RUNTIME_FLAG": "enabled",
+            },
+        },
+        runtime_for_profile="codex_cli",
+        workflow_id="wf-agent-run-1",
+        default_credential_source="oauth_volume",
+    )
+
+    assert (
+        context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_REF"]
+        == "codex_default"
+    )
+    assert (
+        context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"]
+        == "codex_cli"
+    )
+    assert context.delta_env_overrides["SAFE_RUNTIME_FLAG"] == "enabled"
 
 
 # ---------------------------------------------------------------------------
