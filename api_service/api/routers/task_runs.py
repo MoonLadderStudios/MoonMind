@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -1129,7 +1128,7 @@ def _resolve_legacy_log_artifact_path(
     },
 )
 async def get_observability_summary(
-    id: UUID,
+    id: str,
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Fetch the observability summary for a task run from the shared agent jobs volume."""
@@ -1274,7 +1273,7 @@ async def control_task_run_artifact_session(
     },
 )
 async def get_task_run_observability_events(
-    id: UUID,
+    id: str,
     since: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
     stream: list[Literal["stdout", "stderr", "system", "session"]] | None = Query(default=None),
@@ -1366,7 +1365,7 @@ async def get_task_run_observability_events(
     },
 )
 async def stream_task_run_live_logs(
-    id: UUID,
+    id: str,
     request: Request,
     since: int | None = Query(default=None, ge=0, description="Resume from sequence number"),
     _user: User = Depends(get_current_user()),
@@ -1459,7 +1458,7 @@ async def stream_task_run_live_logs(
     },
 )
 async def stream_task_run_log(
-    id: UUID,
+    id: str,
     stream_name: str,
     _user: User = Depends(get_current_user()),
 ):
@@ -1609,7 +1608,7 @@ async def stream_task_run_log(
     },
 )
 async def get_task_run_diagnostics(
-    id: UUID,
+    id: str,
     _user: User = Depends(get_current_user()),
 ):
     """Return the diagnostics.json payload for a task run."""
