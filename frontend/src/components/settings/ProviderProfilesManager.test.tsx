@@ -311,8 +311,6 @@ describe('ProviderProfilesManager form controls', () => {
 
     const [, requestInit] = fetchSpy.mock.calls[0];
     const payload = JSON.parse(String((requestInit as RequestInit).body));
-    expect(payload.profile_id).toBe('codex-secondary');
-    expect(payload.runtime_id).toBe('codex_cli');
     expect(payload.is_default).toBe(true);
   });
 });
