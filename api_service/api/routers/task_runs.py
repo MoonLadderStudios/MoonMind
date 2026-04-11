@@ -901,7 +901,8 @@ def _event_matches_observability_filters(
     raw_session_epoch = event.get("sessionEpoch")
     if raw_session_epoch is None:
         raw_session_epoch = event.get("session_epoch")
-    if session_epochs and _coerce_session_epoch(raw_session_epoch) not in session_epochs:
+    session_epoch = _coerce_session_epoch(raw_session_epoch)
+    if session_epochs and (session_epoch is None or session_epoch not in session_epochs):
         return False
     thread_id = str(event.get("threadId") or event.get("thread_id") or "").strip()
     if thread_ids and thread_id not in thread_ids:

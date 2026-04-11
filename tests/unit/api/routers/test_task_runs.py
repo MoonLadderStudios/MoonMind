@@ -1500,15 +1500,18 @@ def test_get_task_run_observability_events_applies_session_epoch_and_thread_filt
     assert body["events"][0]["threadId"] == "thread-2"
 
 
+@pytest.mark.parametrize("query", ["sessionEpoch=0", "sessionEpoch=-1"])
 def test_get_task_run_observability_events_rejects_invalid_session_epoch_filter(
     client: tuple[TestClient, AsyncMock],
+    query: str,
 ) -> None:
     test_client, _ = client
 
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
-        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?sessionEpoch=0")
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?{query}")
 
     assert response.status_code == 422
+    assert "sessionEpoch" in response.json()["detail"]
     load_record.assert_not_called()
 
 
