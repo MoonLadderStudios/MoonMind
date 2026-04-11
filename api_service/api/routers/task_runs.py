@@ -3,12 +3,11 @@ import json
 import os
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -72,6 +71,19 @@ def _get_managed_session_store_root() -> str:
 
 def _get_agent_runtime_artifacts_root() -> str:
     return str(managed_runtime_artifact_root())
+
+
+async def _load_managed_run_record(
+    store: ManagedRunStore,
+    run_id: str,
+) -> object | None:
+    try:
+        return await asyncio.to_thread(store.load, str(run_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid task run id",
+        ) from exc
 
 
 @lru_cache(maxsize=1)
@@ -345,21 +357,24 @@ def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]
     if not spool_path.is_file():
         return
 
-    with spool_path.open("r", encoding="utf-8", errors="replace") as spool_file:
-        for raw_line in spool_file:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            sequence = payload.get("sequence")
-            if not isinstance(sequence, int):
-                continue
-            yield payload
+    try:
+        with spool_path.open("r", encoding="utf-8", errors="replace") as spool_file:
+            for raw_line in spool_file:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                sequence = payload.get("sequence")
+                if not isinstance(sequence, int):
+                    continue
+                yield payload
+    except OSError:
+        return
 
 
 def _coerce_utc_datetime(value: object) -> datetime | None:
@@ -416,12 +431,25 @@ def _iter_spool_rendered_content(
     *,
     started_at: object = None,
 ) -> Iterator[bytes]:
+    return _iter_grouped_rendered_content(
+        _iter_run_spool_chunks(workspace_path, started_at=started_at),
+        header_for_item=lambda chunk: str(chunk.get("stream", "system")),
+        text_for_item=lambda chunk: str(chunk.get("text", "")),
+    )
+
+
+def _iter_grouped_rendered_content(
+    items: Iterable[dict[str, object]],
+    *,
+    header_for_item: Callable[[dict[str, object]], str],
+    text_for_item: Callable[[dict[str, object]], str],
+) -> Iterator[bytes]:
     current_stream: str | None = None
     emitted_any = False
 
-    for chunk in _iter_run_spool_chunks(workspace_path, started_at=started_at):
-        stream = str(chunk.get("stream", "system"))
-        text = str(chunk.get("text", ""))
+    for item in items:
+        stream = header_for_item(item)
+        text = text_for_item(item)
         if stream != current_stream:
             if emitted_any and not text.startswith("\n"):
                 yield b"\n"
@@ -435,9 +463,12 @@ def _iter_spool_rendered_content(
 
 
 def _resolve_safe_artifact_path(ref: str | None, artifacts_root: Path) -> Path | None:
-    if not ref:
+    if not isinstance(ref, str):
         return None
-    artifact_path = (artifacts_root / ref).resolve()
+    normalized_ref = ref.strip()
+    if not normalized_ref:
+        return None
+    artifact_path = (artifacts_root / normalized_ref).resolve()
     try:
         is_safe = artifact_path.is_relative_to(artifacts_root)
     except Exception:
@@ -481,6 +512,22 @@ def _read_json_payload(path: Path | None) -> dict[str, object] | None:
 
 def _coerce_sequence(value: object) -> int | None:
     return value if isinstance(value, int) else None
+
+
+def _coerce_session_epoch(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return int(candidate)
+        except ValueError:
+            return None
+    return None
 
 
 def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | None:
@@ -784,6 +831,8 @@ def _load_task_run_observability_events(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, object]], str]:
     workspace_path = getattr(record, "workspace_path", None)
     started_at = getattr(record, "started_at", None)
@@ -808,6 +857,8 @@ def _load_task_run_observability_events(
                 since=since,
                 streams=streams,
                 kinds=kinds,
+                session_epochs=session_epochs,
+                thread_ids=thread_ids,
             )
         )
         source = "journal"
@@ -824,6 +875,8 @@ def _load_task_run_observability_events(
                 since=since,
                 streams=streams,
                 kinds=kinds,
+                session_epochs=session_epochs,
+                thread_ids=thread_ids,
             )
         )
         source = "spool"
@@ -845,6 +898,8 @@ def _event_matches_observability_filters(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> bool:
     sequence = _coerce_sequence(event.get("sequence"))
     if since is not None and sequence is not None and sequence > 0 and sequence <= since:
@@ -854,6 +909,14 @@ def _event_matches_observability_filters(
         return False
     kind = str(event.get("kind") or "").strip()
     if kinds and kind not in kinds:
+        return False
+    raw_session_epoch = event.get("sessionEpoch")
+    if raw_session_epoch is None:
+        raw_session_epoch = event.get("session_epoch")
+    if session_epochs and _coerce_session_epoch(raw_session_epoch) not in session_epochs:
+        return False
+    thread_id = str(event.get("threadId") or event.get("thread_id") or "").strip()
+    if thread_ids and thread_id not in thread_ids:
         return False
     return True
 
@@ -865,6 +928,8 @@ def _collect_matching_observability_events(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     collected: list[dict[str, object]] = []
     max_events = max(1, limit) + 1
@@ -874,6 +939,8 @@ def _collect_matching_observability_events(
             since=since,
             streams=streams,
             kinds=kinds,
+            session_epochs=session_epochs,
+            thread_ids=thread_ids,
         ):
             continue
         collected.append(event)
@@ -888,6 +955,8 @@ def _filter_observability_events(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     filtered: list[dict[str, object]] = []
     for event in events:
@@ -896,6 +965,8 @@ def _filter_observability_events(
             since=since,
             streams=streams,
             kinds=kinds,
+            session_epochs=session_epochs,
+            thread_ids=thread_ids,
         ):
             continue
         filtered.append(event)
@@ -906,6 +977,67 @@ def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     sequence = _coerce_sequence(payload.get("sequence"))
     timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
+
+
+def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, datetime]:
+    sequence = _coerce_sequence(payload.get("sequence"))
+    timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
+    if sequence is not None and sequence > 0:
+        return (0, sequence, timestamp)
+    return (1, 2**31 - 1, timestamp)
+
+
+def _merged_event_header(payload: dict[str, object]) -> str:
+    stream = str(payload.get("stream") or "system").strip() or "system"
+    kind = str(payload.get("kind") or "").strip()
+    if stream == "session" and kind:
+        return f"{stream} ({kind})"
+    return stream
+
+
+def _iter_event_rendered_content(events: Iterable[dict[str, object]]) -> Iterator[bytes]:
+    return _iter_grouped_rendered_content(
+        (event for event in events if str(event.get("text") or "")),
+        header_for_item=_merged_event_header,
+        text_for_item=lambda event: str(event.get("text") or ""),
+    )
+
+
+def _iter_merged_journal_events(
+    record: object,
+    artifacts_root: Path,
+) -> Iterator[dict[str, object]]:
+    yield from _load_merged_journal_events(record, artifacts_root)
+
+
+def _load_merged_journal_events(
+    record: object,
+    artifacts_root: Path,
+) -> list[dict[str, object]]:
+    event_journal_path = _resolve_safe_artifact_path(
+        getattr(record, "observability_events_ref", None),
+        artifacts_root,
+    )
+    if event_journal_path is None:
+        return []
+
+    raw_record_run_id = getattr(record, "run_id", None)
+    record_run_id = (
+        raw_record_run_id.strip()
+        if isinstance(raw_record_run_id, str) and raw_record_run_id.strip()
+        else None
+    )
+    events = [
+        event
+        for event in _iter_event_journal(event_journal_path, run_id=record_run_id)
+        if str(event.get("text") or "")
+    ]
+    events.sort(key=_merged_event_sort_key)
+    return events
+
+
+def _merged_journal_has_renderable_events(record: object, artifacts_root: Path) -> bool:
+    return bool(_load_merged_journal_events(record, artifacts_root))
 
 
 def _emit_livelogs_metric_increment(
@@ -1009,7 +1141,7 @@ def _resolve_legacy_log_artifact_path(
     },
 )
 async def get_observability_summary(
-    id: UUID,
+    id: str,
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Fetch the observability summary for a task run from the shared agent jobs volume."""
@@ -1017,7 +1149,7 @@ async def get_observability_summary(
     started = time.perf_counter()
 
     try:
-        record = await asyncio.to_thread(store.load, str(id))
+        record = await _load_managed_run_record(store, id)
         if not record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1154,16 +1286,28 @@ async def control_task_run_artifact_session(
     },
 )
 async def get_task_run_observability_events(
-    id: UUID,
+    id: str,
     since: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
     stream: list[Literal["stdout", "stderr", "system", "session"]] | None = Query(default=None),
     kind: list[str] | None = Query(default=None),
+    session_epoch: list[int] | None = Query(default=None, alias="sessionEpoch"),
+    thread_id: list[str] | None = Query(default=None, alias="threadId"),
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Return structured observability history for one task run."""
+    if session_epoch is not None and any(item < 1 for item in session_epoch):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="sessionEpoch must contain only integers greater than or equal to 1",
+        )
+    if thread_id is not None and any(not item.strip() for item in thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="threadId must not contain blank values",
+        )
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1173,6 +1317,8 @@ async def get_task_run_observability_events(
     started = time.perf_counter()
     stream_filters = set(stream or [])
     kind_filters = {item for item in (kind or []) if item}
+    session_epoch_filters = set(session_epoch or [])
+    thread_id_filters = {item.strip() for item in (thread_id or []) if item.strip()}
     try:
         session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
         events, source = await asyncio.to_thread(
@@ -1183,6 +1329,8 @@ async def get_task_run_observability_events(
             since=since,
             streams=stream_filters,
             kinds=kind_filters,
+            session_epochs=session_epoch_filters,
+            thread_ids=thread_id_filters,
         )
         if source == "artifacts":
             events = _filter_observability_events(
@@ -1190,6 +1338,8 @@ async def get_task_run_observability_events(
                 since=since,
                 streams=stream_filters,
                 kinds=kind_filters,
+                session_epochs=session_epoch_filters,
+                thread_ids=thread_id_filters,
             )
         events.sort(key=_event_sort_key)
         truncated = len(events) > limit
@@ -1228,14 +1378,14 @@ async def get_task_run_observability_events(
     },
 )
 async def stream_task_run_live_logs(
-    id: UUID,
+    id: str,
     request: Request,
     since: int | None = Query(default=None, ge=0, description="Resume from sequence number"),
     _user: User = Depends(get_current_user()),
 ):
     """Serve SSE real-time stream for active runs."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
 
     if not record:
         raise HTTPException(
@@ -1321,7 +1471,7 @@ async def stream_task_run_live_logs(
     },
 )
 async def stream_task_run_log(
-    id: UUID,
+    id: str,
     stream_name: str,
     _user: User = Depends(get_current_user()),
 ):
@@ -1333,7 +1483,7 @@ async def stream_task_run_log(
         )
     
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     
     if not record:
         raise HTTPException(
@@ -1343,71 +1493,84 @@ async def stream_task_run_log(
     await _require_observability_access(record, _user)
 
     if stream_name == "merged":
-        target_ref = getattr(record, "merged_log_artifact_ref", None)
+        artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
+        workspace_path = getattr(record, "workspace_path", None)
+        started_at = getattr(record, "started_at", None)
 
-        # Synthesize merged tail from stdout + stderr when no pre-built artifact exists.
-        if target_ref is None:
-            artifacts_root = Path(_get_agent_runtime_artifacts_root()).resolve()
-            workspace_path = getattr(record, "workspace_path", None)
-            started_at = getattr(record, "started_at", None)
-            if _spool_contains_renderable_chunks(
+        journal_events = _load_merged_journal_events(record, artifacts_root)
+        if journal_events:
+            content_stream = _iter_event_rendered_content(journal_events)
+            order_source = "journal"
+        elif _spool_contains_renderable_chunks(
+            workspace_path,
+            started_at=started_at,
+        ):
+            content_stream = _iter_spool_rendered_content(
                 workspace_path,
                 started_at=started_at,
-            ):
-                content_stream = _iter_spool_rendered_content(
-                    workspace_path,
-                    started_at=started_at,
-                )
-                order_source = "spool"
-            else:
-                stdout_path = _resolve_safe_artifact_path(
-                    getattr(record, "stdout_artifact_ref", None),
-                    artifacts_root,
-                )
-                stderr_path = _resolve_safe_artifact_path(
-                    getattr(record, "stderr_artifact_ref", None),
-                    artifacts_root,
-                )
-                legacy_log_path = _resolve_legacy_log_artifact_path(
-                    record,
-                    artifacts_root,
-                )
-                diagnostics_path = _resolve_safe_artifact_path(
-                    getattr(record, "diagnostics_ref", None),
-                    artifacts_root,
-                )
-                if legacy_log_path is not None:
-                    content_stream = _iter_file_chunks(legacy_log_path)
-                    order_source = "legacy-log-artifact"
-                elif not stdout_path and not stderr_path:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=(
-                            "Merged log artifact not found and no stdout/stderr or "
-                            "legacy log artifacts are available to synthesize from"
-                        ),
-                    )
-                else:
-                    content_stream = _iter_artifact_fallback_content(
-                        stdout_path,
-                        stderr_path,
-                        diagnostics_path=diagnostics_path,
-                    )
-                    order_source = "artifact-fallback"
-
-            return StreamingResponse(
-                content_stream,
-                media_type="text/plain",
-                headers={
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
-                    "X-Merged-Synthesized": "true",
-                    "X-Merged-Order-Source": order_source,
-                },
             )
+            order_source = "spool"
+        else:
+            merged_log_path = _resolve_safe_artifact_path(
+                getattr(record, "merged_log_artifact_ref", None),
+                artifacts_root,
+            )
+            stdout_path = _resolve_safe_artifact_path(
+                getattr(record, "stdout_artifact_ref", None),
+                artifacts_root,
+            )
+            stderr_path = _resolve_safe_artifact_path(
+                getattr(record, "stderr_artifact_ref", None),
+                artifacts_root,
+            )
+            legacy_log_path = _resolve_legacy_log_artifact_path(
+                record,
+                artifacts_root,
+            )
+            diagnostics_path = _resolve_safe_artifact_path(
+                getattr(record, "diagnostics_ref", None),
+                artifacts_root,
+            )
+            if merged_log_path is not None:
+                return FileResponse(
+                    path=merged_log_path,
+                    media_type="text/plain",
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    },
+                )
+            elif legacy_log_path is not None:
+                content_stream = _iter_file_chunks(legacy_log_path)
+                order_source = "legacy-log-artifact"
+            elif not stdout_path and not stderr_path:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        "Merged log artifact not found and no stdout/stderr or "
+                        "legacy log artifacts are available to synthesize from"
+                    ),
+                )
+            else:
+                content_stream = _iter_artifact_fallback_content(
+                    stdout_path,
+                    stderr_path,
+                    diagnostics_path=diagnostics_path,
+                )
+                order_source = "artifact-fallback"
 
-        missing_detail = "Merged log artifact not found"
+        return StreamingResponse(
+            content_stream,
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Merged-Synthesized": "true",
+                "X-Merged-Order-Source": order_source,
+            },
+        )
     else:
         target_ref = getattr(record, f"{stream_name}_artifact_ref", None)
         missing_detail = f"{stream_name} log artifact not found"
@@ -1458,12 +1621,12 @@ async def stream_task_run_log(
     },
 )
 async def get_task_run_diagnostics(
-    id: UUID,
+    id: str,
     _user: User = Depends(get_current_user()),
 ):
     """Return the diagnostics.json payload for a task run."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     
     if not record or not record.diagnostics_ref:
         raise HTTPException(

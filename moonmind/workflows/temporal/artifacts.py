@@ -2388,6 +2388,87 @@ class TemporalArtifactActivities:
         )
         return {"reset": True, "workflow_id": workflow_id}
 
+    async def provider_profile_manager_state(
+        self,
+        *,
+        runtime_id: str,
+        requester_workflow_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a compact ProviderProfileManager health snapshot."""
+
+        from temporalio.service import RPCError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            workflow_id_for_runtime,
+        )
+
+        workflow_id = workflow_id_for_runtime(runtime_id)
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+        handle = client.get_workflow_handle(workflow_id)
+
+        try:
+            description = await handle.describe()
+        except RPCError as exc:
+            return {
+                "running": False,
+                "workflow_id": workflow_id,
+                "status": f"RPC_ERROR_{exc.status.name}",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+        status_name = description.status.name
+        if status_name != "RUNNING":
+            return {
+                "running": False,
+                "workflow_id": workflow_id,
+                "status": status_name,
+            }
+
+        try:
+            state = await handle.query("get_state")
+        except RPCError as exc:
+            return {
+                "running": False,
+                "workflow_id": workflow_id,
+                "status": f"RPC_ERROR_{exc.status.name}",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
+        if not isinstance(state, dict):
+            return {
+                "running": False,
+                "workflow_id": workflow_id,
+                "status": status_name,
+                "error_type": "InvalidQueryPayload",
+            }
+
+        profiles = state.get("profiles")
+        pending_requests = state.get("pending_requests")
+        event_count = state.get("event_count")
+        requester_pending = False
+        if requester_workflow_id and isinstance(pending_requests, list):
+            requester_pending = any(
+                isinstance(request, dict)
+                and request.get("requester_workflow_id") == requester_workflow_id
+                for request in pending_requests
+            )
+
+        return {
+            "running": True,
+            "workflow_id": workflow_id,
+            "status": status_name,
+            "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+            "pending_requests_count": (
+                len(pending_requests) if isinstance(pending_requests, list) else 0
+            ),
+            "event_count": event_count if isinstance(event_count, int) else None,
+            "requester_pending": requester_pending,
+        }
+
     async def provider_profile_verify_lease_holders(
         self,
         *,

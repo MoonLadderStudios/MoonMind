@@ -8,13 +8,16 @@ import os
 import queue
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +50,18 @@ _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
+_ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
+_ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
+_LOG_RECOVERY_MAX_ROWS = 200
+_LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class _RolloutTurnScan:
+    references_turn: bool = False
+    assistant_text: str = ""
+    saw_task_complete: bool = False
+    error_text: str | None = None
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -470,28 +485,455 @@ class CodexManagedSessionRuntime:
         return state
 
     @staticmethod
-    def _extract_assistant_text(thread_payload: Mapping[str, Any]) -> str:
+    def _assistant_text_from_turn_payload(turn_payload: Mapping[str, Any]) -> str:
+        items = turn_payload.get("items")
+        if not isinstance(items, list):
+            return ""
+        for item in reversed(items):
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("type") != "agentMessage":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return ""
+
+    @classmethod
+    def _extract_assistant_text(
+        cls,
+        thread_payload: Mapping[str, Any],
+        *,
+        vendor_turn_id: str | None = None,
+    ) -> str:
         thread = thread_payload.get("thread")
         if not isinstance(thread, Mapping):
             return ""
         turns = thread.get("turns")
         if not isinstance(turns, list):
             return ""
+        if vendor_turn_id:
+            turn_payload = cls._find_turn_payload(
+                thread_payload,
+                vendor_turn_id=vendor_turn_id,
+            )
+            if isinstance(turn_payload, Mapping):
+                return cls._assistant_text_from_turn_payload(turn_payload)
+            return ""
         for turn in reversed(turns):
             if not isinstance(turn, Mapping):
                 continue
-            items = turn.get("items")
-            if not isinstance(items, list):
-                continue
-            for item in reversed(items):
-                if not isinstance(item, Mapping):
-                    continue
-                if item.get("type") != "agentMessage":
-                    continue
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    return text.strip()
+            text = cls._assistant_text_from_turn_payload(turn)
+            if text:
+                return text
         return ""
+
+    @staticmethod
+    def _thread_status_type(thread_payload: Mapping[str, Any]) -> str:
+        thread = thread_payload.get("thread")
+        if not isinstance(thread, Mapping):
+            return ""
+        status = thread.get("status")
+        if not isinstance(status, Mapping):
+            return ""
+        return str(status.get("type") or "").strip().lower()
+
+    @staticmethod
+    def _thread_status_reason(thread_payload: Mapping[str, Any]) -> str | None:
+        thread = thread_payload.get("thread")
+        if not isinstance(thread, Mapping):
+            return None
+        status = thread.get("status")
+        if not isinstance(status, Mapping):
+            return None
+        for field_name in ("reason", "message", "error"):
+            value = status.get(field_name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, Mapping):
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type not in {"output_text", "text"}:
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        return "\n".join(parts).strip()
+
+    @staticmethod
+    def _payload_references_turn(payload: Any, vendor_turn_id: str) -> bool:
+        if not vendor_turn_id:
+            return False
+        if isinstance(payload, Mapping):
+            direct_turn_id = str(
+                payload.get("turnId") or payload.get("turn_id") or ""
+            ).strip()
+            if direct_turn_id == vendor_turn_id:
+                return True
+            turn_payload = payload.get("turn")
+            if isinstance(turn_payload, Mapping):
+                turn_id = str(turn_payload.get("id") or "").strip()
+                if turn_id == vendor_turn_id:
+                    return True
+            for nested_key in ("payload", "data", "delta", "item", "event"):
+                if CodexManagedSessionRuntime._payload_references_turn(
+                    payload.get(nested_key),
+                    vendor_turn_id,
+                ):
+                    return True
+            return False
+        if isinstance(payload, list):
+            return any(
+                CodexManagedSessionRuntime._payload_references_turn(item, vendor_turn_id)
+                for item in payload
+            )
+        return False
+
+    @staticmethod
+    def _rollout_entry_timestamp(payload: Mapping[str, Any]) -> float | None:
+        timestamp_text = str(payload.get("timestamp") or "").strip()
+        if not timestamp_text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.timestamp()
+
+    @staticmethod
+    def _is_terminal_rollout_phase(value: Any) -> bool:
+        phase = str(value or "").strip().lower()
+        return phase in {"final", "final_answer"}
+
+    def _allowed_rollout_path(self, path_value: str | None) -> str | None:
+        normalized = self._normalized_thread_path(path_value)
+        if normalized is None:
+            return None
+        candidate = Path(normalized)
+        try:
+            resolved = candidate.resolve()
+            sessions_root = (self._codex_home_path / "sessions").resolve()
+            resolved.relative_to(sessions_root)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return str(resolved) if resolved.is_file() else None
+
+    def _extract_assistant_text_from_rollout(
+        self,
+        vendor_thread_path: str | None,
+        *,
+        vendor_turn_id: str,
+        turn_started_at: float | None = None,
+    ) -> str:
+        return self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=turn_started_at,
+        ).assistant_text
+
+    def _scan_rollout_for_turn(
+        self,
+        vendor_thread_path: str | None,
+        *,
+        vendor_turn_id: str,
+        turn_started_at: float | None = None,
+    ) -> _RolloutTurnScan:
+        rollout_path = self._allowed_rollout_path(vendor_thread_path)
+        if rollout_path is None:
+            return _RolloutTurnScan()
+        last_text = ""
+        terminal_text = ""
+        terminal_cutoff = None
+        references_active_turn = False
+        saw_task_complete = False
+        error_text: str | None = None
+        if turn_started_at is not None:
+            terminal_cutoff = (
+                float(turn_started_at) - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS
+            )
+        try:
+            rollout_file = Path(rollout_path)
+            for stripped in self._iter_rollout_lines(rollout_file):
+                if not stripped:
+                    continue
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, Mapping):
+                    continue
+                references_turn = self._payload_references_turn(payload, vendor_turn_id)
+                if references_turn:
+                    references_active_turn = True
+                    text = self._assistant_text_from_rollout_entry(payload)
+                    if text:
+                        last_text = text
+                text = self._terminal_assistant_text_from_rollout_entry(payload)
+                if text:
+                    if references_turn:
+                        terminal_text = text
+                    elif terminal_cutoff is not None:
+                        entry_timestamp = self._rollout_entry_timestamp(payload)
+                        if entry_timestamp is not None and entry_timestamp >= terminal_cutoff:
+                            terminal_text = text
+                if not references_turn:
+                    continue
+                entry_type = str(payload.get("type") or "").strip().lower()
+                if entry_type != "event_msg":
+                    continue
+                event_payload = payload.get("payload")
+                if not isinstance(event_payload, Mapping):
+                    continue
+                event_type = str(event_payload.get("type") or "").strip().lower()
+                if event_type != "task_complete":
+                    continue
+                saw_task_complete = True
+                for field_name in ("error", "reason", "message"):
+                    value = event_payload.get(field_name)
+                    if isinstance(value, str) and value.strip():
+                        error_text = value.strip()
+                        break
+        except OSError:
+            return _RolloutTurnScan()
+        return _RolloutTurnScan(
+            references_turn=references_active_turn,
+            assistant_text=last_text or terminal_text,
+            saw_task_complete=saw_task_complete,
+            error_text=error_text,
+        )
+
+    @staticmethod
+    def _iter_rollout_lines(rollout_file: Path) -> Iterator[str]:
+        file_size = rollout_file.stat().st_size
+        start_offset = max(0, file_size - _ROLLOUT_RECOVERY_MAX_BYTES)
+        with rollout_file.open("rb") as handle:
+            if start_offset:
+                handle.seek(start_offset)
+                handle.readline()
+            for raw_line in handle:
+                yield raw_line.decode("utf-8", errors="replace").strip()
+
+    @classmethod
+    def _assistant_text_from_rollout_entry(cls, payload: Mapping[str, Any]) -> str:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return ""
+            if (
+                str(response_payload.get("type") or "").strip().lower() != "message"
+                or str(response_payload.get("role") or "").strip().lower()
+                != "assistant"
+            ):
+                return ""
+            return cls._content_text(response_payload.get("content"))
+        elif entry_type == "event_msg":
+            event_payload = payload.get("payload")
+            if not isinstance(event_payload, Mapping):
+                return ""
+            if str(event_payload.get("type") or "").strip().lower() != "agent_message":
+                return ""
+            return str(event_payload.get("message") or "").strip()
+        return ""
+
+    @classmethod
+    def _terminal_assistant_text_from_rollout_entry(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> str:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return ""
+            if not cls._is_terminal_rollout_phase(response_payload.get("phase")):
+                return ""
+            return cls._assistant_text_from_rollout_entry(payload)
+        elif entry_type == "event_msg":
+            event_payload = payload.get("payload")
+            if not isinstance(event_payload, Mapping):
+                return ""
+            event_type = str(event_payload.get("type") or "").strip().lower()
+            if event_type == "task_complete":
+                return str(event_payload.get("last_agent_message") or "").strip()
+            if (
+                event_type == "agent_message"
+                and cls._is_terminal_rollout_phase(event_payload.get("phase"))
+            ):
+                return cls._assistant_text_from_rollout_entry(payload)
+        return ""
+
+    @staticmethod
+    def _log_shard_sort_key(log_path: Path) -> tuple[int, str]:
+        filename = log_path.name
+        prefix = "logs_"
+        suffix = ".sqlite"
+        if filename.startswith(prefix) and filename.endswith(suffix):
+            shard_suffix = filename[len(prefix) : -len(suffix)]
+            try:
+                return int(shard_suffix), filename
+            except ValueError:
+                pass
+        return -1, filename
+
+    @staticmethod
+    def _quoted_sqlite_identifier(identifier: str) -> str:
+        normalized = identifier.strip()
+        if not normalized:
+            raise ValueError("sqlite identifier must not be blank")
+        if not (normalized[0].isalpha() or normalized[0] == "_"):
+            raise ValueError(f"unsupported sqlite identifier: {identifier!r}")
+        if any(not (character.isalnum() or character == "_") for character in normalized):
+            raise ValueError(f"unsupported sqlite identifier: {identifier!r}")
+        return f'"{normalized}"'
+
+    @staticmethod
+    def _extract_quoted_log_field(text: str, field_name: str) -> str | None:
+        marker = f'{field_name}="'
+        marker_index = text.find(marker)
+        if marker_index < 0:
+            return None
+        cursor = marker_index + len(marker)
+        characters: list[str] = []
+        while cursor < len(text):
+            character = text[cursor]
+            if character == "\\" and cursor + 1 < len(text):
+                characters.append(text[cursor + 1])
+                cursor += 2
+                continue
+            if character == '"':
+                break
+            characters.append(character)
+            cursor += 1
+        recovered = "".join(characters).strip()
+        return recovered or None
+
+    def _extract_turn_error_from_logs(self, vendor_turn_id: str) -> str | None:
+        for log_path in sorted(
+            self._codex_home_path.glob("logs_*.sqlite"),
+            key=self._log_shard_sort_key,
+            reverse=True,
+        ):
+            if not log_path.is_file():
+                continue
+            try:
+                with sqlite3.connect(
+                    f"file:{log_path}?mode=ro",
+                    uri=True,
+                    timeout=_LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS,
+                ) as connection:
+                    column_rows = connection.execute(
+                        "PRAGMA table_info(logs)"
+                    ).fetchall()
+                    if not column_rows:
+                        continue
+                    available_columns = {str(row[1]) for row in column_rows if len(row) > 1}
+                    text_column = None
+                    for candidate in ("feedback_log_body", "message"):
+                        if candidate in available_columns:
+                            text_column = candidate
+                            break
+                    if text_column is None:
+                        continue
+                    quoted_text_column = self._quoted_sqlite_identifier(text_column)
+                    rows = connection.execute(
+                        (
+                            f"SELECT {quoted_text_column} FROM \"logs\" "
+                            f"WHERE {quoted_text_column} LIKE ? "
+                            f"ORDER BY \"id\" DESC LIMIT ?"
+                        ),
+                        (f"%{vendor_turn_id}%", _LOG_RECOVERY_MAX_ROWS),
+                    ).fetchall()
+            except (ValueError, sqlite3.Error):
+                continue
+            for (raw_text,) in rows:
+                text = str(raw_text or "").strip()
+                marker = "Turn error:"
+                marker_index = text.find(marker)
+                if marker_index >= 0:
+                    recovered = text[marker_index + len(marker) :].strip()
+                    if recovered:
+                        return recovered
+                recovered = self._extract_quoted_log_field(text, "error.message")
+                if recovered:
+                    return recovered
+        return None
+
+    def _rollout_terminal_outcome_from_scan(
+        self,
+        scan: _RolloutTurnScan,
+        *,
+        vendor_turn_id: str,
+    ) -> tuple[str, str | None] | None:
+        if scan.error_text:
+            return "failed", scan.error_text
+        if scan.saw_task_complete:
+            if scan.assistant_text:
+                return "completed", None
+            recovered_error = self._extract_turn_error_from_logs(vendor_turn_id)
+            if recovered_error:
+                return "failed", recovered_error
+            return "failed", "codex app-server turn/completed produced no assistant output"
+        if scan.assistant_text:
+            return "completed", None
+        return None
+
+    def _resolved_rollout_path(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+    ) -> str | None:
+        thread = thread_payload.get("thread")
+        runtime_path = None
+        if isinstance(thread, Mapping):
+            runtime_path = self._normalized_thread_path(thread.get("path"))
+        allowed_runtime_path = self._allowed_rollout_path(runtime_path)
+        if allowed_runtime_path is not None:
+            state.vendor_thread_path = allowed_runtime_path
+            return allowed_runtime_path
+        allowed_state_path = self._allowed_rollout_path(state.vendor_thread_path)
+        if allowed_state_path is not None:
+            return allowed_state_path
+        recovered_path = self._find_vendor_thread_path(state.vendor_thread_id)
+        if recovered_path is not None:
+            state.vendor_thread_path = recovered_path
+        return recovered_path
+
+    def _assistant_text_for_completed_turn(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> str:
+        assistant_text = self._extract_assistant_text(
+            thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if assistant_text:
+            return assistant_text
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        return self._extract_assistant_text_from_rollout(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+            turn_started_at=state.last_control_at,
+        )
 
     @staticmethod
     def _find_turn_payload(
@@ -513,6 +955,35 @@ class CodexManagedSessionRuntime:
             return turn
         return None
 
+    def _missing_turn_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> tuple[str, str | None] | None:
+        thread_outcome = self._terminal_thread_outcome(thread_payload)
+        if thread_outcome is not None and thread_outcome[0] != "completed":
+            return thread_outcome
+
+        vendor_thread_path = self._resolved_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+        )
+        rollout_scan = self._scan_rollout_for_turn(
+            vendor_thread_path,
+            vendor_turn_id=vendor_turn_id,
+        )
+        rollout_outcome = self._rollout_terminal_outcome_from_scan(
+            rollout_scan,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if rollout_outcome is not None:
+            return rollout_outcome
+        if thread_outcome is not None and not rollout_scan.references_turn:
+            return thread_outcome
+        return None
+
     def _wait_for_turn_completion(
         self,
         *,
@@ -529,6 +1000,15 @@ class CodexManagedSessionRuntime:
             )
             if isinstance(turn_payload, Mapping):
                 outcome = self._terminal_turn_outcome(turn_payload)
+                if outcome is not None:
+                    return thread_payload, outcome
+            else:
+                state = self._load_state()
+                outcome = self._missing_turn_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                )
                 if outcome is not None:
                     return thread_payload, outcome
 
@@ -627,6 +1107,23 @@ class CodexManagedSessionRuntime:
             return "failed", error_text
         return None
 
+    @classmethod
+    def _terminal_thread_outcome(
+        cls,
+        thread_payload: Mapping[str, Any],
+    ) -> tuple[str, str | None] | None:
+        status_type = cls._thread_status_type(thread_payload)
+        if status_type == "idle":
+            return "completed", None
+        if status_type in {"failed", "error"}:
+            return "failed", cls._thread_status_reason(thread_payload)
+        if status_type in {"interrupted", "cancelled", "canceled"}:
+            return (
+                "interrupted",
+                cls._thread_status_reason(thread_payload) or status_type,
+            )
+        return None
+
     def _finalize_turn(
         self,
         *,
@@ -685,15 +1182,28 @@ class CodexManagedSessionRuntime:
             thread_payload,
             vendor_turn_id=active_turn_id,
         )
-        if not isinstance(turn_payload, Mapping):
-            return state
-
-        outcome = self._terminal_turn_outcome(turn_payload)
-        if outcome is None:
-            return state
+        outcome = None
+        if isinstance(turn_payload, Mapping):
+            outcome = self._terminal_turn_outcome(turn_payload)
+            if outcome is None:
+                return state
+        else:
+            outcome = self._missing_turn_terminal_outcome(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=active_turn_id,
+            )
+            if outcome is None:
+                return state
 
         status, error_text = outcome
-        assistant_text = self._extract_assistant_text(thread_payload)
+        assistant_text = ""
+        if status == "completed":
+            assistant_text = self._assistant_text_for_completed_turn(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=active_turn_id,
+            )
         if status == "completed" and not assistant_text:
             error_text = "codex app-server turn/completed produced no assistant output"
             self._append_spool(
@@ -841,20 +1351,26 @@ class CodexManagedSessionRuntime:
                 metadata={"reason": message},
             )
 
-        assistant_text = self._extract_assistant_text(thread_payload)
+        assistant_text = ""
         metadata: dict[str, Any] = {}
-        if status == "completed" and not assistant_text:
-            error_text = "codex app-server turn/completed produced no assistant output"
-            self._append_spool(
-                "stderr",
-                (
-                    "codex app-server turn completed without assistant output: "
-                    f"{vendor_turn_id}\n"
-                ),
+        if status == "completed":
+            assistant_text = self._assistant_text_for_completed_turn(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=vendor_turn_id,
             )
-            status = "failed"
-        if assistant_text:
-            metadata["assistantText"] = assistant_text
+            if not assistant_text:
+                error_text = "codex app-server turn/completed produced no assistant output"
+                self._append_spool(
+                    "stderr",
+                    (
+                        "codex app-server turn completed without assistant output: "
+                        f"{vendor_turn_id}\n"
+                    ),
+                )
+                status = "failed"
+            else:
+                metadata["assistantText"] = assistant_text
         if error_text:
             metadata["reason"] = error_text
         self._finalize_turn(

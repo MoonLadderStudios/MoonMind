@@ -85,6 +85,7 @@ from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
+    _managed_session_docker_network,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -94,6 +95,7 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,38 @@ def _derive_pr_branch_prefix(
     if selected_skill_name.strip().lower() not in {"", "auto"}:
         return _slugify_branch_prefix(selected_skill_name)
     return ""
+
+
+def _derive_pr_resolver_title(
+    task_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+) -> str:
+    selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
+        task_payload.get("skill")
+    )
+    selected_skill_name = str(
+        selected_skill_payload.get("name")
+        or selected_skill_payload.get("id")
+        or ""
+    ).strip()
+    if selected_skill_name.lower() != "pr-resolver":
+        return ""
+    git_payload = _coerce_mapping(task_payload.get("git"))
+    selected_skill_payload_inputs = _coerce_mapping(
+        selected_skill_payload.get("inputs")
+        or selected_skill_payload.get("args")
+    )
+    return str(
+        git_payload.get("startingBranch")
+        or task_payload.get("startingBranch")
+        or git_payload.get("branch")
+        or task_payload.get("branch")
+        or selected_skill_inputs.get("startingBranch")
+        or selected_skill_inputs.get("branch")
+        or selected_skill_payload_inputs.get("startingBranch")
+        or selected_skill_payload_inputs.get("branch")
+        or ""
+    ).strip()
 
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
@@ -366,9 +400,14 @@ def _build_runtime_planner():
                 )
 
         # --- Assemble plan ---
+        pr_resolver_title = _derive_pr_resolver_title(
+            task_payload,
+            selected_skill_inputs,
+        )
         title = str(
             task_payload.get("title")
             or parameter_payload.get("title")
+            or pr_resolver_title
             or ""
         ).strip() or "Generated Plan"
         created_at = (
@@ -514,10 +553,13 @@ def _build_agent_runtime_deps() -> tuple[
     ManagedRunSupervisor,
     ManagedRuntimeLauncher,
     DockerCodexManagedSessionController,
+    "RunnerProfileRegistry",
+    "DockerWorkloadLauncher",
 ]:
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
     from pathlib import Path
+    from moonmind.workloads import DockerWorkloadLauncher, RunnerProfileRegistry
 
     class LocalRuntimeArtifactStorage:
         def __init__(self, root: str) -> None:
@@ -575,16 +617,45 @@ def _build_agent_runtime_deps() -> tuple[
         or os.environ.get("SYSTEM_DOCKER_HOST")
         or "tcp://docker-proxy:2375"
     )
+    session_moonmind_url = (
+        os.environ.get("MOONMIND_MANAGED_SESSION_MOONMIND_URL")
+        or os.environ.get("MOONMIND_URL")
+        or "http://api:5000"
+    ).strip() or None
+    session_network_name = _managed_session_docker_network(
+        {"MOONMIND_URL": session_moonmind_url or ""}
+    )
     session_controller = DockerCodexManagedSessionController(
         workspace_volume_name=workspace_volume_name,
         codex_volume_name=codex_volume_name,
         workspace_root=workspace_root,
+        network_name=session_network_name,
+        moonmind_url=session_moonmind_url,
         session_store=session_store,
         session_supervisor=session_supervisor,
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
     )
-    return store, supervisor, launcher, session_controller
+    workload_registry_path = os.environ.get("MOONMIND_WORKLOAD_PROFILE_REGISTRY", "")
+    if workload_registry_path.strip():
+        workload_registry = RunnerProfileRegistry.load_file(
+            workload_registry_path,
+            workspace_root=workspace_root,
+        )
+    else:
+        workload_registry = RunnerProfileRegistry.empty(workspace_root=workspace_root)
+    workload_launcher = DockerWorkloadLauncher(
+        docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
+        docker_host=docker_host,
+    )
+    return (
+        store,
+        supervisor,
+        launcher,
+        session_controller,
+        workload_registry,
+        workload_launcher,
+    )
 
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
@@ -615,6 +686,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         run_supervisor = None
         run_launcher = None
         session_controller = None
+        workload_registry = None
+        workload_launcher = None
         agent_runtime_activities = None
         if topology.fleet == AGENT_RUNTIME_FLEET:
             # Docker-backed managed-session reconciliation only belongs on the
@@ -624,6 +697,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor,
                 run_launcher,
                 session_controller,
+                workload_registry,
+                workload_launcher,
             ) = _build_agent_runtime_deps()
             reconciled = await run_supervisor.reconcile()
             if reconciled:
@@ -643,6 +718,13 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
                 session_controller=session_controller,
+                workload_registry=workload_registry,
+                workload_launcher=workload_launcher,
+            )
+            register_workload_tool_handlers(
+                dispatcher,
+                registry=workload_registry,
+                launcher=workload_launcher,
             )
 
         bindings = build_worker_activity_bindings(

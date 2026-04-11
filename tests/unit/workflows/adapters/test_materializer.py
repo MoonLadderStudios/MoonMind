@@ -64,7 +64,7 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
                 "contentTemplate": {
                     "model_provider": "openrouter",
                     "model_reasoning_effort": "high",
-                    "model": "qwen/qwen3.6-plus:free",
+                    "model": "qwen/qwen3.6-plus",
                     "profile": "openrouter_qwen36_plus",
                     "model_providers": {
                         "openrouter": {
@@ -77,7 +77,7 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
                     "profiles": {
                         "openrouter_qwen36_plus": {
                             "model_provider": "openrouter",
-                            "model": "qwen/qwen3.6-plus:free",
+                            "model": "qwen/qwen3.6-plus",
                         }
                     },
                 },
@@ -106,7 +106,7 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
     assert 'model_provider = "openrouter"' in content
     assert 'model_reasoning_effort = "high"' in content
     assert 'base_url = "https://openrouter.ai/api/v1"' in content
-    assert 'model = "qwen/qwen3.6-plus:free"' in content
+    assert 'model = "qwen/qwen3.6-plus"' in content
 
     mode = oct(os.stat(config_path).st_mode & 0o777)
     assert mode == "0o600", f"Expected 0o600, got {mode}"

@@ -66,6 +66,11 @@ The session plane is a continuity and performance cache. It is not durable truth
 
 Managed-session steps may invoke **control-plane tools** that launch separate workload containers as described in [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md). Those workload containers remain outside session identity: they do not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or `active_turn_id`, and they do not replace the task-scoped session container.
 
+Codex session containers that need to create additional MoonMind tasks must be
+launched on the configured MoonMind Docker network and receive `MOONMIND_URL`
+pointing at the internal API endpoint. This keeps task creation on the
+Temporal-aware API path instead of relying on removed queue/DB shortcuts.
+
 ## 3. Protocol
 
 For the Codex MVP, the session protocol is **Codex App Server**, not PTY scraping and not `codex exec` as the primary session surface.

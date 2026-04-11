@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -17,11 +18,13 @@ from typing import Any
 
 import httpx
 from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
+from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 
 
 logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
+IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 
 @dataclass
@@ -231,6 +234,132 @@ def _runtime_text(value: Any) -> str | None:
     return text or None
 
 
+def _runtime_modes_match(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    return normalize_runtime_id(left) == normalize_runtime_id(right)
+
+
+def _session_artifact_spool_path() -> Path | None:
+    raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _resolve_path(path: Path) -> Path:
+    try:
+        return path.resolve(strict=False)
+    except OSError:
+        return path
+
+
+def _default_artifacts_dir_requested(raw_artifacts_dir: str) -> bool:
+    raw = str(raw_artifacts_dir or "").strip()
+    if not raw:
+        return True
+    candidate = Path(raw)
+    return not candidate.is_absolute() and candidate.parts == ("artifacts",)
+
+
+def _artifacts_dir_from_task_context_path(path: Path) -> Path | None:
+    resolved = _resolve_path(path)
+    if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
+        return resolved.parent
+    return None
+
+
+def _looks_like_parent_run_scope(value: str) -> bool:
+    if re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        value,
+    ):
+        return True
+    return bool(re.fullmatch(r"(?:mm:|task-)[A-Za-z0-9_.:-]+", value))
+
+
+def _stable_scope_from_path(path: Path) -> str:
+    resolved = _resolve_path(path)
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:24]
+    return f"path:{digest}"
+
+
+def _parent_run_scope_from_artifacts_dir(path: Path) -> str | None:
+    resolved = _resolve_path(path)
+    if resolved.name != "artifacts":
+        return _stable_scope_from_path(resolved)
+
+    parent_name = resolved.parent.name
+    if not parent_name:
+        return _stable_scope_from_path(resolved)
+    if _looks_like_parent_run_scope(parent_name):
+        return parent_name
+    return _stable_scope_from_path(resolved.parent)
+
+
+def _parent_run_scope(task_context_path: str | None = None) -> str | None:
+    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+        value = _runtime_text(os.getenv(env_key))
+        if value:
+            return value
+
+    spool_path = _session_artifact_spool_path()
+    if spool_path is not None:
+        return _parent_run_scope_from_artifacts_dir(spool_path)
+
+    for candidate in _repo_context_candidates(task_context_path):
+        artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
+        if artifacts_dir is not None:
+            return _parent_run_scope_from_artifacts_dir(artifacts_dir)
+    return None
+
+
+def _resolve_artifacts_dir(
+    raw_artifacts_dir: str,
+    task_context_path: str | None = None,
+) -> Path:
+    raw = str(raw_artifacts_dir or "").strip()
+    if not _default_artifacts_dir_requested(raw):
+        return Path(raw)
+
+    spool_path = _session_artifact_spool_path()
+    if spool_path is not None:
+        return spool_path
+
+    for candidate in _repo_context_candidates(task_context_path):
+        artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
+        if artifacts_dir is not None:
+            return artifacts_dir
+
+    return Path(raw or "artifacts")
+
+
+def _child_idempotency_key(
+    *,
+    batch_scope: str | None,
+    repo: str,
+    pr_number: int | str,
+    branch: str,
+) -> str | None:
+    scope = _runtime_text(batch_scope)
+    if not scope:
+        return None
+
+    components = {
+        "scope": scope,
+        "repo": repo,
+        "pr": str(pr_number),
+        "branch": branch,
+    }
+    canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    key = f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
+    if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
+        raise RuntimeError("generated child idempotency key exceeds storage limit")
+    return key
+
+
 def _load_parent_runtime_selection(
     task_context_path: str | None = None,
 ) -> RuntimeSelection | None:
@@ -302,13 +431,28 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
-    runtime_provider_profile = _runtime_text(getattr(args, "runtime_provider_profile", None))
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
+    runtime_execution_profile_ref = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_REF")
+    )
+    runtime_execution_profile_runtime = _runtime_text(
+        os.getenv("MOONMIND_EXECUTION_PROFILE_RUNTIME")
+    )
+    if runtime_mode is None and runtime_execution_profile_ref:
+        runtime_mode = _normalize_runtime_mode(runtime_execution_profile_runtime)
     if runtime_model is None and inherited is not None:
         runtime_model = inherited.model
     if runtime_effort is None and inherited is not None:
         runtime_effort = inherited.effort
     if runtime_provider_profile is None and inherited is not None:
         runtime_provider_profile = inherited.provider_profile
+    if runtime_provider_profile is None and _runtime_modes_match(
+        runtime_mode,
+        runtime_execution_profile_runtime,
+    ):
+        runtime_provider_profile = runtime_execution_profile_ref
 
     return RuntimeSelection(
         mode=runtime_mode,
@@ -328,6 +472,7 @@ def _build_queue_request(
     max_iterations: int,
     priority: int,
     max_attempts: int,
+    batch_scope: str | None = None,
     skill_version: str = "1.0",
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
@@ -339,12 +484,13 @@ def _build_queue_request(
     if runtime.effort:
         runtime_payload["effort"] = runtime.effort
     if runtime.provider_profile:
-        runtime_payload["providerProfile"] = runtime.provider_profile
+        runtime_payload["executionProfileRef"] = runtime.provider_profile
 
     payload_dict: dict[str, Any] = {
         "repository": repo,
         "requiredCapabilities": ["gh"],
         "task": {
+            "title": branch,
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             "skill": {
                 "name": "pr-resolver",
@@ -364,6 +510,14 @@ def _build_queue_request(
             "publish": {"mode": publish_mode},
         },
     }
+    idempotency_key = _child_idempotency_key(
+        batch_scope=batch_scope,
+        repo=repo,
+        pr_number=pr_number,
+        branch=branch,
+    )
+    if idempotency_key:
+        payload_dict["idempotencyKey"] = idempotency_key
 
     if runtime.mode:
         payload_dict["targetRuntime"] = runtime.mode
@@ -492,7 +646,15 @@ async def _submit_jobs_via_http(
                 response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
-                job_id = str(data.get("taskId", "")) or "(unknown)"
+                job_id = (
+                    str(
+                        data.get("workflowId")
+                        or data.get("taskId")
+                        or data.get("id")
+                        or ""
+                    )
+                    or "(unknown)"
+                )
                 created.append(
                     {
                         "pr": submission.pr_number,
@@ -511,55 +673,10 @@ async def _submit_jobs_via_http(
     return created, errors
 
 
-async def _submit_jobs_via_db(
-    queue_requests: list[JobSubmission],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Fallback: submit jobs directly to the DB queue (skips Temporal routing)."""
-    from api_service.db.base import get_async_session_context
-    from moonmind.workflows import get_agent_queue_service
-
-    created: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    async with get_async_session_context() as session:
-        service = get_agent_queue_service(session)
-        for submission in queue_requests:
-            request = submission.queue_request
-            payload = request["payload"]
-            queue_type = str(request["type"])
-            priority = int(request.get("priority", 0))
-            max_attempts = int(request.get("maxAttempts", 3))
-            
-            kwargs = {
-                "job_type": queue_type,
-                "payload": payload,
-                "priority": priority,
-                "max_attempts": max_attempts,
-            }
-
-            try:
-                job = await service.create_job(**kwargs)
-                created.append(
-                    {
-                        "pr": submission.pr_number,
-                        "branch": submission.branch,
-                        "jobId": str(job.id),
-                    }
-                )
-            except Exception as exc:
-                errors.append(
-                    {
-                        "pr": submission.pr_number,
-                        "branch": submission.branch,
-                        "error": str(exc),
-                    }
-                )
-    return created, errors
-
-
 async def _submit_jobs(
     queue_requests: list[JobSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Submit jobs via the MoonMind HTTP API (Temporal-aware), with DB fallback."""
+    """Submit jobs through the MoonMind Temporal execution API."""
     moonmind_url = str(os.getenv("MOONMIND_URL", "")).strip()
     if moonmind_url:
         worker_token = _read_worker_token()
@@ -568,12 +685,19 @@ async def _submit_jobs(
             moonmind_url=moonmind_url,
             worker_token=worker_token,
         )
-    # Fallback for environments without a running API (e.g. direct invocation).
-    logger.warning(
-        "MOONMIND_URL is not set; submitting jobs directly to the DB queue. "
-        "This bypasses Temporal routing and should only be used in dev/test environments."
+
+    message = (
+        "MOONMIND_URL is not set; batch-pr-resolver requires the MoonMind "
+        "Temporal execution API and cannot submit via the removed legacy DB queue."
     )
-    return await _submit_jobs_via_db(queue_requests)
+    return [], [
+        {
+            "pr": submission.pr_number,
+            "branch": submission.branch,
+            "error": message,
+        }
+        for submission in queue_requests
+    ]
 
 
 def _build_request_records(
@@ -602,6 +726,7 @@ def _build_request_records(
             return 0
 
     open_prs_sorted = sorted(open_prs, key=_get_pr_number)
+    batch_scope = _parent_run_scope(args.task_context_path)
 
     for pr in open_prs_sorted:
         number = pr.get("number")
@@ -619,6 +744,7 @@ def _build_request_records(
             max_iterations=args.max_iterations,
             priority=args.priority,
             max_attempts=args.max_attempts,
+            batch_scope=batch_scope,
             skill_version=args.skill_version,
         )
         queue_requests.append(
@@ -655,7 +781,7 @@ async def main() -> int:
             "mode": runtime.mode,
             "model": runtime.model,
             "effort": runtime.effort,
-            "providerProfile": runtime.provider_profile,
+            "executionProfileRef": runtime.provider_profile,
         },
         "requested": len(open_prs),
         "created": len(created),
@@ -666,7 +792,10 @@ async def main() -> int:
     if payload["created"] == 0:
         payload["message"] = "No matching PRs were queued."
 
-    artifacts_path = Path(args.artifacts_dir) / "batch_pr_resolver_result.json"
+    artifacts_path = (
+        _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
+        / "batch_pr_resolver_result.json"
+    )
     _write_artifacts(artifacts_path, payload)
 
     print(json.dumps(payload, indent=2))

@@ -369,7 +369,7 @@ Set the theme class before CSS paints by adding a tiny inline script in `<head>`
 
 ### 9.2 Typography
 
-- Continue `IBM Plex Sans` for body, `Barlow Condensed` for headline, and `IBM Plex Mono` for logs/code.
+- Continue `IBM Plex Sans` for body/headlines and `IBM Plex Mono` for logs/code.
 - Slight uppercase + tracking for overline labels only.
 - Avoid thin weights on glass backgrounds.
 

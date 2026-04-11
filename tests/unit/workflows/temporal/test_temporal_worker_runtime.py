@@ -164,6 +164,35 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/my-feature-branch"
+
+
+def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "PR-Resolver",
+                    "version": "1.0",
+                    "inputs": {"branch": "fix/from-tool-inputs"},
+                },
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert '"pr": "fix/from-tool-inputs"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/from-tool-inputs"
 
 
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
@@ -204,12 +233,45 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
 
-    store, supervisor, _launcher, _session_controller = _build_agent_runtime_deps()
+    (
+        store,
+        supervisor,
+        _launcher,
+        _session_controller,
+        workload_registry,
+        workload_launcher,
+    ) = _build_agent_runtime_deps()
 
     assert store.store_root == tmp_path / "managed_runs"
     assert supervisor._log_streamer._storage._root == artifacts_root
+    assert workload_registry.workspace_root == tmp_path
+    assert workload_launcher is not None
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
+
+
+def test_build_agent_runtime_deps_reuses_global_session_network(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
+    monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:5000")
+
+    (
+        _store,
+        _supervisor,
+        _launcher,
+        session_controller,
+        _workload_registry,
+        _workload_launcher,
+    ) = _build_agent_runtime_deps()
+
+    assert session_controller._network_name == "shared-moonmind-network"
+    assert session_controller._moonmind_url == "http://moonmind-api:5000"
 
 
 def _make_snapshot():
@@ -679,11 +741,15 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     run_launcher = MagicMock()
     session_controller = MagicMock()
     session_controller.reconcile = AsyncMock(return_value=[])
+    workload_registry = MagicMock()
+    workload_launcher = MagicMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
         run_launcher,
         session_controller,
+        workload_registry,
+        workload_launcher,
     )
     @asynccontextmanager
     async def _fake_session_context():
@@ -787,11 +853,15 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     run_launcher = MagicMock()
     session_controller = MagicMock()
     session_controller.reconcile = AsyncMock(return_value=[])
+    workload_registry = MagicMock()
+    workload_launcher = MagicMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
         run_launcher,
         session_controller,
+        workload_registry,
+        workload_launcher,
     )
 
     @asynccontextmanager
@@ -827,6 +897,8 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         run_supervisor=run_supervisor,
         run_launcher=run_launcher,
         session_controller=session_controller,
+        workload_registry=workload_registry,
+        workload_launcher=workload_launcher,
     )
     mock_build_bindings.assert_called_once_with(
         fleet=AGENT_RUNTIME_FLEET,

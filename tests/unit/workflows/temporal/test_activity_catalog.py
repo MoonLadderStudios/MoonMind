@@ -14,6 +14,8 @@ from moonmind.workflows.temporal.activity_catalog import (
     LLM_TASK_QUEUE,
     SANDBOX_FLEET,
     SANDBOX_TASK_QUEUE,
+    AGENT_RUNTIME_FLEET,
+    AGENT_RUNTIME_TASK_QUEUE,
     TemporalActivityCatalogError,
     build_default_activity_catalog,
     manifest_ingest_activity_routes,
@@ -78,12 +80,19 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         catalog.resolve_activity("integration.jules.start").task_queue
         == INTEGRATIONS_TASK_QUEUE
     )
+    assert (
+        catalog.resolve_activity("workload.run").task_queue
+        == AGENT_RUNTIME_TASK_QUEUE
+    )
+    assert catalog.resolve_activity("workload.run").fleet == AGENT_RUNTIME_FLEET
+    assert catalog.resolve_activity("workload.run").capability_class == "docker_workload"
 
     fleets = {fleet.fleet: fleet for fleet in catalog.fleets}
     assert fleets[ARTIFACTS_FLEET].task_queues == (ARTIFACTS_TASK_QUEUE,)
     assert fleets[LLM_FLEET].task_queues == (LLM_TASK_QUEUE,)
     assert fleets[SANDBOX_FLEET].task_queues == (SANDBOX_TASK_QUEUE,)
     assert fleets[INTEGRATIONS_FLEET].task_queues == (INTEGRATIONS_TASK_QUEUE,)
+    assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
 
 def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
@@ -91,6 +100,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
 
     llm_route = catalog.resolve_skill(_skill_definition(capabilities=["llm"]))
     sandbox_route = catalog.resolve_skill(_skill_definition(capabilities=["sandbox"]))
+    docker_workload_route = catalog.resolve_skill(
+        _skill_definition(capabilities=["docker_workload"])
+    )
     integration_route = catalog.resolve_skill(
         _skill_definition(capabilities=["integration:jules"])
     )
@@ -102,6 +114,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     assert llm_route.task_queue == LLM_TASK_QUEUE
     assert sandbox_route.fleet == SANDBOX_FLEET
     assert sandbox_route.task_queue == SANDBOX_TASK_QUEUE
+    assert docker_workload_route.fleet == AGENT_RUNTIME_FLEET
+    assert docker_workload_route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert docker_workload_route.capability_class == "docker_workload"
     assert integration_route.fleet == INTEGRATIONS_FLEET
     assert integration_route.task_queue == INTEGRATIONS_TASK_QUEUE
     assert artifact_route.fleet == ARTIFACTS_FLEET

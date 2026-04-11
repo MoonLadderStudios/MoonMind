@@ -291,8 +291,10 @@ def test_react_shell_places_operator_metadata_in_title_row(
 
 def test_react_shell_hides_title_row_metadata_when_build_id_is_not_configured(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("MOONMIND_BUILD_ID", raising=False)
+    monkeypatch.setenv("MOONMIND_BUILD_ID_PATH", str(tmp_path / "missing-build-id"))
 
     with _client_with_mock_service(monkeypatch) as (client, _mock_service):
         response = client.get("/tasks/list")

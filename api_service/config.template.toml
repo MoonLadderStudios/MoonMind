@@ -26,3 +26,10 @@ disable_task_template_catalog = false
 # Rollout scope for the session-aware Live Logs timeline contract:
 # off | internal | codex_managed | all_managed
 live_logs_session_timeline_rollout = "off"
+# Expose the Create-page Jira browser contract. This is separate from
+# ATLASSIAN_JIRA_TOOL_ENABLED so trusted tools can be enabled without showing
+# Jira controls in the browser UI.
+jira_create_page_enabled = false
+jira_create_page_default_project_key = ""
+jira_create_page_default_board_id = ""
+jira_create_page_remember_last_board_in_session = true

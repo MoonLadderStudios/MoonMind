@@ -11,6 +11,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    _MAX_SUMMARY_CHARS,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
@@ -516,6 +517,347 @@ async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_
     assert fetch_payload["publish_mode"] == "pr"
     assert fetch_payload["target_branch"] == "main"
     assert fetch_payload["head_branch"] == "feature/recover-detached-head"
+
+
+async def test_agent_run_managed_session_start_runtime_error_returns_failed_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+    manager_signals: list[tuple[str, Any]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError(
+                "ManagedAgentAdapter should not be used for managedSession requests"
+            )
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            raise RuntimeError(
+                "codex app-server request thread/resume failed: "
+                "{'code': -32600, 'message': 'no rollout found for thread id thread-1'}"
+            )
+
+        async def status(self, run_id: str) -> AgentRunStatus:
+            raise AssertionError("status should not be polled after start failure")
+
+        async def fetch_result(self, run_id: str) -> AgentRunResult:
+            raise AssertionError("fetch_result should not run after start failure")
+
+        async def cancel(self, run_id: str) -> AgentRunStatus:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId="codex",
+                status="canceled",
+            )
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            manager_signals.append((signal_name, payload))
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        run.slot_assigned_event.set()
+        run._assigned_profile_id = execution_profile_ref or "codex-default"
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        return 1
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "ManagedAgentAdapter",
+        _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "CodexSessionAdapter",
+        _FakeCodexSessionAdapter,
+    )
+    monkeypatch.setattr(
+        run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal
+    )
+    monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
+
+    result = await run.run(_managed_session_request())
+
+    assert result.failure_class == "execution_error"
+    assert "no rollout found for thread id" in result.summary
+    assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
+    assert result.metadata["childRunId"] == "run-1"
+    assert result.metadata["taskRunId"] == "wf-task-1"
+    assert [name for name, _payload in routed_calls] == ["agent_runtime.publish_artifacts"]
+    assert manager_signals[-1] == (
+        "release_slot",
+        {
+            "requester_workflow_id": "wf-agent-run-1",
+            "profile_id": "codex-default",
+        },
+    )
+
+
+async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError(
+                "ManagedAgentAdapter should not be used for managedSession requests"
+            )
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            raise RuntimeError("managed start failed: " + ("x" * 5000))
+
+        async def status(self, run_id: str) -> AgentRunStatus:
+            raise AssertionError("status should not be polled after start failure")
+
+        async def fetch_result(self, run_id: str) -> AgentRunResult:
+            raise AssertionError("fetch_result should not run after start failure")
+
+        async def cancel(self, run_id: str) -> AgentRunStatus:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId="codex",
+                status="canceled",
+            )
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        run.slot_assigned_event.set()
+        run._assigned_profile_id = execution_profile_ref or "codex-default"
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        return 1
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "ManagedAgentAdapter",
+        _FakeManagedAgentAdapter,
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "CodexSessionAdapter",
+        _FakeCodexSessionAdapter,
+    )
+    monkeypatch.setattr(
+        run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal
+    )
+    monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
+
+    result = await run.run(_managed_session_request())
+
+    assert result.failure_class == "execution_error"
+    assert result.summary is not None
+    assert len(result.summary) == _MAX_SUMMARY_CHARS
+    assert result.summary.endswith("...")
+    assert result.summary.startswith("managed start failed: ")
+
+
+async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    ensure_profile_refs: list[str | None] = []
+    manager_signals: list[tuple[str, dict[str, Any]]] = []
+    fetch_results = [
+        AgentRunResult(
+            failureClass="execution_error",
+            providerErrorCode="provider_capacity",
+            retryRecommendation="retry_after_cooldown",
+            summary="provider capacity",
+        ),
+        AgentRunResult(summary="Recovered on fallback profile."),
+    ]
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeManagedAgentAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError(
+                "ManagedAgentAdapter should not be used for managedSession requests"
+            )
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            return AgentRunHandle(
+                runId=f"managed-session-run-{len(ensure_profile_refs)}",
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="completed",
+                startedAt=agent_run_module.workflow.now(),
+            )
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: dict[str, Any]) -> None:
+            manager_signals.append((signal_name, payload))
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+    ) -> _FakeManagerHandle:
+        ensure_profile_refs.append(execution_profile_ref)
+        run.slot_assigned_event.set()
+        run._assigned_profile_id = (
+            "codex_openrouter_qwen36_plus"
+            if len(ensure_profile_refs) == 1
+            else "codex-default"
+        )
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        run._profile_snapshots = {
+            "codex_openrouter_qwen36_plus": {
+                "cooldown_after_429_seconds": 0,
+            },
+            "codex-default": {
+                "cooldown_after_429_seconds": 0,
+            },
+        }
+        return 2
+
+    async def fake_fetch_managed_result(**_kwargs: Any) -> AgentRunResult:
+        return fetch_results.pop(0)
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(agent_run_module, "ManagedAgentAdapter", _FakeManagedAgentAdapter)
+    monkeypatch.setattr(agent_run_module, "CodexSessionAdapter", _FakeCodexSessionAdapter)
+    monkeypatch.setattr(run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal)
+    monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
+    monkeypatch.setattr(run, "_fetch_managed_result", fake_fetch_managed_result)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
+
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": None}
+    )
+
+    result = await run.run(request)
+
+    assert result.summary == "Recovered on fallback profile."
+    assert ensure_profile_refs == [None, None]
+    assert manager_signals[:2] == [
+        (
+            "report_cooldown",
+            {
+                "profile_id": "codex_openrouter_qwen36_plus",
+                "cooldown_seconds": 0,
+            },
+        ),
+        (
+            "release_slot",
+            {
+                "requester_workflow_id": "wf-agent-run-1",
+                "profile_id": "codex_openrouter_qwen36_plus",
+            },
+        ),
+    ]
 
 
 async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(

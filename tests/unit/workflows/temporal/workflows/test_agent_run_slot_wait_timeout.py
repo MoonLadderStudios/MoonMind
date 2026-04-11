@@ -12,6 +12,7 @@ import inspect
 import textwrap
 
 from moonmind.workflows.temporal.workflows.agent_run import (
+    MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID,
     MoonMindAgentRun,
     _SLOT_WAIT_TIMEOUT_SECONDS,
     _SLOT_WAIT_MAX_RESETS,
@@ -115,3 +116,45 @@ class TestSlotWaitRetryBehavior:
             "MoonMindAgentRun must have _reset_and_request_slot method "
             "for resetting a stuck manager during slot acquisition"
         )
+
+    def test_slot_timeout_inspects_manager_before_reset(self):
+        """A responsive manager means the run is waiting on capacity, not a reset."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert "MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID" in source
+        assert (
+            MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID
+            == "agent-run-slot-wait-manager-inspection-v1"
+        )
+        assert "provider_profile.manager_state" in inspect.getsource(
+            MoonMindAgentRun._manager_state_for_slot_wait
+        )
+        assert source.index("_manager_state_for_slot_wait") < source.index(
+            "_reset_and_request_slot"
+        )
+        assert "re-requesting without reset" in source
+
+    def test_reset_and_request_slot_uses_ensure_signal_fallback(self):
+        """The reset path must tolerate the fresh-manager signal race."""
+        source = inspect.getsource(MoonMindAgentRun._reset_and_request_slot)
+
+        assert "_ensure_manager_and_signal" in source
+        assert "manager_handle.signal(\"request_slot\"" not in source
+
+    def test_slot_timeout_probe_failure_falls_back_to_reset(self):
+        """Manager inspection errors must not fail the AgentRun timeout path."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert "except CancelledError:" in source
+        assert "falling back to reset path" in source
+        assert 'manager_state = {"running": False}' in source
+
+    def test_healthy_manager_does_not_duplicate_pending_request(self):
+        """If this workflow is already pending, timeout recovery must not re-signal."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+        pending_index = source.index('manager_state.get("requester_pending") is True')
+        rerequest_index = source.index("re-requesting without reset")
+
+        assert pending_index < rerequest_index
+        assert "continuing without reset or duplicate request" in source
+        assert "requester_workflow_id=workflow.info().workflow_id" in source

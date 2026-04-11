@@ -147,8 +147,15 @@ INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 # Replay-stable patch id for task-scoped Codex terminate activity+signal finalization.
 RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
-# Replay-stable patch id for task-scoped Codex terminate child-workflow updates.
+# Replay-stable patch id for the v2 task-scoped Codex termination path. The
+# identifier says "update" for in-flight history continuity, but current
+# Temporal external workflow handles expose the session control surface by signal.
 RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
+# Replay-stable patch id for task-scoped Codex termination through the
+# AgentSession update handler. This path executes the remote terminate activity.
+RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
+    "run-task-scoped-session-termination-v3"
+)
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
@@ -2114,7 +2121,8 @@ class MoonMindRunWorkflow:
                     ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
                 )
                 head_branch = (
-                    agent_outputs.get("branch")
+                    agent_outputs.get("push_branch")
+                    or agent_outputs.get("branch")
                     or agent_outputs.get("targetBranch")
                     or ws.get("targetBranch")
                     or ws.get("branch")
@@ -2303,17 +2311,19 @@ class MoonMindRunWorkflow:
         return request.model_copy(update={"managed_session": binding})
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
-        handle = self._codex_session_handle
         binding = self._codex_session_binding
         try:
-            if handle is not None and binding is not None:
-                if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+            if binding is not None:
+                session_handle = workflow.get_external_workflow_handle(
+                    binding.workflow_id
+                )
+                if workflow.patched(
+                    RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
+                ):
                     try:
-                        await handle.execute_update(
+                        await session_handle.execute_update(
                             "TerminateSession",
-                            {
-                                "reason": reason,
-                            },
+                            {"reason": reason},
                         )
                     except Exception as exc:
                         self._get_logger().warning(
@@ -2333,13 +2343,21 @@ class MoonMindRunWorkflow:
                                 binding.session_id,
                                 activity_exc,
                             )
-                        await handle.signal(
+                        await session_handle.signal(
                             "control_action",
                             {
                                 "action": "terminate_session",
                                 "reason": reason,
                             },
                         )
+                elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+                    await session_handle.signal(
+                        "control_action",
+                        {
+                            "action": "terminate_session",
+                            "reason": reason,
+                        },
+                    )
                 elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
                     try:
                         await self._terminate_task_scoped_session_via_activity(
@@ -2353,7 +2371,7 @@ class MoonMindRunWorkflow:
                             binding.session_id,
                             exc,
                         )
-                    await handle.signal(
+                    await session_handle.signal(
                         "control_action",
                         {
                             "action": "terminate_session",
@@ -2361,7 +2379,7 @@ class MoonMindRunWorkflow:
                         },
                     )
                 else:
-                    await handle.signal(
+                    await session_handle.signal(
                         "control_action",
                         {
                             "action": "terminate_session",
@@ -3855,10 +3873,16 @@ class MoonMindRunWorkflow:
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
         if new_state == "awaiting_slot":
+            self._waiting_reason = "provider_profile_slot"
+            self._attention_required = False
             self._set_state(STATE_AWAITING_SLOT, summary=reason)
         elif new_state == "launching":
+            self._waiting_reason = None
+            self._attention_required = False
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
+            self._waiting_reason = None
+            self._attention_required = False
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
         elif new_state in ("completed", "failed", "canceled", "timed_out"):
             # Child has reached a terminal state. If we have an assigned profile

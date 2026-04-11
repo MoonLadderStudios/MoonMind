@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import runpy
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,27 @@ def _load_module() -> dict[str, Any]:
             / "batch_pr_resolver.py"
         )
     )
+
+
+def _expected_child_idempotency_key(
+    *,
+    batch_scope: str,
+    repo: str,
+    pr_number: int | str,
+    branch: str,
+) -> str:
+    canonical = json.dumps(
+        {
+            "scope": batch_scope,
+            "repo": repo,
+            "pr": str(pr_number),
+            "branch": branch,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
 
 
 def test_is_local_head_uses_cross_repository_flag():
@@ -84,10 +107,79 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["mode"] == "codex"
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
-    assert task["runtime"]["providerProfile"] == "test-profile"
+    assert task["runtime"]["executionProfileRef"] == "test-profile"
+    assert "providerProfile" not in task["runtime"]
+    assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
+
+
+def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+    runtime_selection = module["RuntimeSelection"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/example",
+        runtime=runtime_selection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+        batch_scope="mm:parent-run",
+    )
+
+    assert request["payload"]["idempotencyKey"] == _expected_child_idempotency_key(
+        batch_scope="mm:parent-run",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/example",
+    )
+
+
+def test_child_idempotency_key_is_fixed_length_and_collision_resistant() -> None:
+    module = _load_module()
+    child_idempotency_key = module["_child_idempotency_key"]
+
+    common_prefix = "feature/" + ("very-long-branch-" * 20)
+    key_one = child_idempotency_key(
+        batch_scope="mm:parent-run",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch=f"{common_prefix}one",
+    )
+    key_two = child_idempotency_key(
+        batch_scope="mm:parent-run",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch=f"{common_prefix}two",
+    )
+
+    assert key_one != key_two
+    assert len(key_one) <= 128
+    assert len(key_two) <= 128
+
+
+def test_build_queue_request_omits_idempotency_without_batch_scope() -> None:
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+    runtime_selection = module["RuntimeSelection"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/example",
+        runtime=runtime_selection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+
+    assert "idempotencyKey" not in request["payload"]
 
 
 def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
@@ -111,6 +203,99 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     # skill.name shape.  Publish and skill identity assertions are covered by the
     # dedicated contract tests below.
     assert request["payload"]["task"]["publish"]["mode"] == "none"
+
+
+def test_resolve_artifacts_dir_prefers_managed_session_spool(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    resolve_artifacts_dir = module["_resolve_artifacts_dir"]
+
+    spool = tmp_path / "mm-parent" / "artifacts"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    assert resolve_artifacts_dir("artifacts") == spool
+
+
+def test_resolve_artifacts_dir_treats_default_aliases_as_managed_spool(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    resolve_artifacts_dir = module["_resolve_artifacts_dir"]
+
+    spool = tmp_path / "mm-parent" / "artifacts"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    assert resolve_artifacts_dir("./artifacts") == spool
+    assert resolve_artifacts_dir("artifacts/") == spool
+
+
+def test_resolve_artifacts_dir_respects_explicit_path(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    resolve_artifacts_dir = module["_resolve_artifacts_dir"]
+
+    explicit = tmp_path / "custom-artifacts"
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        str(tmp_path / "mm-parent" / "artifacts"),
+    )
+
+    assert resolve_artifacts_dir(str(explicit)) == explicit
+
+
+def test_parent_run_scope_uses_managed_session_spool(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    parent_run_scope = module["_parent_run_scope"]
+
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        str(tmp_path / "mm:parent-run" / "artifacts"),
+    )
+
+    assert parent_run_scope() == "mm:parent-run"
+
+
+def test_parent_run_scope_hashes_nonstandard_session_spool_path(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    parent_run_scope = module["_parent_run_scope"]
+    stable_scope_from_path = module["_stable_scope_from_path"]
+
+    spool = tmp_path / "custom-spool" / "output"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    assert parent_run_scope() == stable_scope_from_path(spool)
+
+
+def test_parent_run_scope_reuses_task_context_artifacts_helper(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    parent_run_scope = module["_parent_run_scope"]
+    for env_key in (
+        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_RUN_ID",
+        "TASK_RUN_ID",
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+
+    task_context = tmp_path / "task-parent" / "artifacts" / "task_context.json"
+    task_context.parent.mkdir(parents=True)
+    task_context.write_text("{}", encoding="utf-8")
+
+    assert parent_run_scope(str(task_context)) == "task-parent"
 
 
 def test_load_parent_repository_reads_task_context(tmp_path: Path):
@@ -240,6 +425,59 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     assert runtime.provider_profile == "inherited-profile"
 
 
+def test_resolve_runtime_selection_uses_execution_profile_env(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": None,
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "codex_cli"
+    assert runtime.provider_profile == "codex_default"
+
+
+def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": "gemini_cli",
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "gemini_cli"
+    assert runtime.provider_profile is None
+
+
 def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Path):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
@@ -271,8 +509,10 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
-    
+
     monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
     args = type(
         "Args",
@@ -389,6 +629,48 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     assert call_path == "/api/executions"
 
 
+def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
+    """The Temporal executions API returns workflowId rather than legacy taskId."""
+    module = _load_module()
+    submit_jobs_via_http = module["_submit_jobs_via_http"]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(
+        return_value={"workflowId": "mm:wf-123", "status": "queued"}
+    )
+
+    mock_post = AsyncMock(return_value=fake_response)
+
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, path: str, **kwargs: Any) -> Any:
+            return await mock_post(path, **kwargs)
+
+    with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+        submission = _make_submission(module)
+        created, errors = asyncio.run(
+            submit_jobs_via_http(
+                [submission],
+                moonmind_url="http://api:5000",
+                worker_token=None,
+            )
+        )
+
+    assert errors == []
+    assert created[0]["jobId"] == "mm:wf-123"
+
+
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
     module = _load_module()
@@ -418,27 +700,22 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     assert errors == []
 
 
-def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
-    """_submit_jobs falls back to DB path and logs a warning when MOONMIND_URL is absent."""
+def test_submit_jobs_errors_when_no_url(monkeypatch: Any) -> None:
+    """The removed legacy DB queue fallback must not be used."""
     module = _load_module()
     submit_jobs = module["_submit_jobs"]
 
     monkeypatch.delenv("MOONMIND_URL", raising=False)
 
-    db_called = []
-
-    async def fake_db(requests: list) -> tuple:
-        db_called.append(True)
-        return [{"pr": 1, "branch": "b", "jobId": "y"}], []
-
     submission = _make_submission(module)
 
-    monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
     created, errors = asyncio.run(submit_jobs([submission]))
 
-    assert db_called == [True]
-    assert len(created) == 1
-    assert errors == []
+    assert created == []
+    assert len(errors) == 1
+    assert errors[0]["pr"] == 42
+    assert "MOONMIND_URL is not set" in errors[0]["error"]
+    assert "removed legacy DB queue" in errors[0]["error"]
 
 
 def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:

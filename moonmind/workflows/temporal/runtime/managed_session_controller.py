@@ -13,6 +13,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
+from urllib.parse import urlparse
 
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -56,6 +57,35 @@ _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 logger = logging.getLogger(__name__)
 
 
+def _managed_session_docker_network(
+    request_environment: Mapping[str, str] | None = None,
+) -> str | None:
+    """Return the Docker network managed session containers should join."""
+
+    for env_key in (
+        "MOONMIND_MANAGED_SESSION_DOCKER_NETWORK",
+        "MOONMIND_DOCKER_NETWORK",
+    ):
+        raw_value = os.environ.get(env_key)
+        if raw_value is None:
+            continue
+        value = raw_value.strip()
+        if value.lower() in {"", "none", "disabled", "off"}:
+            return None
+        return value
+
+    moonmind_url = ""
+    if request_environment is not None:
+        moonmind_url = str(request_environment.get("MOONMIND_URL") or "").strip()
+    if not moonmind_url:
+        moonmind_url = os.environ.get("MOONMIND_URL", "").strip()
+    if moonmind_url:
+        hostname = (urlparse(moonmind_url).hostname or "").strip().lower()
+        if hostname in {"api", "moonmind-api", "moonmind-api-1"}:
+            return "local-network"
+    return None
+
+
 class CommandRunner(Protocol):
     async def __call__(
         self,
@@ -63,6 +93,8 @@ class CommandRunner(Protocol):
         *,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
     ) -> tuple[int, str, str]:
         pass
 
@@ -72,13 +104,25 @@ async def _default_command_runner(
     *,
     input_text: str | None = None,
     env: dict[str, str] | None = None,
+    run_as_uid: int | None = None,
+    run_as_gid: int | None = None,
 ) -> tuple[int, str, str]:
+    subprocess_kwargs: dict[str, Any] = {}
+    geteuid = getattr(os, "geteuid", None)
+    if os.name == "posix" and callable(geteuid) and geteuid() == 0:
+        if run_as_uid is not None or run_as_gid is not None:
+            subprocess_kwargs["extra_groups"] = []
+        if run_as_uid is not None:
+            subprocess_kwargs["user"] = run_as_uid
+        if run_as_gid is not None:
+            subprocess_kwargs["group"] = run_as_gid
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE if input_text is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={**os.environ, **(env or {})},
+        **subprocess_kwargs,
     )
     stdout, stderr = await process.communicate(
         input_text.encode("utf-8") if input_text is not None else None
@@ -110,6 +154,8 @@ class DockerCodexManagedSessionController:
         workspace_volume_name: str,
         codex_volume_name: str,
         workspace_root: str,
+        network_name: str | None = None,
+        moonmind_url: str | None = None,
         session_store: ManagedSessionStore | None = None,
         session_supervisor: ManagedSessionSupervisor | Any | None = None,
         docker_binary: str = "docker",
@@ -125,6 +171,8 @@ class DockerCodexManagedSessionController:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
         self._workspace_root = workspace_root
+        self._network_name = str(network_name or "").strip() or None
+        self._moonmind_url = str(moonmind_url or "").strip() or None
         self._session_store = session_store
         self._session_supervisor = session_supervisor
         self._docker_binary = docker_binary
@@ -134,6 +182,16 @@ class DockerCodexManagedSessionController:
         self._turn_poll_interval_seconds = turn_poll_interval_seconds
         self._turn_poll_timeout_seconds = turn_poll_timeout_seconds
         self._command_runner = command_runner
+
+    @staticmethod
+    def _managed_session_user_command_kwargs() -> dict[str, int]:
+        geteuid = getattr(os, "geteuid", None)
+        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+            return {}
+        return {
+            "run_as_uid": _MANAGED_SESSION_CONTAINER_UID,
+            "run_as_gid": _MANAGED_SESSION_CONTAINER_GID,
+        }
 
     def _docker_env(self) -> dict[str, str]:
         env: dict[str, str] = {}
@@ -436,11 +494,21 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         extra_env: Mapping[str, str] | None = None,
+        run_as_managed_session_user: bool = False,
     ) -> tuple[str, str]:
         env = None
         if extra_env:
             env = {str(key): str(value) for key, value in extra_env.items()}
-        returncode, stdout, stderr = await self._command_runner(tuple(command), env=env)
+        command_kwargs = (
+            self._managed_session_user_command_kwargs()
+            if run_as_managed_session_user
+            else {}
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            tuple(command),
+            env=env,
+            **command_kwargs,
+        )
         if returncode != 0:
             rendered_command, rendered_detail = self._scrub_command_failure(
                 command,
@@ -455,7 +523,11 @@ class DockerCodexManagedSessionController:
         self,
         command: Sequence[str],
     ) -> tuple[str, str]:
-        return await self._run_host_command(command, extra_env=_GIT_COMMAND_LOCALE)
+        return await self._run_host_command(
+            command,
+            extra_env=_GIT_COMMAND_LOCALE,
+            run_as_managed_session_user=True,
+        )
 
     @staticmethod
     def _workspace_git_command(
@@ -476,9 +548,11 @@ class DockerCodexManagedSessionController:
         self,
         command: Sequence[str],
     ) -> tuple[int, str, str]:
+        command_kwargs = self._managed_session_user_command_kwargs()
         return await self._command_runner(
             tuple(command),
             env=dict(_GIT_COMMAND_LOCALE),
+            **command_kwargs,
         )
 
     async def _workspace_is_git_repository(self, *, workspace_path: Path) -> bool:
@@ -508,6 +582,7 @@ class DockerCodexManagedSessionController:
     ) -> None:
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         await self._remove_workspace_path(workspace_path=workspace_path)
+        self._normalize_container_path_owner(workspace_path.parent)
 
         from .launcher import ManagedRuntimeLauncher
 
@@ -567,6 +642,7 @@ class DockerCodexManagedSessionController:
                 request=request,
                 owned_paths=created_paths,
             )
+            self._normalize_container_path_ownership([workspace_path])
             if repository:
                 if not await self._workspace_is_git_repository(workspace_path=workspace_path):
                     await self._clone_workspace(
@@ -690,6 +766,14 @@ class DockerCodexManagedSessionController:
                 target_branch,
             )
         )
+
+    @staticmethod
+    def _normalize_container_path_owner(path: Path) -> None:
+        geteuid = getattr(os, "geteuid", None)
+        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+            return
+        if path.exists():
+            DockerCodexManagedSessionController._chown_path(path)
 
     @staticmethod
     def _normalize_container_path_ownership(paths: Sequence[Path]) -> None:
@@ -1091,22 +1175,36 @@ class DockerCodexManagedSessionController:
             _MANAGED_SESSION_CONTAINER_USER,
             "--mount",
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
-            "-e",
-            f"MOONMIND_SESSION_WORKSPACE_PATH={request.workspace_path}",
-            "-e",
-            f"MOONMIND_SESSION_WORKSPACE_STATE_PATH={request.session_workspace_path}",
-            "-e",
-            f"MOONMIND_SESSION_ARTIFACT_SPOOL_PATH={request.artifact_spool_path}",
-            "-e",
-            f"MOONMIND_SESSION_CODEX_HOME_PATH={request.codex_home_path}",
-            "-e",
-            f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
-            "-e",
-            f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
-            "-e",
-            "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
-            f"{request.turn_completion_timeout_seconds}",
         ]
+        session_environment = dict(request.environment)
+        if self._moonmind_url:
+            existing_moonmind_url = session_environment.get("MOONMIND_URL")
+            if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
+                session_environment["MOONMIND_URL"] = self._moonmind_url
+        docker_network = self._network_name or _managed_session_docker_network(
+            session_environment
+        )
+        if docker_network:
+            run_command.extend(["--network", docker_network])
+        run_command.extend(
+            [
+                "-e",
+                f"MOONMIND_SESSION_WORKSPACE_PATH={request.workspace_path}",
+                "-e",
+                f"MOONMIND_SESSION_WORKSPACE_STATE_PATH={request.session_workspace_path}",
+                "-e",
+                f"MOONMIND_SESSION_ARTIFACT_SPOOL_PATH={request.artifact_spool_path}",
+                "-e",
+                f"MOONMIND_SESSION_CODEX_HOME_PATH={request.codex_home_path}",
+                "-e",
+                f"MOONMIND_SESSION_IMAGE_REF={request.image_ref}",
+                "-e",
+                f"MOONMIND_SESSION_CONTROL_URL=docker-exec://{container_name}",
+                "-e",
+                "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS="
+                f"{request.turn_completion_timeout_seconds}",
+            ]
+        )
         auth_volume_path = str(
             request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
         ).strip()
@@ -1117,7 +1215,7 @@ class DockerCodexManagedSessionController:
                     self._volume_mount(self._codex_volume_name, auth_volume_path),
                 ]
             )
-        for key, value in sorted(request.environment.items()):
+        for key, value in sorted(session_environment.items()):
             run_command.extend(["-e", f"{key}={value}"])
         run_command.extend(
             [

@@ -54,6 +54,12 @@ logger = logging.getLogger(__name__)
 # Only the *key names* are propagated through workflow/activity payloads; the
 # values are injected at launch time by the agent-runtime activity worker.
 _SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GITHUB_TOKEN",)
+_RESERVED_MANAGED_LAUNCH_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "MOONMIND_EXECUTION_PROFILE_REF",
+        "MOONMIND_EXECUTION_PROFILE_RUNTIME",
+    }
+)
 
 _PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),
@@ -98,7 +104,7 @@ def build_managed_profile_launch_context(
 ) -> ManagedProfileLaunchContext:
     """Build deterministic launch metadata safe to compute in workflow code."""
 
-    del runtime_for_profile, workflow_id  # Reserved for activity-side shaping.
+    del workflow_id  # Reserved for activity-side shaping.
     credential_source = str(
         profile.get("credential_source") or default_credential_source
     ).strip() or default_credential_source
@@ -112,11 +118,16 @@ def build_managed_profile_launch_context(
     if account_label:
         delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = str(account_label)
 
+    profile_id = str(profile.get("profile_id") or "").strip()
+    profile_runtime = str(runtime_for_profile or "").strip()
+
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
         for key, value in runtime_env_overrides.items():
             ks = str(key).strip()
             if not ks:
+                continue
+            if ks in _RESERVED_MANAGED_LAUNCH_ENV_KEYS:
                 continue
             if _contains_sensitive_key(
                 {ks: value},
@@ -125,9 +136,14 @@ def build_managed_profile_launch_context(
                 continue
             delta_env_overrides[ks] = str(value) if value is not None else ""
 
+    if profile_id:
+        delta_env_overrides["MOONMIND_EXECUTION_PROFILE_REF"] = profile_id
+    if profile_runtime:
+        delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"] = profile_runtime
+
     passthrough_env_keys = list(_SECRET_ENV_PASSTHROUGH_KEYS)
     return ManagedProfileLaunchContext(
-        profile_id=str(profile.get("profile_id") or "").strip(),
+        profile_id=profile_id,
         credential_source=credential_source,
         delta_env_overrides=delta_env_overrides,
         passthrough_env_keys=passthrough_env_keys,
@@ -520,10 +536,16 @@ class ManagedAgentAdapter:
             record = self._run_store.load(run_id)
             if record is not None and record.status in TERMINAL_AGENT_RUN_STATES:
                 output_refs: list[str] = []
-                if record.log_artifact_ref:
-                    output_refs.append(record.log_artifact_ref)
-                if record.diagnostics_ref:
-                    output_refs.append(record.diagnostics_ref)
+                for ref in (
+                    record.log_artifact_ref,
+                    record.stdout_artifact_ref,
+                    record.stderr_artifact_ref,
+                    record.merged_log_artifact_ref,
+                    record.diagnostics_ref,
+                    record.observability_events_ref,
+                ):
+                    if ref and ref not in output_refs:
+                        output_refs.append(ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
                 if pr_resolver_expected:

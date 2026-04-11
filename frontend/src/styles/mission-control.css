@@ -17,6 +17,9 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
+  --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mm-font-headline: var(--mm-font-sans);
+  --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 .dark {
@@ -40,6 +43,10 @@
   box-sizing: border-box;
 }
 
+html {
+  font-family: var(--mm-font-sans);
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -52,7 +59,13 @@ body {
     rgb(var(--mm-bg));
   background-attachment: fixed;
   background-repeat: no-repeat;
-  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--mm-font-mono);
 }
 
 .dark body {
@@ -71,6 +84,7 @@ body {
   width: 100%;
   padding: 1.25rem 1rem 2.75rem;
   box-sizing: border-box;
+  container-type: inline-size;
 }
 
 /* Masthead + primary nav stay compact; table-first panels can widen below (see .panel--data-wide). */
@@ -82,21 +96,28 @@ body {
 }
 
 .masthead {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.4rem 1.6rem;
-  border-radius: 1rem;
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--mm-panel) / 0.82) 0%,
-      rgb(var(--mm-panel) / 0.65) 45%,
-      rgb(var(--mm-panel) / 0.78) 100%
-    );
-  box-shadow: var(--mm-shadow), 0 0 0 1px rgb(var(--mm-accent) / 0.08);
+  padding: 1.4rem 1rem;
+}
+
+.masthead::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+@supports (width: 1cqw) {
+  .masthead::after {
+    left: calc(50% - 50cqw - 1rem);
+    right: calc(50% - 50cqw - 1rem);
+  }
 }
 
 .masthead-copy {
@@ -140,14 +161,14 @@ body {
   white-space: nowrap;
   line-height: 1.2;
   margin-left: auto;
-  opacity: 0.45;
+  opacity: 0.7;
 }
 
 .version-badge-value {
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.62rem;
   font-weight: 400;
-  color: rgb(var(--mm-muted) / 0.8);
+  color: rgb(var(--mm-muted) / 0.98);
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
 }
@@ -168,14 +189,11 @@ body {
 
 h1 {
   margin: 0.35rem 0 0.2rem;
-  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
-  letter-spacing: 0.01em;
+  font-family: var(--mm-font-headline);
+  font-weight: 700;
+  letter-spacing: 0;
   font-size: clamp(1.7rem, 3vw, 2.55rem);
   line-height: 1;
-}
-
-.masthead-title-row h1 {
-  font-size: clamp(1.5rem, 2.4vw, 2.1rem);
 }
 
 .masthead-meta {
@@ -198,7 +216,7 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.75rem;
   color: rgb(var(--mm-muted));
   letter-spacing: 0.02em;
@@ -264,6 +282,12 @@ h1 {
   padding: 1rem;
   min-height: 320px;
   animation: panel-enter 220ms cubic-bezier(.2,.8,.2,1);
+}
+
+.panel:has(.queue-submit-form) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .panel.panel--data-wide {
@@ -1275,7 +1299,7 @@ button.secondary:hover {
 .live-logs-empty,
 .live-logs-legacy-viewer,
 .live-logs-viewer {
-  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.74rem;
   line-height: 1.45;
 }
@@ -1561,7 +1585,7 @@ button.secondary:hover {
 }
 
 .inline-code {
-  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-family: var(--mm-font-mono);
   background: rgb(var(--mm-panel) / 0.72);
   border-radius: 0.36rem;
   padding: 0.08rem 0.28rem;
@@ -1593,7 +1617,7 @@ button.secondary:hover {
   border-radius: 0.72rem;
   background: rgb(var(--mm-panel) / 0.72);
   color: rgb(var(--mm-ink));
-  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-family: var(--mm-font-mono);
   font-size: 0.8rem;
   line-height: 1.38;
   max-height: 320px;

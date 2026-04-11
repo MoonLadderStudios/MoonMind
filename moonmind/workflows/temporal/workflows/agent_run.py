@@ -15,6 +15,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        _MAX_SUMMARY_CHARS,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
@@ -22,6 +23,7 @@ with workflow.unsafe.imports_passed_through():
         ProfileResolutionError,
     )
     from moonmind.workflows.adapters.codex_session_adapter import (
+        CodexSessionRunFailedError,
         CodexSessionAdapter,
     )
     from moonmind.workflows.adapters.external_adapter_registry import (
@@ -37,6 +39,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
+    )
+    from moonmind.workflows.provider_failures import (
+        classify_provider_failure,
+        provider_error_requires_cooldown,
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -86,8 +92,6 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "unknown": RunStatus.awaiting_callback,
 }
 
-PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
-
 # Default workflow-level execution timeouts
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
 DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
@@ -102,6 +106,7 @@ MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
 MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-prepare-turn-instructions-activity-v1"
 )
+MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -342,7 +347,8 @@ class MoonMindAgentRun:
         retry_at = workflow.now() + timedelta(seconds=max(cooldown_seconds, 0))
         profile_fragment = f" on profile {profile_id}" if profile_id else ""
         return (
-            f"Gemini capacity exhausted for {runtime_id}{profile_fragment}; retry scheduled for "
+            "Managed provider capacity exhausted for "
+            f"{runtime_id}{profile_fragment}; retry scheduled for "
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
         )
 
@@ -387,6 +393,50 @@ class MoonMindAgentRun:
             metadata["moonmind"] = moonmind_payload
 
         return result.model_copy(update={"metadata": metadata})
+
+    def _managed_start_failure_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        error: Exception,
+    ) -> AgentRunResult:
+        summary = str(error).strip()
+        if len(summary) > _MAX_SUMMARY_CHARS:
+            summary = summary[: _MAX_SUMMARY_CHARS - 3] + "..."
+        if not summary:
+            summary = "Managed agent failed before execution started."
+        metadata: dict[str, Any] = {"phase": "start"}
+        if request.managed_session is not None:
+            metadata["managedSession"] = request.managed_session.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+        classification = classify_provider_failure(summary)
+        if classification is not None:
+            metadata["providerFailure"] = {
+                "providerErrorCode": classification.provider_error_code,
+                "retryRecommendation": classification.retry_recommendation,
+                "reason": classification.reason,
+            }
+        return AgentRunResult(
+            summary=summary,
+            failureClass=(
+                classification.failure_class
+                if classification is not None
+                else "execution_error"
+            ),
+            providerErrorCode=(
+                classification.provider_error_code
+                if classification is not None
+                else None
+            ),
+            retryRecommendation=(
+                classification.retry_recommendation
+                if classification is not None
+                else None
+            ),
+            metadata=metadata,
+        )
 
     @staticmethod
     def _uses_codex_session_adapter(request: AgentExecutionRequest) -> bool:
@@ -547,13 +597,18 @@ class MoonMindAgentRun:
             signal_payload["profile_selector"] = profile_selector
         if not request_slot:
             return manager_handle
-        try:
-            await manager_handle.signal("request_slot", signal_payload)
-        except ApplicationError as exc:
-            if "ExternalWorkflowExecutionNotFound" not in (
-                getattr(exc, "type", None) or str(exc)
-            ):
-                raise
+
+        for attempt in range(2):
+            try:
+                await manager_handle.signal("request_slot", signal_payload)
+                return manager_handle
+            except ApplicationError as exc:
+                if "ExternalWorkflowExecutionNotFound" not in (
+                    getattr(exc, "type", None) or str(exc)
+                ):
+                    raise
+                if attempt > 0:
+                    raise
             self._get_logger().warning(
                 "ProviderProfileManager %s not found, auto-starting via activity",
                 manager_id,
@@ -563,10 +618,29 @@ class MoonMindAgentRun:
                 {"runtime_id": runtime_id},
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
-            # Re-acquire handle and retry signal once.
+            # Re-acquire handle and retry the signal.
             manager_handle = workflow.get_external_workflow_handle(manager_id)
-            await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
+
+    async def _manager_state_for_slot_wait(
+        self,
+        *,
+        runtime_id: str,
+        requester_workflow_id: str,
+    ) -> dict[str, Any]:
+        """Fetch a compact manager-health snapshot before resetting it."""
+
+        result = await self._execute_routed_activity(
+            "provider_profile.manager_state",
+            {
+                "runtime_id": runtime_id,
+                "requester_workflow_id": requester_workflow_id,
+            },
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if isinstance(result, dict):
+            return result
+        return {"running": False, "error": "invalid_manager_state_payload"}
 
     async def _reset_and_request_slot(
         self,
@@ -590,18 +664,13 @@ class MoonMindAgentRun:
             {"runtime_id": runtime_id},
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
-        # Re-acquire handle and request slot from the fresh manager.
-        manager_handle = workflow.get_external_workflow_handle(manager_id)
-        signal_payload = {
-            "requester_workflow_id": workflow.info().workflow_id,
-            "runtime_id": runtime_id,
-        }
-        if execution_profile_ref:
-            signal_payload["execution_profile_ref"] = execution_profile_ref
-        if profile_selector:
-            signal_payload["profile_selector"] = profile_selector
-        await manager_handle.signal("request_slot", signal_payload)
-        return manager_handle
+        return await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=True,
+            execution_profile_ref=execution_profile_ref,
+            profile_selector=profile_selector,
+        )
 
     async def _sync_manager_profiles(
         self,
@@ -878,6 +947,7 @@ class MoonMindAgentRun:
         use_managed_status_activity = workflow.patched(
             MANAGED_STATUS_ACTIVITY_PATCH_ID
         )
+        requested_execution_profile_ref = request.execution_profile_ref
 
         try:
             while True:
@@ -974,12 +1044,64 @@ class MoonMindAgentRun:
                                         type="SlotAcquisitionTimeout",
                                         non_retryable=True,
                                     )
+                                selector_payload = request.profile_selector.model_dump(
+                                    by_alias=True,
+                                    exclude_none=True,
+                                )
+                                if workflow.patched(MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID):
+                                    try:
+                                        manager_state = await self._manager_state_for_slot_wait(
+                                            runtime_id=runtime_id,
+                                            requester_workflow_id=workflow.info().workflow_id,
+                                        )
+                                    except CancelledError:
+                                        raise
+                                    except Exception as exc:
+                                        self._get_logger().warning(
+                                            "Auth profile manager %s state inspection failed while %s waits for a slot; falling back to reset path: %s",
+                                            manager_id,
+                                            workflow.info().workflow_id,
+                                            exc,
+                                        )
+                                        manager_state = {"running": False}
+                                    if manager_state.get("running") is True:
+                                        if manager_state.get("requester_pending") is True:
+                                            self._get_logger().warning(
+                                                "Auth profile manager %s is responsive while %s already waits in the pending queue; continuing without reset or duplicate request",
+                                                manager_id,
+                                                workflow.info().workflow_id,
+                                            )
+                                            manager_handle = workflow.get_external_workflow_handle(
+                                                manager_id
+                                            )
+                                            await self._sync_manager_profiles(
+                                                manager_handle=manager_handle,
+                                                runtime_id=runtime_id,
+                                            )
+                                            continue
+                                        self._get_logger().warning(
+                                            "Auth profile manager %s is responsive while %s waits for a slot; re-requesting without reset",
+                                            manager_id,
+                                            workflow.info().workflow_id,
+                                        )
+                                        manager_handle = await self._ensure_manager_and_signal(
+                                            manager_id,
+                                            runtime_id,
+                                            request_slot=True,
+                                            execution_profile_ref=request.execution_profile_ref,
+                                            profile_selector=selector_payload,
+                                        )
+                                        await self._sync_manager_profiles(
+                                            manager_handle=manager_handle,
+                                            runtime_id=runtime_id,
+                                        )
+                                        continue
                                 self.slot_assigned_event.clear()
                                 manager_handle = await self._reset_and_request_slot(
-                                    manager_id, 
+                                    manager_id,
                                     runtime_id,
                                     execution_profile_ref=request.execution_profile_ref,
-                                    profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
+                                    profile_selector=selector_payload,
                                 )
                                 await self._sync_manager_profiles(
                                     manager_handle=manager_handle,
@@ -1248,20 +1370,43 @@ class MoonMindAgentRun:
                             type="ProfileResolutionError",
                             non_retryable=True,
                         ) from exc
-                    self.run_id = handle.run_id
-                    self.run_status = handle.status
-                    poll_interval = handle.poll_hint_seconds or 10
-                    if (
-                        uses_codex_session_adapter
-                        and handle.status in _TERMINAL_RUN_STATUSES
-                    ):
-                        self.final_result = await self._fetch_managed_result(
-                            request=request,
-                            adapter=adapter,
-                            uses_codex_session_adapter=uses_codex_session_adapter,
-                            use_managed_status_activity=use_managed_status_activity,
+                    except RuntimeError as exc:
+                        self._get_logger().warning(
+                            "Managed agent start failed",
+                            extra={
+                                "agent_id": request.agent_id,
+                                "workflow_id": workflow.info().workflow_id,
+                                "error": str(exc),
+                            },
                         )
+                        self.run_status = RunStatus.failed
+                        if (
+                            isinstance(exc, CodexSessionRunFailedError)
+                            and isinstance(exc.agent_run_result, AgentRunResult)
+                        ):
+                            self.final_result = exc.agent_run_result
+                        else:
+                            self.final_result = self._managed_start_failure_result(
+                                request=request,
+                                error=exc,
+                            )
                         skip_poll_and_fetch = True
+                        handle = None
+                    if handle is not None:
+                        self.run_id = handle.run_id
+                        self.run_status = handle.status
+                        poll_interval = handle.poll_hint_seconds or 10
+                        if (
+                            uses_codex_session_adapter
+                            and handle.status in _TERMINAL_RUN_STATUSES
+                        ):
+                            self.final_result = await self._fetch_managed_result(
+                                request=request,
+                                adapter=adapter,
+                                uses_codex_session_adapter=uses_codex_session_adapter,
+                                use_managed_status_activity=use_managed_status_activity,
+                            )
+                            skip_poll_and_fetch = True
 
                 elif request.agent_kind == "external":
                     # Validate adapter availability and resolve execution style.
@@ -1608,8 +1753,14 @@ class MoonMindAgentRun:
                                     }
                                 )
 
-                # Check for 429
-                if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
+                if (
+                    request.agent_kind == "managed"
+                    and manager_handle
+                    and provider_error_requires_cooldown(
+                        provider_error_code=self.final_result.provider_error_code,
+                        retry_recommendation=self.final_result.retry_recommendation,
+                    )
+                ):
                     if workflow.patched("gemini-429-cooldown-retry-signal"):
                         runtime_id = self._managed_runtime_id(request.agent_id)
                         profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
@@ -1650,6 +1801,7 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
+                        request.execution_profile_ref = requested_execution_profile_ref
                         self.run_status = RunStatus.awaiting_slot
                         continue # Retries loop
                     else:
@@ -1657,6 +1809,7 @@ class MoonMindAgentRun:
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                         self.completion_event.clear()
                         self.final_result = None
+                        request.execution_profile_ref = requested_execution_profile_ref
                         continue # Retries loop
 
                 # Not a 429 or external agent

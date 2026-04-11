@@ -1,13 +1,44 @@
-import { describe, it, expect } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
   defaultFormState,
+  ProviderProfilesManager,
   toFormState,
   parseCommandBehavior,
   parseTags,
   parsePriority,
   parseClearEnvKeys,
 } from './ProviderProfilesManager';
+import { renderWithClient } from '../../utils/test-utils';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  const onNotice = vi.fn();
+
+  renderWithClient(
+    <ProviderProfilesManager
+      profiles={profiles}
+      secretSlugs={['OPENAI_API_KEY']}
+      onNotice={onNotice}
+      queryClient={queryClient}
+      defaultTaskModelByRuntime={{}}
+    />,
+  );
+
+  return { onNotice, queryClient };
+}
 
 describe('defaultFormState', () => {
   it('includes advanced fields with correct defaults', () => {
@@ -206,5 +237,93 @@ describe('parseClearEnvKeys', () => {
 
   it('filters blank lines', () => {
     expect(parseClearEnvKeys('OPENAI_API_KEY\n\nOPENAI_BASE_URL')).toEqual(['OPENAI_API_KEY', 'OPENAI_BASE_URL']);
+  });
+});
+
+describe('ProviderProfilesManager form controls', () => {
+  const profile: ProviderProfile = {
+    profile_id: 'codex-default',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: { OPENAI_API_KEY: 'db://OPENAI_API_KEY' },
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: true,
+    is_default: true,
+  };
+
+  it('labels secret refs and resets create-form values', () => {
+    renderProviderProfilesManager();
+
+    const secretRefs = screen.getByLabelText('Secret refs (JSON object of string refs)');
+    expect(secretRefs.tagName).toBe('TEXTAREA');
+
+    const profileId = screen.getByLabelText(/Profile ID/) as HTMLInputElement;
+    fireEvent.change(profileId, { target: { value: 'draft-profile' } });
+    expect(profileId.value).toBe('draft-profile');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset form' }));
+    expect(profileId.value).toBe('');
+    expect(screen.queryByRole('button', { name: 'Cancel edit' })).toBeNull();
+  });
+
+  it('uses one cancel action while editing', () => {
+    renderProviderProfilesManager([profile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(screen.getAllByRole('button', { name: 'Cancel edit' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Reset form' })).toBeNull();
+  });
+
+  it('sends runtime default changes when updating an edited profile', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...profile, profile_id: 'codex-secondary', is_default: true }),
+    } as Response);
+    const secondaryProfile: ProviderProfile = {
+      ...profile,
+      profile_id: 'codex-secondary',
+      is_default: false,
+    };
+
+    renderProviderProfilesManager([profile, secondaryProfile]);
+
+    const editButtons = screen.getAllByRole('button', { name: 'Edit' });
+    const secondaryEditButton = editButtons[1];
+    if (!secondaryEditButton) {
+      throw new Error('Expected secondary provider profile edit button');
+    }
+    fireEvent.click(secondaryEditButton);
+    const runtimeDefaultCheckbox = screen.getByLabelText('Runtime default') as HTMLInputElement;
+    expect(runtimeDefaultCheckbox.checked).toBe(false);
+
+    fireEvent.click(runtimeDefaultCheckbox);
+    const submitButton = screen.getByRole('button', { name: 'Update provider profile' });
+    const form = submitButton.closest('form');
+    if (!form) {
+      throw new Error('Expected provider profile update form');
+    }
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/codex-secondary',
+        expect.objectContaining({
+          method: 'PATCH',
+        }),
+      );
+    });
+
+    const fetchCall = fetchSpy.mock.calls[0];
+    if (!fetchCall) {
+      throw new Error('Expected provider profile update request');
+    }
+    const [, requestInit] = fetchCall;
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload.is_default).toBe(true);
   });
 });

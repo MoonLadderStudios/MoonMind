@@ -49,6 +49,11 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
 )
+from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
+from moonmind.workloads.tool_bridge import (
+    build_dood_tool_definition_payload,
+    is_dood_tool,
+)
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -128,6 +133,7 @@ async def _run_command(cmd, **kwargs):
     return CmdRes(stdout)
 
 logger = getLogger(__name__)
+_NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
 PlanGenerator = Callable[
@@ -329,6 +335,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "provider_profile.list": ("artifacts", "provider_profile_list"),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
+    "provider_profile.manager_state": ("artifacts", "provider_profile_manager_state"),
     "provider_profile.verify_lease_holders": (
         "artifacts",
         "provider_profile_verify_lease_holders",
@@ -416,6 +423,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
+    "workload.run": ("agent_runtime", "workload_run"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
@@ -631,6 +639,9 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
 
 
 def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
+    if is_dood_tool(name):
+        return build_dood_tool_definition_payload(name=name, version=version)
+
     description = (
         "Execute generic runtime CLI instructions."
         if name == "auto"
@@ -2261,6 +2272,8 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        workload_launcher: Any | None = None,
+        workload_registry: Any | None = None,
         client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -2268,6 +2281,8 @@ class TemporalAgentRuntimeActivities:
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        self._workload_launcher = workload_launcher
+        self._workload_registry = workload_registry
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -2497,6 +2512,25 @@ class TemporalAgentRuntimeActivities:
         task.add_done_callback(self._supervision_tasks.discard)
 
         return record.model_dump(mode="json")
+
+    async def workload_run(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Run one validated Docker workload on the agent_runtime fleet."""
+
+        if self._workload_registry is None or self._workload_launcher is None:
+            raise TemporalActivityRuntimeError(
+                "workload registry and launcher are required for workload.run"
+            )
+        request_payload = payload.get("request", payload)
+        request = WorkloadRequest.model_validate(request_payload)
+        validated = self._workload_registry.validate_request(request)
+        result = await self._workload_launcher.run(validated)
+        if not isinstance(result, WorkloadResult):
+            result = WorkloadResult.model_validate(result)
+        return result.model_dump(mode="json", by_alias=True)
 
     async def agent_runtime_publish_artifacts(
         self,
@@ -2811,6 +2845,10 @@ class TemporalAgentRuntimeActivities:
                     profile=profile,
                 )
             )
+        for key in _NON_SECRET_MANAGED_SESSION_ENV_KEYS:
+            value = os.environ.get(key)
+            if value is not None and value.strip() and key not in environment:
+                environment[key] = value
         environment = await shape_launch_github_auth_environment(
             environment,
             ambient_github_token=os.environ.get("GITHUB_TOKEN"),
