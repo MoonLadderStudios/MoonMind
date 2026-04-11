@@ -292,13 +292,22 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([profile, secondaryProfile]);
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+    const editButtons = screen.getAllByRole('button', { name: 'Edit' });
+    const secondaryEditButton = editButtons[1];
+    if (!secondaryEditButton) {
+      throw new Error('Expected secondary provider profile edit button');
+    }
+    fireEvent.click(secondaryEditButton);
     const runtimeDefaultCheckbox = screen.getByLabelText('Runtime default') as HTMLInputElement;
     expect(runtimeDefaultCheckbox.checked).toBe(false);
 
     fireEvent.click(runtimeDefaultCheckbox);
     const submitButton = screen.getByRole('button', { name: 'Update provider profile' });
-    fireEvent.submit(submitButton.closest('form') as HTMLFormElement);
+    const form = submitButton.closest('form');
+    if (!form) {
+      throw new Error('Expected provider profile update form');
+    }
+    fireEvent.submit(form);
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -309,7 +318,11 @@ describe('ProviderProfilesManager form controls', () => {
       );
     });
 
-    const [, requestInit] = fetchSpy.mock.calls[0];
+    const fetchCall = fetchSpy.mock.calls[0];
+    if (!fetchCall) {
+      throw new Error('Expected provider profile update request');
+    }
+    const [, requestInit] = fetchCall;
     const payload = JSON.parse(String((requestInit as RequestInit).body));
     expect(payload.is_default).toBe(true);
   });
