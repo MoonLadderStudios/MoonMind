@@ -143,6 +143,32 @@ def _build_dashboard_system_metadata() -> dict[str, str | None]:
     }
 
 
+def _build_jira_runtime_config() -> dict[str, Any] | None:
+    """Build Create-page Jira browser config when the UI rollout is enabled."""
+
+    if not settings.feature_flags.jira_create_page_enabled:
+        return None
+
+    return {
+        "sources": {
+            "connections": "/api/jira/connections/verify",
+            "projects": "/api/jira/projects",
+            "boards": "/api/jira/projects/{projectKey}/boards",
+            "columns": "/api/jira/boards/{boardId}/columns",
+            "issues": "/api/jira/boards/{boardId}/issues",
+            "issue": "/api/jira/issues/{issueKey}",
+        },
+        "system": {
+            "enabled": True,
+            "defaultProjectKey": settings.feature_flags.jira_create_page_default_project_key,
+            "defaultBoardId": settings.feature_flags.jira_create_page_default_board_id,
+            "rememberLastBoardInSession": bool(
+                settings.feature_flags.jira_create_page_remember_last_board_in_session
+            ),
+        },
+    }
+
+
 def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
 
@@ -181,6 +207,15 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     )
 
     system_metadata = _build_dashboard_system_metadata()
+    jira_runtime_config = _build_jira_runtime_config()
+    jira_sources = (
+        {"jira": jira_runtime_config["sources"]} if jira_runtime_config else {}
+    )
+    jira_system = (
+        {"jiraIntegration": jira_runtime_config["system"]}
+        if jira_runtime_config
+        else {}
+    )
 
     return {
         "initialPath": initial_path,
@@ -233,6 +268,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactSession": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}",
                 "artifactSessionControl": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control",
             },
+            **jira_sources,
 
         },
         "features": {
@@ -289,6 +325,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                     }
                 ),
             },
+            **jira_system,
         },
     }
 

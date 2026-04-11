@@ -103,6 +103,8 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "speckit" not in config["sources"]
     assert "orchestrator" not in config["sources"]
     assert "externalRuns" not in config["sources"]
+    assert "jira" not in config["sources"]
+    assert "jiraIntegration" not in config["system"]
     assert "external" not in config["statusMaps"]
     temporal_dashboard = config["features"]["temporalDashboard"]
     assert temporal_dashboard["enabled"] is True
@@ -134,6 +136,78 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert attachment_policy["maxBytes"] >= 1
     assert attachment_policy["totalBytes"] >= attachment_policy["maxBytes"]
     assert "image/png" in attachment_policy["allowedContentTypes"]
+
+
+def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
+
+    config = build_runtime_config("/tasks/new")
+
+    assert "jira" not in config["sources"]
+    assert "jiraIntegration" not in config["system"]
+
+
+def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "jira_create_page_default_project_key",
+        "",
+    )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "jira_create_page_default_board_id",
+        "",
+    )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "jira_create_page_remember_last_board_in_session",
+        True,
+    )
+
+    config = build_runtime_config("/tasks/new")
+
+    assert config["sources"]["jira"] == {
+        "connections": "/api/jira/connections/verify",
+        "projects": "/api/jira/projects",
+        "boards": "/api/jira/projects/{projectKey}/boards",
+        "columns": "/api/jira/boards/{boardId}/columns",
+        "issues": "/api/jira/boards/{boardId}/issues",
+        "issue": "/api/jira/issues/{issueKey}",
+    }
+    assert config["system"]["jiraIntegration"] == {
+        "enabled": True,
+        "defaultProjectKey": "",
+        "defaultBoardId": "",
+        "rememberLastBoardInSession": True,
+    }
+
+
+def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "jira_create_page_default_project_key",
+        "ENG",
+    )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "jira_create_page_default_board_id",
+        "42",
+    )
+    monkeypatch.setattr(
+        settings.feature_flags,
+        "jira_create_page_remember_last_board_in_session",
+        False,
+    )
+
+    config = build_runtime_config("/tasks/new")
+
+    assert config["system"]["jiraIntegration"]["defaultProjectKey"] == "ENG"
+    assert config["system"]["jiraIntegration"]["defaultBoardId"] == "42"
+    assert config["system"]["jiraIntegration"]["rememberLastBoardInSession"] is False
 
 
 def test_build_runtime_config_includes_dashboard_build_metadata(monkeypatch) -> None:
