@@ -73,6 +73,19 @@ def _get_agent_runtime_artifacts_root() -> str:
     return str(managed_runtime_artifact_root())
 
 
+async def _load_managed_run_record(
+    store: ManagedRunStore,
+    run_id: str,
+) -> object | None:
+    try:
+        return await asyncio.to_thread(store.load, str(run_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid task run id",
+        ) from exc
+
+
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
@@ -1136,7 +1149,7 @@ async def get_observability_summary(
     started = time.perf_counter()
 
     try:
-        record = await asyncio.to_thread(store.load, str(id))
+        record = await _load_managed_run_record(store, id)
         if not record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1294,7 +1307,7 @@ async def get_task_run_observability_events(
             detail="threadId must not contain blank values",
         )
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1372,7 +1385,7 @@ async def stream_task_run_live_logs(
 ):
     """Serve SSE real-time stream for active runs."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
 
     if not record:
         raise HTTPException(
@@ -1470,7 +1483,7 @@ async def stream_task_run_log(
         )
     
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     
     if not record:
         raise HTTPException(
@@ -1613,7 +1626,7 @@ async def get_task_run_diagnostics(
 ):
     """Return the diagnostics.json payload for a task run."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     
     if not record or not record.diagnostics_ref:
         raise HTTPException(
