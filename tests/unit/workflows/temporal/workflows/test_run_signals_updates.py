@@ -438,9 +438,17 @@ def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
     assert workflow_instance._waiting_reason == "provider_profile_slot"
     assert workflow_instance._attention_required is False
 
+    workflow_instance._attention_required = True
     workflow_instance.child_state_changed("launching", "Slot acquired.")
 
     assert workflow_instance._waiting_reason is None
+    assert workflow_instance._attention_required is False
+
+    workflow_instance._attention_required = True
+    workflow_instance.child_state_changed("running", "Agent started.")
+
+    assert workflow_instance._waiting_reason is None
+    assert workflow_instance._attention_required is False
 
 
 @pytest.mark.asyncio

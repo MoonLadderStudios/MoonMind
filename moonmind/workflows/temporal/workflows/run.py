@@ -3831,9 +3831,11 @@ class MoonMindRunWorkflow:
             self._set_state(STATE_AWAITING_SLOT, summary=reason)
         elif new_state == "launching":
             self._waiting_reason = None
+            self._attention_required = False
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
             self._waiting_reason = None
+            self._attention_required = False
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
         elif new_state in ("completed", "failed", "canceled", "timed_out"):
             # Child has reached a terminal state. If we have an assigned profile
