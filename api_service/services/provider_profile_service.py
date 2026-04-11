@@ -54,12 +54,15 @@ async def normalize_runtime_default_profile(
     selected_id = selected.profile_id
     changed = False
     for row in rows:
-        should_be_default = row.profile_id == selected_id
-        if row.is_default != should_be_default:
-            row.is_default = should_be_default
+        if row.profile_id != selected_id and row.is_default:
+            row.is_default = False
             changed = True
 
     if changed:
+        await session.flush()
+
+    if not selected.is_default:
+        selected.is_default = True
         await session.flush()
 
     return selected_id
