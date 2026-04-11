@@ -414,10 +414,13 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         *,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
     ) -> tuple[int, str, str]:
         commands.append(command)
         if command[0] == "git":
             git_envs.append(env)
+            assert (run_as_uid, run_as_gid) == (1000, 1000)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
         if command[:2] == ("git", "clone"):
@@ -510,6 +513,7 @@ async def test_controller_launch_clones_workspace_before_starting_container(
     assert Path(request.session_workspace_path).exists()
     assert Path(request.artifact_spool_path).exists()
     chowned_paths = {path for path, _uid, _gid, _follow_symlinks in chown_calls}
+    assert Path(request.workspace_path).parent in chowned_paths
     assert Path(request.workspace_path) in chowned_paths
     assert Path(request.workspace_path, "README.md") in chowned_paths
     assert Path(request.session_workspace_path) in chowned_paths
@@ -664,6 +668,7 @@ async def test_controller_launch_creates_target_branch_when_remote_branch_missin
 
 @pytest.mark.asyncio
 async def test_controller_launch_reuses_existing_workspace_and_checks_out_target_branch(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "agent_jobs"
@@ -685,14 +690,28 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
         },
     )
     commands: list[tuple[str, ...]] = []
+    git_identities: list[tuple[int | None, int | None]] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        lambda *args, **kwargs: None,
+    )
 
     async def _fake_runner(
         command: tuple[str, ...],
         *,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
     ) -> tuple[int, str, str]:
         commands.append(command)
+        if command[0] == "git":
+            git_identities.append((run_as_uid, run_as_gid))
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
         if command == _workspace_git_command(
@@ -747,6 +766,7 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
         "checkout",
         "codex/session-fix",
     )
+    assert git_identities == [(1000, 1000), (1000, 1000)]
 
 
 @pytest.mark.asyncio
