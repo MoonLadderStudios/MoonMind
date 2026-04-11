@@ -49,6 +49,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
 )
+from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -417,6 +418,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
+    "workload.run": ("agent_runtime", "workload_run"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
@@ -2262,6 +2264,8 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        workload_launcher: Any | None = None,
+        workload_registry: Any | None = None,
         client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -2269,6 +2273,8 @@ class TemporalAgentRuntimeActivities:
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        self._workload_launcher = workload_launcher
+        self._workload_registry = workload_registry
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -2498,6 +2504,25 @@ class TemporalAgentRuntimeActivities:
         task.add_done_callback(self._supervision_tasks.discard)
 
         return record.model_dump(mode="json")
+
+    async def workload_run(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Run one validated Docker workload on the agent_runtime fleet."""
+
+        if self._workload_registry is None or self._workload_launcher is None:
+            raise TemporalActivityRuntimeError(
+                "workload registry and launcher are required for workload.run"
+            )
+        request_payload = payload.get("request", payload)
+        request = WorkloadRequest.model_validate(request_payload)
+        validated = self._workload_registry.validate_request(request)
+        result = await self._workload_launcher.run(validated)
+        if not isinstance(result, WorkloadResult):
+            result = WorkloadResult.model_validate(result)
+        return result.model_dump(mode="json", by_alias=True)
 
     async def agent_runtime_publish_artifacts(
         self,

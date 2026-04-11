@@ -552,10 +552,13 @@ def _build_agent_runtime_deps() -> tuple[
     ManagedRunSupervisor,
     ManagedRuntimeLauncher,
     DockerCodexManagedSessionController,
+    "RunnerProfileRegistry",
+    "DockerWorkloadLauncher",
 ]:
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
     from pathlib import Path
+    from moonmind.workloads import DockerWorkloadLauncher, RunnerProfileRegistry
 
     class LocalRuntimeArtifactStorage:
         def __init__(self, root: str) -> None:
@@ -632,7 +635,26 @@ def _build_agent_runtime_deps() -> tuple[
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
     )
-    return store, supervisor, launcher, session_controller
+    workload_registry_path = os.environ.get("MOONMIND_WORKLOAD_PROFILE_REGISTRY", "")
+    if workload_registry_path.strip():
+        workload_registry = RunnerProfileRegistry.load_file(
+            workload_registry_path,
+            workspace_root=workspace_root,
+        )
+    else:
+        workload_registry = RunnerProfileRegistry.empty(workspace_root=workspace_root)
+    workload_launcher = DockerWorkloadLauncher(
+        docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
+        docker_host=docker_host,
+    )
+    return (
+        store,
+        supervisor,
+        launcher,
+        session_controller,
+        workload_registry,
+        workload_launcher,
+    )
 
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
@@ -663,6 +685,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         run_supervisor = None
         run_launcher = None
         session_controller = None
+        workload_registry = None
+        workload_launcher = None
         agent_runtime_activities = None
         if topology.fleet == AGENT_RUNTIME_FLEET:
             # Docker-backed managed-session reconciliation only belongs on the
@@ -672,6 +696,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor,
                 run_launcher,
                 session_controller,
+                workload_registry,
+                workload_launcher,
             ) = _build_agent_runtime_deps()
             reconciled = await run_supervisor.reconcile()
             if reconciled:
@@ -691,6 +717,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
                 session_controller=session_controller,
+                workload_registry=workload_registry,
+                workload_launcher=workload_launcher,
             )
 
         bindings = build_worker_activity_bindings(

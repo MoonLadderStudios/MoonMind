@@ -529,7 +529,6 @@ class MoonMindAgentSessionWorkflow:
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         self._status = AGENT_SESSION_STATUS_TERMINATING
-        self._termination_requested = True
         self._last_control_action = "terminate_session"
         self._last_control_reason = request.reason
         if self._container_id and self._thread_id:
@@ -559,6 +558,7 @@ class MoonMindAgentSessionWorkflow:
                     last_control_action="terminate_session",
                     last_control_reason=request.reason,
                 )
+        self._termination_requested = True
         return self.get_status()
 
     @terminate_session_update.validator

@@ -107,7 +107,8 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["mode"] == "codex"
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
-    assert task["runtime"]["providerProfile"] == "test-profile"
+    assert task["runtime"]["executionProfileRef"] == "test-profile"
+    assert "providerProfile" not in task["runtime"]
     assert task["title"] == "feature/example"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
@@ -276,9 +277,19 @@ def test_parent_run_scope_hashes_nonstandard_session_spool_path(
     assert parent_run_scope() == stable_scope_from_path(spool)
 
 
-def test_parent_run_scope_reuses_task_context_artifacts_helper(tmp_path: Path) -> None:
+def test_parent_run_scope_reuses_task_context_artifacts_helper(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
+    for env_key in (
+        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_RUN_ID",
+        "TASK_RUN_ID",
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
 
     task_context = tmp_path / "task-parent" / "artifacts" / "task_context.json"
     task_context.parent.mkdir(parents=True)
@@ -414,6 +425,59 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     assert runtime.provider_profile == "inherited-profile"
 
 
+def test_resolve_runtime_selection_uses_execution_profile_env(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": None,
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "codex_cli"
+    assert runtime.provider_profile == "codex_default"
+
+
+def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
+    monkeypatch: Any,
+) -> None:
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_REF", "codex_default")
+    monkeypatch.setenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", "codex_cli")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": "gemini_cli",
+            "runtime_model": None,
+            "runtime_effort": None,
+            "runtime_provider_profile": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "gemini_cli"
+    assert runtime.provider_profile is None
+
+
 def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Path):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
@@ -445,8 +509,10 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
-    
+
     monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_REF", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_PROFILE_RUNTIME", raising=False)
 
     args = type(
         "Args",

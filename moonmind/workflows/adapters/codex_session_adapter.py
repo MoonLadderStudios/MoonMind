@@ -50,7 +50,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
 from moonmind.workflows.codex_session_timeouts import (
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
-from moonmind.workflows.provider_failures import classify_retryable_provider_failure
+from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
@@ -1155,7 +1155,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         classification_source = (
             summary if str(summary or "").strip() else default_summary
         )
-        classification = classify_retryable_provider_failure(classification_source)
+        classification = classify_provider_failure(classification_source)
         summary_text = _clamp_agent_run_result_summary(
             summary,
             default=default_summary,

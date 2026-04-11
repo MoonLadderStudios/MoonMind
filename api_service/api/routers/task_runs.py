@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -72,6 +71,19 @@ def _get_managed_session_store_root() -> str:
 
 def _get_agent_runtime_artifacts_root() -> str:
     return str(managed_runtime_artifact_root())
+
+
+async def _load_managed_run_record(
+    store: ManagedRunStore,
+    run_id: str,
+) -> object | None:
+    try:
+        return await asyncio.to_thread(store.load, str(run_id))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid task run id",
+        ) from exc
 
 
 @lru_cache(maxsize=1)
@@ -502,6 +514,22 @@ def _coerce_sequence(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _coerce_session_epoch(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return int(candidate)
+        except ValueError:
+            return None
+    return None
+
+
 def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | None:
     try:
         chunk = RunObservabilityEvent.model_validate(payload)
@@ -803,6 +831,8 @@ def _load_task_run_observability_events(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, object]], str]:
     workspace_path = getattr(record, "workspace_path", None)
     started_at = getattr(record, "started_at", None)
@@ -827,6 +857,8 @@ def _load_task_run_observability_events(
                 since=since,
                 streams=streams,
                 kinds=kinds,
+                session_epochs=session_epochs,
+                thread_ids=thread_ids,
             )
         )
         source = "journal"
@@ -843,6 +875,8 @@ def _load_task_run_observability_events(
                 since=since,
                 streams=streams,
                 kinds=kinds,
+                session_epochs=session_epochs,
+                thread_ids=thread_ids,
             )
         )
         source = "spool"
@@ -864,6 +898,8 @@ def _event_matches_observability_filters(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> bool:
     sequence = _coerce_sequence(event.get("sequence"))
     if since is not None and sequence is not None and sequence > 0 and sequence <= since:
@@ -873,6 +909,14 @@ def _event_matches_observability_filters(
         return False
     kind = str(event.get("kind") or "").strip()
     if kinds and kind not in kinds:
+        return False
+    raw_session_epoch = event.get("sessionEpoch")
+    if raw_session_epoch is None:
+        raw_session_epoch = event.get("session_epoch")
+    if session_epochs and _coerce_session_epoch(raw_session_epoch) not in session_epochs:
+        return False
+    thread_id = str(event.get("threadId") or event.get("thread_id") or "").strip()
+    if thread_ids and thread_id not in thread_ids:
         return False
     return True
 
@@ -884,6 +928,8 @@ def _collect_matching_observability_events(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     collected: list[dict[str, object]] = []
     max_events = max(1, limit) + 1
@@ -893,6 +939,8 @@ def _collect_matching_observability_events(
             since=since,
             streams=streams,
             kinds=kinds,
+            session_epochs=session_epochs,
+            thread_ids=thread_ids,
         ):
             continue
         collected.append(event)
@@ -907,6 +955,8 @@ def _filter_observability_events(
     since: int | None = None,
     streams: set[str] | None = None,
     kinds: set[str] | None = None,
+    session_epochs: set[int] | None = None,
+    thread_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     filtered: list[dict[str, object]] = []
     for event in events:
@@ -915,6 +965,8 @@ def _filter_observability_events(
             since=since,
             streams=streams,
             kinds=kinds,
+            session_epochs=session_epochs,
+            thread_ids=thread_ids,
         ):
             continue
         filtered.append(event)
@@ -1089,7 +1141,7 @@ def _resolve_legacy_log_artifact_path(
     },
 )
 async def get_observability_summary(
-    id: UUID,
+    id: str,
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Fetch the observability summary for a task run from the shared agent jobs volume."""
@@ -1097,7 +1149,7 @@ async def get_observability_summary(
     started = time.perf_counter()
 
     try:
-        record = await asyncio.to_thread(store.load, str(id))
+        record = await _load_managed_run_record(store, id)
         if not record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1234,16 +1286,28 @@ async def control_task_run_artifact_session(
     },
 )
 async def get_task_run_observability_events(
-    id: UUID,
+    id: str,
     since: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
     stream: list[Literal["stdout", "stderr", "system", "session"]] | None = Query(default=None),
     kind: list[str] | None = Query(default=None),
+    session_epoch: list[int] | None = Query(default=None, alias="sessionEpoch"),
+    thread_id: list[str] | None = Query(default=None, alias="threadId"),
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Return structured observability history for one task run."""
+    if session_epoch is not None and any(item < 1 for item in session_epoch):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="sessionEpoch must contain only integers greater than or equal to 1",
+        )
+    if thread_id is not None and any(not item.strip() for item in thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="threadId must not contain blank values",
+        )
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     if not record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1253,6 +1317,8 @@ async def get_task_run_observability_events(
     started = time.perf_counter()
     stream_filters = set(stream or [])
     kind_filters = {item for item in (kind or []) if item}
+    session_epoch_filters = set(session_epoch or [])
+    thread_id_filters = {item.strip() for item in (thread_id or []) if item.strip()}
     try:
         session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
         events, source = await asyncio.to_thread(
@@ -1263,6 +1329,8 @@ async def get_task_run_observability_events(
             since=since,
             streams=stream_filters,
             kinds=kind_filters,
+            session_epochs=session_epoch_filters,
+            thread_ids=thread_id_filters,
         )
         if source == "artifacts":
             events = _filter_observability_events(
@@ -1270,6 +1338,8 @@ async def get_task_run_observability_events(
                 since=since,
                 streams=stream_filters,
                 kinds=kind_filters,
+                session_epochs=session_epoch_filters,
+                thread_ids=thread_id_filters,
             )
         events.sort(key=_event_sort_key)
         truncated = len(events) > limit
@@ -1308,14 +1378,14 @@ async def get_task_run_observability_events(
     },
 )
 async def stream_task_run_live_logs(
-    id: UUID,
+    id: str,
     request: Request,
     since: int | None = Query(default=None, ge=0, description="Resume from sequence number"),
     _user: User = Depends(get_current_user()),
 ):
     """Serve SSE real-time stream for active runs."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
 
     if not record:
         raise HTTPException(
@@ -1401,7 +1471,7 @@ async def stream_task_run_live_logs(
     },
 )
 async def stream_task_run_log(
-    id: UUID,
+    id: str,
     stream_name: str,
     _user: User = Depends(get_current_user()),
 ):
@@ -1413,7 +1483,7 @@ async def stream_task_run_log(
         )
     
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     
     if not record:
         raise HTTPException(
@@ -1551,12 +1621,12 @@ async def stream_task_run_log(
     },
 )
 async def get_task_run_diagnostics(
-    id: UUID,
+    id: str,
     _user: User = Depends(get_current_user()),
 ):
     """Return the diagnostics.json payload for a task run."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
-    record = await asyncio.to_thread(store.load, str(id))
+    record = await _load_managed_run_record(store, id)
     
     if not record or not record.diagnostics_ref:
         raise HTTPException(
