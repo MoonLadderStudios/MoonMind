@@ -32,7 +32,7 @@ Last updated: 2026-04-11
 ## Phase 2 completion notes
 
 - `DockerWorkloadLauncher` executes a profile-validated workload request through the configured Docker CLI / `DOCKER_HOST` path and returns bounded `WorkloadResult` metadata.
-- Docker run construction is deterministic for container name, labels, workspace/cache mounts, workdir, network policy, env overrides, resource flags, entrypoint/wrapper, image, and command.
+- Docker run construction is deterministic for container name, labels, workspace/cache mounts, approved artifacts directory reachability, workdir, network policy, env overrides, resource flags, entrypoint/wrapper, image, and command.
 - Timeout and cancellation cleanup paths stop, kill, and remove ephemeral workload containers according to profile cleanup policy.
 - `DockerContainerJanitor` supports `docker stop`, `docker kill`, `docker rm`, and orphan lookup by ownership labels.
 - The Temporal activity catalog exposes `workload.run` as a separate `docker_workload` capability on the existing `agent_runtime` fleet rather than overloading managed-session verbs.

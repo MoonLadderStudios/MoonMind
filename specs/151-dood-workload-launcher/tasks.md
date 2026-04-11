@@ -19,9 +19,9 @@
 
 **Purpose**: Confirm the Phase 1 workload contract and Phase 2 execution boundary before adding launcher behavior.
 
-- [ ] T001 Review existing workload request, result, and runner-profile contracts in `moonmind/schemas/workload_models.py`
-- [ ] T002 Review existing runner profile registry behavior in `moonmind/workloads/registry.py`
-- [ ] T003 [P] Review Phase 2 acceptance and verification commands in `specs/151-dood-workload-launcher/quickstart.md`
+- [X] T001 Review existing workload request, result, and runner-profile contracts in `moonmind/schemas/workload_models.py`
+- [X] T002 Review existing runner profile registry behavior in `moonmind/workloads/registry.py`
+- [X] T003 [P] Review Phase 2 acceptance and verification commands in `specs/151-dood-workload-launcher/quickstart.md`
 
 ---
 
@@ -31,11 +31,11 @@
 
 **CRITICAL**: No user story implementation should begin until these boundary tests exist.
 
-- [ ] T004 [P] Add failing launcher construction and result-shape tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T005 [P] Add failing `workload.run` activity boundary tests in `tests/unit/workflows/temporal/test_workload_run_activity.py`
-- [ ] T006 [P] Add failing activity catalog tests for `workload.run` in `tests/unit/workflows/temporal/test_activity_catalog.py`
-- [ ] T007 [P] Add failing worker topology tests for `docker_workload` capability in `tests/unit/workflows/temporal/test_temporal_workers.py`
-- [ ] T008 [P] Add failing worker runtime dependency-injection tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T004 [P] Add failing launcher construction and result-shape tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T005 [P] Add failing `workload.run` activity boundary tests in `tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T006 [P] Add failing activity catalog tests for `workload.run` in `tests/unit/workflows/temporal/test_activity_catalog.py`
+- [X] T007 [P] Add failing worker topology tests for `docker_workload` capability in `tests/unit/workflows/temporal/test_temporal_workers.py`
+- [X] T008 [P] Add failing worker runtime dependency-injection tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
 
 **Checkpoint**: Test coverage captures the desired runtime boundary and should fail against the unimplemented launcher.
 
@@ -51,17 +51,17 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T009 [P] [US1] Add Docker run argument tests for deterministic names, labels, workspace mount, approved artifacts directory handling, cache mounts, workdir, env, timeout, and resource controls in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T010 [P] [US1] Add stream capture, bounded diagnostics, and normal-completion container removal tests for success and non-zero exits in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T011 [P] [US1] Add `workload.run` request-envelope validation and launcher-call tests in `tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T009 [P] [US1] Add Docker run argument tests for deterministic names, labels, workspace mount, approved artifacts directory handling, cache mounts, workdir, env, timeout, and resource controls in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T010 [P] [US1] Add stream capture, bounded diagnostics, and normal-completion container removal tests for success and non-zero exits in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T011 [P] [US1] Add `workload.run` request-envelope validation and launcher-call tests in `tests/unit/workflows/temporal/test_workload_run_activity.py`
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Implement deterministic workload identity, ownership labels, and Docker argument construction in `moonmind/workloads/docker_launcher.py`
-- [ ] T013 [US1] Implement bounded Docker process execution, stdout/stderr capture, exit-code capture, timing, diagnostics metadata, and cleanup-policy removal after normal completion in `moonmind/workloads/docker_launcher.py`
-- [ ] T014 [US1] Implement profile-approved workspace mount, approved artifacts directory handling, cache mount resolution, and task repo workdir handling in `moonmind/workloads/docker_launcher.py`
-- [ ] T015 [US1] Export `DockerWorkloadLauncher` and launcher result helpers from `moonmind/workloads/__init__.py`
-- [ ] T016 [US1] Bind the `workload.run` activity to validated request parsing and launcher execution in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T012 [US1] Implement deterministic workload identity, ownership labels, and Docker argument construction in `moonmind/workloads/docker_launcher.py`
+- [X] T013 [US1] Implement bounded Docker process execution, stdout/stderr capture, exit-code capture, timing, diagnostics metadata, and cleanup-policy removal after normal completion in `moonmind/workloads/docker_launcher.py`
+- [X] T014 [US1] Implement profile-approved workspace mount, approved artifacts directory handling, cache mount resolution, and task repo workdir handling in `moonmind/workloads/docker_launcher.py`
+- [X] T015 [US1] Export `DockerWorkloadLauncher` and launcher result helpers from `moonmind/workloads/__init__.py`
+- [X] T016 [US1] Bind the `workload.run` activity to validated request parsing and launcher execution in `moonmind/workflows/temporal/activity_runtime.py`
 
 **Checkpoint**: User Story 1 can launch and complete one bounded workload independently of managed-session operations.
 
@@ -77,16 +77,16 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T017 [P] [US2] Add timeout cleanup tests for stop, kill, remove, timeout status, and timeout diagnostics in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T018 [P] [US2] Add cancellation cleanup tests for bounded stop, kill, remove, and cancellation propagation in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T019 [P] [US2] Add orphan lookup tests for MoonMind ownership label filters in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T017 [P] [US2] Add timeout cleanup tests for stop, kill, remove, timeout status, and timeout diagnostics in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T018 [P] [US2] Add cancellation cleanup tests for bounded stop, kill, remove, and cancellation propagation in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T019 [P] [US2] Add orphan lookup tests for MoonMind ownership label filters in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Implement Docker cleanup utility methods for `docker stop`, `docker kill`, `docker rm`, and already-missing containers in `moonmind/workloads/docker_launcher.py`
-- [ ] T021 [US2] Implement timeout handling with bounded stop, terminate, remove, and timed-out `WorkloadResult` metadata in `moonmind/workloads/docker_launcher.py`
-- [ ] T022 [US2] Implement cancellation handling with bounded cleanup and cancellation propagation in `moonmind/workloads/docker_launcher.py`
-- [ ] T023 [US2] Implement operator-usable orphan lookup by MoonMind workload labels in `moonmind/workloads/docker_launcher.py`
+- [X] T020 [US2] Implement Docker cleanup utility methods for `docker stop`, `docker kill`, `docker rm`, and already-missing containers in `moonmind/workloads/docker_launcher.py`
+- [X] T021 [US2] Implement timeout handling with bounded stop, terminate, remove, and timed-out `WorkloadResult` metadata in `moonmind/workloads/docker_launcher.py`
+- [X] T022 [US2] Implement cancellation handling with bounded cleanup and cancellation propagation in `moonmind/workloads/docker_launcher.py`
+- [X] T023 [US2] Implement operator-usable orphan lookup by MoonMind workload labels in `moonmind/workloads/docker_launcher.py`
 
 **Checkpoint**: User Story 2 cleanup behavior is independently testable and no routine timeout/cancel path leaves a running ephemeral container.
 
@@ -102,16 +102,16 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T024 [P] [US3] Add activity catalog assertions for `workload.run` activity name, task queue, and `docker_workload` capability in `tests/unit/workflows/temporal/test_activity_catalog.py`
-- [ ] T025 [P] [US3] Add worker topology assertions that only the `agent_runtime` fleet advertises `docker_workload` in `tests/unit/workflows/temporal/test_temporal_workers.py`
-- [ ] T026 [P] [US3] Add worker runtime assertions that the workload registry and launcher are initialized separately from managed-session controllers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T024 [P] [US3] Add activity catalog assertions for `workload.run` activity name, task queue, and `docker_workload` capability in `tests/unit/workflows/temporal/test_activity_catalog.py`
+- [X] T025 [P] [US3] Add worker topology assertions that only the `agent_runtime` fleet advertises `docker_workload` in `tests/unit/workflows/temporal/test_temporal_workers.py`
+- [X] T026 [P] [US3] Add worker runtime assertions that the workload registry and launcher are initialized separately from managed-session controllers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Register `workload.run` as a dedicated activity on the `agent_runtime` queue with `docker_workload` capability metadata in `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T028 [US3] Add `docker_workload` capability to the Docker-capable `agent_runtime` fleet and keep it absent from non-Docker worker definitions in `moonmind/workflows/temporal/workers.py`
-- [ ] T029 [US3] Initialize workload profile registry and `DockerWorkloadLauncher` dependencies in the agent-runtime worker path in `moonmind/workflows/temporal/worker_runtime.py`
-- [ ] T030 [US3] Verify managed-session activity names remain unchanged and distinct from workload launching in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T027 [US3] Register `workload.run` as a dedicated activity on the `agent_runtime` queue with `docker_workload` capability metadata in `moonmind/workflows/temporal/activity_catalog.py`
+- [X] T028 [US3] Add `docker_workload` capability to the Docker-capable `agent_runtime` fleet and keep it absent from non-Docker worker definitions in `moonmind/workflows/temporal/workers.py`
+- [X] T029 [US3] Initialize workload profile registry and `DockerWorkloadLauncher` dependencies in the agent-runtime worker path in `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T030 [US3] Verify managed-session activity names remain unchanged and distinct from workload launching in `moonmind/workflows/temporal/activity_runtime.py`
 
 **Checkpoint**: User Story 3 proves Docker workloads are a separate runtime capability and not a managed-session lifecycle operation.
 
@@ -121,11 +121,11 @@
 
 **Purpose**: Verify runtime scope, update implementation tracking, and run the requested validation suite.
 
-- [ ] T031 [P] Update Phase 2 implementation tracking notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
-- [ ] T032 [P] Run focused Phase 2 verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`
-- [ ] T033 Run full unit verification with `./tools/test_unit.sh`
-- [ ] T034 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T035 Run runtime diff validation with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`
+- [X] T031 [P] Update Phase 2 implementation tracking notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+- [X] T032 [P] Run focused Phase 2 verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T033 Run full unit verification with `./tools/test_unit.sh`
+- [X] T034 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T035 Run runtime diff validation with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`
 
 ---
 

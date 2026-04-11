@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import posixpath
 from datetime import UTC, datetime
 from typing import Mapping, Sequence
 
@@ -64,6 +65,29 @@ def _effective_resources(
     if shm_size:
         resources["--shm-size"] = shm_size
     return resources
+
+
+def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
+    normalized = posixpath.normpath(path)
+    for mount in mounts:
+        target = posixpath.normpath(mount.target)
+        if normalized == target or normalized.startswith(f"{target}/"):
+            return True
+    return False
+
+
+def _ensure_paths_are_mounted(request: ValidatedWorkloadRequest) -> None:
+    mounts = (*request.profile.required_mounts, *request.profile.optional_mounts)
+    workload = request.request
+    if not _path_is_under_mount(workload.repo_dir, mounts):
+        raise DockerWorkloadLauncherError(
+            f"repoDir is not covered by approved profile mounts: {workload.repo_dir}"
+        )
+    if not _path_is_under_mount(workload.artifacts_dir, mounts):
+        raise DockerWorkloadLauncherError(
+            "artifactsDir is not covered by approved profile mounts: "
+            f"{workload.artifacts_dir}"
+        )
 
 
 class DockerContainerJanitor:
@@ -131,6 +155,7 @@ class DockerWorkloadLauncher:
         )
 
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
+        _ensure_paths_are_mounted(request)
         profile = request.profile
         workload = request.request
         args = [
@@ -222,6 +247,7 @@ class DockerWorkloadLauncher:
             "containerName": request.container_name,
             "image": request.profile.image,
             "dockerHost": self._docker_host or os.environ.get("DOCKER_HOST", ""),
+            "artifactsDir": request.request.artifacts_dir,
             "stdout": _decode_stream(stdout),
             "stderr": _decode_stream(stderr),
         }
@@ -251,4 +277,3 @@ class DockerWorkloadLauncher:
             grace_seconds=request.profile.cleanup.kill_grace_seconds,
         )
         await self._janitor.kill(request.container_name)
-

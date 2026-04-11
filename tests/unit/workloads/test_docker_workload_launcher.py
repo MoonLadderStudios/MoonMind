@@ -11,6 +11,7 @@ from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
     DockerWorkloadLauncher,
+    DockerWorkloadLauncherError,
 )
 from moonmind.workloads.registry import RunnerProfileRegistry
 
@@ -173,7 +174,80 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert result.status == "succeeded"
     assert result.exit_code == 0
     assert result.metadata["containerName"] == "mm-workload-task-1-step-test-2"
+    assert result.metadata["artifactsDir"] == "/work/agent_jobs/task-1/artifacts/step-test"
     assert result.metadata["stdout"] == "tests passed\n"
+
+
+def test_launcher_rejects_artifacts_dir_outside_profile_mount(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    _profile_payload(
+                        required_mounts=[
+                            {
+                                "type": "volume",
+                                "source": "agent_workspaces",
+                                "target": "/work/agent_jobs/task-1/repo",
+                            }
+                        ],
+                        optional_mounts=[],
+                    )
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = RunnerProfileRegistry.load_file(
+        registry_path,
+        workspace_root=WORKSPACE_ROOT,
+    )
+    validated = registry.validate_request(
+        WorkloadRequest.model_validate(
+            {
+                "profileId": "local-python",
+                "taskRunId": "task-1",
+                "stepId": "step-test",
+                "attempt": 2,
+                "toolName": "container.run_workload",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["pytest -q"],
+            }
+        )
+    )
+
+    with pytest.raises(DockerWorkloadLauncherError, match="artifactsDir"):
+        DockerWorkloadLauncher().build_run_args(validated)
+
+
+@pytest.mark.asyncio
+async def test_launcher_removes_container_after_nonzero_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=7, stdout=b"", stderr=b"failed\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(_validated_request(tmp_path))
+
+    assert result.status == "failed"
+    assert result.exit_code == 7
+    assert result.metadata["stderr"] == "failed\n"
+    assert created[-1] == ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"]
 
 
 @pytest.mark.asyncio
@@ -202,6 +276,36 @@ async def test_launcher_timeout_stops_kills_and_removes_container(
 
     assert result.status == "timed_out"
     assert result.timeout_reason == "workload exceeded timeoutSeconds"
+    assert ["docker", "stop", "-t", "3", "mm-workload-task-1-step-test-2"] in created
+    assert ["docker", "kill", "mm-workload-task-1-step-test-2"] in created
+    assert ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"] in created
+
+
+@pytest.mark.asyncio
+async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(never_complete=True)
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    task = asyncio.create_task(DockerWorkloadLauncher().run(_validated_request(tmp_path)))
+    await asyncio.sleep(0)
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
     assert ["docker", "stop", "-t", "3", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "kill", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"] in created
