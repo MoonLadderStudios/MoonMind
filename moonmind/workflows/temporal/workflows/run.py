@@ -151,6 +151,11 @@ RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
 RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH = "run-task-scoped-session-termination-v2"
+# Replay-stable patch id for task-scoped Codex termination through the
+# AgentSession update handler. This path executes the remote terminate activity.
+RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
+    "run-task-scoped-session-termination-v3"
+)
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
@@ -2312,7 +2317,14 @@ class MoonMindRunWorkflow:
                 session_handle = workflow.get_external_workflow_handle(
                     binding.workflow_id
                 )
-                if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
+                if workflow.patched(
+                    RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
+                ):
+                    await session_handle.execute_update(
+                        "TerminateSession",
+                        {"reason": reason},
+                    )
+                elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     await session_handle.signal(
                         "control_action",
                         {

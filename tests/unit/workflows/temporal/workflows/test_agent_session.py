@@ -163,6 +163,7 @@ async def test_agent_session_terminate_update_executes_remote_terminate_when_han
     ) -> dict[str, object]:
         captured.append((activity_name, payload, kwargs))
         if activity_name == "agent_runtime.terminate_session":
+            assert workflow._termination_requested is False
             return {
                 "sessionState": {
                     "sessionId": "sess:wf-run-1:codex_cli",
