@@ -1500,6 +1500,58 @@ def test_get_task_run_observability_events_applies_session_epoch_and_thread_filt
     assert body["events"][0]["threadId"] == "thread-2"
 
 
+def test_get_task_run_observability_events_rejects_invalid_session_epoch_filter(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?sessionEpoch=0")
+
+    assert response.status_code == 422
+    load_record.assert_not_called()
+
+
+def test_get_task_run_observability_events_rejects_blank_thread_id_filter(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?threadId=%20%20%20")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "threadId must not contain blank values"
+    load_record.assert_not_called()
+
+
+def test_observability_event_session_epoch_filter_coerces_string_rows() -> None:
+    events = [
+        {
+            "sequence": 1,
+            "stream": "session",
+            "kind": "summary_published",
+            "sessionEpoch": "2",
+            "threadId": "thread-2",
+        },
+        {
+            "sequence": 2,
+            "stream": "session",
+            "kind": "summary_published",
+            "sessionEpoch": "not-an-int",
+            "threadId": "thread-2",
+        },
+    ]
+
+    filtered = task_runs_router._filter_observability_events(
+        events,
+        session_epochs={2},
+        thread_ids={"thread-2"},
+    )
+
+    assert [event["sequence"] for event in filtered] == [1]
+
+
 def test_get_task_run_observability_events_limits_to_oldest_matching_rows_after_since(
     client: tuple[TestClient, AsyncMock],
     tmp_path,

@@ -502,6 +502,22 @@ def _coerce_sequence(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _coerce_session_epoch(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            return int(candidate)
+        except ValueError:
+            return None
+    return None
+
+
 def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | None:
     try:
         chunk = RunObservabilityEvent.model_validate(payload)
@@ -885,7 +901,7 @@ def _event_matches_observability_filters(
     raw_session_epoch = event.get("sessionEpoch")
     if raw_session_epoch is None:
         raw_session_epoch = event.get("session_epoch")
-    if session_epochs and raw_session_epoch not in session_epochs:
+    if session_epochs and _coerce_session_epoch(raw_session_epoch) not in session_epochs:
         return False
     thread_id = str(event.get("threadId") or event.get("thread_id") or "").strip()
     if thread_ids and thread_id not in thread_ids:
@@ -1268,6 +1284,16 @@ async def get_task_run_observability_events(
     _user: User = Depends(get_current_user()),
 ) -> dict:
     """Return structured observability history for one task run."""
+    if session_epoch is not None and any(item < 1 for item in session_epoch):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="sessionEpoch must contain only integers greater than or equal to 1",
+        )
+    if thread_id is not None and any(not item.strip() for item in thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="threadId must not contain blank values",
+        )
     store = ManagedRunStore(_get_agent_runtime_store_root())
     record = await asyncio.to_thread(store.load, str(id))
     if not record:
@@ -1279,7 +1305,7 @@ async def get_task_run_observability_events(
     started = time.perf_counter()
     stream_filters = set(stream or [])
     kind_filters = {item for item in (kind or []) if item}
-    session_epoch_filters = {item for item in (session_epoch or []) if item >= 1}
+    session_epoch_filters = set(session_epoch or [])
     thread_id_filters = {item.strip() for item in (thread_id or []) if item.strip()}
     try:
         session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
