@@ -91,6 +91,48 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert git["targetBranch"] == "feature/example"
 
 
+def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+    runtime_selection = module["RuntimeSelection"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/example",
+        runtime=runtime_selection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+        batch_scope="mm:parent-run",
+    )
+
+    assert request["payload"]["idempotencyKey"] == (
+        "batch-pr-resolver:mm:parent-run:MoonLadderStudios/MoonMind:"
+        "pr:42:branch:feature/example"
+    )
+
+
+def test_build_queue_request_omits_idempotency_without_batch_scope() -> None:
+    module = _load_module()
+    build_queue_request = module["_build_queue_request"]
+    runtime_selection = module["RuntimeSelection"]
+
+    request = build_queue_request(
+        "MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/example",
+        runtime=runtime_selection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+
+    assert "idempotencyKey" not in request["payload"]
+
+
 def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     module = _load_module()
     build_queue_request = module["_build_queue_request"]
@@ -112,6 +154,50 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     # skill.name shape.  Publish and skill identity assertions are covered by the
     # dedicated contract tests below.
     assert request["payload"]["task"]["publish"]["mode"] == "none"
+
+
+def test_resolve_artifacts_dir_prefers_managed_session_spool(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    resolve_artifacts_dir = module["_resolve_artifacts_dir"]
+
+    spool = tmp_path / "mm-parent" / "artifacts"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    assert resolve_artifacts_dir("artifacts") == spool
+
+
+def test_resolve_artifacts_dir_respects_explicit_path(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    resolve_artifacts_dir = module["_resolve_artifacts_dir"]
+
+    explicit = tmp_path / "custom-artifacts"
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        str(tmp_path / "mm-parent" / "artifacts"),
+    )
+
+    assert resolve_artifacts_dir(str(explicit)) == explicit
+
+
+def test_parent_run_scope_uses_managed_session_spool(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    parent_run_scope = module["_parent_run_scope"]
+
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        str(tmp_path / "mm:parent-run" / "artifacts"),
+    )
+
+    assert parent_run_scope() == "mm:parent-run"
 
 
 def test_load_parent_repository_reads_task_context(tmp_path: Path):

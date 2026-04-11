@@ -169,6 +169,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
                 max_iterations=3,
                 priority=0,
                 max_attempts=3,
+                batch_scope="task-parent",
             ),
             pr_number=1337,
             branch="codex/session-child-task",
@@ -194,6 +195,10 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         body = captured["body"]
         assert body["type"] == "task"
         assert body["payload"]["targetRuntime"] == "codex_cli"
+        assert body["payload"]["idempotencyKey"] == (
+            "batch-pr-resolver:task-parent:MoonLadderStudios/MoonMind:"
+            "pr:1337:branch:codex/session-child-task"
+        )
         assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
         assert body["payload"]["task"]["inputs"]["pr"] == "1337"
     finally:

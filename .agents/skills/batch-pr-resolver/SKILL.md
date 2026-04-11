@@ -63,6 +63,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.
    - Build a canonical queue task with:
      - `type: "task"`
+     - `payload.idempotencyKey`: stable per parent batch run and PR, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
      - `payload.task.publish.mode`: `none`
@@ -70,7 +71,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
      - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
    - Submit via the internal Temporal execution API (`POST /api/executions`);
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
-4. Write one summary artifact at `artifacts/batch_pr_resolver_result.json`.
+4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`.
 5. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
 
 ## Safety constraints

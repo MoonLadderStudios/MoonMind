@@ -231,6 +231,71 @@ def _runtime_text(value: Any) -> str | None:
     return text or None
 
 
+def _session_artifact_spool_path() -> Path | None:
+    raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _parent_run_scope(task_context_path: str | None = None) -> str | None:
+    for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
+        value = _runtime_text(os.getenv(env_key))
+        if value:
+            return value
+
+    spool_path = _session_artifact_spool_path()
+    if spool_path is not None and spool_path.parent.name:
+        return spool_path.parent.name
+
+    for candidate in _repo_context_candidates(task_context_path):
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            resolved = candidate
+        if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
+            parent_name = resolved.parent.parent.name
+            if parent_name:
+                return parent_name
+    return None
+
+
+def _resolve_artifacts_dir(
+    raw_artifacts_dir: str,
+    task_context_path: str | None = None,
+) -> Path:
+    raw = str(raw_artifacts_dir or "").strip()
+    if raw and raw != "artifacts":
+        return Path(raw)
+
+    spool_path = _session_artifact_spool_path()
+    if spool_path is not None:
+        return spool_path
+
+    for candidate in _repo_context_candidates(task_context_path):
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            resolved = candidate
+        if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
+            return resolved.parent
+
+    return Path(raw or "artifacts")
+
+
+def _child_idempotency_key(
+    *,
+    batch_scope: str | None,
+    repo: str,
+    pr_number: int | str,
+    branch: str,
+) -> str | None:
+    scope = _runtime_text(batch_scope)
+    if not scope:
+        return None
+    return f"batch-pr-resolver:{scope}:{repo}:pr:{pr_number}:branch:{branch}"[:512]
+
+
 def _load_parent_runtime_selection(
     task_context_path: str | None = None,
 ) -> RuntimeSelection | None:
@@ -328,6 +393,7 @@ def _build_queue_request(
     max_iterations: int,
     priority: int,
     max_attempts: int,
+    batch_scope: str | None = None,
     skill_version: str = "1.0",
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
@@ -365,6 +431,14 @@ def _build_queue_request(
             "publish": {"mode": publish_mode},
         },
     }
+    idempotency_key = _child_idempotency_key(
+        batch_scope=batch_scope,
+        repo=repo,
+        pr_number=pr_number,
+        branch=branch,
+    )
+    if idempotency_key:
+        payload_dict["idempotencyKey"] = idempotency_key
 
     if runtime.mode:
         payload_dict["targetRuntime"] = runtime.mode
@@ -573,6 +647,7 @@ def _build_request_records(
             return 0
 
     open_prs_sorted = sorted(open_prs, key=_get_pr_number)
+    batch_scope = _parent_run_scope(args.task_context_path)
 
     for pr in open_prs_sorted:
         number = pr.get("number")
@@ -590,6 +665,7 @@ def _build_request_records(
             max_iterations=args.max_iterations,
             priority=args.priority,
             max_attempts=args.max_attempts,
+            batch_scope=batch_scope,
             skill_version=args.skill_version,
         )
         queue_requests.append(
@@ -637,7 +713,10 @@ async def main() -> int:
     if payload["created"] == 0:
         payload["message"] = "No matching PRs were queued."
 
-    artifacts_path = Path(args.artifacts_dir) / "batch_pr_resolver_result.json"
+    artifacts_path = (
+        _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
+        / "batch_pr_resolver_result.json"
+    )
     _write_artifacts(artifacts_path, payload)
 
     print(json.dumps(payload, indent=2))
