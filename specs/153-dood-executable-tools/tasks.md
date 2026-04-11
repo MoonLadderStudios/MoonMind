@@ -119,7 +119,7 @@
 - [ ] T035 [US3] Route `docker_workload` skill capability to the `agent_runtime` task queue in `moonmind/workflows/temporal/activity_catalog.py`.
 - [ ] T036 [US3] Register DooD workload tool handlers only on the agent-runtime worker path in `moonmind/workflows/temporal/worker_runtime.py`.
 - [ ] T037 [US3] Preserve `MoonMind.Run` skill-step routing through `mm.tool.execute` or `mm.skill.execute` without invoking `MoonMind.AgentRun` for workload tools in `moonmind/workflows/temporal/workflows/run.py`.
-- [ ] T038 [US3] Confirm managed-session controller code remains unchanged for generic workload execution in `moonmind/workflows/temporal/runtime/managed_session_controller.py`.
+- [ ] T038 [US3] Add a managed-session boundary regression assertion that generic workload tool execution does not invoke `moonmind/workflows/temporal/runtime/managed_session_controller.py` in `tests/unit/workflows/temporal/workflows/test_run_integration.py`.
 
 **Checkpoint**: Docker-backed workload tools are invocable from plans or managed-session-assisted steps without granting the session container Docker authority or creating managed agent runs for workload containers.
 

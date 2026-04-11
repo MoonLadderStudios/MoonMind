@@ -79,6 +79,7 @@ tests/
         └── temporal/
             ├── test_activity_catalog.py
             ├── test_activity_runtime.py
+            ├── test_temporal_workers.py
             ├── test_temporal_worker_runtime.py
             └── workflows/test_run_integration.py
 ```
