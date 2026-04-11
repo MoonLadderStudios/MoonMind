@@ -335,6 +335,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "provider_profile.list": ("artifacts", "provider_profile_list"),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
+    "provider_profile.manager_state": ("artifacts", "provider_profile_manager_state"),
     "provider_profile.verify_lease_holders": (
         "artifacts",
         "provider_profile_verify_lease_holders",
