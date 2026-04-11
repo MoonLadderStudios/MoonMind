@@ -93,6 +93,8 @@ class CommandRunner(Protocol):
         *,
         input_text: str | None = None,
         env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
     ) -> tuple[int, str, str]:
         pass
 
@@ -102,13 +104,25 @@ async def _default_command_runner(
     *,
     input_text: str | None = None,
     env: dict[str, str] | None = None,
+    run_as_uid: int | None = None,
+    run_as_gid: int | None = None,
 ) -> tuple[int, str, str]:
+    subprocess_kwargs: dict[str, Any] = {}
+    geteuid = getattr(os, "geteuid", None)
+    if os.name == "posix" and callable(geteuid) and geteuid() == 0:
+        if run_as_uid is not None or run_as_gid is not None:
+            subprocess_kwargs["extra_groups"] = []
+        if run_as_uid is not None:
+            subprocess_kwargs["user"] = run_as_uid
+        if run_as_gid is not None:
+            subprocess_kwargs["group"] = run_as_gid
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE if input_text is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={**os.environ, **(env or {})},
+        **subprocess_kwargs,
     )
     stdout, stderr = await process.communicate(
         input_text.encode("utf-8") if input_text is not None else None
@@ -168,6 +182,16 @@ class DockerCodexManagedSessionController:
         self._turn_poll_interval_seconds = turn_poll_interval_seconds
         self._turn_poll_timeout_seconds = turn_poll_timeout_seconds
         self._command_runner = command_runner
+
+    @staticmethod
+    def _managed_session_user_command_kwargs() -> dict[str, int]:
+        geteuid = getattr(os, "geteuid", None)
+        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+            return {}
+        return {
+            "run_as_uid": _MANAGED_SESSION_CONTAINER_UID,
+            "run_as_gid": _MANAGED_SESSION_CONTAINER_GID,
+        }
 
     def _docker_env(self) -> dict[str, str]:
         env: dict[str, str] = {}
@@ -470,11 +494,21 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         extra_env: Mapping[str, str] | None = None,
+        run_as_managed_session_user: bool = False,
     ) -> tuple[str, str]:
         env = None
         if extra_env:
             env = {str(key): str(value) for key, value in extra_env.items()}
-        returncode, stdout, stderr = await self._command_runner(tuple(command), env=env)
+        command_kwargs = (
+            self._managed_session_user_command_kwargs()
+            if run_as_managed_session_user
+            else {}
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            tuple(command),
+            env=env,
+            **command_kwargs,
+        )
         if returncode != 0:
             rendered_command, rendered_detail = self._scrub_command_failure(
                 command,
@@ -489,7 +523,11 @@ class DockerCodexManagedSessionController:
         self,
         command: Sequence[str],
     ) -> tuple[str, str]:
-        return await self._run_host_command(command, extra_env=_GIT_COMMAND_LOCALE)
+        return await self._run_host_command(
+            command,
+            extra_env=_GIT_COMMAND_LOCALE,
+            run_as_managed_session_user=True,
+        )
 
     @staticmethod
     def _workspace_git_command(
@@ -510,9 +548,11 @@ class DockerCodexManagedSessionController:
         self,
         command: Sequence[str],
     ) -> tuple[int, str, str]:
+        command_kwargs = self._managed_session_user_command_kwargs()
         return await self._command_runner(
             tuple(command),
             env=dict(_GIT_COMMAND_LOCALE),
+            **command_kwargs,
         )
 
     async def _workspace_is_git_repository(self, *, workspace_path: Path) -> bool:
@@ -542,6 +582,7 @@ class DockerCodexManagedSessionController:
     ) -> None:
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         await self._remove_workspace_path(workspace_path=workspace_path)
+        self._normalize_container_path_owner(workspace_path.parent)
 
         from .launcher import ManagedRuntimeLauncher
 
@@ -601,6 +642,7 @@ class DockerCodexManagedSessionController:
                 request=request,
                 owned_paths=created_paths,
             )
+            self._normalize_container_path_ownership([workspace_path])
             if repository:
                 if not await self._workspace_is_git_repository(workspace_path=workspace_path):
                     await self._clone_workspace(
@@ -724,6 +766,14 @@ class DockerCodexManagedSessionController:
                 target_branch,
             )
         )
+
+    @staticmethod
+    def _normalize_container_path_owner(path: Path) -> None:
+        geteuid = getattr(os, "geteuid", None)
+        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+            return
+        if path.exists():
+            DockerCodexManagedSessionController._chown_path(path)
 
     @staticmethod
     def _normalize_container_path_ownership(paths: Sequence[Path]) -> None:
