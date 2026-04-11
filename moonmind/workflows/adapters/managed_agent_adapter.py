@@ -54,6 +54,12 @@ logger = logging.getLogger(__name__)
 # Only the *key names* are propagated through workflow/activity payloads; the
 # values are injected at launch time by the agent-runtime activity worker.
 _SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GITHUB_TOKEN",)
+_RESERVED_MANAGED_LAUNCH_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "MOONMIND_EXECUTION_PROFILE_REF",
+        "MOONMIND_EXECUTION_PROFILE_RUNTIME",
+    }
+)
 
 _PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
     Path("var/pr_resolver/result.json"),
@@ -98,7 +104,7 @@ def build_managed_profile_launch_context(
 ) -> ManagedProfileLaunchContext:
     """Build deterministic launch metadata safe to compute in workflow code."""
 
-    del runtime_for_profile, workflow_id  # Reserved for activity-side shaping.
+    del workflow_id  # Reserved for activity-side shaping.
     credential_source = str(
         profile.get("credential_source") or default_credential_source
     ).strip() or default_credential_source
@@ -113,8 +119,7 @@ def build_managed_profile_launch_context(
         delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = str(account_label)
 
     profile_id = str(profile.get("profile_id") or "").strip()
-    if profile_id:
-        delta_env_overrides["MOONMIND_EXECUTION_PROFILE_REF"] = profile_id
+    profile_runtime = str(runtime_for_profile or "").strip()
 
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
@@ -122,12 +127,19 @@ def build_managed_profile_launch_context(
             ks = str(key).strip()
             if not ks:
                 continue
+            if ks in _RESERVED_MANAGED_LAUNCH_ENV_KEYS:
+                continue
             if _contains_sensitive_key(
                 {ks: value},
                 allowed_sensitive_keys=_ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
             ):
                 continue
             delta_env_overrides[ks] = str(value) if value is not None else ""
+
+    if profile_id:
+        delta_env_overrides["MOONMIND_EXECUTION_PROFILE_REF"] = profile_id
+    if profile_runtime:
+        delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"] = profile_runtime
 
     passthrough_env_keys = list(_SECRET_ENV_PASSTHROUGH_KEYS)
     return ManagedProfileLaunchContext(
