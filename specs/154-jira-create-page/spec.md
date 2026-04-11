@@ -5,6 +5,27 @@
 **Status**: Draft
 **Input**: User description: "Implement the Jira Create-page integration for MoonMind in runtime mode. Treat docs/UI/CreatePage.md as the canonical desired-state design. Jira must plug into the existing Create page authoring surfaces, use MoonMind-owned browser operations through the trusted Jira boundary, expose rollout-gated runtime config, support browsing Jira project/board/column/issue detail, import Jira text into preset or step instructions, preserve preset reapply semantics and template-bound step edit behavior, keep Jira failures local and non-blocking, include provenance/session preferences, and deliver production runtime code changes plus validation tests."
 
+## Source Document Requirements
+
+The feature is backed by `docs/UI/CreatePage.md`. These source requirements are implementation-agnostic summaries of the desired-state contract and each maps to at least one functional requirement below.
+
+| Requirement ID | Source Citation | Requirement Summary | Functional Requirement Mapping |
+| --- | --- | --- | --- |
+| DOC-REQ-001 | `docs/UI/CreatePage.md` §1, lines 9-21 | The Create page is the single task-composition surface and Jira story text may be imported into either step instructions or preset initial instructions. | FR-013, FR-014, FR-020, FR-022 |
+| DOC-REQ-002 | `docs/UI/CreatePage.md` §3, lines 38-54 | Jira is only an external instruction source; manual entry remains first-class; browser clients must call MoonMind only; imported Jira text is a one-time copy, not a live sync. | FR-005, FR-027, FR-030, FR-032 |
+| DOC-REQ-003 | `docs/UI/CreatePage.md` §6, lines 111-127 | The Jira browser is not a top-level Create page section; it is one shared secondary instruction-source surface invoked from Steps and Task Presets. | FR-013, FR-014, FR-015 |
+| DOC-REQ-004 | `docs/UI/CreatePage.md` §7.3, lines 160-168 | Importing Jira text into a template-bound step counts as a manual instruction edit and detaches template instruction identity when the text diverges. | FR-023, FR-026 |
+| DOC-REQ-005 | `docs/UI/CreatePage.md` §8.3-§8.4, lines 202-224 | Preset initial instructions are the preset-owned objective source; changing them, including through Jira import, must mark applied presets dirty without silently overwriting expanded steps. | FR-021, FR-024, FR-025 |
+| DOC-REQ-006 | `docs/UI/CreatePage.md` §14, lines 325-358 | Jira browser entry points may render only when runtime config explicitly enables Jira integration, and browser clients must not embed Jira credentials or Jira-domain knowledge beyond documented responses. | FR-001, FR-002, FR-003, FR-004, FR-005 |
+| DOC-REQ-007 | `docs/UI/CreatePage.md` §15.1-§15.2, lines 362-426 | MoonMind must provide Create-page-ready board columns and issue lists, resolving board configuration and status-to-column mapping server-side while keeping empty columns renderable. | FR-007, FR-009, FR-010, FR-011 |
+| DOC-REQ-008 | `docs/UI/CreatePage.md` §15.3, lines 428-455 | Issue detail must provide normalized story text and target-specific recommended import text so the browser does not parse Jira rich-text formats. | FR-012 |
+| DOC-REQ-009 | `docs/UI/CreatePage.md` §16-§17, lines 459-516 | One shared Jira browser must preserve draft state, preselect the opening target, allow target visibility or switching, and require explicit import before writing. | FR-015, FR-016, FR-017, FR-018 |
+| DOC-REQ-010 | `docs/UI/CreatePage.md` §18-§19, lines 517-570 | Jira import must support target-aware import modes plus explicit replace and append actions, with append preserving existing text and adding separation. | FR-018, FR-019, FR-020, FR-022 |
+| DOC-REQ-011 | `docs/UI/CreatePage.md` §20, lines 574-601 | Jira provenance is advisory field-level UI metadata; absence of submitted provenance must not block task creation. | FR-027, FR-028, FR-029, FR-030 |
+| DOC-REQ-012 | `docs/UI/CreatePage.md` §21-§22, lines 606-643 | Jira failures and empty states must remain local and additive, while the existing Create page submission flow, objective resolution, and task type remain unchanged. | FR-030, FR-031, FR-032, FR-033 |
+| DOC-REQ-013 | `docs/UI/CreatePage.md` §23, lines 647-659 | Jira browser controls and field affordances must meet the same accessibility expectations as the rest of Mission Control. | FR-036 |
+| DOC-REQ-014 | `docs/UI/CreatePage.md` §24, lines 661-675 | Test coverage must include hidden entry points, board/column behavior, issue selection, import targets, template detachment, preset reapply signaling, failure isolation, and unchanged submission behavior. | FR-035 |
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Discover Jira Capability Safely (Priority: P1)
@@ -98,41 +119,42 @@ A task author receives clear signals when Jira import affects preset inputs or t
 
 ### Functional Requirements
 
-- **FR-001**: System MUST keep Create-page Jira browser exposure controlled by a UI-specific rollout setting that is separate from trusted Jira tool enablement.
-- **FR-002**: System MUST omit Jira browser sources and Jira integration metadata from the Create-page boot payload when the Jira UI rollout is disabled.
-- **FR-003**: System MUST include Jira browser source locations and Jira integration metadata in the Create-page boot payload when the Jira UI rollout is enabled.
-- **FR-004**: System MUST surface configured default Jira project, default Jira board, and session-memory preference values to the Create page when Jira UI is enabled.
-- **FR-005**: System MUST ensure browser clients interact only with MoonMind-owned Jira browser operations and never receive raw Jira credentials.
+- **FR-001**: System MUST keep Create-page Jira browser exposure controlled by a UI-specific rollout setting that is separate from trusted Jira tool enablement. (DOC-REQ-006)
+- **FR-002**: System MUST omit Jira browser sources and Jira integration metadata from the Create-page boot payload when the Jira UI rollout is disabled. (DOC-REQ-006)
+- **FR-003**: System MUST include Jira browser source locations and Jira integration metadata in the Create-page boot payload when the Jira UI rollout is enabled. (DOC-REQ-006)
+- **FR-004**: System MUST surface configured default Jira project, default Jira board, and session-memory preference values to the Create page when Jira UI is enabled. (DOC-REQ-006)
+- **FR-005**: System MUST ensure browser clients interact only with MoonMind-owned Jira browser operations and never receive raw Jira credentials. (DOC-REQ-002, DOC-REQ-006)
 - **FR-006**: System MUST verify the configured Jira connection through the trusted MoonMind Jira boundary before presenting Jira data as available.
-- **FR-007**: System MUST provide project, board, board-column, board-issue, and issue-detail browsing capabilities through the trusted Jira boundary.
+- **FR-007**: System MUST provide project, board, board-column, board-issue, and issue-detail browsing capabilities through the trusted Jira boundary. (DOC-REQ-007)
 - **FR-008**: System MUST enforce configured Jira project allowlists and Jira policy decisions on all browser-facing Jira read operations.
-- **FR-009**: System MUST normalize Jira board configuration into stable column records that preserve board order.
-- **FR-010**: System MUST map Jira issues to board columns using board status mappings and provide safe handling for statuses that cannot be mapped.
-- **FR-011**: System MUST return normalized issue summaries suitable for list display without exposing unnecessary raw Jira response data.
-- **FR-012**: System MUST return normalized issue detail containing description text, acceptance criteria text, recommended preset-instruction import text, and recommended step-instruction import text.
-- **FR-013**: Users MUST be able to open one shared Jira browser surface from the preset Feature Request / Initial Instructions field.
-- **FR-014**: Users MUST be able to open the same shared Jira browser surface from any step Instructions field.
-- **FR-015**: System MUST keep only one Jira browser surface open at a time and preserve the current import target context.
-- **FR-016**: Users MUST be able to navigate from project to board to column to issue detail before importing text.
-- **FR-017**: Users MUST be able to choose an import target of either preset instructions or one specific step's instructions.
-- **FR-018**: Users MUST be able to choose replace or append behavior before applying an import.
-- **FR-019**: Users MUST be able to import at least four normalized text modes: preset brief, execution brief, description only, and acceptance criteria only.
-- **FR-020**: System MUST write preset-target imports into the preset Feature Request / Initial Instructions field.
-- **FR-021**: System MUST preserve objective precedence so non-empty preset initial instructions remain preferred over primary step instructions for task objective resolution.
-- **FR-022**: System MUST write step-target imports only into the selected step's Instructions field.
-- **FR-023**: System MUST treat Jira import into a template-bound step as a manual instruction edit, including detaching template identity when the imported text diverges from template instructions.
-- **FR-024**: System MUST show a non-blocking reapply-needed message when Jira import changes preset instructions after a preset has already been applied.
-- **FR-025**: System MUST NOT silently rewrite already-expanded preset steps when preset instructions change through Jira import.
-- **FR-026**: System MUST warn before importing into a template-bound step that the step will become manually customized while still allowing the import.
-- **FR-027**: System MUST track local Jira import provenance for issue key, board, import mode, and target type.
-- **FR-028**: System MUST show a compact Jira issue marker near a field or section changed by Jira import.
-- **FR-029**: System MUST remember the last selected Jira project and board for the browser session only when session memory is enabled.
-- **FR-030**: System MUST keep the task submission contract unchanged for the initial delivery and MUST NOT require Jira provenance in the submitted task payload.
-- **FR-031**: System MUST keep Jira loading and request failures local to the Jira browser surface.
-- **FR-032**: System MUST keep manual step editing, preset editing, and task creation usable when Jira is unavailable.
-- **FR-033**: System MUST only block an import action while the user is actively waiting on that import, and MUST NOT disable general task creation because Jira failed.
+- **FR-009**: System MUST normalize Jira board configuration into stable column records that preserve board order. (DOC-REQ-007)
+- **FR-010**: System MUST map Jira issues to board columns using board status mappings and provide safe handling for statuses that cannot be mapped. (DOC-REQ-007)
+- **FR-011**: System MUST return normalized issue summaries suitable for list display without exposing unnecessary raw Jira response data. (DOC-REQ-007)
+- **FR-012**: System MUST return normalized issue detail containing description text, acceptance criteria text, recommended preset-instruction import text, and recommended step-instruction import text. (DOC-REQ-008)
+- **FR-013**: Users MUST be able to open one shared Jira browser surface from the preset Feature Request / Initial Instructions field. (DOC-REQ-001, DOC-REQ-003)
+- **FR-014**: Users MUST be able to open the same shared Jira browser surface from any step Instructions field. (DOC-REQ-001, DOC-REQ-003)
+- **FR-015**: System MUST keep only one Jira browser surface open at a time and preserve the current import target context. (DOC-REQ-003, DOC-REQ-009)
+- **FR-016**: Users MUST be able to navigate from project to board to column to issue detail before importing text. (DOC-REQ-009)
+- **FR-017**: Users MUST be able to choose an import target of either preset instructions or one specific step's instructions. (DOC-REQ-009)
+- **FR-018**: Users MUST be able to choose replace or append behavior before applying an import. (DOC-REQ-009, DOC-REQ-010)
+- **FR-019**: Users MUST be able to import at least four normalized text modes: preset brief, execution brief, description only, and acceptance criteria only. (DOC-REQ-010)
+- **FR-020**: System MUST write preset-target imports into the preset Feature Request / Initial Instructions field. (DOC-REQ-001, DOC-REQ-010)
+- **FR-021**: System MUST preserve objective precedence so non-empty preset initial instructions remain preferred over primary step instructions for task objective resolution. (DOC-REQ-005)
+- **FR-022**: System MUST write step-target imports only into the selected step's Instructions field. (DOC-REQ-001, DOC-REQ-010)
+- **FR-023**: System MUST treat Jira import into a template-bound step as a manual instruction edit, including detaching template identity when the imported text diverges from template instructions. (DOC-REQ-004)
+- **FR-024**: System MUST show a non-blocking reapply-needed message when Jira import changes preset instructions after a preset has already been applied. (DOC-REQ-005)
+- **FR-025**: System MUST NOT silently rewrite already-expanded preset steps when preset instructions change through Jira import. (DOC-REQ-005)
+- **FR-026**: System MUST warn before importing into a template-bound step that the step will become manually customized while still allowing the import. (DOC-REQ-004)
+- **FR-027**: System MUST track local Jira import provenance for issue key, board, import mode, and target type. (DOC-REQ-002, DOC-REQ-011)
+- **FR-028**: System MUST show a compact Jira issue marker near a field or section changed by Jira import. (DOC-REQ-011)
+- **FR-029**: System MUST remember the last selected Jira project and board for the browser session only when session memory is enabled. (DOC-REQ-011)
+- **FR-030**: System MUST keep the task submission contract unchanged for the initial delivery and MUST NOT require Jira provenance in the submitted task payload. (DOC-REQ-002, DOC-REQ-011, DOC-REQ-012)
+- **FR-031**: System MUST keep Jira loading and request failures local to the Jira browser surface. (DOC-REQ-012)
+- **FR-032**: System MUST keep manual step editing, preset editing, and task creation usable when Jira is unavailable. (DOC-REQ-002, DOC-REQ-012)
+- **FR-033**: System MUST only block an import action while the user is actively waiting on that import, and MUST NOT disable general task creation because Jira failed. (DOC-REQ-012)
 - **FR-034**: Required deliverables MUST include production runtime code changes, not docs/spec-only changes.
-- **FR-035**: Required deliverables MUST include validation tests covering the runtime configuration, trusted Jira browser path, normalization behavior, policy/secret safety, Create-page browsing, import behavior, preset safety, and Jira failure isolation.
+- **FR-035**: Required deliverables MUST include validation tests covering the runtime configuration, trusted Jira browser path, normalization behavior, policy/secret safety, Create-page browsing, import behavior, preset safety, and Jira failure isolation. (DOC-REQ-014)
+- **FR-036**: System MUST make Jira browser open, close, target, column navigation, issue selection, and import actions keyboard accessible with clear target context and predictable focus behavior after import. (DOC-REQ-013)
 
 ### Key Entities *(include if feature involves data)*
 
@@ -158,4 +180,4 @@ A task author receives clear signals when Jira import affects preset inputs or t
 - **SC-005**: Importing into preset instructions after preset application never changes already-expanded steps unless the user explicitly reapplies the preset.
 - **SC-006**: Importing into a template-bound step is recorded as a manual customization in all covered tests.
 - **SC-007**: Jira browser failures do not prevent a user from manually editing a task and submitting it.
-- **SC-008**: Automated validation covers runtime configuration, browser operation behavior, issue normalization, policy denial, secret redaction, Create-page navigation, import behavior, preset reapply messaging, and Jira failure isolation.
+- **SC-008**: Automated validation covers runtime configuration, browser operation behavior, issue normalization, policy denial, secret redaction, Create-page navigation, import behavior, preset reapply messaging, accessibility expectations, and Jira failure isolation.
