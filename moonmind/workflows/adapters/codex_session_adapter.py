@@ -48,6 +48,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
 from moonmind.workflows.codex_session_timeouts import (
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
+from moonmind.workflows.provider_failures import classify_retryable_provider_failure
 from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
@@ -100,6 +101,14 @@ def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
         return normalized
     truncated = normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS].rstrip()
     return truncated or normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS]
+
+
+class CodexSessionRunFailedError(RuntimeError):
+    """Raised when a Codex session run persisted a structured failed result."""
+
+    def __init__(self, message: str, *, result: AgentRunResult) -> None:
+        super().__init__(message)
+        self.agent_run_result = result
 
 
 class CodexSessionExecutionState(BaseModel):
@@ -282,7 +291,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         f" with status '{turn_response.status}'"
                     ),
                 )
-                self._persist_failed_run_state(
+                publication = await self._publish_failure_artifacts(
+                    locator=current_locator,
+                    managed_run_id=binding.task_run_id,
+                    run_id=run_id,
+                )
+                failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
                     managed_run_id=binding.task_run_id,
@@ -292,16 +306,30 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     active_turn_id=current_active_turn_id,
                     summary=reason,
                     default_summary=reason,
-                    output_refs=turn_response.output_refs,
+                    output_refs=self._merge_output_refs(
+                        turn_response.output_refs,
+                        (
+                            publication.published_artifact_refs
+                            if publication is not None
+                            else ()
+                        ),
+                    ),
                     started_at=started_at,
                     finished_at=_current_time(),
                     instruction_ref=original_instruction_ref,
                     resolved_skillset_ref=original_skillset_ref,
                     turn_id=turn_id,
                     profile_id=launch_context.profile_id or None,
+                    session_artifacts=(
+                        publication.model_dump(mode="json", by_alias=True)
+                        if publication is not None
+                        else None
+                    ),
+                    turn_status=turn_response.status,
+                    turn_metadata=turn_response.metadata,
                 )
                 failed_state_persisted = True
-                raise RuntimeError(reason)
+                raise CodexSessionRunFailedError(reason, result=failure_result)
 
             publication: CodexManagedSessionArtifactsPublication | None = None
             try:
@@ -349,7 +377,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     },
                 )
             except Exception as exc:
-                self._persist_failed_run_state(
+                failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
                     managed_run_id=binding.task_run_id,
@@ -369,9 +397,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     resolved_skillset_ref=original_skillset_ref,
                     turn_id=turn_id,
                     profile_id=launch_context.profile_id or None,
+                    session_artifacts=(
+                        publication.model_dump(mode="json", by_alias=True)
+                        if publication is not None
+                        else None
+                    ),
                 )
                 failed_state_persisted = True
-                raise
+                raise CodexSessionRunFailedError(str(exc), result=failure_result) from exc
 
             self._save_run_state(
                 run_id=run_id,
@@ -404,7 +437,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
         except Exception as exc:
             if not failed_state_persisted:
-                self._persist_failed_run_state(
+                failure_result = self._persist_failed_run_state(
                     run_id=run_id,
                     agent_id=request.agent_id,
                     managed_run_id=binding.task_run_id,
@@ -421,6 +454,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     turn_id=turn_id,
                     profile_id=launch_context.profile_id or None,
                 )
+                raise CodexSessionRunFailedError(
+                    str(exc) or "Codex managed-session turn failed",
+                    result=failure_result,
+                ) from exc
             raise
 
     async def status(self, run_id: str) -> AgentRunStatus:
@@ -1107,20 +1144,53 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         profile_id: str | None,
         output_refs: tuple[str, ...] | list[str] = (),
         turn_id: str | None = None,
-    ) -> None:
+        session_artifacts: Mapping[str, Any] | None = None,
+        turn_status: str | None = None,
+        turn_metadata: Mapping[str, Any] | None = None,
+    ) -> AgentRunResult:
+        summary_text = _clamp_agent_run_result_summary(
+            summary,
+            default=default_summary,
+        )
+        classification = classify_retryable_provider_failure(summary_text)
         metadata: dict[str, Any] = {
             "instructionRef": instruction_ref,
             "resolvedSkillsetRef": resolved_skillset_ref,
         }
+        if profile_id:
+            metadata["profileId"] = profile_id
         if turn_id:
             metadata["turnId"] = turn_id
+        if turn_status:
+            metadata["turnStatus"] = turn_status
+        if turn_metadata:
+            metadata["turnMetadata"] = dict(turn_metadata)
+        if session_artifacts is not None:
+            metadata["sessionArtifacts"] = dict(session_artifacts)
+        if classification is not None:
+            metadata["providerFailure"] = {
+                "providerErrorCode": classification.provider_error_code,
+                "retryRecommendation": classification.retry_recommendation,
+                "reason": classification.reason,
+            }
         failure_result = AgentRunResult(
             outputRefs=list(output_refs),
-            summary=_clamp_agent_run_result_summary(
-                summary,
-                default=default_summary,
+            summary=summary_text,
+            failureClass=(
+                classification.failure_class
+                if classification is not None
+                else "execution_error"
             ),
-            failureClass="execution_error",
+            providerErrorCode=(
+                classification.provider_error_code
+                if classification is not None
+                else None
+            ),
+            retryRecommendation=(
+                classification.retry_recommendation
+                if classification is not None
+                else None
+            ),
             metadata=metadata,
         )
         self._save_run_state(
@@ -1137,6 +1207,30 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             finished_at=finished_at,
             profile_id=profile_id,
         )
+        return failure_result
+
+    async def _publish_failure_artifacts(
+        self,
+        *,
+        locator: CodexManagedSessionLocator,
+        managed_run_id: str | None,
+        run_id: str,
+    ) -> CodexManagedSessionArtifactsPublication | None:
+        try:
+            return await self._coerce_publication(
+                self._publish_remote_artifacts(
+                    PublishCodexManagedSessionArtifactsRequest(
+                        sessionId=locator.session_id,
+                        sessionEpoch=locator.session_epoch,
+                        containerId=locator.container_id,
+                        threadId=locator.thread_id,
+                        taskRunId=managed_run_id or run_id,
+                        metadata={"runId": run_id, "workflowId": self._workflow_id},
+                    )
+                )
+            )
+        except Exception:
+            return None
 
     def _merge_output_refs(self, *groups: Any) -> list[str]:
         seen: list[str] = []

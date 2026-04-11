@@ -556,7 +556,7 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
 
     assert str(excinfo.value) == expected_reason
     assert summary_calls == []
-    assert publication_calls == []
+    assert len(publication_calls) == 1
     persisted_record = run_store.load(binding.task_run_id)
     assert persisted_record is not None
     assert persisted_record.status == "failed"
@@ -564,10 +564,106 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     assert persisted_record.live_stream_capable is True
     assert persisted_record.error_message == expected_reason
     assert persisted_record.failure_class == "execution_error"
+    assert persisted_record.stdout_artifact_ref == "artifact:stdout"
+    assert persisted_record.stderr_artifact_ref == "artifact:stderr"
+    assert persisted_record.diagnostics_ref == "artifact:diagnostics"
     assert persisted_record.session_id == binding.session_id
     assert persisted_record.session_epoch == binding.session_epoch + 1
     assert persisted_record.container_id == "container-2"
     assert persisted_record.thread_id == "thread-2"
+
+
+async def test_start_classifies_codex_provider_capacity_failure_and_publishes_artifacts(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    reason = "We're currently experiencing high demand, which may cause temporary errors."
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+            status="failed",
+            assistant_text="",
+        ).model_copy(update={"metadata": {"reason": reason}})
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(),
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    result = excinfo.value.agent_run_result
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "provider_capacity"
+    assert result.retry_recommendation == "retry_after_cooldown"
+    assert result.output_refs == [
+        "artifact:turn-output",
+        "artifact:stdout",
+        "artifact:stderr",
+        "artifact:diagnostics",
+        "artifact:observability.events.jsonl",
+        "artifact:session-summary",
+        "artifact:session-checkpoint",
+    ]
+    assert result.metadata["providerFailure"]["providerErrorCode"] == "provider_capacity"
+    assert result.metadata["profileId"] == "codex-default"
+
+    persisted_record = run_store.load(binding.task_run_id)
+    assert persisted_record is not None
+    assert persisted_record.failure_class == "integration_error"
+    assert persisted_record.provider_error_code == "provider_capacity"
+    assert persisted_record.stdout_artifact_ref == "artifact:stdout"
+    assert persisted_record.stderr_artifact_ref == "artifact:stderr"
+    assert persisted_record.diagnostics_ref == "artifact:diagnostics"
 
 
 @pytest.mark.parametrize(

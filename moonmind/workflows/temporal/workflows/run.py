@@ -2308,9 +2308,12 @@ class MoonMindRunWorkflow:
         binding = self._codex_session_binding
         try:
             if handle is not None and binding is not None:
+                session_handle = workflow.get_external_workflow_handle(
+                    binding.workflow_id
+                )
                 if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     try:
-                        await handle.execute_update(
+                        await session_handle.execute_update(
                             "TerminateSession",
                             {
                                 "reason": reason,
@@ -2322,7 +2325,7 @@ class MoonMindRunWorkflow:
                             binding.session_id,
                             exc,
                         )
-                        await handle.signal(
+                        await session_handle.signal(
                             "control_action",
                             {
                                 "action": "terminate_session",
@@ -2366,7 +2369,7 @@ class MoonMindRunWorkflow:
                             binding.session_id,
                             exc,
                         )
-                    await handle.signal(
+                    await session_handle.signal(
                         "control_action",
                         {
                             "action": "terminate_session",
@@ -2374,7 +2377,7 @@ class MoonMindRunWorkflow:
                         },
                     )
                 else:
-                    await handle.signal(
+                    await session_handle.signal(
                         "control_action",
                         {
                             "action": "terminate_session",
