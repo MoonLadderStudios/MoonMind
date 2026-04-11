@@ -626,12 +626,16 @@ class MoonMindAgentRun:
         self,
         *,
         runtime_id: str,
+        requester_workflow_id: str,
     ) -> dict[str, Any]:
         """Fetch a compact manager-health snapshot before resetting it."""
 
         result = await self._execute_routed_activity(
             "provider_profile.manager_state",
-            {"runtime_id": runtime_id},
+            {
+                "runtime_id": runtime_id,
+                "requester_workflow_id": requester_workflow_id,
+            },
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
         if isinstance(result, dict):
@@ -1040,15 +1044,41 @@ class MoonMindAgentRun:
                                         type="SlotAcquisitionTimeout",
                                         non_retryable=True,
                                     )
+                                selector_payload = request.profile_selector.model_dump(
+                                    by_alias=True,
+                                    exclude_none=True,
+                                )
                                 if workflow.patched(MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID):
-                                    manager_state = await self._manager_state_for_slot_wait(
-                                        runtime_id=runtime_id,
-                                    )
-                                    if manager_state.get("running") is True:
-                                        selector_payload = request.profile_selector.model_dump(
-                                            by_alias=True,
-                                            exclude_none=True,
+                                    try:
+                                        manager_state = await self._manager_state_for_slot_wait(
+                                            runtime_id=runtime_id,
+                                            requester_workflow_id=workflow.info().workflow_id,
                                         )
+                                    except CancelledError:
+                                        raise
+                                    except Exception as exc:
+                                        self._get_logger().warning(
+                                            "Auth profile manager %s state inspection failed while %s waits for a slot; falling back to reset path: %s",
+                                            manager_id,
+                                            workflow.info().workflow_id,
+                                            exc,
+                                        )
+                                        manager_state = {"running": False}
+                                    if manager_state.get("running") is True:
+                                        if manager_state.get("requester_pending") is True:
+                                            self._get_logger().warning(
+                                                "Auth profile manager %s is responsive while %s already waits in the pending queue; continuing without reset or duplicate request",
+                                                manager_id,
+                                                workflow.info().workflow_id,
+                                            )
+                                            manager_handle = workflow.get_external_workflow_handle(
+                                                manager_id
+                                            )
+                                            await self._sync_manager_profiles(
+                                                manager_handle=manager_handle,
+                                                runtime_id=runtime_id,
+                                            )
+                                            continue
                                         self._get_logger().warning(
                                             "Auth profile manager %s is responsive while %s waits for a slot; re-requesting without reset",
                                             manager_id,
@@ -1067,10 +1097,6 @@ class MoonMindAgentRun:
                                         )
                                         continue
                                 self.slot_assigned_event.clear()
-                                selector_payload = request.profile_selector.model_dump(
-                                    by_alias=True,
-                                    exclude_none=True,
-                                )
                                 manager_handle = await self._reset_and_request_slot(
                                     manager_id,
                                     runtime_id,

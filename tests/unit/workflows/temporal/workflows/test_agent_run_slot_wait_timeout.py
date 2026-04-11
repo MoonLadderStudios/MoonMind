@@ -140,3 +140,21 @@ class TestSlotWaitRetryBehavior:
 
         assert "_ensure_manager_and_signal" in source
         assert "manager_handle.signal(\"request_slot\"" not in source
+
+    def test_slot_timeout_probe_failure_falls_back_to_reset(self):
+        """Manager inspection errors must not fail the AgentRun timeout path."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert "except CancelledError:" in source
+        assert "falling back to reset path" in source
+        assert 'manager_state = {"running": False}' in source
+
+    def test_healthy_manager_does_not_duplicate_pending_request(self):
+        """If this workflow is already pending, timeout recovery must not re-signal."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+        pending_index = source.index('manager_state.get("requester_pending") is True')
+        rerequest_index = source.index("re-requesting without reset")
+
+        assert pending_index < rerequest_index
+        assert "continuing without reset or duplicate request" in source
+        assert "requester_workflow_id=workflow.info().workflow_id" in source
