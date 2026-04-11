@@ -43,16 +43,19 @@
 ### ClearSession
 
 - Fields:
+  - `sessionEpoch` (required, integer >= 1)
   - `reason` (optional, non-blank)
 
 ### CancelSession
 
 - Fields:
+  - `sessionEpoch` (required, integer >= 1)
   - `reason` (optional, non-blank)
 
 ### TerminateSession
 
 - Fields:
+  - `sessionEpoch` (required, integer >= 1)
   - `reason` (optional, non-blank)
 
 ## Validator Context

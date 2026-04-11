@@ -18,7 +18,7 @@ The generic mutating `control_action` signal is not part of the Phase 1 contract
 
 - Any update that depends on runtime state rejects if runtime handles are missing.
 - `InterruptTurn` and `SteerTurn` reject when there is no active turn.
-- `InterruptTurn` and `SteerTurn` reject when the provided `sessionEpoch` does not match the workflow binding epoch.
+- `InterruptTurn`, `SteerTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` reject when the provided `sessionEpoch` does not match the workflow binding epoch.
 - `ClearSession` rejects while the workflow is already clearing.
 - All mutating updates reject once the workflow is canceling, terminating, or terminated.
 
@@ -28,5 +28,6 @@ The generic mutating `control_action` signal is not part of the Phase 1 contract
 - `InterruptTurn` -> `agent_runtime.interrupt_turn`
 - `SteerTurn` -> `agent_runtime.steer_turn`
 - `ClearSession` -> `agent_runtime.clear_session`
+- `TerminateSession` -> `agent_runtime.terminate_session` when runtime handles are attached
 
-`CancelSession` and `TerminateSession` remain workflow-owned state transitions in this slice; true terminate semantics are deferred to later phases.
+`CancelSession` remains a workflow-owned state transition in this slice. Full Phase 2 cancellation semantics and end-to-end steering behavior remain deferred.
