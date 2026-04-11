@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Iterator
-from uuid import uuid4
-from unittest.mock import AsyncMock, MagicMock, patch
 from types import SimpleNamespace
+from typing import Iterator
+from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import quote
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -59,6 +60,41 @@ def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tu
 # Legacy web_ro session unit tests removed in Phase 6.
 
 
+def _encoded_task_run_path_id(task_run_id: str) -> str:
+    return quote(task_run_id, safe="")
+
+
+def _task_run_api_path(task_run_id: str) -> str:
+    return f"/api/task-runs/{_encoded_task_run_path_id(task_run_id)}"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "/observability-summary",
+        "/observability/events",
+        "/logs/stream",
+        "/logs/stdout",
+        "/diagnostics",
+    ],
+)
+def test_task_run_observability_endpoints_reject_invalid_task_run_id(
+    client: tuple[TestClient, AsyncMock],
+    suffix: str,
+) -> None:
+    test_client, _ = client
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedRunStore.load",
+        side_effect=ValueError("run_id resolves outside store root"),
+    ) as load_record:
+        response = test_client.get(f"/api/task-runs/invalid-run-id{suffix}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Invalid task run id"
+    load_record.assert_called_once_with("invalid-run-id")
+
+
 # ---------------------------------------------------------------------------
 # Observability summary
 # ---------------------------------------------------------------------------
@@ -106,6 +142,30 @@ def test_get_observability_summary_returns_200(
     body = response.json()["summary"]
     assert body["runId"] == str(run_id)
     assert body["status"] == "running"
+
+
+def test_get_observability_summary_accepts_moonmind_task_run_id(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    task_run_id = f"mm:{uuid4()}"
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"runId": task_run_id, "status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ) as load_record:
+        response = test_client.get(
+            f"{_task_run_api_path(task_run_id)}/observability-summary"
+        )
+
+    assert response.status_code == 200
+    load_record.assert_called_once_with(task_run_id)
+    assert response.json()["summary"]["runId"] == task_run_id
 
 
 def test_get_observability_summary_returns_session_backed_artifact_refs(
@@ -479,6 +539,69 @@ def test_stream_task_run_log_returns_file_response(
     assert mock_file_response.call_args[1]["media_type"] == "text/plain"
     assert response.status_code == 200
     assert response.content == b"mock_log_data"
+
+
+@pytest.mark.parametrize(
+    (
+        "suffix",
+        "artifact_ref_attr",
+        "artifact_ref",
+        "media_type",
+        "response_content",
+    ),
+    [
+        (
+            "/logs/stdout",
+            "stdout_artifact_ref",
+            "test/stdout.log",
+            "text/plain",
+            b"prefixed task output",
+        ),
+        (
+            "/diagnostics",
+            "diagnostics_ref",
+            "test/diagnostics.json",
+            "application/json",
+            b'{"prefixed":true}',
+        ),
+    ],
+)
+def test_file_backed_task_run_endpoints_accept_moonmind_task_run_id(
+    client: tuple[TestClient, AsyncMock],
+    suffix: str,
+    artifact_ref_attr: str,
+    artifact_ref: str,
+    media_type: str,
+    response_content: bytes,
+) -> None:
+    test_client, _ = client
+    task_run_id = f"mm:{uuid4()}"
+    mock_record = MagicMock()
+    setattr(mock_record, artifact_ref_attr, artifact_ref)
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ) as load_record:
+        with patch("pathlib.Path.is_file", return_value=True):
+            with patch("pathlib.Path.is_relative_to", return_value=True):
+                with patch(
+                    "api_service.api.routers.task_runs.FileResponse"
+                ) as mock_file_response:
+                    from fastapi.responses import Response
+
+                    mock_file_response.return_value = Response(
+                        content=response_content,
+                        media_type=media_type,
+                    )
+                    response = test_client.get(
+                        f"{_task_run_api_path(task_run_id)}{suffix}"
+                    )
+
+    assert response.status_code == 200
+    load_record.assert_called_once_with(task_run_id)
+    assert mock_file_response.call_args[1]["media_type"] == media_type
+    assert response.content == response_content
 
 
 @pytest.mark.parametrize(
@@ -1198,6 +1321,36 @@ def test_get_task_run_observability_events_reads_structured_spool_history(
     assert "session_id" not in body["events"][1]
 
 
+def test_get_task_run_observability_events_accepts_moonmind_task_run_id(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    task_run_id = f"mm:{uuid4()}"
+    mock_record = MagicMock()
+    mock_record.workspace_path = "/tmp/workspace"
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ) as load_record:
+        with patch(
+            "api_service.api.routers.task_runs._load_task_run_session_record",
+            return_value=None,
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_task_run_observability_events",
+                return_value=([], "artifacts"),
+            ):
+                response = test_client.get(
+                    f"{_task_run_api_path(task_run_id)}/observability/events"
+                )
+
+    assert response.status_code == 200
+    load_record.assert_called_once_with(task_run_id)
+    assert response.json()["events"] == []
+
+
 def test_get_task_run_observability_events_filters_spool_fallback_rows(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -1882,6 +2035,27 @@ def test_stream_task_run_live_logs_rejects_non_live_capable_active_run(
         response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stream")
 
     assert response.status_code == 400
+    assert response.json()["detail"] == "Live streaming is not supported for this run."
+
+
+def test_stream_task_run_live_logs_accepts_moonmind_task_run_id(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    task_run_id = f"mm:{uuid4()}"
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = False
+    mock_record.workspace_path = "/tmp/workspace"
+
+    with patch(
+        "api_service.api.routers.task_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ) as load_record:
+        response = test_client.get(f"{_task_run_api_path(task_run_id)}/logs/stream")
+
+    assert response.status_code == 400
+    load_record.assert_called_once_with(task_run_id)
     assert response.json()["detail"] == "Live streaming is not supported for this run."
 
 
