@@ -8487,6 +8487,8 @@ export interface operations {
                 limit?: number;
                 stream?: ("stdout" | "stderr" | "system" | "session")[] | null;
                 kind?: string[] | null;
+                sessionEpoch?: number[] | null;
+                threadId?: string[] | null;
             };
             header?: never;
             path: {
