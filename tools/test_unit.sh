@@ -137,10 +137,17 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
         (cd "$REPO_ROOT" && npm ci --no-fund --no-audit)
     fi
 
-    # Allow targeted frontend test runs via --ui-args (e.g. --ui-args src/components/App.tsx).
+    VITEST_BIN="$REPO_ROOT/node_modules/.bin/vitest"
+    if [[ ! -x "$VITEST_BIN" ]]; then
+        echo "Error: vitest was not installed at $VITEST_BIN." >&2
+        exit 127
+    fi
+
+    # Invoke the local binary directly because managed-agent workspaces can include
+    # ':' in their path, which makes npm's PATH-based bin lookup ambiguous.
     if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
-        npm run ui:test -- "${UI_TEST_ARGS[@]}"
+        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS[@]}")
     else
-        npm run ui:test
+        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts)
     fi
 fi
