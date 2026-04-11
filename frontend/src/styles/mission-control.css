@@ -18,7 +18,7 @@
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
-  --mm-font-headline: "Barlow Condensed", var(--mm-font-sans);
+  --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
@@ -191,13 +191,9 @@ h1 {
   margin: 0.35rem 0 0.2rem;
   font-family: var(--mm-font-headline);
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   font-size: clamp(1.7rem, 3vw, 2.55rem);
   line-height: 1;
-}
-
-.masthead-title-row h1 {
-  font-size: clamp(1.35rem, 2vw, 1.8rem);
 }
 
 .masthead-meta {
