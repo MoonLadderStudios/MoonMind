@@ -1423,6 +1423,135 @@ def test_get_task_run_observability_events_applies_since_stream_and_kind_filters
     assert all(event["stream"] == "session" for event in body["events"])
 
 
+def test_get_task_run_observability_events_applies_session_epoch_and_thread_filters(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 6,
+                        "stream": "session",
+                        "text": "old thread\n",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "session_reset_boundary",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 1,
+                        "threadId": "thread-1",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 7,
+                        "stream": "session",
+                        "text": "current thread\n",
+                        "timestamp": "2026-04-08T00:00:02Z",
+                        "kind": "summary_published",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 2,
+                        "threadId": "thread-2",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 8,
+                        "stream": "session",
+                        "text": "other thread same epoch\n",
+                        "timestamp": "2026-04-08T00:00:03Z",
+                        "kind": "checkpoint_published",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 2,
+                        "threadId": "thread-3",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/task-runs/{uuid4()}/observability/events?sessionEpoch=2&threadId=thread-2"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [7]
+    assert body["events"][0]["sessionEpoch"] == 2
+    assert body["events"][0]["threadId"] == "thread-2"
+
+
+def test_get_task_run_observability_events_rejects_invalid_session_epoch_filter(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?sessionEpoch=0")
+
+    assert response.status_code == 422
+    load_record.assert_not_called()
+
+
+def test_get_task_run_observability_events_rejects_blank_thread_id_filter(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load") as load_record:
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability/events?threadId=%20%20%20")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "threadId must not contain blank values"
+    load_record.assert_not_called()
+
+
+def test_observability_event_session_epoch_filter_coerces_string_rows() -> None:
+    events = [
+        {
+            "sequence": 1,
+            "stream": "session",
+            "kind": "summary_published",
+            "sessionEpoch": "2",
+            "threadId": "thread-2",
+        },
+        {
+            "sequence": 2,
+            "stream": "session",
+            "kind": "summary_published",
+            "sessionEpoch": "not-an-int",
+            "threadId": "thread-2",
+        },
+    ]
+
+    filtered = task_runs_router._filter_observability_events(
+        events,
+        session_epochs={2},
+        thread_ids={"thread-2"},
+    )
+
+    assert [event["sequence"] for event in filtered] == [1]
+
+
 def test_get_task_run_observability_events_limits_to_oldest_matching_rows_after_since(
     client: tuple[TestClient, AsyncMock],
     tmp_path,

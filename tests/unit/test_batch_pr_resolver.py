@@ -276,9 +276,19 @@ def test_parent_run_scope_hashes_nonstandard_session_spool_path(
     assert parent_run_scope() == stable_scope_from_path(spool)
 
 
-def test_parent_run_scope_reuses_task_context_artifacts_helper(tmp_path: Path) -> None:
+def test_parent_run_scope_reuses_task_context_artifacts_helper(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
     module = _load_module()
     parent_run_scope = module["_parent_run_scope"]
+    for env_key in (
+        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_RUN_ID",
+        "TASK_RUN_ID",
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
 
     task_context = tmp_path / "task-parent" / "artifacts" / "task_context.json"
     task_context.parent.mkdir(parents=True)
