@@ -2320,10 +2320,36 @@ class MoonMindRunWorkflow:
                 if workflow.patched(
                     RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH
                 ):
-                    await session_handle.execute_update(
-                        "TerminateSession",
-                        {"reason": reason},
-                    )
+                    try:
+                        await session_handle.execute_update(
+                            "TerminateSession",
+                            {"reason": reason},
+                        )
+                    except Exception as exc:
+                        self._get_logger().warning(
+                            "Task-scoped Codex terminate update failed for %s: %s",
+                            binding.session_id,
+                            exc,
+                        )
+                        try:
+                            await self._terminate_task_scoped_session_via_activity(
+                                binding=binding,
+                                reason=reason,
+                            )
+                        except Exception as activity_exc:
+                            self._get_logger().warning(
+                                "Task-scoped Codex terminate activity failed for %s; "
+                                "falling back to session signal: %s",
+                                binding.session_id,
+                                activity_exc,
+                            )
+                        await session_handle.signal(
+                            "control_action",
+                            {
+                                "action": "terminate_session",
+                                "reason": reason,
+                            },
+                        )
                 elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     await session_handle.signal(
                         "control_action",
@@ -2334,34 +2360,10 @@ class MoonMindRunWorkflow:
                     )
                 elif workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_PATCH):
                     try:
-                        snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                            "agent_runtime.load_session_snapshot"
+                        await self._terminate_task_scoped_session_via_activity(
+                            binding=binding,
+                            reason=reason,
                         )
-                        snapshot_payload = await workflow.execute_activity(
-                            snapshot_route.activity_type,
-                            binding.model_dump(mode="json", by_alias=True),
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(snapshot_route),
-                        )
-                        snapshot = CodexManagedSessionSnapshot.model_validate(
-                            snapshot_payload
-                        )
-                        if snapshot.container_id and snapshot.thread_id:
-                            terminate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                                "agent_runtime.terminate_session"
-                            )
-                            await workflow.execute_activity(
-                                terminate_route.activity_type,
-                                TerminateCodexManagedSessionRequest(
-                                    sessionId=snapshot.binding.session_id,
-                                    sessionEpoch=snapshot.binding.session_epoch,
-                                    containerId=snapshot.container_id,
-                                    threadId=snapshot.thread_id,
-                                    reason=reason,
-                                ).model_dump(mode="json", by_alias=True),
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **self._execute_kwargs_for_route(terminate_route),
-                            )
                     except Exception as exc:
                         self._get_logger().warning(
                             "Task-scoped Codex terminate activity failed for %s; "
@@ -2387,6 +2389,39 @@ class MoonMindRunWorkflow:
         finally:
             self._codex_session_handle = None
             self._codex_session_binding = None
+
+    async def _terminate_task_scoped_session_via_activity(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+        reason: str,
+    ) -> None:
+        snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "agent_runtime.load_session_snapshot"
+        )
+        snapshot_payload = await workflow.execute_activity(
+            snapshot_route.activity_type,
+            binding.model_dump(mode="json", by_alias=True),
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(snapshot_route),
+        )
+        snapshot = CodexManagedSessionSnapshot.model_validate(snapshot_payload)
+        if snapshot.container_id and snapshot.thread_id:
+            terminate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "agent_runtime.terminate_session"
+            )
+            await workflow.execute_activity(
+                terminate_route.activity_type,
+                TerminateCodexManagedSessionRequest(
+                    sessionId=snapshot.binding.session_id,
+                    sessionEpoch=snapshot.binding.session_epoch,
+                    containerId=snapshot.container_id,
+                    threadId=snapshot.thread_id,
+                    reason=reason,
+                ).model_dump(mode="json", by_alias=True),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **self._execute_kwargs_for_route(terminate_route),
+            )
 
     def _coerce_text(
         self, value: Any, max_chars: int | None = None, *, flatten: bool = True
