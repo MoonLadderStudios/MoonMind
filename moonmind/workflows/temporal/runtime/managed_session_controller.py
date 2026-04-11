@@ -110,11 +110,12 @@ async def _default_command_runner(
     subprocess_kwargs: dict[str, Any] = {}
     geteuid = getattr(os, "geteuid", None)
     if os.name == "posix" and callable(geteuid) and geteuid() == 0:
+        if run_as_uid is not None or run_as_gid is not None:
+            subprocess_kwargs["extra_groups"] = []
         if run_as_uid is not None:
             subprocess_kwargs["user"] = run_as_uid
         if run_as_gid is not None:
             subprocess_kwargs["group"] = run_as_gid
-            subprocess_kwargs["extra_groups"] = []
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.PIPE if input_text is not None else asyncio.subprocess.DEVNULL,
@@ -641,6 +642,7 @@ class DockerCodexManagedSessionController:
                 request=request,
                 owned_paths=created_paths,
             )
+            self._normalize_container_path_ownership([workspace_path])
             if repository:
                 if not await self._workspace_is_git_repository(workspace_path=workspace_path):
                     await self._clone_workspace(

@@ -21,6 +21,7 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
+    _default_command_runner,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -58,6 +59,42 @@ def _workspace_git_command(workspace_path: str | Path, *args: str) -> tuple[str,
         resolved_workspace,
         *args,
     )
+
+
+@pytest.mark.asyncio
+async def test_default_command_runner_clears_supplemental_groups_when_uid_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+
+    class _FakeProcess:
+        returncode = 0
+
+        async def communicate(self, _input: bytes | None = None) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(
+        *_command: str,
+        **kwargs: object,
+    ) -> _FakeProcess:
+        captured_kwargs.update(kwargs)
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    await _default_command_runner(("id",), run_as_uid=1000)
+
+    assert captured_kwargs["user"] == 1000
+    assert captured_kwargs["extra_groups"] == []
+    assert "group" not in captured_kwargs
 
 
 @pytest.mark.asyncio
@@ -674,6 +711,9 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
     workspace_root = tmp_path / "agent_jobs"
     workspace_path = workspace_root / "mm:task-1" / "repo"
     workspace_path.mkdir(parents=True, exist_ok=True)
+    existing_git_ref = workspace_path / ".git" / "refs" / "heads" / "main"
+    existing_git_ref.parent.mkdir(parents=True, exist_ok=True)
+    existing_git_ref.write_text("abc123\n", encoding="utf-8")
     request = LaunchCodexManagedSessionRequest(
         taskRunId="mm:task-1",
         sessionId="sess-1",
@@ -691,14 +731,24 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
     )
     commands: list[tuple[str, ...]] = []
     git_identities: list[tuple[int | None, int | None]] = []
+    chown_calls: list[tuple[Path, int, int, bool]] = []
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
         lambda: 0,
     )
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        chown_calls.append((Path(path), uid, gid, follow_symlinks))
+
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
-        lambda *args, **kwargs: None,
+        _fake_chown,
     )
 
     async def _fake_runner(
@@ -711,6 +761,10 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
     ) -> tuple[int, str, str]:
         commands.append(command)
         if command[0] == "git":
+            chowned_paths = {path for path, _uid, _gid, _follow in chown_calls}
+            assert workspace_path in chowned_paths
+            assert workspace_path / ".git" in chowned_paths
+            assert existing_git_ref in chowned_paths
             git_identities.append((run_as_uid, run_as_gid))
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
@@ -766,6 +820,12 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
         "checkout",
         "codex/session-fix",
     )
+    chowned_paths = {path for path, _uid, _gid, _follow in chown_calls}
+    assert workspace_path in chowned_paths
+    assert workspace_path / ".git" in chowned_paths
+    assert existing_git_ref in chowned_paths
+    assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
+    assert all(follow is False for _path, _uid, _gid, follow in chown_calls)
     assert git_identities == [(1000, 1000), (1000, 1000)]
 
 

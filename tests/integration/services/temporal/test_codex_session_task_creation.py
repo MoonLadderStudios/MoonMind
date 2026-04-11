@@ -86,11 +86,12 @@ async def _run_checked(
 ) -> None:
     kwargs: dict[str, Any] = {}
     if os.name == "posix" and os.geteuid() == 0:
+        if run_as_uid is not None or run_as_gid is not None:
+            kwargs["extra_groups"] = []
         if run_as_uid is not None:
             kwargs["user"] = run_as_uid
         if run_as_gid is not None:
             kwargs["group"] = run_as_gid
-            kwargs["extra_groups"] = []
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=str(cwd) if cwd is not None else None,
