@@ -361,6 +361,13 @@ def _serialize_execution(
     )
     if raw_state == "awaiting_external":
         attention_required = True
+    if (
+        raw_state
+        not in {"awaiting_slot", "awaiting_external", "waiting_on_dependencies"}
+        and not bool(getattr(record, "paused", False))
+        and not attention_required
+    ):
+        waiting_reason = None
     dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(record.state, "queued")
     actions = _build_action_capabilities(record)
     intervention_audit = _parse_intervention_audit_entries(memo)
@@ -1456,6 +1463,7 @@ async def _create_execution_from_task_request(
     raw_target_runtime = (
         payload.get("targetRuntime")
         or runtime_payload.get("mode")
+        or settings.workflow.default_task_runtime
         or ""
     )
     raw_profile_id = str(
@@ -1483,6 +1491,13 @@ async def _create_execution_from_task_request(
                 "Must be one of: codex_cli, gemini_cli, claude_code, codex_cloud, jules."
             )
         canonical_target_runtime = normalized_rt
+
+    if canonical_target_runtime:
+        normalized_runtime_for_planner = dict(
+            normalized_task_for_planner.get("runtime") or {}
+        )
+        normalized_runtime_for_planner["mode"] = canonical_target_runtime
+        normalized_task_for_planner["runtime"] = normalized_runtime_for_planner
 
     # Load provider profile when a profileId is supplied.
     _provider_profile = None
