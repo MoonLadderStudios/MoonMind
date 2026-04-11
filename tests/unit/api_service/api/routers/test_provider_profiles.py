@@ -141,6 +141,52 @@ async def test_create_second_profile_can_become_runtime_default(
 
 
 @pytest.mark.asyncio
+async def test_update_profile_can_become_runtime_default(
+    client_app: AsyncClient,
+    _module_db,
+):
+    first_payload = {
+        "profile_id": "patch_runtime_default_first",
+        "runtime_id": "patch_runtime_default",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://patch_first_secret"},
+        "enabled": True,
+        "is_default": True,
+    }
+    second_payload = {
+        "profile_id": "patch_runtime_default_second",
+        "runtime_id": "patch_runtime_default",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://patch_second_secret"},
+        "enabled": True,
+    }
+
+    async with client_app as client:
+        first_response = await client.post("/api/v1/provider-profiles", json=first_payload)
+        second_response = await client.post("/api/v1/provider-profiles", json=second_payload)
+        update_response = await client.patch(
+            "/api/v1/provider-profiles/patch_runtime_default_second",
+            json={"is_default": True},
+        )
+        listed = await client.get(
+            "/api/v1/provider-profiles",
+            params={"runtime_id": "patch_runtime_default"},
+        )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert update_response.status_code == 200
+    assert update_response.json()["is_default"] is True
+    assert listed.status_code == 200
+
+    profiles = {profile["profile_id"]: profile for profile in listed.json()}
+    assert profiles["patch_runtime_default_first"]["is_default"] is False
+    assert profiles["patch_runtime_default_second"]["is_default"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_provider_profile_invalid_secret_refs(client_app: AsyncClient, _module_db):
     """Test that creating a profile with raw secrets fails."""
     payload = {

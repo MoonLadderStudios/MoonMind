@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
-import { fireEvent, screen } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
   defaultFormState,
@@ -12,6 +12,10 @@ import {
   parseClearEnvKeys,
 } from './ProviderProfilesManager';
 import { renderWithClient } from '../../utils/test-utils';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
   const queryClient = new QueryClient({
@@ -273,5 +277,53 @@ describe('ProviderProfilesManager form controls', () => {
 
     expect(screen.getAllByRole('button', { name: 'Cancel edit' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Reset form' })).toBeNull();
+  });
+
+  it('sends runtime default changes when updating an edited profile', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...profile, profile_id: 'codex-secondary', is_default: true }),
+    } as Response);
+    const secondaryProfile: ProviderProfile = {
+      ...profile,
+      profile_id: 'codex-secondary',
+      is_default: false,
+    };
+
+    renderProviderProfilesManager([profile, secondaryProfile]);
+
+    const editButtons = screen.getAllByRole('button', { name: 'Edit' });
+    const secondaryEditButton = editButtons[1];
+    if (!secondaryEditButton) {
+      throw new Error('Expected secondary provider profile edit button');
+    }
+    fireEvent.click(secondaryEditButton);
+    const runtimeDefaultCheckbox = screen.getByLabelText('Runtime default') as HTMLInputElement;
+    expect(runtimeDefaultCheckbox.checked).toBe(false);
+
+    fireEvent.click(runtimeDefaultCheckbox);
+    const submitButton = screen.getByRole('button', { name: 'Update provider profile' });
+    const form = submitButton.closest('form');
+    if (!form) {
+      throw new Error('Expected provider profile update form');
+    }
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/codex-secondary',
+        expect.objectContaining({
+          method: 'PATCH',
+        }),
+      );
+    });
+
+    const fetchCall = fetchSpy.mock.calls[0];
+    if (!fetchCall) {
+      throw new Error('Expected provider profile update request');
+    }
+    const [, requestInit] = fetchCall;
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload.is_default).toBe(true);
   });
 });
