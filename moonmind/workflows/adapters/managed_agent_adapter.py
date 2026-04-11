@@ -520,10 +520,16 @@ class ManagedAgentAdapter:
             record = self._run_store.load(run_id)
             if record is not None and record.status in TERMINAL_AGENT_RUN_STATES:
                 output_refs: list[str] = []
-                if record.log_artifact_ref:
-                    output_refs.append(record.log_artifact_ref)
-                if record.diagnostics_ref:
-                    output_refs.append(record.diagnostics_ref)
+                for ref in (
+                    record.log_artifact_ref,
+                    record.stdout_artifact_ref,
+                    record.stderr_artifact_ref,
+                    record.merged_log_artifact_ref,
+                    record.diagnostics_ref,
+                    record.observability_events_ref,
+                ):
+                    if ref and ref not in output_refs:
+                        output_refs.append(ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
                 if pr_resolver_expected:

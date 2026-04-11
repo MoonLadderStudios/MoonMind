@@ -2304,13 +2304,15 @@ class MoonMindRunWorkflow:
         return request.model_copy(update={"managed_session": binding})
 
     async def _terminate_task_scoped_sessions(self, *, reason: str) -> None:
-        handle = self._codex_session_handle
         binding = self._codex_session_binding
         try:
-            if handle is not None and binding is not None:
+            if binding is not None:
+                session_handle = workflow.get_external_workflow_handle(
+                    binding.workflow_id
+                )
                 if workflow.patched(RUN_TASK_SCOPED_SESSION_TERMINATION_UPDATE_PATCH):
                     try:
-                        await handle.execute_update(
+                        await session_handle.execute_update(
                             "TerminateSession",
                             {
                                 "reason": reason,
@@ -2322,7 +2324,7 @@ class MoonMindRunWorkflow:
                             binding.session_id,
                             exc,
                         )
-                        await handle.signal(
+                        await session_handle.signal(
                             "control_action",
                             {
                                 "action": "terminate_session",
@@ -2366,7 +2368,7 @@ class MoonMindRunWorkflow:
                             binding.session_id,
                             exc,
                         )
-                    await handle.signal(
+                    await session_handle.signal(
                         "control_action",
                         {
                             "action": "terminate_session",
@@ -2374,7 +2376,7 @@ class MoonMindRunWorkflow:
                         },
                     )
                 else:
-                    await handle.signal(
+                    await session_handle.signal(
                         "control_action",
                         {
                             "action": "terminate_session",

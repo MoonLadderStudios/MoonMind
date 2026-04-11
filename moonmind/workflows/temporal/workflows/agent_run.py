@@ -23,6 +23,7 @@ with workflow.unsafe.imports_passed_through():
         ProfileResolutionError,
     )
     from moonmind.workflows.adapters.codex_session_adapter import (
+        CodexSessionRunFailedError,
         CodexSessionAdapter,
     )
     from moonmind.workflows.adapters.external_adapter_registry import (
@@ -38,6 +39,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
+    )
+    from moonmind.workflows.provider_failures import (
+        classify_retryable_provider_failure,
+        provider_error_requires_cooldown,
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -86,8 +91,6 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "timed-out": RunStatus.timed_out,
     "unknown": RunStatus.awaiting_callback,
 }
-
-PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
 # Default workflow-level execution timeouts
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
@@ -343,7 +346,8 @@ class MoonMindAgentRun:
         retry_at = workflow.now() + timedelta(seconds=max(cooldown_seconds, 0))
         profile_fragment = f" on profile {profile_id}" if profile_id else ""
         return (
-            f"Gemini capacity exhausted for {runtime_id}{profile_fragment}; retry scheduled for "
+            "Managed provider capacity exhausted for "
+            f"{runtime_id}{profile_fragment}; retry scheduled for "
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
         )
 
@@ -406,9 +410,30 @@ class MoonMindAgentRun:
                 mode="json",
                 by_alias=True,
             )
+        classification = classify_retryable_provider_failure(summary)
+        if classification is not None:
+            metadata["providerFailure"] = {
+                "providerErrorCode": classification.provider_error_code,
+                "retryRecommendation": classification.retry_recommendation,
+                "reason": classification.reason,
+            }
         return AgentRunResult(
             summary=summary,
-            failureClass="execution_error",
+            failureClass=(
+                classification.failure_class
+                if classification is not None
+                else "execution_error"
+            ),
+            providerErrorCode=(
+                classification.provider_error_code
+                if classification is not None
+                else None
+            ),
+            retryRecommendation=(
+                classification.retry_recommendation
+                if classification is not None
+                else None
+            ),
             metadata=metadata,
         )
 
@@ -1282,10 +1307,16 @@ class MoonMindAgentRun:
                             },
                         )
                         self.run_status = RunStatus.failed
-                        self.final_result = self._managed_start_failure_result(
-                            request=request,
-                            error=exc,
-                        )
+                        if (
+                            isinstance(exc, CodexSessionRunFailedError)
+                            and isinstance(exc.agent_run_result, AgentRunResult)
+                        ):
+                            self.final_result = exc.agent_run_result
+                        else:
+                            self.final_result = self._managed_start_failure_result(
+                                request=request,
+                                error=exc,
+                            )
                         skip_poll_and_fetch = True
                         handle = None
                     if handle is not None:
@@ -1649,8 +1680,14 @@ class MoonMindAgentRun:
                                     }
                                 )
 
-                # Check for 429
-                if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
+                if (
+                    request.agent_kind == "managed"
+                    and manager_handle
+                    and provider_error_requires_cooldown(
+                        provider_error_code=self.final_result.provider_error_code,
+                        retry_recommendation=self.final_result.retry_recommendation,
+                    )
+                ):
                     if workflow.patched("gemini-429-cooldown-retry-signal"):
                         runtime_id = self._managed_runtime_id(request.agent_id)
                         profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
