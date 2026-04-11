@@ -66,6 +66,13 @@ MoonMind engineers need Docker-backed workload execution to appear as a distinct
 - Cancellation occurs while the workload is still starting.
 - Labels or identifiers contain characters that are unsafe for container names.
 
+### Assumptions
+
+- Phase 1 request and runner-profile validation already exists and remains the source of truth for profile selection and policy checks.
+- The initial execution host is the existing Docker-capable MoonMind worker fleet.
+- This phase covers one-shot workload containers only; bounded helper containers remain outside this feature scope.
+- Durable artifacts and richer live-log presentation are handled by later DooD phases, while this phase returns bounded workload execution metadata.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
