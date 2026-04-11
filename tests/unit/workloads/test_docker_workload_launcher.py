@@ -108,20 +108,53 @@ class _Process:
         stderr: bytes = b"",
         never_complete: bool = False,
     ) -> None:
-        self.returncode = returncode
+        self.returncode = None if never_complete else returncode
         self._stdout = stdout
         self._stderr = stderr
         self._never_complete = never_complete
         self.killed = False
+        self.terminated = False
+        self._closed = asyncio.Event()
+        if not never_complete:
+            self._closed.set()
+        self.stdout = _Pipe(self, stdout)
+        self.stderr = _Pipe(self, stderr)
 
     async def communicate(self) -> tuple[bytes, bytes]:
         if self._never_complete and not self.killed:
-            await asyncio.sleep(3600)
+            await self._closed.wait()
         return self._stdout, self._stderr
+
+    async def wait(self) -> int:
+        if self.returncode is None:
+            await self._closed.wait()
+        return int(self.returncode or 0)
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+        self._closed.set()
 
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+        self._closed.set()
+
+
+class _Pipe:
+    def __init__(self, process: _Process, data: bytes) -> None:
+        self._process = process
+        self._data = bytearray(data)
+
+    async def read(self, size: int = -1) -> bytes:
+        if not self._data:
+            await self._process._closed.wait()
+            return b""
+        if size is None or size < 0:
+            size = len(self._data)
+        chunk = bytes(self._data[:size])
+        del self._data[:size]
+        return chunk
 
 
 @pytest.mark.asyncio
@@ -176,6 +209,16 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert result.metadata["containerName"] == "mm-workload-task-1-step-test-2"
     assert result.metadata["artifactsDir"] == "/work/agent_jobs/task-1/artifacts/step-test"
     assert result.metadata["stdout"] == "tests passed\n"
+
+
+def test_launcher_wraps_multi_part_shell_command_as_single_arg(
+    tmp_path: Path,
+) -> None:
+    run_args = DockerWorkloadLauncher().build_run_args(
+        _validated_request(tmp_path, command=["python", "-V"])
+    )
+
+    assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
 
 
 def test_launcher_rejects_artifacts_dir_outside_profile_mount(
@@ -287,11 +330,14 @@ async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created: list[list[str]] = []
+    run_process: _Process | None = None
 
     async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal run_process
         created.append(list(args))
         if args[1] == "run":
-            return _Process(never_complete=True)
+            run_process = _Process(never_complete=True)
+            return run_process
         return _Process(returncode=0)
 
     monkeypatch.setattr(
@@ -302,13 +348,39 @@ async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
     await asyncio.sleep(0)
 
     task.cancel()
+    done, pending = await asyncio.wait({task})
 
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
+    assert done == {task}
+    assert pending == set()
+    assert task.cancelled()
     assert ["docker", "stop", "-t", "3", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "kill", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"] in created
+    assert run_process is not None
+    assert run_process.terminated
+
+
+@pytest.mark.asyncio
+async def test_launcher_captures_bounded_process_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    noisy_stdout = b"a" * 70_000 + b"tail\n"
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=noisy_stdout)
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(_validated_request(tmp_path))
+
+    assert len(result.metadata["stdout"]) == 64_000
+    assert result.metadata["stdout"].endswith("tail\n")
 
 
 @pytest.mark.asyncio

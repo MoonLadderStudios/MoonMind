@@ -552,8 +552,8 @@ def _build_agent_runtime_deps() -> tuple[
     ManagedRunSupervisor,
     ManagedRuntimeLauncher,
     DockerCodexManagedSessionController,
-    object,
-    object,
+    "RunnerProfileRegistry",
+    "DockerWorkloadLauncher",
 ]:
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import posixpath
+import shlex
 from datetime import UTC, datetime
 from typing import Mapping, Sequence
 
@@ -18,6 +19,7 @@ from moonmind.schemas.workload_models import (
 
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
+_MAX_CAPTURED_STREAM_BYTES = 64_000
 
 
 class DockerWorkloadLauncherError(RuntimeError):
@@ -29,6 +31,39 @@ def _decode_stream(data: bytes) -> str:
     if len(text) <= _MAX_CAPTURED_STREAM_CHARS:
         return text
     return text[-_MAX_CAPTURED_STREAM_CHARS:]
+
+
+def _append_limited(buffer: bytearray, chunk: bytes) -> None:
+    buffer.extend(chunk)
+    overflow = len(buffer) - _MAX_CAPTURED_STREAM_BYTES
+    if overflow > 0:
+        del buffer[:overflow]
+
+
+async def _read_limited_stream(
+    stream: asyncio.StreamReader | None,
+    buffer: bytearray,
+) -> None:
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(8192)
+        if not chunk:
+            return
+        _append_limited(buffer, chunk)
+
+
+async def _wait_with_limited_output(
+    process: asyncio.subprocess.Process,
+    *,
+    stdout_buffer: bytearray,
+    stderr_buffer: bytearray,
+) -> int:
+    await asyncio.gather(
+        _read_limited_stream(process.stdout, stdout_buffer),
+        _read_limited_stream(process.stderr, stderr_buffer),
+    )
+    return await process.wait()
 
 
 def _docker_env(*, docker_host: str | None = None) -> dict[str, str]:
@@ -65,6 +100,18 @@ def _effective_resources(
     if shm_size:
         resources["--shm-size"] = shm_size
     return resources
+
+
+def _workload_command_args(
+    *,
+    command_wrapper: Sequence[str],
+    workload_command: Sequence[str],
+) -> list[str]:
+    if command_wrapper and command_wrapper[-1] in {"-c", "-lc"}:
+        if len(workload_command) == 1:
+            return [workload_command[0]]
+        return [shlex.join(workload_command)]
+    return list(workload_command)
 
 
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
@@ -187,7 +234,12 @@ class DockerWorkloadLauncher:
         if len(profile.entrypoint) > 1:
             args.extend(profile.entrypoint[1:])
         args.extend(profile.command_wrapper)
-        args.extend(workload.command)
+        args.extend(
+            _workload_command_args(
+                command_wrapper=profile.command_wrapper,
+                workload_command=workload.command,
+            )
+        )
         return args
 
     async def run(
@@ -197,10 +249,9 @@ class DockerWorkloadLauncher:
         timeout_seconds: float | None = None,
     ) -> WorkloadResult:
         started_at = datetime.now(UTC)
-        stdout = b""
-        stderr = b""
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
         exit_code: int | None = None
-        status = "failed"
         timeout_reason: str | None = None
         configured_timeout = (
             timeout_seconds
@@ -215,27 +266,56 @@ class DockerWorkloadLauncher:
             env=_docker_env(docker_host=self._docker_host),
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
+            exit_code = await asyncio.wait_for(
+                _wait_with_limited_output(
+                    process,
+                    stdout_buffer=stdout_buffer,
+                    stderr_buffer=stderr_buffer,
+                ),
                 timeout=configured_timeout,
             )
-            exit_code = int(process.returncode or 0)
             status = "succeeded" if exit_code == 0 else "failed"
-        except TimeoutError:
+        except asyncio.TimeoutError:
             status = "timed_out"
             timeout_reason = "workload exceeded timeoutSeconds"
-            await self._terminate_after_timeout(request)
+            await self._terminate_container(request)
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                await asyncio.wait_for(
+                    _wait_with_limited_output(
+                        process,
+                        stdout_buffer=stdout_buffer,
+                        stderr_buffer=stderr_buffer,
+                    ),
                     timeout=max(1, request.profile.cleanup.kill_grace_seconds),
                 )
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 process.kill()
-                stdout, stderr = await process.communicate()
+                await _wait_with_limited_output(
+                    process,
+                    stdout_buffer=stdout_buffer,
+                    stderr_buffer=stderr_buffer,
+                )
             exit_code = process.returncode
         except asyncio.CancelledError:
-            await self._terminate_after_cancel(request)
+            await self._terminate_container(request)
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(
+                        _wait_with_limited_output(
+                            process,
+                            stdout_buffer=stdout_buffer,
+                            stderr_buffer=stderr_buffer,
+                        ),
+                        timeout=max(1, request.profile.cleanup.kill_grace_seconds),
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await _wait_with_limited_output(
+                        process,
+                        stdout_buffer=stdout_buffer,
+                        stderr_buffer=stderr_buffer,
+                    )
             raise
         finally:
             if request.profile.cleanup.remove_container_on_exit:
@@ -248,8 +328,8 @@ class DockerWorkloadLauncher:
             "image": request.profile.image,
             "dockerHost": self._docker_host or os.environ.get("DOCKER_HOST", ""),
             "artifactsDir": request.request.artifacts_dir,
-            "stdout": _decode_stream(stdout),
-            "stderr": _decode_stream(stderr),
+            "stdout": _decode_stream(bytes(stdout_buffer)),
+            "stderr": _decode_stream(bytes(stderr_buffer)),
         }
         return WorkloadResult(
             requestId=request.container_name,
@@ -264,14 +344,7 @@ class DockerWorkloadLauncher:
             metadata=metadata,
         )
 
-    async def _terminate_after_timeout(self, request: ValidatedWorkloadRequest) -> None:
-        await self._janitor.stop(
-            request.container_name,
-            grace_seconds=request.profile.cleanup.kill_grace_seconds,
-        )
-        await self._janitor.kill(request.container_name)
-
-    async def _terminate_after_cancel(self, request: ValidatedWorkloadRequest) -> None:
+    async def _terminate_container(self, request: ValidatedWorkloadRequest) -> None:
         await self._janitor.stop(
             request.container_name,
             grace_seconds=request.profile.cleanup.kill_grace_seconds,
