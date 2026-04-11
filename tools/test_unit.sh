@@ -137,14 +137,15 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
         (cd "$REPO_ROOT" && npm ci --no-fund --no-audit)
     fi
 
+    # Invoke the local binary directly. Managed agent workspaces may include
+    # colons in their absolute path, which breaks npm's PATH-based bin lookup.
     VITEST_BIN="$REPO_ROOT/node_modules/.bin/vitest"
     if [[ ! -x "$VITEST_BIN" ]]; then
-        echo "Error: vitest was not installed at $VITEST_BIN." >&2
+        echo "Error: Vitest binary not found at $VITEST_BIN after npm dependency preparation." >&2
         exit 127
     fi
 
-    # Invoke the local binary directly because managed-agent workspaces can include
-    # ':' in their path, which makes npm's PATH-based bin lookup ambiguous.
+    # Allow targeted frontend test runs via --ui-args (e.g. --ui-args src/components/App.tsx).
     if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
         (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS[@]}")
     else

@@ -927,12 +927,12 @@ def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
 
 
-def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int | datetime, datetime]:
+def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, datetime]:
     sequence = _coerce_sequence(payload.get("sequence"))
     timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
     if sequence is not None and sequence > 0:
         return (0, sequence, timestamp)
-    return (1, timestamp, timestamp)
+    return (1, 2**31 - 1, timestamp)
 
 
 def _merged_event_header(payload: dict[str, object]) -> str:

@@ -164,6 +164,35 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/my-feature-branch"
+
+
+def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "PR-Resolver",
+                    "version": "1.0",
+                    "inputs": {"branch": "fix/from-tool-inputs"},
+                },
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert '"pr": "fix/from-tool-inputs"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "fix/from-tool-inputs"
 
 
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
@@ -210,6 +239,23 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert supervisor._log_streamer._storage._root == artifacts_root
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
+
+
+def test_build_agent_runtime_deps_reuses_global_session_network(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
+    monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:5000")
+
+    _store, _supervisor, _launcher, session_controller = _build_agent_runtime_deps()
+
+    assert session_controller._network_name == "shared-moonmind-network"
+    assert session_controller._moonmind_url == "http://moonmind-api:5000"
 
 
 def _make_snapshot():

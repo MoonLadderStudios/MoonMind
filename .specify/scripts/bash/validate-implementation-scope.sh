@@ -134,18 +134,19 @@ validate_diff_scope() {
     return 1
   fi
 
-  mapfile -t committed < <(git diff --name-only "${merge_base}"..HEAD)
-  mapfile -t staged < <(git diff --name-only --cached)
-  mapfile -t unstaged < <(git diff --name-only)
-  mapfile -t untracked < <(git ls-files --others --exclude-standard)
+  local committed staged unstaged untracked all_files
+  committed="$(git diff --name-only "${merge_base}"..HEAD)"
+  staged="$(git diff --name-only --cached)"
+  unstaged="$(git diff --name-only)"
+  untracked="$(git ls-files --others --exclude-standard)"
 
-  local all_files
   all_files="$(
-    printf '%s\n' \
-      "${committed[@]:-}" \
-      "${staged[@]:-}" \
-      "${unstaged[@]:-}" \
-      "${untracked[@]:-}" \
+    {
+      printf '%s\n' "$committed"
+      printf '%s\n' "$staged"
+      printf '%s\n' "$unstaged"
+      printf '%s\n' "$untracked"
+    } \
       | unique_nonempty_lines
   )"
 

@@ -85,6 +85,7 @@ from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
+    _managed_session_docker_network,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -150,6 +151,38 @@ def _derive_pr_branch_prefix(
     if selected_skill_name.strip().lower() not in {"", "auto"}:
         return _slugify_branch_prefix(selected_skill_name)
     return ""
+
+
+def _derive_pr_resolver_title(
+    task_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+) -> str:
+    selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
+        task_payload.get("skill")
+    )
+    selected_skill_name = str(
+        selected_skill_payload.get("name")
+        or selected_skill_payload.get("id")
+        or ""
+    ).strip()
+    if selected_skill_name.lower() != "pr-resolver":
+        return ""
+    git_payload = _coerce_mapping(task_payload.get("git"))
+    selected_skill_payload_inputs = _coerce_mapping(
+        selected_skill_payload.get("inputs")
+        or selected_skill_payload.get("args")
+    )
+    return str(
+        git_payload.get("startingBranch")
+        or task_payload.get("startingBranch")
+        or git_payload.get("branch")
+        or task_payload.get("branch")
+        or selected_skill_inputs.get("startingBranch")
+        or selected_skill_inputs.get("branch")
+        or selected_skill_payload_inputs.get("startingBranch")
+        or selected_skill_payload_inputs.get("branch")
+        or ""
+    ).strip()
 
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
@@ -366,9 +399,14 @@ def _build_runtime_planner():
                 )
 
         # --- Assemble plan ---
+        pr_resolver_title = _derive_pr_resolver_title(
+            task_payload,
+            selected_skill_inputs,
+        )
         title = str(
             task_payload.get("title")
             or parameter_payload.get("title")
+            or pr_resolver_title
             or ""
         ).strip() or "Generated Plan"
         created_at = (
@@ -575,10 +613,20 @@ def _build_agent_runtime_deps() -> tuple[
         or os.environ.get("SYSTEM_DOCKER_HOST")
         or "tcp://docker-proxy:2375"
     )
+    session_moonmind_url = (
+        os.environ.get("MOONMIND_MANAGED_SESSION_MOONMIND_URL")
+        or os.environ.get("MOONMIND_URL")
+        or "http://api:5000"
+    ).strip() or None
+    session_network_name = _managed_session_docker_network(
+        {"MOONMIND_URL": session_moonmind_url or ""}
+    )
     session_controller = DockerCodexManagedSessionController(
         workspace_volume_name=workspace_volume_name,
         codex_volume_name=codex_volume_name,
         workspace_root=workspace_root,
+        network_name=session_network_name,
+        moonmind_url=session_moonmind_url,
         session_store=session_store,
         session_supervisor=session_supervisor,
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),

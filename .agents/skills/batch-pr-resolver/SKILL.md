@@ -63,13 +63,15 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
    - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.
    - Build a canonical queue task with:
      - `type: "task"`
+     - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: target repo
      - `payload.task.git.startingBranch`: PR head branch
      - `payload.task.publish.mode`: `none`
-     - `payload.task.skill.id`: `pr-resolver`
-     - `payload.task.skill.args`: `{ repo, pr, branch, mergeMethod, maxIterations }`
-   - Submit via internal queue service (`AgentQueueService`).
-4. Write one summary artifact at `artifacts/batch_pr_resolver_result.json`.
+     - `payload.task.skill.name`: `pr-resolver`
+     - `payload.task.inputs`: `{ repo, pr, branch, mergeMethod, maxIterations }`
+   - Submit via the internal Temporal execution API (`POST /api/executions`);
+     `MOONMIND_URL` must point at the MoonMind API from the managed session.
+4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`.
 5. Print a short count summary to stdout (`queued`, `skipped`, `errors`).
 
 ## Safety constraints
@@ -78,3 +80,4 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
 - Use `state=open` by default to avoid accidental non-open PR dispatch.
 - `--include-forks` is rejected to avoid unreliable fork-branch checkout behavior in queued jobs.
 - Skip fork PRs by default.
+- Require `MOONMIND_URL` to reach the MoonMind API; the legacy direct-DB queue fallback is intentionally unsupported.

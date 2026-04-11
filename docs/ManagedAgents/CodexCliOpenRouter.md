@@ -10,7 +10,7 @@ Last Updated: 2026-04-03
 
 ## 1. Summary
 
-This document describes how MoonMind should support **Codex CLI** against **OpenRouter** using the existing **Provider Profiles** and **managed agents** architecture, with **`qwen/qwen3.6-plus:free`** as the example default model.
+This document describes how MoonMind should support **Codex CLI** against **OpenRouter** using the existing **Provider Profiles** and **managed agents** architecture, with **`qwen/qwen3.6-plus`** as the example default model.
 
 The key design choice is:
 
@@ -144,7 +144,7 @@ The provider-profile design expects runtime homes such as `CODEX_HOME` to be app
 That works for OpenAI-backed runs, but OpenRouter support needs Codex to know both:
 
 - **which provider** to use (`openrouter`)
-- **which model** on that provider to use (`qwen/qwen3.6-plus:free`)
+- **which model** on that provider to use (`qwen/qwen3.6-plus`)
 
 The provider choice belongs in Codex config, not just in a CLI model string.
 
@@ -219,7 +219,7 @@ enabled: true
 tags: ["openrouter", "qwen", "codex", "openai-compatible"]
 priority: 100
 
-default_model: qwen/qwen3.6-plus:free
+default_model: qwen/qwen3.6-plus
 model_overrides: {}
 
 max_parallel_runs: 4
@@ -253,7 +253,7 @@ file_templates:
     content_template:
       model_provider: openrouter
       model_reasoning_effort: high
-      model: qwen/qwen3.6-plus:free
+      model: qwen/qwen3.6-plus
       profile: openrouter_qwen36_plus
       model_providers:
         openrouter:
@@ -264,7 +264,7 @@ file_templates:
       profiles:
         openrouter_qwen36_plus:
           model_provider: openrouter
-          model: qwen/qwen3.6-plus:free
+          model: qwen/qwen3.6-plus
 
 home_path_overrides:
   CODEX_HOME: "{{runtime_support_dir}}/codex-home"
@@ -280,7 +280,7 @@ command_behavior:
 - `env_template.OPENROUTER_API_KEY` should be created from the resolved secret role rather than persisted directly.
 - `file_templates` write a **real Codex config file** into the per-run Codex home.
 - `home_path_overrides.CODEX_HOME` points Codex at the generated config bundle.
-- `command_behavior.suppress_default_model_flag` is recommended so the strategy does not redundantly append `-m qwen/qwen3.6-plus:free` when the generated Codex profile already sets the default.
+- `command_behavior.suppress_default_model_flag` is recommended so the strategy does not redundantly append `-m qwen/qwen3.6-plus` when the generated Codex profile already sets the default.
 
 ---
 
@@ -291,7 +291,7 @@ The rendered config file should be equivalent to:
 ```toml
 model_provider = "openrouter"
 model_reasoning_effort = "high"
-model = "qwen/qwen3.6-plus:free"
+model = "qwen/qwen3.6-plus"
 profile = "openrouter_qwen36_plus"
 
 [model_providers.openrouter]
@@ -302,7 +302,7 @@ wire_api = "responses"
 
 [profiles.openrouter_qwen36_plus]
 model_provider = "openrouter"
-model = "qwen/qwen3.6-plus:free"
+model = "qwen/qwen3.6-plus"
 ```
 
 ### Why include both top-level `model_provider` and a named profile?
@@ -475,7 +475,7 @@ Add a convenient bootstrap path for local/dev deployments.
 1. If `OPENROUTER_API_KEY` is present at service startup, auto-seed a default provider profile:
    - `profile_id = codex_openrouter_qwen36_plus`
    - `provider_id = openrouter`
-   - `default_model = qwen/qwen3.6-plus:free`
+   - `default_model = qwen/qwen3.6-plus`
    - `secret_refs.provider_api_key = env://OPENROUTER_API_KEY`
 
 2. Also support creating/editing the profile through Mission Control / REST so production deployments can use `db_encrypted`, `vault://...`, or other secret backends.
@@ -619,7 +619,7 @@ Recommendation: use **`openrouter`**.
 
 Reason: MoonMind needs provider-aware routing, cooldowns, auditability, and UI semantics tied to the actual upstream surface.
 
-### 16.2 Should the example profile hardcode `qwen/qwen3.6-plus:free`?
+### 16.2 Should the example profile hardcode `qwen/qwen3.6-plus`?
 
 Recommendation: yes for the starter profile.
 
@@ -642,6 +642,6 @@ Implement OpenRouter for Codex CLI as a **provider profile on the existing `code
 - `runtime_materialization_mode = composite`
 - a generated per-run `CODEX_HOME/config.toml`
 - launch-time `OPENROUTER_API_KEY` injection
-- a default example profile using `qwen/qwen3.6-plus:free`
+- a default example profile using `qwen/qwen3.6-plus`
 
 This gives MoonMind a clean, provider-aware, reusable path for OpenRouter-backed Codex runs while staying aligned with the current Provider Profiles architecture.

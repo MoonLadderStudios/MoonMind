@@ -402,6 +402,44 @@ async def test_launch_session_injects_github_token_from_activity_environment(
     assert launched_request.environment["GIT_TERMINAL_PROMPT"] == "0"
 
 
+async def test_launch_session_injects_moonmind_url_from_activity_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:5000")
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "environment": {"PATH": "/usr/bin"},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["PATH"] == "/usr/bin"
+    assert launched_request.environment["MOONMIND_URL"] == "http://api:5000"
+
+
 async def test_launch_session_injects_github_token_from_managed_secret_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -535,7 +573,7 @@ async def test_launch_session_materializes_profile_into_request_environment(
                 "fileTemplates": [
                     {
                         "path": "{{runtime_support_dir}}/codex-home/config.toml",
-                        "contentTemplate": {"model": "qwen/qwen3.6-plus:free"},
+                        "contentTemplate": {"model": "qwen/qwen3.6-plus"},
                         "format": "toml",
                     }
                 ],
@@ -549,7 +587,7 @@ async def test_launch_session_materializes_profile_into_request_environment(
     assert launched_request.environment["CODEX_HOME"] == str(codex_home_path)
     assert launched_request.environment["MANAGED_ACCOUNT_LABEL"] == "Codex CLI via OpenRouter"
     assert (codex_home_path / "config.toml").is_file()
-    assert "qwen/qwen3.6-plus:free" in (codex_home_path / "config.toml").read_text(
+    assert "qwen/qwen3.6-plus" in (codex_home_path / "config.toml").read_text(
         encoding="utf-8"
     )
 

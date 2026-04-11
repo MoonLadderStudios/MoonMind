@@ -388,7 +388,7 @@ class TestCodexCliBuildCommand:
         s = CodexCliStrategy()
         profile = _make_profile(
             command_template=["codex", "exec"],
-            default_model="qwen/qwen3.6-plus:free",
+            default_model="qwen/qwen3.6-plus",
         )
         profile.command_behavior = {"suppress_default_model_flag": True}
         request = _make_request(instruction_ref="Go")
@@ -399,12 +399,12 @@ class TestCodexCliBuildCommand:
         s = CodexCliStrategy()
         profile = _make_profile(
             command_template=["codex", "exec"],
-            default_model="qwen/qwen3.6-plus:free",
+            default_model="qwen/qwen3.6-plus",
         )
         profile.command_behavior = {"suppress_default_model_flag": True}
         request = _make_request(
             instruction_ref="Go",
-            parameters={"model": "qwen/qwen3.6-plus:free"},
+            parameters={"model": "qwen/qwen3.6-plus"},
         )
         cmd = s.build_command(profile, request)
         assert cmd == ["codex", "exec", "Go"]
@@ -413,7 +413,7 @@ class TestCodexCliBuildCommand:
         s = CodexCliStrategy()
         profile = _make_profile(
             command_template=["codex", "exec"],
-            default_model="qwen/qwen3.6-plus:free",
+            default_model="qwen/qwen3.6-plus",
         )
         profile.command_behavior = {"suppress_default_model_flag": True}
         request = _make_request(
