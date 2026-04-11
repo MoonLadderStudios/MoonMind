@@ -31,5 +31,5 @@
 
 ## Notes
 
-- Runtime intent is explicit in the input and FR-009: required deliverables include production runtime code changes, not docs/spec-only work, plus validation tests.
+- Runtime intent is explicit in the input and FR-010: required deliverables include production runtime code changes, not docs/spec-only work, plus validation tests.
 - Named workflow controls are treated as product contract vocabulary for this feature because the user-provided feature request requires parity with that control-plane surface.

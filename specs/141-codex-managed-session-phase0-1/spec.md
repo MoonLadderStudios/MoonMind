@@ -5,6 +5,14 @@
 **Status**: Draft  
 **Input**: User description: "Implement Phase 0 and Phase 1 using test-driven development for the Codex managed session plane rollout. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
+## Source Document Requirements
+
+- **DOC-REQ-001**: Source `docs/ManagedAgents/CodexManagedSessionPlane.md`, section 2.1 and section 7. The managed session plane must distinguish operator/audit truth from the operational recovery index and disposable container-local cache state.
+- **DOC-REQ-002**: Source `docs/ManagedAgents/CodexManagedSessionPlane.md`, section 5. The managed session plane must expose the canonical Phase 1 control vocabulary: start, resume, send, steer, interrupt, clear, cancel, and terminate.
+- **DOC-REQ-003**: Source `docs/ManagedAgents/CodexManagedSessionPlane.md`, section 6. Clear/reset must preserve session and container identity, create a new thread, increment the epoch, clear the active turn, and publish the reset boundary.
+- **DOC-REQ-004**: Source `docs/ManagedAgents/CodexManagedSessionPlane.md`, section 8. Managed Codex steps must produce durable artifact-backed evidence, and continuity must be represented through summary, checkpoint, and control-boundary artifacts.
+- **DOC-REQ-005**: Source `docs/ManagedAgents/CodexManagedSessionPlane.md`, section 8. The managed-session controller and supervisor must be the production artifact publishers; in-container summary/publication helpers may not be treated as the production path while they return empty refs.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Align the canonical doc with the production path (Priority: P1)
@@ -49,15 +57,16 @@ MoonMind workflow callers need the `MoonMind.AgentSession` workflow to expose th
 
 ### Functional Requirements
 
-- **FR-001**: The canonical `docs/ManagedAgents/CodexManagedSessionPlane.md` doc MUST describe artifacts plus bounded workflow metadata as operator/audit truth and `ManagedSessionStore` as the operational recovery/reconciliation index.
-- **FR-002**: The canonical doc MUST identify the managed-session controller/supervisor path as the production artifact publisher and MUST not present the transitional in-container summary/publication helpers as the production path.
+- **FR-001**: The canonical `docs/ManagedAgents/CodexManagedSessionPlane.md` doc MUST describe artifacts plus bounded workflow metadata as operator/audit truth and `ManagedSessionStore` as the operational recovery/reconciliation index. *(Maps: DOC-REQ-001)*
+- **FR-002**: The canonical doc MUST identify the managed-session controller/supervisor path as the production artifact publisher and MUST not present the transitional in-container summary/publication helpers as the production path. *(Maps: DOC-REQ-004, DOC-REQ-005)*
 - **FR-003**: `MoonMind.AgentSession` MUST initialize handler-visible workflow binding state via `@workflow.init`.
-- **FR-004**: `MoonMind.AgentSession` MUST replace the generic mutating `control_action` signal with typed Updates for `SendFollowUp`, `InterruptTurn`, `SteerTurn`, `ClearSession`, `CancelSession`, and `TerminateSession`.
-- **FR-005**: `attach_runtime_handles` MAY remain as a fire-and-forget signal for runtime-handle propagation, but other state mutations MUST go through typed Updates.
-- **FR-006**: The workflow MUST reject invalid update requests at the workflow boundary for missing runtime handles, stale `sessionEpoch`, missing active turn for interrupt/steer, clear-while-clearing, and any mutator after cancel/terminate has started.
-- **FR-007**: `InterruptTurn` MUST call the existing `agent_runtime.interrupt_turn` activity surface and update the workflow snapshot to reflect the interruption.
-- **FR-008**: Parent workflow, adapter, and API/router callers that control `MoonMind.AgentSession` MUST target the typed update names instead of the removed generic mutating signal.
-- **FR-009**: The Phase 0 and Phase 1 slice MUST include production runtime code changes and automated validation tests.
+- **FR-004**: `MoonMind.AgentSession` MUST replace the generic mutating `control_action` signal with typed Updates for `SendFollowUp`, `InterruptTurn`, `SteerTurn`, `ClearSession`, `CancelSession`, and `TerminateSession`. *(Maps: DOC-REQ-002)*
+- **FR-005**: `attach_runtime_handles` MAY remain as a fire-and-forget signal for runtime-handle propagation, but other state mutations MUST go through typed Updates. *(Maps: DOC-REQ-002)*
+- **FR-006**: The workflow MUST reject invalid update requests at the workflow boundary for missing runtime handles, stale `sessionEpoch`, missing active turn for interrupt/steer, clear-while-clearing, and any mutator after cancel/terminate has started. *(Maps: DOC-REQ-002, DOC-REQ-003)*
+- **FR-007**: `InterruptTurn` MUST call the existing `agent_runtime.interrupt_turn` activity surface and update the workflow snapshot to reflect the interruption. *(Maps: DOC-REQ-002)*
+- **FR-008**: Parent workflow, adapter, and API/router callers that control `MoonMind.AgentSession` MUST target the typed update names instead of the removed generic mutating signal. *(Maps: DOC-REQ-002)*
+- **FR-009**: `ClearSession` MUST preserve session and container identity, advance the session epoch, require a new thread identity, clear any active turn, and expose continuity/reset evidence through artifacts or bounded workflow metadata. *(Maps: DOC-REQ-003, DOC-REQ-004)*
+- **FR-010**: The Phase 0 and Phase 1 slice MUST include production runtime code changes and automated validation tests.
 
 ### Key Entities *(include if feature involves data)*
 
