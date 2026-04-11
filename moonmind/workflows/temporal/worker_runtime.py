@@ -95,6 +95,7 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -719,6 +720,11 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 session_controller=session_controller,
                 workload_registry=workload_registry,
                 workload_launcher=workload_launcher,
+            )
+            register_workload_tool_handlers(
+                dispatcher,
+                registry=workload_registry,
+                launcher=workload_launcher,
             )
 
         bindings = build_worker_activity_bindings(

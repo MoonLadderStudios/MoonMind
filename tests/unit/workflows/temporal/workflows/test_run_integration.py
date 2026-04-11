@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.workflows.run import (
     INTEGRATION_POLL_LOOP_PATCH,
     MoonMindRunWorkflow,
 )
+from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
     import json
@@ -293,6 +294,126 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     assert "2. Step 2" in request.instruction_ref
     assert request.parameters["metadata"]["moonmind"]["bundleManifestRef"] == "artifact://bundle/1"
     assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._title = "DooD workload"
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload), kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            build_dood_tool_definition_payload(
+                                name="container.run_workload",
+                                version="1.0",
+                            )
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "workload-step",
+                        "tool": {
+                            "type": "skill",
+                            "name": "container.run_workload",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "profileId": "local-python",
+                            "repoDir": "/work/agent_jobs/wf-1/repo",
+                            "artifactsDir": (
+                                "/work/agent_jobs/wf-1/artifacts/workload-step"
+                            ),
+                            "command": ["python", "-V"],
+                        },
+                    }
+                ]
+            )
+        if activity_type == "mm.tool.execute":
+            return {
+                "status": "COMPLETED",
+                "outputs": {
+                    "workloadResult": {
+                        "status": "succeeded",
+                        "profileId": "local-python",
+                    }
+                },
+            }
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    payload = tool_calls[0][1]
+    assert payload["invocation_payload"]["tool"] == {
+        "type": "skill",
+        "name": "container.run_workload",
+        "version": "1.0",
+    }
+    assert payload["context"]["workflow_id"] == "wf-1"
+    assert payload["context"]["node_id"] == "workload-step"
+    assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
 
 
 @pytest.mark.asyncio

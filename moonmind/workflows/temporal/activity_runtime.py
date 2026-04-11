@@ -50,6 +50,10 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRuntimeProfile,
 )
 from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
+from moonmind.workloads.tool_bridge import (
+    build_dood_tool_definition_payload,
+    is_dood_tool,
+)
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -634,6 +638,9 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
 
 
 def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
+    if is_dood_tool(name):
+        return build_dood_tool_definition_payload(name=name, version=version)
+
     description = (
         "Execute generic runtime CLI instructions."
         if name == "auto"
