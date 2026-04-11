@@ -368,6 +368,15 @@ async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activ
         "execute_activity",
         fake_execute_activity,
     )
+
+    async def fail_if_child_workflow_starts(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("DooD skill tools must not start MoonMind.AgentRun")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fail_if_child_workflow_starts,
+    )
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,

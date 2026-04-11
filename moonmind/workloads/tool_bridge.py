@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
+from pydantic import ValidationError
+
 from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
 from moonmind.workflows.skills.skill_plan_contracts import (
     SkillFailure as ToolFailure,
@@ -163,12 +165,12 @@ def build_workload_tool_handler(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None,
     ) -> SkillResult:
-        request = _build_workload_request(
-            tool_name=normalized,
-            inputs=inputs,
-            context=context,
-        )
         try:
+            request = _build_workload_request(
+                tool_name=normalized,
+                inputs=inputs,
+                context=context,
+            )
             validated = registry.validate_request(request)
             result = await launcher.run(validated)
         except WorkloadPolicyError as exc:
@@ -177,7 +179,7 @@ def build_workload_tool_handler(
                 message=str(exc),
                 retryable=False,
             ) from exc
-        except ValueError as exc:
+        except (ValidationError, ValueError) as exc:
             raise ToolFailure(
                 error_code="INVALID_INPUT",
                 message=str(exc),

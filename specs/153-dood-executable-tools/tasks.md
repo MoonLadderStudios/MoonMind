@@ -19,12 +19,12 @@
 
 **Purpose**: Confirm planned contracts and existing DooD runtime surfaces before adding executable tool exposure.
 
-- [ ] T001 Review Phase 3 executable tool contracts in `specs/153-dood-executable-tools/contracts/dood-executable-tools-contract.md`.
-- [ ] T002 Review existing workload request/result and runner profile contracts in `moonmind/schemas/workload_models.py`.
-- [ ] T003 [P] Review existing runner profile validation in `moonmind/workloads/registry.py`.
-- [ ] T004 [P] Review existing Docker launcher behavior in `moonmind/workloads/docker_launcher.py`.
-- [ ] T005 [P] Review executable tool registry and dispatcher behavior in `moonmind/workflows/skills/tool_plan_contracts.py`, `moonmind/workflows/skills/tool_registry.py`, and `moonmind/workflows/skills/tool_dispatcher.py`.
-- [ ] T006 [P] Review Temporal activity routing and worker topology in `moonmind/workflows/temporal/activity_catalog.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/worker_runtime.py`, and `moonmind/workflows/temporal/workers.py`.
+- [X] T001 Review Phase 3 executable tool contracts in `specs/153-dood-executable-tools/contracts/dood-executable-tools-contract.md`.
+- [X] T002 Review existing workload request/result and runner profile contracts in `moonmind/schemas/workload_models.py`.
+- [X] T003 [P] Review existing runner profile validation in `moonmind/workloads/registry.py`.
+- [X] T004 [P] Review existing Docker launcher behavior in `moonmind/workloads/docker_launcher.py`.
+- [X] T005 [P] Review executable tool registry and dispatcher behavior in `moonmind/workflows/skills/tool_plan_contracts.py`, `moonmind/workflows/skills/tool_registry.py`, and `moonmind/workflows/skills/tool_dispatcher.py`.
+- [X] T006 [P] Review Temporal activity routing and worker topology in `moonmind/workflows/temporal/activity_catalog.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/worker_runtime.py`, and `moonmind/workflows/temporal/workers.py`.
 
 ---
 
@@ -34,12 +34,12 @@
 
 **CRITICAL**: No user story implementation should begin until this phase is complete.
 
-- [ ] T007 [P] Add workload tool bridge test scaffolding in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T008 [P] Add DooD tool definition registry assertions in `tests/unit/workflows/temporal/test_activity_runtime.py`.
-- [ ] T009 [P] Add `docker_workload` skill capability routing assertions in `tests/unit/workflows/temporal/test_activity_catalog.py`.
-- [ ] T010 [P] Add worker runtime handler-registration assertions in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`.
-- [ ] T011 Create workload tool bridge module scaffolding in `moonmind/workloads/tool_bridge.py`.
-- [ ] T012 Export workload tool bridge helpers from `moonmind/workloads/__init__.py`.
+- [X] T007 [P] Add workload tool bridge test scaffolding in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T008 [P] Add DooD tool definition registry assertions in `tests/unit/workflows/temporal/test_activity_runtime.py`.
+- [X] T009 [P] Add `docker_workload` skill capability routing assertions in `tests/unit/workflows/temporal/test_activity_catalog.py`.
+- [X] T010 [P] Add worker runtime handler-registration assertions in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`.
+- [X] T011 Create workload tool bridge module scaffolding in `moonmind/workloads/tool_bridge.py`.
+- [X] T012 Export workload tool bridge helpers from `moonmind/workloads/__init__.py`.
 
 **Checkpoint**: Test scaffolding and module boundaries exist, and tests fail against the unimplemented Phase 3 behavior.
 
@@ -55,19 +55,19 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T013 [P] [US1] Add `container.run_workload` ToolDefinition generation tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T014 [P] [US1] Add tests rejecting raw image, mount, device, and arbitrary Docker input fields in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T015 [P] [US1] Add input-to-`WorkloadRequest` conversion and runner-profile validation tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T016 [P] [US1] Add launcher invocation and `WorkloadResult` to normal `ToolResult` mapping tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T017 [P] [US1] Add default registry payload tests for `container.run_workload` in `tests/unit/workflows/temporal/test_activity_runtime.py`.
+- [X] T013 [P] [US1] Add `container.run_workload` ToolDefinition generation tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T014 [P] [US1] Add tests rejecting raw image, mount, device, and arbitrary Docker input fields in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T015 [P] [US1] Add input-to-`WorkloadRequest` conversion and runner-profile validation tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T016 [P] [US1] Add launcher invocation and `WorkloadResult` to normal `ToolResult` mapping tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T017 [P] [US1] Add default registry payload tests for `container.run_workload` in `tests/unit/workflows/temporal/test_activity_runtime.py`.
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Implement `container.run_workload` ToolDefinition payload generation in `moonmind/workloads/tool_bridge.py`.
-- [ ] T019 [US1] Implement generic workload tool input shaping and execution-context defaults in `moonmind/workloads/tool_bridge.py`.
-- [ ] T020 [US1] Implement runner-profile validation and launcher invocation for generic workload tool execution in `moonmind/workloads/tool_bridge.py`.
-- [ ] T021 [US1] Implement `WorkloadResult` to `ToolResult` status/output mapping in `moonmind/workloads/tool_bridge.py`.
-- [ ] T022 [US1] Wire DooD tool definition generation into default registry payload construction in `moonmind/workflows/temporal/activity_runtime.py`.
+- [X] T018 [US1] Implement `container.run_workload` ToolDefinition payload generation in `moonmind/workloads/tool_bridge.py`.
+- [X] T019 [US1] Implement generic workload tool input shaping and execution-context defaults in `moonmind/workloads/tool_bridge.py`.
+- [X] T020 [US1] Implement runner-profile validation and launcher invocation for generic workload tool execution in `moonmind/workloads/tool_bridge.py`.
+- [X] T021 [US1] Implement `WorkloadResult` to `ToolResult` status/output mapping in `moonmind/workloads/tool_bridge.py`.
+- [X] T022 [US1] Wire DooD tool definition generation into default registry payload construction in `moonmind/workflows/temporal/activity_runtime.py`.
 
 **Checkpoint**: `container.run_workload` can be executed through the executable tool dispatcher independently of managed-session operations.
 
@@ -83,17 +83,17 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T023 [P] [US2] Add `unreal.run_tests` ToolDefinition generation tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T024 [P] [US2] Add Unreal domain input validation and required `projectPath` tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T025 [P] [US2] Add curated Unreal command construction tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
-- [ ] T026 [P] [US2] Add default registry payload tests for `unreal.run_tests` in `tests/unit/workflows/temporal/test_activity_runtime.py`.
+- [X] T023 [P] [US2] Add `unreal.run_tests` ToolDefinition generation tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T024 [P] [US2] Add Unreal domain input validation and required `projectPath` tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T025 [P] [US2] Add curated Unreal command construction tests in `tests/unit/workloads/test_workload_tool_bridge.py`.
+- [X] T026 [P] [US2] Add default registry payload tests for `unreal.run_tests` in `tests/unit/workflows/temporal/test_activity_runtime.py`.
 
 ### Implementation for User Story 2
 
-- [ ] T027 [US2] Implement `unreal.run_tests` ToolDefinition payload generation in `moonmind/workloads/tool_bridge.py`.
-- [ ] T028 [US2] Implement Unreal tool input shaping, curated default profile selection, and command construction in `moonmind/workloads/tool_bridge.py`.
-- [ ] T029 [US2] Integrate `unreal.run_tests` into workload tool handler registration in `moonmind/workloads/tool_bridge.py`.
-- [ ] T030 [US2] Ensure default registry payload construction emits `unreal.run_tests` as a `docker_workload` executable tool in `moonmind/workflows/temporal/activity_runtime.py`.
+- [X] T027 [US2] Implement `unreal.run_tests` ToolDefinition payload generation in `moonmind/workloads/tool_bridge.py`.
+- [X] T028 [US2] Implement Unreal tool input shaping, curated default profile selection, and command construction in `moonmind/workloads/tool_bridge.py`.
+- [X] T029 [US2] Integrate `unreal.run_tests` into workload tool handler registration in `moonmind/workloads/tool_bridge.py`.
+- [X] T030 [US2] Ensure default registry payload construction emits `unreal.run_tests` as a `docker_workload` executable tool in `moonmind/workflows/temporal/activity_runtime.py`.
 
 **Checkpoint**: `unreal.run_tests` can be executed independently using the curated workload profile contract.
 
@@ -109,17 +109,17 @@
 
 > Write these tests first and verify they fail before implementation.
 
-- [ ] T031 [P] [US3] Add `docker_workload` skill capability routing tests in `tests/unit/workflows/temporal/test_activity_catalog.py`.
-- [ ] T032 [P] [US3] Add worker topology assertions that `docker_workload` remains on the `agent_runtime` fleet in `tests/unit/workflows/temporal/test_temporal_workers.py`.
-- [ ] T033 [P] [US3] Add agent-runtime worker handler-registration tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`.
-- [ ] T034 [P] [US3] Add `MoonMind.Run` workflow-boundary routing test for a DooD skill step in `tests/unit/workflows/temporal/workflows/test_run_integration.py`.
+- [X] T031 [P] [US3] Add `docker_workload` skill capability routing tests in `tests/unit/workflows/temporal/test_activity_catalog.py`.
+- [X] T032 [P] [US3] Add worker topology assertions that `docker_workload` remains on the `agent_runtime` fleet in `tests/unit/workflows/temporal/test_temporal_workers.py`.
+- [X] T033 [P] [US3] Add agent-runtime worker handler-registration tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`.
+- [X] T034 [P] [US3] Add `MoonMind.Run` workflow-boundary routing test for a DooD skill step in `tests/unit/workflows/temporal/workflows/test_run_integration.py`.
 
 ### Implementation for User Story 3
 
-- [ ] T035 [US3] Route `docker_workload` skill capability to the `agent_runtime` task queue in `moonmind/workflows/temporal/activity_catalog.py`.
-- [ ] T036 [US3] Register DooD workload tool handlers only on the agent-runtime worker path in `moonmind/workflows/temporal/worker_runtime.py`.
-- [ ] T037 [US3] Preserve `MoonMind.Run` skill-step routing through `mm.tool.execute` or `mm.skill.execute` without invoking `MoonMind.AgentRun` for workload tools in `moonmind/workflows/temporal/workflows/run.py`.
-- [ ] T038 [US3] Add a managed-session boundary regression assertion that generic workload tool execution does not invoke `moonmind/workflows/temporal/runtime/managed_session_controller.py` in `tests/unit/workflows/temporal/workflows/test_run_integration.py`.
+- [X] T035 [US3] Route `docker_workload` skill capability to the `agent_runtime` task queue in `moonmind/workflows/temporal/activity_catalog.py`.
+- [X] T036 [US3] Register DooD workload tool handlers only on the agent-runtime worker path in `moonmind/workflows/temporal/worker_runtime.py`.
+- [X] T037 [US3] Preserve `MoonMind.Run` skill-step routing through `mm.tool.execute` or `mm.skill.execute` without invoking `MoonMind.AgentRun` for workload tools in `moonmind/workflows/temporal/workflows/run.py`.
+- [X] T038 [US3] Add a managed-session boundary regression assertion that generic workload tool execution does not invoke `moonmind/workflows/temporal/runtime/managed_session_controller.py` in `tests/unit/workflows/temporal/workflows/test_run_integration.py`.
 
 **Checkpoint**: Docker-backed workload tools are invocable from plans or managed-session-assisted steps without granting the session container Docker authority or creating managed agent runs for workload containers.
 
@@ -129,12 +129,12 @@
 
 **Purpose**: Verify the runtime scope, documentation tracker alignment, and full test suite.
 
-- [ ] T039 [P] Update Phase 3 completion tracking in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
-- [ ] T040 [P] Run focused Phase 3 verification from `specs/153-dood-executable-tools/quickstart.md` using `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_activity_runtime.py::test_default_skill_registry_payload_uses_dood_tool_definitions tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_runtime_activities_reconciles_managed_sessions_only_on_agent_runtime_fleet tests/unit/workflows/temporal/workflows/test_run_integration.py::test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity`.
-- [ ] T041 Run existing workload launcher regression coverage using `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`.
-- [ ] T042 Run full unit verification with `./tools/test_unit.sh`.
-- [ ] T043 Run runtime tasks scope validation with `SPECIFY_FEATURE=153-dood-executable-tools .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`.
-- [ ] T044 Run runtime diff scope validation with `SPECIFY_FEATURE=153-dood-executable-tools .specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`.
+- [X] T039 [P] Update Phase 3 completion tracking in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
+- [X] T040 [P] Run focused Phase 3 verification from `specs/153-dood-executable-tools/quickstart.md` using `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_activity_runtime.py::test_default_skill_registry_payload_uses_dood_tool_definitions tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_runtime_activities_reconciles_managed_sessions_only_on_agent_runtime_fleet tests/unit/workflows/temporal/workflows/test_run_integration.py::test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity`.
+- [X] T041 Run existing workload launcher regression coverage using `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`.
+- [X] T042 Run full unit verification with `./tools/test_unit.sh`.
+- [X] T043 Run runtime tasks scope validation with `SPECIFY_FEATURE=153-dood-executable-tools .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`.
+- [X] T044 Run runtime diff scope validation with `SPECIFY_FEATURE=153-dood-executable-tools .specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`.
 
 ---
 

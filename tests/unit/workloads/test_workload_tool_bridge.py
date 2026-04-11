@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
-from moonmind.workflows.skills.skill_plan_contracts import SkillResult
+from moonmind.workflows.skills.skill_plan_contracts import SkillFailure, SkillResult
 from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workloads.tool_bridge import (
     build_dood_tool_definition_payload,
@@ -68,6 +68,25 @@ def test_container_run_workload_tool_definition_routes_to_docker_workload() -> N
     assert "devices" not in definition["inputs"]["schema"]["properties"]
 
 
+def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
+    definition = build_dood_tool_definition_payload(
+        name="unreal.run_tests",
+        version="1.0",
+    )
+
+    assert definition["type"] == "skill"
+    assert definition["executor"]["activity_type"] == "mm.tool.execute"
+    assert definition["requirements"]["capabilities"] == ["docker_workload"]
+    assert definition["inputs"]["schema"]["required"] == [
+        "repoDir",
+        "artifactsDir",
+        "projectPath",
+    ]
+    assert "image" not in definition["inputs"]["schema"]["properties"]
+    assert "mounts" not in definition["inputs"]["schema"]["properties"]
+    assert "devices" not in definition["inputs"]["schema"]["properties"]
+
+
 @pytest.mark.asyncio
 async def test_container_run_workload_handler_validates_and_calls_launcher() -> None:
     registry = RunnerProfileRegistry(
@@ -112,6 +131,66 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_field", ["image", "mounts", "devices", "privileged"])
+async def test_container_run_workload_handler_rejects_raw_docker_fields(
+    raw_field: str,
+) -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "profileId": "local-python",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["python", "-V"],
+                raw_field: "not-allowed",
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
+
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert launcher.validated is None
+
+
+@pytest.mark.asyncio
+async def test_container_run_workload_handler_maps_failed_result_to_tool_failure_status() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher(status="failed")
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "profileId": "local-python",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "command": ["python", "-V"],
+        },
+        {"workflow_id": "task-1", "node_id": "step-test"},
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["workloadStatus"] == "failed"
+    assert result.outputs["exitCode"] == 1
+
+
+@pytest.mark.asyncio
 async def test_unreal_run_tests_handler_builds_curated_command() -> None:
     registry = RunnerProfileRegistry(
         [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
@@ -148,3 +227,30 @@ async def test_unreal_run_tests_handler_builds_curated_command() -> None:
         "--test",
         "Project.Functional",
     )
+
+
+@pytest.mark.asyncio
+async def test_unreal_run_tests_handler_requires_project_path_before_launch() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="unreal.run_tests",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+            },
+            {"workflow_id": "task-1", "node_id": "unreal-tests"},
+        )
+
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert "projectPath" in exc_info.value.message
+    assert launcher.validated is None

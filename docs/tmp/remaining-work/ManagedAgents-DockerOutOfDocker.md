@@ -45,7 +45,7 @@ Last updated: 2026-04-11
 - The agent-runtime worker registers DooD skill handlers that convert tool inputs into validated `WorkloadRequest` payloads, resolve runner profiles through the deployment-owned registry, invoke `DockerWorkloadLauncher`, and return normal `ToolResult` payloads.
 - `container.run_workload` exposes profile, workspace, command, env allowlist, timeout, resource, and optional session-association fields without raw image, mount, or device inputs.
 - `unreal.run_tests` maps a stable domain contract (`projectPath`, optional target/test selector) onto the curated Unreal runner profile command.
-- Focused unit tests cover tool definition generation, input-to-request conversion, launcher invocation, `MoonMind.Run` routing through `mm.tool.execute`, and agent-runtime task-queue selection.
+- Focused unit tests cover tool definition generation, raw Docker input rejection, input-to-request conversion, launcher invocation/result mapping, `MoonMind.Run` routing through `mm.tool.execute`, managed-session boundary preservation, and agent-runtime task-queue selection.
 
 ## Guardrails to preserve during later phases
 
