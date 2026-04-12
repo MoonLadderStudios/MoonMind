@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
   defaultFormState,
+  PROVIDER_PROFILE_QUERY_KEY,
   ProviderProfilesManager,
   toFormState,
   parseCommandBehavior,
@@ -48,13 +49,13 @@ function renderProviderProfilesManagerWithQuery(profiles: ProviderProfile[] = []
       },
     },
   });
-  queryClient.setQueryData(['provider-profiles'], profiles);
+  queryClient.setQueryData(PROVIDER_PROFILE_QUERY_KEY, profiles);
   const onNotice = vi.fn();
 
   function ProviderProfilesHarness() {
     const { data = [] } = useQuery<ProviderProfile[]>({
-      queryKey: ['provider-profiles'],
-      queryFn: async () => queryClient.getQueryData<ProviderProfile[]>(['provider-profiles']) ?? profiles,
+      queryKey: PROVIDER_PROFILE_QUERY_KEY,
+      queryFn: async () => queryClient.getQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY) ?? profiles,
       initialData: profiles,
       staleTime: Infinity,
     });

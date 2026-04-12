@@ -61,7 +61,7 @@ interface ProviderProfileFormState {
   accountLabel: string;
 }
 
-const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
+export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
 
 export function defaultFormState(): ProviderProfileFormState {
   return {
@@ -277,7 +277,8 @@ export function ProviderProfilesManager({
 
           return nextProfiles.map((profile) =>
             profile.runtime_id === savedProfile.runtime_id &&
-            profile.profile_id !== savedProfile.profile_id
+            profile.profile_id !== savedProfile.profile_id &&
+            profile.is_default
               ? { ...profile, is_default: false }
               : profile,
           );
