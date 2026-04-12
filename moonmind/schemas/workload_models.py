@@ -122,6 +122,25 @@ def _is_under_work_path(value: str, *, allow_work_root: bool) -> bool:
     return normalized.startswith("/work/")
 
 
+def _validate_relative_artifact_path(value: str, *, field_name: str) -> str:
+    normalized = require_non_blank(value, field_name=field_name).replace("\\", "/")
+    normalized = posixpath.normpath(normalized)
+    if normalized in {"", "."}:
+        raise ValueError(f"{field_name} must be a relative artifact path")
+    if normalized.startswith("/") or normalized == ".." or normalized.startswith("../"):
+        raise ValueError(f"{field_name} must stay under artifactsDir")
+    return normalized
+
+
+def _validate_declared_output_key(value: str) -> str:
+    normalized = require_non_blank(value, field_name="declaredOutputs key")
+    if normalized.startswith("session."):
+        raise ValueError(
+            "declaredOutputs key must not use session continuity artifact classes"
+        )
+    return normalized
+
+
 class WorkloadMount(BaseModel):
     """Allowed container mount declaration for a runner profile."""
 
@@ -336,6 +355,10 @@ class WorkloadRequest(BaseModel):
         default_factory=WorkloadResourceOverrides,
         alias="resources",
     )
+    declared_outputs: dict[str, str] = Field(
+        default_factory=dict,
+        alias="declaredOutputs",
+    )
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     source_turn_id: NonBlankStr | None = Field(None, alias="sourceTurnId")
@@ -350,6 +373,15 @@ class WorkloadRequest(BaseModel):
             key = _normalize_env_name(str(raw_key), field_name="envOverrides key")
             normalized_env[key] = str(raw_value)
         self.env_overrides = normalized_env
+        self.declared_outputs = {
+            _validate_declared_output_key(key): (
+                _validate_relative_artifact_path(
+                    str(value),
+                    field_name="declaredOutputs value",
+                )
+            )
+            for key, value in self.declared_outputs.items()
+        }
         if self.session_id is None:
             if self.session_epoch is not None or self.source_turn_id is not None:
                 raise ValueError(

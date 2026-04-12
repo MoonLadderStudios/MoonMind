@@ -294,6 +294,146 @@ async def test_launcher_removes_container_after_nonzero_exit(
 
 
 @pytest.mark.asyncio
+async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_dir = Path("/work/agent_jobs/task-phase4/artifacts/step-test")
+    if artifact_dir.exists():
+        for child in artifact_dir.rglob("*"):
+            if child.is_file():
+                child.unlink()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(
+                returncode=0,
+                stdout=b"runtime stdout\n",
+                stderr=b"runtime stderr\n",
+            )
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            taskRunId="task-phase4",
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    stdout_path = Path(result.stdout_ref or "")
+    stderr_path = Path(result.stderr_ref or "")
+    diagnostics_path = Path(result.diagnostics_ref or "")
+    assert stdout_path.read_text(encoding="utf-8") == "runtime stdout\n"
+    assert stderr_path.read_text(encoding="utf-8") == "runtime stderr\n"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert diagnostics["status"] == "succeeded"
+    assert diagnostics["profileId"] == "local-python"
+    assert diagnostics["imageRef"] == "python:3.12-slim"
+    assert diagnostics["exitCode"] == 0
+    assert diagnostics["durationSeconds"] == result.duration_seconds
+    assert diagnostics["stepId"] == "step-test"
+    assert diagnostics["taskRunId"] == "task-phase4"
+    assert diagnostics["sessionContext"] is None
+    assert result.output_refs["runtime.stdout"] == result.stdout_ref
+    assert result.output_refs["runtime.stderr"] == result.stderr_ref
+    assert result.output_refs["runtime.diagnostics"] == result.diagnostics_ref
+    assert result.metadata["workload"]["stepId"] == "step-test"
+
+
+@pytest.mark.asyncio
+async def test_launcher_publishes_failure_artifacts_with_session_association(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_dir = Path("/work/agent_jobs/task-phase4-session/artifacts/step-test")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=9, stdout=b"before failure\n", stderr=b"boom\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            taskRunId="task-phase4-session",
+            artifactsDir=str(artifact_dir),
+            sessionId="session-1",
+            sessionEpoch=4,
+            sourceTurnId="turn-9",
+        )
+    )
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert result.status == "failed"
+    assert Path(result.stdout_ref or "").read_text("utf-8") == "before failure\n"
+    assert Path(result.stderr_ref or "").read_text("utf-8") == "boom\n"
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["sessionContext"] == {
+        "sessionId": "session-1",
+        "sessionEpoch": 4,
+        "sourceTurnId": "turn-9",
+    }
+    assert "session.summary" not in result.output_refs
+    assert "session.step_checkpoint" not in result.output_refs
+
+
+@pytest.mark.asyncio
+async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_dir = Path("/work/agent_jobs/task-phase4-outputs/artifacts/step-test")
+    report_path = artifact_dir / "reports" / "result.xml"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("<testsuite />\n", encoding="utf-8")
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"done\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            taskRunId="task-phase4-outputs",
+            artifactsDir=str(artifact_dir),
+            declaredOutputs={
+                "test.report": "reports/result.xml",
+                "output.summary": "summary.json",
+            },
+        )
+    )
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert result.output_refs["test.report"] == str(report_path.resolve())
+    assert "output.summary" not in result.output_refs
+    assert diagnostics["declaredOutputRefs"] == {
+        "test.report": str(report_path.resolve())
+    }
+    assert diagnostics["missingDeclaredOutputs"] == {
+        "output.summary": "summary.json"
+    }
+
+
+@pytest.mark.asyncio
 async def test_launcher_timeout_stops_kills_and_removes_container(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

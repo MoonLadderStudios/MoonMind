@@ -50,7 +50,43 @@ class _FakeLauncher:
             status=self._status,
             labels=validated.ownership.labels,
             exitCode=0 if self._status == "succeeded" else 1,
-            metadata={"containerName": validated.container_name},
+            stdoutRef="/work/agent_jobs/task-1/artifacts/step-test/workload/stdout.log",
+            stderrRef="/work/agent_jobs/task-1/artifacts/step-test/workload/stderr.log",
+            diagnosticsRef=(
+                "/work/agent_jobs/task-1/artifacts/step-test/workload/"
+                "diagnostics.json"
+            ),
+            outputRefs={
+                "runtime.stdout": (
+                    "/work/agent_jobs/task-1/artifacts/step-test/workload/stdout.log"
+                ),
+                "runtime.stderr": (
+                    "/work/agent_jobs/task-1/artifacts/step-test/workload/stderr.log"
+                ),
+                "runtime.diagnostics": (
+                    "/work/agent_jobs/task-1/artifacts/step-test/workload/"
+                    "diagnostics.json"
+                ),
+            },
+            metadata={
+                "containerName": validated.container_name,
+                "workload": {
+                    "taskRunId": validated.request.task_run_id,
+                    "stepId": validated.request.step_id,
+                    "attempt": validated.request.attempt,
+                    "toolName": validated.request.tool_name,
+                    "profileId": validated.profile.id,
+                    "sessionContext": (
+                        {
+                            "sessionId": validated.request.session_id,
+                            "sessionEpoch": validated.request.session_epoch,
+                            "sourceTurnId": validated.request.source_turn_id,
+                        }
+                        if validated.request.session_id is not None
+                        else None
+                    ),
+                },
+            },
         )
 
 
@@ -150,7 +186,18 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
     assert launcher.validated.request.session_id == "session-1"
     assert launcher.validated.request.source_turn_id == "turn-1"
     assert result.outputs["workloadResult"]["status"] == "succeeded"
-    assert result.outputs["outputRefs"] == {}
+    assert result.outputs["stdoutRef"].endswith("stdout.log")
+    assert result.outputs["stderrRef"].endswith("stderr.log")
+    assert result.outputs["diagnosticsRef"].endswith("diagnostics.json")
+    assert result.outputs["outputRefs"]["runtime.stdout"].endswith("stdout.log")
+    workload_metadata = result.outputs["workloadMetadata"]
+    assert workload_metadata["stepId"] == "step-test"
+    assert workload_metadata["sessionContext"] == {
+        "sessionId": "session-1",
+        "sessionEpoch": 3,
+        "sourceTurnId": "turn-1",
+    }
+    assert "session.summary" not in result.outputs["outputRefs"]
 
 
 @pytest.mark.asyncio
