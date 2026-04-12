@@ -369,6 +369,56 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
 
 
 @pytest.mark.asyncio
+async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-redaction" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    secret_value = "inline_secret_value_for_redaction_test"
+    auth_path = "/home/codex/.codex/auth.json"
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"runtime stdout\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            taskRunId="task-redaction",
+            repoDir=str(workspace_root / "task-redaction" / "repo"),
+            artifactsDir=str(artifact_dir),
+            envOverrides={
+                "CI": secret_value,
+                "UE_PROJECT_PATH": auth_path,
+            },
+        )
+    )
+
+    diagnostics_text = Path(result.diagnostics_ref or "").read_text("utf-8")
+    diagnostics = json.loads(diagnostics_text)
+    workload_metadata_text = json.dumps(
+        result.metadata["workload"],
+        sort_keys=True,
+    )
+
+    assert diagnostics["envOverrideKeys"] == ["CI", "UE_PROJECT_PATH"]
+    assert secret_value not in diagnostics_text
+    assert secret_value not in workload_metadata_text
+    assert auth_path not in diagnostics_text
+    assert auth_path not in workload_metadata_text
+    assert "envOverrides" not in diagnostics
+
+
+@pytest.mark.asyncio
 async def test_launcher_publishes_failure_artifacts_with_session_association(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

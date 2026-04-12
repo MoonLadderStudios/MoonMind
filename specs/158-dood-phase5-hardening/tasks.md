@@ -17,9 +17,9 @@
 
 **Purpose**: Confirm the existing workload runtime surfaces and feature artifacts are ready for TDD implementation.
 
-- [ ] T001 Verify current workload runtime surfaces in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, and `moonmind/workflows/temporal/worker_runtime.py`
-- [ ] T002 [P] Verify existing workload validation tests and fixtures in `tests/unit/workloads/test_workload_contract.py` and `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T003 [P] Verify existing tool and Temporal routing tests in `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, `tests/unit/workflows/temporal/test_activity_catalog.py`, `tests/unit/workflows/temporal/test_temporal_workers.py`, and `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T001 Verify current workload runtime surfaces in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, and `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T002 [P] Verify existing workload validation tests and fixtures in `tests/unit/workloads/test_workload_contract.py` and `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T003 [P] Verify existing tool and Temporal routing tests in `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, `tests/unit/workflows/temporal/test_activity_catalog.py`, `tests/unit/workflows/temporal/test_temporal_workers.py`, and `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
 
 ---
 
@@ -29,11 +29,11 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T004 [P] Implement or verify with failing-first tests stable workload policy denial categories and non-secret details in `moonmind/workloads/registry.py`
-- [ ] T005 [P] Implement or verify with failing-first tests workload profile security fields and validation hooks in `moonmind/schemas/workload_models.py`
-- [ ] T006 [P] Implement or verify with failing-first tests Docker launcher operational label helpers and cleanup helper boundaries in `moonmind/workloads/docker_launcher.py`
-- [ ] T007 Implement or verify with failing-first tests tool failure propagation preserves policy reason/details in `moonmind/workloads/tool_bridge.py`
-- [ ] T008 Implement or verify with failing-first tests agent-runtime worker bootstrap accepts operator-owned workload policy/capacity settings in `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T004 [P] Implement or verify with failing-first tests stable workload policy denial categories and non-secret details in `moonmind/workloads/registry.py`
+- [X] T005 [P] Implement or verify with failing-first tests workload profile security fields and validation hooks in `moonmind/schemas/workload_models.py`
+- [X] T006 [P] Implement or verify with failing-first tests Docker launcher operational label helpers and cleanup helper boundaries in `moonmind/workloads/docker_launcher.py`
+- [X] T007 Implement or verify with failing-first tests tool failure propagation preserves policy reason/details in `moonmind/workloads/tool_bridge.py`
+- [X] T008 Implement or verify with failing-first tests agent-runtime worker bootstrap accepts operator-owned workload policy/capacity settings in `moonmind/workflows/temporal/worker_runtime.py`
 
 **Checkpoint**: Foundation ready. User story implementation can begin in priority order or in parallel where marked.
 
@@ -49,20 +49,20 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T009 [P] [US1] Add image provenance and registry allowlist denial tests in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T010 [P] [US1] Add auth/credential/secret volume rejection tests in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T011 [P] [US1] Add stable denial metadata tests for unknown profile, disallowed env key, disallowed mount, and resource request too large in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T012 [P] [US1] Add explicit no-privileged, no host-network, and no implicit device launch argument tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T013 [P] [US1] Add tool failure reason/detail propagation tests in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T009 [P] [US1] Add image provenance and registry allowlist denial tests in `tests/unit/workloads/test_workload_contract.py`
+- [X] T010 [P] [US1] Add auth/credential/secret volume rejection tests in `tests/unit/workloads/test_workload_contract.py`
+- [X] T011 [P] [US1] Add stable denial metadata tests for unknown profile, disallowed env key, disallowed mount, and resource request too large in `tests/unit/workloads/test_workload_contract.py`
+- [X] T012 [P] [US1] Add explicit no-privileged, no host-network, and no implicit device launch argument tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T013 [P] [US1] Add tool failure reason/detail propagation tests in `tests/unit/workloads/test_workload_tool_bridge.py`
 
 ### Implementation for User Story 1
 
-- [ ] T014 [US1] Implement image registry/provenance allowlist enforcement in `moonmind/workloads/registry.py`
-- [ ] T015 [US1] Implement auth/credential/secret volume rejection and profile security validation in `moonmind/schemas/workload_models.py`
-- [ ] T016 [US1] Implement structured policy denial reason/details for registry validation failures in `moonmind/workloads/registry.py`
-- [ ] T017 [US1] Implement explicit safe Docker launch posture in `moonmind/workloads/docker_launcher.py`
-- [ ] T018 [US1] Implement policy denial propagation into executable-tool failures in `moonmind/workloads/tool_bridge.py`
-- [ ] T019 [US1] Run `pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py -q`
+- [X] T014 [US1] Implement image registry/provenance allowlist enforcement in `moonmind/workloads/registry.py`
+- [X] T015 [US1] Implement auth/credential/secret volume rejection and profile security validation in `moonmind/schemas/workload_models.py`
+- [X] T016 [US1] Implement structured policy denial reason/details for registry validation failures in `moonmind/workloads/registry.py`
+- [X] T017 [US1] Implement explicit safe Docker launch posture in `moonmind/workloads/docker_launcher.py`
+- [X] T018 [US1] Implement policy denial propagation into executable-tool failures in `moonmind/workloads/tool_bridge.py`
+- [X] T019 [US1] Run `pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py -q`
 
 **Checkpoint**: User Story 1 rejects unsafe launches before Docker execution and exposes stable non-secret denial diagnostics.
 
@@ -78,18 +78,18 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T020 [P] [US2] Add runner profile `maxConcurrency` schema validation tests in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T021 [P] [US2] Add profile concurrency limit denial tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T022 [P] [US2] Add fleet concurrency limit bootstrap tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
-- [ ] T023 [P] [US2] Add capacity denial reason/detail propagation tests in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T020 [P] [US2] Add runner profile `maxConcurrency` schema validation tests in `tests/unit/workloads/test_workload_contract.py`
+- [X] T021 [P] [US2] Add profile concurrency limit denial tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T022 [P] [US2] Add fleet concurrency limit bootstrap tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T023 [P] [US2] Add capacity denial reason/detail propagation tests in `tests/unit/workloads/test_workload_tool_bridge.py`
 
 ### Implementation for User Story 2
 
-- [ ] T024 [US2] Add per-profile workload concurrency field and validation to `moonmind/schemas/workload_models.py`
-- [ ] T025 [US2] Implement Docker workload concurrency limiter and lease release behavior in `moonmind/workloads/docker_launcher.py`
-- [ ] T026 [US2] Wire fleet-level workload concurrency configuration into agent-runtime bootstrap in `moonmind/workflows/temporal/worker_runtime.py`
-- [ ] T027 [US2] Export concurrency limiter from `moonmind/workloads/__init__.py`
-- [ ] T028 [US2] Run `pytest tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
+- [X] T024 [US2] Add per-profile workload concurrency field and validation to `moonmind/schemas/workload_models.py`
+- [X] T025 [US2] Implement Docker workload concurrency limiter and lease release behavior in `moonmind/workloads/docker_launcher.py`
+- [X] T026 [US2] Wire fleet-level workload concurrency configuration into agent-runtime bootstrap in `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T027 [US2] Export concurrency limiter from `moonmind/workloads/__init__.py`
+- [X] T028 [US2] Run `pytest tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
 
 **Checkpoint**: User Story 2 prevents additional workload launches when profile or fleet pressure reaches configured limits.
 
@@ -105,16 +105,16 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T029 [P] [US3] Add workload TTL label construction tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T030 [P] [US3] Add expired orphan sweep tests for workload-labeled containers in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T031 [P] [US3] Add skip behavior tests for non-expired, malformed, and unrelated containers in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T029 [P] [US3] Add workload TTL label construction tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T030 [P] [US3] Add expired orphan sweep tests for workload-labeled containers in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T031 [P] [US3] Add skip behavior tests for non-expired, malformed, and unrelated containers in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] Implement workload expiration label generation in `moonmind/workloads/docker_launcher.py`
-- [ ] T033 [US3] Implement expired workload orphan sweep behavior in `moonmind/workloads/docker_launcher.py`
-- [ ] T034 [US3] Ensure cleanup uses MoonMind workload ownership labels and never broad container selection in `moonmind/workloads/docker_launcher.py`
-- [ ] T035 [US3] Run `pytest tests/unit/workloads/test_docker_workload_launcher.py -q`
+- [X] T032 [US3] Implement workload expiration label generation in `moonmind/workloads/docker_launcher.py`
+- [X] T033 [US3] Implement expired workload orphan sweep behavior in `moonmind/workloads/docker_launcher.py`
+- [X] T034 [US3] Ensure cleanup uses MoonMind workload ownership labels and never broad container selection in `moonmind/workloads/docker_launcher.py`
+- [X] T035 [US3] Run `pytest tests/unit/workloads/test_docker_workload_launcher.py -q`
 
 **Checkpoint**: User Story 3 reliably removes expired MoonMind workload orphans and leaves unrelated containers alone.
 
@@ -130,17 +130,17 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T036 [P] [US4] Add workload result metadata tests for selected profile, image, labels, timing, and artifact publication in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T037 [P] [US4] Add workflow activity boundary tests for hardened workload results in `tests/unit/workflows/temporal/test_workload_run_activity.py`
-- [ ] T038 [P] [US4] Add activity catalog and worker topology tests for missing `docker_workload` capability diagnostics in `tests/unit/workflows/temporal/test_activity_catalog.py` and `tests/unit/workflows/temporal/test_temporal_workers.py`
-- [ ] T039 [P] [US4] Add negative diagnostics tests proving workload metadata and tool failure details omit or redact secret-like env values, auth volume paths, and raw environment dumps in `tests/unit/workloads/test_docker_workload_launcher.py` and `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T036 [P] [US4] Add workload result metadata tests for selected profile, image, labels, timing, and artifact publication in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T037 [P] [US4] Add workflow activity boundary tests for hardened workload results in `tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T038 [P] [US4] Add activity catalog and worker topology tests for missing `docker_workload` capability diagnostics in `tests/unit/workflows/temporal/test_activity_catalog.py` and `tests/unit/workflows/temporal/test_temporal_workers.py`
+- [X] T039 [P] [US4] Add negative diagnostics tests proving workload metadata and tool failure details omit or redact secret-like env values, auth volume paths, and raw environment dumps in `tests/unit/workloads/test_docker_workload_launcher.py` and `tests/unit/workloads/test_workload_tool_bridge.py`
 
 ### Implementation for User Story 4
 
-- [ ] T040 [US4] Add bounded launch approval and denial metadata to `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/registry.py`
-- [ ] T041 [US4] Ensure `workload.run` returns hardened result metadata at the Temporal activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T042 [US4] Ensure Docker workload capability routing failures remain operator-diagnosable in `moonmind/workflows/temporal/activity_catalog.py` and `moonmind/workflows/temporal/workers.py`
-- [ ] T043 [US4] Run `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py -q`
+- [X] T040 [US4] Add bounded launch approval and denial metadata to `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/registry.py`
+- [X] T041 [US4] Ensure `workload.run` returns hardened result metadata at the Temporal activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T042 [US4] Ensure Docker workload capability routing failures remain operator-diagnosable in `moonmind/workflows/temporal/activity_catalog.py` and `moonmind/workflows/temporal/workers.py`
+- [X] T043 [US4] Run `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py -q`
 
 **Checkpoint**: User Story 4 produces bounded, non-secret diagnostics for launch decisions, denials, cleanup, and capacity pressure.
 
@@ -150,11 +150,11 @@
 
 **Purpose**: Final integration checks, tracker consistency, and canonical verification.
 
-- [ ] T044 [P] Update Phase 5 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` if runtime work changes tracker state
-- [ ] T045 [P] Validate the planning contract schema with `python -m json.tool specs/158-dood-phase5-hardening/contracts/workload-hardening-contract.schema.json`
-- [ ] T046 Run focused workload and Temporal verification with `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
-- [ ] T047 Run canonical final verification with `./tools/test_unit.sh`
-- [ ] T048 Review `git diff` for unrelated changes and ensure no secrets or raw environment dumps appear in `moonmind/`, `tests/`, `docs/tmp/`, or `specs/158-dood-phase5-hardening/`
+- [X] T044 [P] Update Phase 5 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` if runtime work changes tracker state
+- [X] T045 [P] Validate the planning contract schema with `python -m json.tool specs/158-dood-phase5-hardening/contracts/workload-hardening-contract.schema.json`
+- [X] T046 Run focused workload and Temporal verification with `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
+- [X] T047 Run canonical final verification with `./tools/test_unit.sh`
+- [X] T048 Review `git diff` for unrelated changes and ensure no secrets or raw environment dumps appear in `moonmind/`, `tests/`, `docs/tmp/`, or `specs/158-dood-phase5-hardening/`
 
 ---
 
