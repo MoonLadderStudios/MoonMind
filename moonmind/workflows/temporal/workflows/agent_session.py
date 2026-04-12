@@ -18,6 +18,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionInterruptRequest,
         CodexManagedSessionLocator,
         CodexManagedSessionPlaneContract,
+        CodexManagedSessionRequestTrackingEntry,
         CodexManagedSessionSendFollowUpRequest,
         CodexManagedSessionSnapshot,
         CodexManagedSessionState,
@@ -44,6 +45,7 @@ AGENT_SESSION_STATUS_ACTIVE = "active"
 AGENT_SESSION_STATUS_CLEARING = "clearing"
 AGENT_SESSION_STATUS_TERMINATING = "terminating"
 AGENT_SESSION_STATUS_TERMINATED = "terminated"
+MAX_REQUEST_TRACKING_ENTRIES = 100
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
 
@@ -69,6 +71,9 @@ class MoonMindAgentSessionWorkflow:
         self._continue_as_new_event_threshold = (
             session_input.continue_as_new_event_threshold
         )
+        self._request_tracking_state: dict[
+            str, CodexManagedSessionRequestTrackingEntry
+        ] = {}
         self._termination_requested = False
         self._mutation_lock = asyncio.Lock()
         self._restore_continue_as_new_state(session_input)
@@ -183,6 +188,44 @@ class MoonMindAgentSessionWorkflow:
         self._latest_control_event_ref = projection.get("latestControlEventRef")
         self._latest_reset_boundary_ref = projection.get("latestResetBoundaryRef")
 
+    def _record_request_tracking(
+        self,
+        *,
+        request_id: str | None,
+        action: str,
+        status: str,
+        result_ref: str | None = None,
+    ) -> None:
+        if request_id is None:
+            return
+        entry = CodexManagedSessionRequestTrackingEntry(
+            requestId=request_id,
+            action=action,
+            sessionEpoch=self._binding.session_epoch,
+            status=status,
+            resultRef=result_ref,
+        )
+        self._request_tracking_state[entry.request_id] = entry
+        while len(self._request_tracking_state) > MAX_REQUEST_TRACKING_ENTRIES:
+            oldest_request_id = next(iter(self._request_tracking_state))
+            del self._request_tracking_state[oldest_request_id]
+
+    def _validate_request_not_completed(
+        self,
+        *,
+        request_id: str | None,
+        action: str,
+    ) -> None:
+        if request_id is None:
+            return
+        existing = self._request_tracking_state.get(request_id)
+        if (
+            existing is not None
+            and existing.action == action
+            and existing.status == "completed"
+        ):
+            raise ValueError(f"Managed session request {request_id} already completed")
+
     async def _refresh_continuity_projection(
         self,
         *,
@@ -238,6 +281,9 @@ class MoonMindAgentSessionWorkflow:
         self._latest_checkpoint_ref = session_input.latest_checkpoint_ref
         self._latest_control_event_ref = session_input.latest_control_event_ref
         self._latest_reset_boundary_ref = session_input.latest_reset_boundary_ref
+        self._request_tracking_state = {
+            entry.request_id: entry for entry in session_input.request_tracking_state
+        }
 
     def _build_continue_as_new_input(self) -> dict[str, Any]:
         binding = self._require_binding()
@@ -259,6 +305,11 @@ class MoonMindAgentSessionWorkflow:
             "latestControlEventRef": self._latest_control_event_ref,
             "latestResetBoundaryRef": self._latest_reset_boundary_ref,
             "continueAsNewEventThreshold": self._continue_as_new_event_threshold,
+            "requestTrackingState": [
+                entry.model_dump(mode="json", by_alias=True)
+                for entry in self._request_tracking_state.values()
+            ]
+            or None,
         }
         payload.update(
             {key: value for key, value in optional_fields.items() if value is not None}
@@ -421,6 +472,7 @@ class MoonMindAgentSessionWorkflow:
             latestControlEventRef=self._latest_control_event_ref,
             latestResetBoundaryRef=self._latest_reset_boundary_ref,
             terminationRequested=self._termination_requested,
+            requestTrackingState=tuple(self._request_tracking_state.values()),
         )
         return snapshot.model_dump(mode="json", by_alias=True)
 
@@ -428,6 +480,15 @@ class MoonMindAgentSessionWorkflow:
     async def send_follow_up(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
         async with self._mutation_lock:
+            self._validate_request_not_completed(
+                request_id=request.request_id,
+                action="send_turn",
+            )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="send_turn",
+                status="accepted",
+            )
             await self._await_runtime_handles()
             locator = self._require_locator()
             response = CodexManagedSessionTurnResponse.model_validate(
@@ -453,6 +514,13 @@ class MoonMindAgentSessionWorkflow:
                 metadata={"action": "send_follow_up", "reason": request.reason},
             )
             self._apply_continuity_projection(continuity)
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="send_turn",
+                status="completed",
+                result_ref=continuity.get("latestControlEventRef")
+                or continuity.get("latestSummaryRef"),
+            )
             return {
                 "turnId": response.turn_id,
                 "status": response.status,
@@ -471,6 +539,15 @@ class MoonMindAgentSessionWorkflow:
     ) -> dict[str, Any]:
         request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
         async with self._mutation_lock:
+            self._validate_request_not_completed(
+                request_id=request.request_id,
+                action="interrupt_turn",
+            )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="interrupt_turn",
+                status="accepted",
+            )
             await self._await_runtime_handles()
             locator = self._require_locator()
             turn_id = self._require_active_turn()
@@ -497,6 +574,13 @@ class MoonMindAgentSessionWorkflow:
                 metadata={"action": "interrupt_turn", "reason": request.reason},
             )
             self._apply_continuity_projection(continuity)
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="interrupt_turn",
+                status="completed",
+                result_ref=continuity.get("latestControlEventRef")
+                or continuity.get("latestSummaryRef"),
+            )
             return {
                 "turnId": response.turn_id,
                 "status": response.status,
@@ -518,6 +602,15 @@ class MoonMindAgentSessionWorkflow:
     ) -> dict[str, Any]:
         request = CodexManagedSessionSteerRequest.model_validate(payload or {})
         async with self._mutation_lock:
+            self._validate_request_not_completed(
+                request_id=request.request_id,
+                action="steer_turn",
+            )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="steer_turn",
+                status="accepted",
+            )
             await self._await_runtime_handles()
             locator = self._require_locator()
             turn_id = self._require_active_turn()
@@ -547,6 +640,13 @@ class MoonMindAgentSessionWorkflow:
                 metadata={"action": "steer_turn", "reason": request.reason},
             )
             self._apply_continuity_projection(continuity)
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="steer_turn",
+                status="completed",
+                result_ref=continuity.get("latestControlEventRef")
+                or continuity.get("latestSummaryRef"),
+            )
             return {
                 "turnId": response.turn_id,
                 "status": response.status,
@@ -568,6 +668,15 @@ class MoonMindAgentSessionWorkflow:
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         async with self._mutation_lock:
+            self._validate_request_not_completed(
+                request_id=request.request_id,
+                action="clear_session",
+            )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="clear_session",
+                status="accepted",
+            )
             await self._await_runtime_handles()
             binding = self._require_binding()
             locator = self._require_locator()
@@ -597,6 +706,14 @@ class MoonMindAgentSessionWorkflow:
                     metadata={"action": "clear_session", "reason": request.reason},
                 )
                 self._apply_continuity_projection(continuity)
+                self._record_request_tracking(
+                    request_id=request.request_id,
+                    action="clear_session",
+                    status="completed",
+                    result_ref=continuity.get("latestResetBoundaryRef")
+                    or continuity.get("latestControlEventRef")
+                    or continuity.get("latestSummaryRef"),
+                )
                 return {
                     "sessionState": session_state,
                     **continuity,
@@ -618,6 +735,15 @@ class MoonMindAgentSessionWorkflow:
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         async with self._mutation_lock:
+            self._validate_request_not_completed(
+                request_id=request.request_id,
+                action="cancel_session",
+            )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="cancel_session",
+                status="accepted",
+            )
             locator: CodexManagedSessionLocator | None = None
             turn_id: str | None = None
             if self._container_id and self._thread_id and self._active_turn_id:
@@ -643,6 +769,11 @@ class MoonMindAgentSessionWorkflow:
             self._status = AGENT_SESSION_STATUS_ACTIVE
             self._last_control_action = "cancel_session"
             self._last_control_reason = request.reason
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="cancel_session",
+                status="completed",
+            )
             return self.get_status()
 
     @cancel_session_update.validator
@@ -658,6 +789,15 @@ class MoonMindAgentSessionWorkflow:
         async with self._mutation_lock:
             if self._termination_requested:
                 return self.get_status()
+            self._validate_request_not_completed(
+                request_id=request.request_id,
+                action="terminate_session",
+            )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="terminate_session",
+                status="accepted",
+            )
             self._status = AGENT_SESSION_STATUS_TERMINATING
             self._last_control_action = "terminate_session"
             self._last_control_reason = request.reason
@@ -680,6 +820,11 @@ class MoonMindAgentSessionWorkflow:
                     last_control_action="terminate_session",
                     last_control_reason=request.reason,
                 )
+            self._record_request_tracking(
+                request_id=request.request_id,
+                action="terminate_session",
+                status="completed",
+            )
             self._termination_requested = True
             return self.get_status()
 

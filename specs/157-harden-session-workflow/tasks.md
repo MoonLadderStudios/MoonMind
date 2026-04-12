@@ -17,10 +17,10 @@
 
 **Purpose**: Confirm the feature scope and existing implementation boundaries before runtime edits.
 
-- [ ] T001 Review planned workflow/schema surfaces in specs/157-harden-session-workflow/plan.md and specs/157-harden-session-workflow/contracts/agent-session-workflow-hardening.md
-- [ ] T002 [P] Inspect existing managed-session schema fields in moonmind/schemas/managed_session_models.py
-- [ ] T003 [P] Inspect existing `MoonMind.AgentSession` handlers and query state in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T004 [P] Inspect current workflow unit-test fixtures in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T001 Review planned workflow/schema surfaces in specs/157-harden-session-workflow/plan.md and specs/157-harden-session-workflow/contracts/agent-session-workflow-hardening.md
+- [X] T002 [P] Inspect existing managed-session schema fields in moonmind/schemas/managed_session_models.py
+- [X] T003 [P] Inspect existing `MoonMind.AgentSession` handlers and query state in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T004 [P] Inspect current workflow unit-test fixtures in tests/unit/workflows/temporal/workflows/test_agent_session.py
 
 ---
 
@@ -30,11 +30,11 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T005 Add bounded carry-forward fields to `CodexManagedSessionWorkflowInput` in moonmind/schemas/managed_session_models.py
-- [ ] T006 Add latest continuity-ref fields and compact request-tracking state to `CodexManagedSessionSnapshot` in moonmind/schemas/managed_session_models.py
-- [ ] T007 Add normalization rules for optional locator, continuity-ref, threshold, and request-tracking fields in moonmind/schemas/managed_session_models.py
-- [ ] T008 Add shared workflow state restore and Continue-As-New payload builder helpers in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T009 [P] Add schema validation coverage for bounded carry-forward fields in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T005 Add bounded carry-forward fields to `CodexManagedSessionWorkflowInput` in moonmind/schemas/managed_session_models.py
+- [X] T006 Add latest continuity-ref fields and compact request-tracking state to `CodexManagedSessionSnapshot` in moonmind/schemas/managed_session_models.py
+- [X] T007 Add normalization rules for optional locator, continuity-ref, threshold, and request-tracking fields in moonmind/schemas/managed_session_models.py
+- [X] T008 Add shared workflow state restore and Continue-As-New payload builder helpers in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T009 [P] Add schema validation coverage for bounded carry-forward fields in tests/unit/workflows/temporal/workflows/test_agent_session.py
 
 **Checkpoint**: Shared schema and workflow state helpers are ready for story-specific behavior.
 
@@ -50,15 +50,15 @@
 
 > Write these tests first and confirm they fail before implementing US1 runtime changes.
 
-- [ ] T010 [P] [US1] Add async mutator lock serialization test in tests/unit/workflows/temporal/workflows/test_agent_session.py
-- [ ] T011 [P] [US1] Add coherent continuity-ref query state test after send/interrupt/clear in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T010 [P] [US1] Add async mutator lock serialization test in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T011 [P] [US1] Add coherent continuity-ref query state test after send/interrupt/clear in tests/unit/workflows/temporal/workflows/test_agent_session.py
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Add workflow-level async lock initialization in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T013 [US1] Wrap `SendFollowUp`, `InterruptTurn`, `SteerTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` async mutators with the workflow lock in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T014 [US1] Persist latest continuity refs into workflow query state after projection refresh in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T015 [US1] Run `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py` and confirm US1 tests pass
+- [X] T012 [US1] Add workflow-level async lock initialization in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T013 [US1] Wrap `SendFollowUp`, `InterruptTurn`, `SteerTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` async mutators with the workflow lock in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T014 [US1] Persist latest continuity refs into workflow query state after projection refresh in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T015 [US1] Run `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py` and confirm US1 tests pass
 
 **Checkpoint**: User Story 1 is independently functional and testable.
 
@@ -74,16 +74,16 @@
 
 > Write these tests first and confirm they fail before implementing US2 runtime changes.
 
-- [ ] T016 [P] [US2] Add pre-handle accepted update readiness test for `SendFollowUp` in tests/unit/workflows/temporal/workflows/test_agent_session.py
-- [ ] T017 [P] [US2] Add validator regression tests for stale epoch, missing active turn after readiness, duplicate clear, and post-termination mutation in tests/unit/workflows/temporal/workflows/test_agent_session.py
-- [ ] T018 [P] [US2] Add no-handle terminate regression test in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T016 [P] [US2] Add pre-handle accepted update readiness test for `SendFollowUp` in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T017 [P] [US2] Add validator regression tests for stale epoch, missing active turn after readiness, duplicate clear, and post-termination mutation in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T018 [P] [US2] Add no-handle terminate regression test in tests/unit/workflows/temporal/workflows/test_agent_session.py
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Add runtime-handle readiness predicate and wait helper in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T020 [US2] Move locator readiness checks from accepted runtime-bound update validators into update bodies where readiness waits are required in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T021 [US2] Preserve deterministic validator rejection for stale epoch, active-turn absence after handles, duplicate clear, and terminating state in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T022 [US2] Run `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py` and confirm US2 tests pass
+- [X] T019 [US2] Add runtime-handle readiness predicate and wait helper in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T020 [US2] Move locator readiness checks from accepted runtime-bound update validators into update bodies where readiness waits are required in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T021 [US2] Preserve deterministic validator rejection for stale epoch, active-turn absence after handles, duplicate clear, and terminating state in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T022 [US2] Run `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py` and confirm US2 tests pass
 
 **Checkpoint**: User Story 2 is independently functional and testable.
 
@@ -99,16 +99,16 @@
 
 > Write these tests first and confirm they fail before implementing US3 runtime changes.
 
-- [ ] T023 [P] [US3] Add completion handler-drain test using `workflow.all_handlers_finished` in tests/unit/workflows/temporal/workflows/test_agent_session.py
-- [ ] T024 [P] [US3] Add Continue-As-New trigger and handler-drain test in tests/unit/workflows/temporal/workflows/test_agent_session.py
-- [ ] T025 [P] [US3] Add handoff payload carry-forward test for identity, epoch, locator, active turn, control metadata, continuity refs, threshold, and request-tracking state in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T023 [P] [US3] Add completion handler-drain test using `workflow.all_handlers_finished` in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T024 [P] [US3] Add Continue-As-New trigger and handler-drain test in tests/unit/workflows/temporal/workflows/test_agent_session.py
+- [X] T025 [P] [US3] Add handoff payload carry-forward test for identity, epoch, locator, active turn, control metadata, continuity refs, threshold, and request-tracking state in tests/unit/workflows/temporal/workflows/test_agent_session.py
 
 ### Implementation for User Story 3
 
-- [ ] T026 [US3] Add main-loop Continue-As-New suggestion and threshold checks in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T027 [US3] Wait for `workflow.all_handlers_finished` before terminal completion and Continue-As-New in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T028 [US3] Carry bounded handoff payload through `CodexManagedSessionWorkflowInput` restoration in moonmind/workflows/temporal/workflows/agent_session.py
-- [ ] T029 [US3] Run `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py` and confirm US3 tests pass
+- [X] T026 [US3] Add main-loop Continue-As-New suggestion and threshold checks in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T027 [US3] Wait for `workflow.all_handlers_finished` before terminal completion and Continue-As-New in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T028 [US3] Carry bounded handoff payload through `CodexManagedSessionWorkflowInput` restoration in moonmind/workflows/temporal/workflows/agent_session.py
+- [X] T029 [US3] Run `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py` and confirm US3 tests pass
 
 **Checkpoint**: User Story 3 is independently functional and testable.
 
@@ -118,11 +118,11 @@
 
 **Purpose**: Final validation and cleanup across all stories.
 
-- [ ] T030 [P] Run `python -m py_compile moonmind/workflows/temporal/workflows/agent_session.py moonmind/schemas/managed_session_models.py tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T031 Run `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_agent_session.py` for focused repository-wrapper validation
-- [ ] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit validation
-- [ ] T033 Run `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` and confirm runtime scope validation passes
-- [ ] T034 Review docs generated for this feature in specs/157-harden-session-workflow/ and ensure no implementation checklist leaked into canonical docs/
+- [X] T030 [P] Run `python -m py_compile moonmind/workflows/temporal/workflows/agent_session.py moonmind/schemas/managed_session_models.py tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T031 Run `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_agent_session.py` for focused repository-wrapper validation
+- [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit validation
+- [X] T033 Run `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` and confirm runtime scope validation passes
+- [X] T034 Review docs generated for this feature in specs/157-harden-session-workflow/ and ensure no implementation checklist leaked into canonical docs/
 
 ---
 
