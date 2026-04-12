@@ -746,6 +746,58 @@ def _resolve_task_run_id_from_managed_store(workflow_id: str) -> str | None:
     return str(record.run_id or "").strip() or None
 
 
+async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
+    if not isinstance(payload, Mapping):
+        return payload
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return payload
+
+    enriched_steps: list[Any] = []
+    resolved_by_child_workflow: dict[str, str | None] = {}
+    changed = False
+
+    for step in steps:
+        if not isinstance(step, Mapping):
+            enriched_steps.append(step)
+            continue
+        refs = step.get("refs")
+        if not isinstance(refs, Mapping):
+            enriched_steps.append(step)
+            continue
+        existing_task_run_id = str(
+            refs.get("taskRunId") or refs.get("task_run_id") or ""
+        ).strip()
+        child_workflow_id = str(
+            refs.get("childWorkflowId") or refs.get("child_workflow_id") or ""
+        ).strip()
+        if existing_task_run_id or not child_workflow_id:
+            enriched_steps.append(step)
+            continue
+        if child_workflow_id not in resolved_by_child_workflow:
+            resolved_by_child_workflow[child_workflow_id] = await asyncio.to_thread(
+                _resolve_task_run_id_from_managed_store,
+                child_workflow_id,
+            )
+        task_run_id = resolved_by_child_workflow[child_workflow_id]
+        if not task_run_id:
+            enriched_steps.append(step)
+            continue
+
+        enriched_refs = dict(refs)
+        enriched_refs["taskRunId"] = task_run_id
+        enriched_step = dict(step)
+        enriched_step["refs"] = enriched_refs
+        enriched_steps.append(enriched_step)
+        changed = True
+
+    if not changed:
+        return payload
+    enriched_payload = dict(payload)
+    enriched_payload["steps"] = enriched_steps
+    return enriched_payload
+
+
 async def _load_execution_progress(
     *,
     temporal_client: Client,
@@ -811,8 +863,10 @@ async def _load_execution_step_ledger(
             },
         ) from exc
 
+    enriched_payload = await _enrich_step_ledger_task_run_refs(payload)
+
     try:
-        return StepLedgerSnapshotModel.model_validate(payload)
+        return StepLedgerSnapshotModel.model_validate(enriched_payload)
     except ValidationError as exc:
         logger.warning(
             "Invalid execution step ledger payload for %s: %s",
