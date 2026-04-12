@@ -73,7 +73,7 @@ As an operator running a message-heavy session for an extended period, I need th
 - **FR-004**: The system MUST wait for accepted asynchronous handlers to finish before the session workflow completes.
 - **FR-005**: The system MUST wait for accepted asynchronous handlers to finish before any session workflow handoff to a new run.
 - **FR-006**: The system MUST initiate workflow handoff only from the main workflow execution path, not from individual message handlers.
-- **FR-007**: The system MUST carry forward the logical session identity, current epoch, runtime locator, last control action, last control reason, latest continuity refs, and any request-tracking state required to prevent duplicate external effects across handoff.
+- **FR-007**: The system MUST carry forward the logical session identity, current epoch, runtime locator, last control action, last control reason, latest continuity refs, and compact request-tracking state for accepted mutating controls when caller or workflow request identity is available.
 - **FR-008**: The system MUST expose a test-only way to force shortened-history handoff so validation can prove handoff behavior without requiring production-scale histories.
 - **FR-009**: The system MUST preserve operator-visible session query state across accepted controls and handoff boundaries.
 - **FR-010**: The feature MUST include production runtime behavior changes and validation tests; documentation or specification updates alone are not sufficient.
@@ -86,7 +86,7 @@ As an operator running a message-heavy session for an extended period, I need th
 - **Control Request**: A user or workflow-initiated session mutation such as send, steer, interrupt, clear, cancel, or terminate.
 - **Continuity Refs**: Artifact references that summarize the latest durable session context, checkpoint, control event, and reset boundary.
 - **Handoff Payload**: The bounded state passed from one workflow run to the next when the same logical session continues.
-- **Request-Tracking State**: The compact dedupe or idempotency data required to avoid applying the same accepted control more than once across a workflow handoff.
+- **Request-Tracking State**: Compact identity, action, epoch, and completion metadata for accepted mutating controls, used to avoid applying the same identified control more than once across a workflow handoff.
 
 ### Assumptions
 
@@ -94,6 +94,7 @@ As an operator running a message-heavy session for an extended period, I need th
 - Runtime-handle attachment is expected to happen shortly after session launch for sessions that accept runtime-bound controls.
 - Handoff preserves bounded operator and recovery metadata; full transcripts, prompts, and large runtime content remain outside the workflow state.
 - Existing invalid-request semantics from earlier phases remain in force unless this feature explicitly changes readiness handling.
+- Request tracking is based on stable caller or workflow request identity when available; the feature does not require content-based dedupe over prompts, transcripts, or other large runtime data.
 
 ## Success Criteria *(mandatory)*
 

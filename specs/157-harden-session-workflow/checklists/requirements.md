@@ -33,3 +33,4 @@
 
 - Runtime-intent guard satisfied by FR-010 and FR-011: required deliverables include production runtime code changes, not docs/spec-only output, plus validation tests.
 - The specification uses product-domain terms such as session workflow, handoff, runtime locator, and managed session because they are part of the user-provided control-plane requirement vocabulary.
+- Clarification scan resolved the only material ambiguity by bounding request-tracking state to compact identified-control metadata; no interactive clarification blockers remain.
