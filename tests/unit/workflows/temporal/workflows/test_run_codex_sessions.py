@@ -129,6 +129,30 @@ async def test_run_skips_task_scoped_session_for_non_codex_managed_runtime(
     assert started is False
 
 
+def test_run_pending_agent_step_refs_include_session_task_run_id() -> None:
+    workflow = MoonMindRunWorkflow()
+    request = _managed_request("codex").model_copy(
+        update={
+            "managed_session": CodexManagedSessionBinding(
+                workflowId="wf-run-1:session:codex_cli",
+                taskRunId="wf-run-1",
+                sessionId="sess:wf-run-1:codex_cli",
+                sessionEpoch=1,
+                runtimeId="codex_cli",
+                executionProfileRef="codex-default",
+            )
+        }
+    )
+
+    assert workflow._pending_agent_step_refs(
+        child_workflow_id="wf-run-1:agent:node-1",
+        request=request,
+    ) == {
+        "childWorkflowId": "wf-run-1:agent:node-1",
+        "taskRunId": "wf-run-1",
+    }
+
+
 @pytest.mark.asyncio
 async def test_run_termination_v3_executes_session_update(
     monkeypatch: pytest.MonkeyPatch,

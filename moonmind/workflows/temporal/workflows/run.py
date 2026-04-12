@@ -1789,7 +1789,10 @@ class MoonMindRunWorkflow:
                                 updated_at=workflow.now(),
                                 waiting_reason="Awaiting child workflow progress",
                                 summary=f"Awaiting child workflow for {tool_name}",
-                                refs={"childWorkflowId": child_workflow_id},
+                                refs=self._pending_agent_step_refs(
+                                    child_workflow_id=child_workflow_id,
+                                    request=request,
+                                ),
                             )
                             try:
                                 child_result = await workflow.execute_child_workflow(
@@ -2340,6 +2343,19 @@ class MoonMindRunWorkflow:
 
     def _task_scoped_session_workflow_id(self, runtime_id: str) -> str:
         return f"{workflow.info().workflow_id}:session:{runtime_id}"
+
+    def _pending_agent_step_refs(
+        self,
+        *,
+        child_workflow_id: str,
+        request: AgentExecutionRequest,
+    ) -> dict[str, str]:
+        refs = {"childWorkflowId": child_workflow_id}
+        if request.managed_session is not None:
+            task_run_id = str(request.managed_session.task_run_id or "").strip()
+            if task_run_id:
+                refs["taskRunId"] = task_run_id
+        return refs
 
     async def _ensure_task_scoped_codex_session(
         self, request: AgentExecutionRequest

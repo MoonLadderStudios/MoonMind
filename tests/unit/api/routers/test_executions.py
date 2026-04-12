@@ -1591,6 +1591,120 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     }
 
 
+def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    def _ledger_step(
+        *,
+        logical_step_id: str,
+        order: int,
+        tool_type: str,
+        child_workflow_id: str,
+    ) -> dict[str, object]:
+        return {
+            "logicalStepId": logical_step_id,
+            "order": order,
+            "title": logical_step_id,
+            "tool": {
+                "type": tool_type,
+                "name": (
+                    "codex_cli"
+                    if tool_type == "agent_runtime"
+                    else "repo.run_tests"
+                ),
+                "version": "1",
+            },
+            "dependsOn": [],
+            "status": "awaiting_external",
+            "waitingReason": "Awaiting child workflow progress",
+            "attentionRequired": False,
+            "attempt": 1,
+            "startedAt": "2026-04-08T12:00:00Z",
+            "updatedAt": "2026-04-08T12:01:00Z",
+            "summary": "Awaiting child workflow",
+            "checks": [],
+            "refs": {
+                "childWorkflowId": child_workflow_id,
+                "childRunId": None,
+                "taskRunId": None,
+            },
+            "artifacts": {
+                "outputSummary": None,
+                "outputPrimary": None,
+                "runtimeStdout": None,
+                "runtimeStderr": None,
+                "runtimeMergedLogs": None,
+                "runtimeDiagnostics": None,
+                "providerSnapshot": None,
+            },
+            "lastError": None,
+        }
+
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                _ledger_step(
+                    logical_step_id="delegate-agent",
+                    order=1,
+                    tool_type="agent_runtime",
+                    child_workflow_id="mm:wf-1:agent:delegate-agent",
+                ),
+                _ledger_step(
+                    logical_step_id="second-agent",
+                    order=2,
+                    tool_type="agent_runtime",
+                    child_workflow_id="mm:wf-1:agent:second-agent",
+                ),
+                _ledger_step(
+                    logical_step_id="run-tests",
+                    order=3,
+                    tool_type="skill",
+                    child_workflow_id="mm:wf-1:tool:run-tests",
+                ),
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+    to_thread_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    async def _fake_to_thread(
+        func: object, /, *args: object, **kwargs: object
+    ) -> dict[str, str]:
+        to_thread_calls.append((func, args, kwargs))
+        return {
+            "mm:wf-1:agent:delegate-agent": "task-run-1",
+            "mm:wf-1:agent:second-agent": "task-run-2",
+        }
+
+    with patch(
+        "api_service.api.routers.executions.asyncio.to_thread",
+        new=_fake_to_thread,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["steps"][0]["refs"]["taskRunId"] == "task-run-1"
+    assert payload["steps"][1]["refs"]["taskRunId"] == "task-run-2"
+    assert payload["steps"][2]["refs"]["taskRunId"] is None
+    assert len(to_thread_calls) == 1
+    assert to_thread_calls[0][1] == (
+        (
+            "mm:wf-1:agent:delegate-agent",
+            "mm:wf-1:agent:second-agent",
+        ),
+    )
+
+
 def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -1690,9 +1804,11 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
 
     to_thread_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
 
-    async def _fake_to_thread(func: object, /, *args: object, **kwargs: object) -> str:
+    async def _fake_to_thread(
+        func: object, /, *args: object, **kwargs: object
+    ) -> dict[str, str]:
         to_thread_calls.append((func, args, kwargs))
-        return "550e8400-e29b-41d4-a716-446655440000"
+        return {"mm:wf-1": "550e8400-e29b-41d4-a716-446655440000"}
 
     with patch(
         "api_service.api.routers.executions.asyncio.to_thread",
@@ -1705,6 +1821,7 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
         response.json()["taskRunId"] == "550e8400-e29b-41d4-a716-446655440000"
     )
     assert len(to_thread_calls) == 1
+    assert to_thread_calls[0][1] == (("mm:wf-1",),)
 
 
 def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:

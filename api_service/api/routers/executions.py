@@ -727,23 +727,127 @@ def _managed_run_store_root() -> str:
     )
 
 
-def _resolve_task_run_id_from_managed_store(workflow_id: str) -> str | None:
-    normalized_workflow_id = str(workflow_id or "").strip()
-    if not normalized_workflow_id:
-        return None
+def _resolve_task_run_ids_from_managed_store(
+    workflow_ids: tuple[str, ...]
+) -> dict[str, str]:
+    normalized_workflow_ids = tuple(
+        dict.fromkeys(
+            str(workflow_id or "").strip()
+            for workflow_id in workflow_ids
+            if str(workflow_id or "").strip()
+        )
+    )
+    if not normalized_workflow_ids:
+        return {}
     try:
         store = ManagedRunStore(_managed_run_store_root())
-        record = store.find_latest_for_workflow(normalized_workflow_id)
+        records = store.find_latest_by_workflow_ids(normalized_workflow_ids)
     except Exception:
         logger.warning(
-            "Failed to resolve managed task run id for workflow %s from run store",
-            normalized_workflow_id,
+            "Failed to resolve managed task run ids for workflows %s from run store",
+            normalized_workflow_ids,
             exc_info=True,
         )
-        return None
-    if record is None:
-        return None
-    return str(record.run_id or "").strip() or None
+        return {}
+    resolved: dict[str, str] = {}
+    for workflow_id, record in records.items():
+        run_id = str(record.run_id or "").strip()
+        if run_id:
+            resolved[workflow_id] = run_id
+    return resolved
+
+
+async def _enrich_step_ledger_task_run_refs(payload: Any) -> Any:
+    if not isinstance(payload, Mapping):
+        return payload
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return payload
+
+    missing_agent_child_workflow_ids: list[str] = []
+    seen_child_workflow_ids: set[str] = set()
+
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        tool = step.get("tool")
+        if (
+            not isinstance(tool, Mapping)
+            or str(tool.get("type") or "").strip() != "agent_runtime"
+        ):
+            continue
+        refs = step.get("refs")
+        if not isinstance(refs, Mapping):
+            continue
+        existing_task_run_id = str(
+            refs.get("taskRunId") or refs.get("task_run_id") or ""
+        ).strip()
+        child_workflow_id = str(
+            refs.get("childWorkflowId") or refs.get("child_workflow_id") or ""
+        ).strip()
+        if (
+            existing_task_run_id
+            or not child_workflow_id
+            or child_workflow_id in seen_child_workflow_ids
+        ):
+            continue
+        seen_child_workflow_ids.add(child_workflow_id)
+        missing_agent_child_workflow_ids.append(child_workflow_id)
+
+    if not missing_agent_child_workflow_ids:
+        return payload
+
+    resolved_by_child_workflow = await asyncio.to_thread(
+        _resolve_task_run_ids_from_managed_store,
+        tuple(missing_agent_child_workflow_ids),
+    )
+    if not resolved_by_child_workflow:
+        return payload
+
+    enriched_steps: list[Any] = []
+    changed = False
+
+    for step in steps:
+        if not isinstance(step, Mapping):
+            enriched_steps.append(step)
+            continue
+        tool = step.get("tool")
+        if (
+            not isinstance(tool, Mapping)
+            or str(tool.get("type") or "").strip() != "agent_runtime"
+        ):
+            enriched_steps.append(step)
+            continue
+        refs = step.get("refs")
+        if not isinstance(refs, Mapping):
+            enriched_steps.append(step)
+            continue
+        existing_task_run_id = str(
+            refs.get("taskRunId") or refs.get("task_run_id") or ""
+        ).strip()
+        child_workflow_id = str(
+            refs.get("childWorkflowId") or refs.get("child_workflow_id") or ""
+        ).strip()
+        if existing_task_run_id or not child_workflow_id:
+            enriched_steps.append(step)
+            continue
+        task_run_id = resolved_by_child_workflow.get(child_workflow_id)
+        if not task_run_id:
+            enriched_steps.append(step)
+            continue
+
+        enriched_refs = dict(refs)
+        enriched_refs["taskRunId"] = task_run_id
+        enriched_step = dict(step)
+        enriched_step["refs"] = enriched_refs
+        enriched_steps.append(enriched_step)
+        changed = True
+
+    if not changed:
+        return payload
+    enriched_payload = dict(payload)
+    enriched_payload["steps"] = enriched_steps
+    return enriched_payload
 
 
 async def _load_execution_progress(
@@ -811,8 +915,10 @@ async def _load_execution_step_ledger(
             },
         ) from exc
 
+    enriched_payload = await _enrich_step_ledger_task_run_refs(payload)
+
     try:
-        return StepLedgerSnapshotModel.model_validate(payload)
+        return StepLedgerSnapshotModel.model_validate(enriched_payload)
     except ValidationError as exc:
         logger.warning(
             "Invalid execution step ledger payload for %s: %s",
@@ -2227,10 +2333,11 @@ async def describe_execution(
             update["temporal_run_id"] = queried_run_id
         execution = execution.model_copy(update=update)
     if not execution.task_run_id:
-        task_run_id = await asyncio.to_thread(
-            _resolve_task_run_id_from_managed_store,
-            execution.workflow_id,
+        task_run_ids = await asyncio.to_thread(
+            _resolve_task_run_ids_from_managed_store,
+            (execution.workflow_id,),
         )
+        task_run_id = task_run_ids.get(execution.workflow_id)
         if task_run_id:
             execution = execution.model_copy(update={"task_run_id": task_run_id})
     return execution
