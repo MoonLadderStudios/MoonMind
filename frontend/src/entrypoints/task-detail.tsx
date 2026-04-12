@@ -7,12 +7,14 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel } from '../utils/formatters';
+import { taskEditHref, taskRerunHref } from '../lib/temporalTaskEditing';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
   features?: {
     temporalDashboard?: {
       actionsEnabled?: boolean;
+      temporalTaskEditing?: boolean;
       debugFieldsEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
@@ -207,6 +209,7 @@ const ExecutionDetailSchema = z
     actions: z
       .object({
         canSetTitle: z.boolean().optional(),
+        canUpdateInputs: z.boolean().optional(),
         canRerun: z.boolean().optional(),
         canApprove: z.boolean().optional(),
         canPause: z.boolean().optional(),
@@ -2562,6 +2565,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const taskRunRoutes = readTaskRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
+  const taskEditingOn = Boolean(cfg?.features?.temporalDashboard?.temporalTaskEditing);
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
@@ -2784,11 +2788,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     updateMutation.mutate({ updateName: 'SetTitle', title: title.trim() });
   };
 
-  const onRerun = () => {
-    setActionError(null);
-    if (!window.confirm('Request rerun for this task?')) return;
-    updateMutation.mutate({ updateName: 'RequestRerun' });
-  };
+  const editHref = workflowId ? taskEditHref(workflowId) : '';
+  const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
 
   const onPause = () => {
     setActionError(null);
@@ -2829,7 +2830,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const actions = execution?.actions;
   const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
-  const hasTaskActions = Boolean(actions?.canSetTitle || actions?.canRerun);
+  const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
+  const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions);
   const hasInterventionSection = Boolean(
     actions &&
       (
@@ -3161,10 +3163,15 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     Rename
                   </button>
                 ) : null}
-                {actions.canRerun ? (
-                  <button type="button" disabled={busy} className="secondary" onClick={onRerun}>
+                {taskEditingOn && actions.canUpdateInputs && editHref ? (
+                  <a className="button secondary" href={editHref}>
+                    Edit
+                  </a>
+                ) : null}
+                {taskEditingOn && actions.canRerun && rerunHref ? (
+                  <a className="button secondary" href={rerunHref}>
                     Rerun
-                  </button>
+                  </a>
                 ) : null}
               </div>
             </section>

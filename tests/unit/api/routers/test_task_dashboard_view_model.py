@@ -113,6 +113,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["detailEnabled"] is True
     assert temporal_dashboard["actionsEnabled"] is True
     assert temporal_dashboard["submitEnabled"] is True
+    assert temporal_dashboard["temporalTaskEditing"] is True
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
@@ -361,6 +362,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     monkeypatch.setattr(settings.temporal_dashboard, "detail_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", False)
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
     monkeypatch.setattr(
         settings.temporal_dashboard,
@@ -386,6 +388,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         "detailEnabled": True,
         "actionsEnabled": True,
         "submitEnabled": True,
+        "temporalTaskEditing": False,
         "debugFieldsEnabled": True,
     }
     assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"

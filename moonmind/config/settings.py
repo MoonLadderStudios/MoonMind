@@ -213,6 +213,10 @@ class TemporalDashboardSettings(BaseSettings):
         True,
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SUBMIT_ENABLED"),
     )
+    temporal_task_editing_enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices("TEMPORAL_TASK_EDITING_ENABLED"),
+    )
     debug_fields_enabled: bool = Field(
         False,
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED"),

@@ -2051,6 +2051,7 @@ def test_describe_execution_includes_actions_and_debug_fields(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
 
     with TestClient(app) as test_client:
@@ -2064,8 +2065,66 @@ def test_describe_execution_includes_actions_and_debug_fields(
     assert body["actions"]["canApprove"] is True
     assert body["actions"]["canResume"] is True
     assert body["actions"]["canCancel"] is True
+    assert body["actions"]["canUpdateInputs"] is False
     assert body["debugFields"]["workflowId"] == "mm:wf-1"
     assert body["redirectPath"] == "/tasks/mm:wf-1?source=temporal"
+
+
+def test_describe_execution_exposes_temporal_task_editing_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.input_ref = "artifact://input/current"
+    record.plan_ref = "artifact://plan/current"
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "model": "gpt-5.4",
+        "task": {"git": {"repository": "Moon/Mind"}},
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflowId"] == "mm:wf-1"
+    assert body["workflowType"] == "MoonMind.Run"
+    assert body["inputArtifactRef"] == "artifact://input/current"
+    assert body["planArtifactRef"] == "artifact://plan/current"
+    assert body["inputParameters"]["targetRuntime"] == "codex_cli"
+    assert body["actions"]["canUpdateInputs"] is True
+    assert body["actions"]["canRerun"] is False
+
+
+def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", False)
+    disabled_record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+
+    disabled_actions = _serialize_execution(disabled_record).actions
+    assert disabled_actions.can_update_inputs is False
+    assert disabled_actions.disabled_reasons["canUpdateInputs"] == "temporal_task_editing_disabled"
+
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    manifest_record = _build_execution_record(
+        workflow_type=TemporalWorkflowType.MANIFEST_INGEST,
+        state=MoonMindWorkflowState.COMPLETED,
+    )
+
+    manifest_actions = _serialize_execution(manifest_record).actions
+    assert manifest_actions.can_rerun is False
+    assert manifest_actions.disabled_reasons["canRerun"] == "unsupported_workflow_type"
 
 
 def test_describe_execution_disables_actions_when_feature_flag_off(
