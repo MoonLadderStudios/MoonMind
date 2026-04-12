@@ -15,10 +15,10 @@
 
 **Purpose**: Establish the existing Jira boundaries and feature artifacts before changing runtime code.
 
-- [ ] T001 Review trusted Jira auth/client/tool boundaries in `moonmind/integrations/jira/auth.py`, `moonmind/integrations/jira/client.py`, `moonmind/integrations/jira/tool.py`, and `docs/Tools/JiraIntegration.md`
-- [ ] T002 Review Create-page runtime config gating in `api_service/api/routers/task_dashboard_view_model.py` and tests in `tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [ ] T003 [P] Review planned response models and API contract in `specs/157-jira-browser-api/data-model.md` and `specs/157-jira-browser-api/contracts/jira-browser-openapi.yaml`
-- [ ] T004 [P] Review existing Jira regression tests in `tests/unit/integrations/test_jira_auth.py`, `tests/unit/integrations/test_jira_client.py`, and `tests/unit/integrations/test_jira_tool_service.py`
+- [X] T001 Review trusted Jira auth/client/tool boundaries in `moonmind/integrations/jira/auth.py`, `moonmind/integrations/jira/client.py`, `moonmind/integrations/jira/tool.py`, and `docs/Tools/JiraIntegration.md`
+- [X] T002 Review Create-page runtime config gating in `api_service/api/routers/task_dashboard_view_model.py` and tests in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T003 [P] Review planned response models and API contract in `specs/157-jira-browser-api/data-model.md` and `specs/157-jira-browser-api/contracts/jira-browser-openapi.yaml`
+- [X] T004 [P] Review existing Jira regression tests in `tests/unit/integrations/test_jira_auth.py`, `tests/unit/integrations/test_jira_client.py`, and `tests/unit/integrations/test_jira_tool_service.py`
 
 ---
 
@@ -28,10 +28,10 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T005 [P] Create browser response model skeletons for connection, project, board, column, issue summary, issue detail, recommended imports, and safe errors in `moonmind/integrations/jira/browser.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007)
-- [ ] T006 [P] Create the Jira browser router skeleton with dependency wiring in `api_service/api/routers/jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
-- [ ] T007 Register the Jira browser router in `api_service/main.py` without changing existing Create-page routes or submission behavior (DOC-REQ-001, DOC-REQ-003)
-- [ ] T008 Add shared test fixtures for stubbed Jira browser service calls in `tests/unit/integrations/test_jira_browser_service.py` and `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-007)
+- [X] T005 [P] Create browser response model skeletons for connection, project, board, column, issue summary, issue detail, recommended imports, and safe errors in `moonmind/integrations/jira/browser.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007)
+- [X] T006 [P] Create the Jira browser router skeleton with dependency wiring in `api_service/api/routers/jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T007 Register the Jira browser router in `api_service/main.py` without changing existing Create-page routes or submission behavior (DOC-REQ-001, DOC-REQ-003)
+- [X] T008 Add shared test fixtures for stubbed Jira browser service calls in `tests/unit/integrations/test_jira_browser_service.py` and `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-007)
 
 **Checkpoint**: Browser read-model and router seams exist; user-story work can proceed.
 
@@ -45,16 +45,16 @@
 
 ### Tests for User Story 1
 
-- [ ] T009 [P] [US1] Add service tests for account-scoped and project-scoped connection verification in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002)
-- [ ] T010 [P] [US1] Add service tests for disabled browser rollout and missing Jira configuration failures in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-003, DOC-REQ-007)
-- [ ] T011 [P] [US1] Add router tests for `GET /api/jira/connections/verify` success and safe Jira error mapping in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
-- [ ] T012 [P] [US1] Add redaction regression tests proving verification failures do not expose credential-like values in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T009 [P] [US1] Add service tests for account-scoped and project-scoped connection verification in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002)
+- [X] T010 [P] [US1] Add service tests for disabled browser rollout and missing Jira configuration failures in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T011 [P] [US1] Add router tests for `GET /api/jira/connections/verify` success and safe Jira error mapping in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T012 [P] [US1] Add redaction regression tests proving verification failures do not expose credential-like values in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Implement `JiraBrowserService.verify_connection()` using the trusted Jira auth/client path in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-003)
-- [ ] T014 [US1] Implement browser rollout and project-policy checks for verification in `moonmind/integrations/jira/browser.py` (DOC-REQ-003, DOC-REQ-007)
-- [ ] T015 [US1] Implement `GET /api/jira/connections/verify` and safe `JiraToolError` HTTP mapping in `api_service/api/routers/jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T013 [US1] Implement `JiraBrowserService.verify_connection()` using the trusted Jira auth/client path in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-003)
+- [X] T014 [US1] Implement browser rollout and project-policy checks for verification in `moonmind/integrations/jira/browser.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T015 [US1] Implement `GET /api/jira/connections/verify` and safe `JiraToolError` HTTP mapping in `api_service/api/routers/jira_browser.py` (DOC-REQ-003, DOC-REQ-007)
 
 **Checkpoint**: User Story 1 can be verified independently through the connection verification endpoint.
 
@@ -68,19 +68,19 @@
 
 ### Tests for User Story 2
 
-- [ ] T016 [P] [US2] Add service tests for allowed project listing with and without configured project allowlists in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
-- [ ] T017 [P] [US2] Add service tests proving denied project board listing is rejected before Jira data is returned in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-003, DOC-REQ-004)
-- [ ] T018 [P] [US2] Add service tests for board listing and board metadata normalization in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002, DOC-REQ-004)
-- [ ] T019 [P] [US2] Add service tests for column order, stable column IDs, empty column lists, and status ID mappings in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-004)
-- [ ] T020 [P] [US2] Add router tests for `GET /api/jira/projects`, `GET /api/jira/projects/{projectKey}/boards`, and `GET /api/jira/boards/{boardId}/columns` in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
+- [X] T016 [P] [US2] Add service tests for allowed project listing with and without configured project allowlists in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
+- [X] T017 [P] [US2] Add service tests proving denied project board listing is rejected before Jira data is returned in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-003, DOC-REQ-004)
+- [X] T018 [P] [US2] Add service tests for board listing and board metadata normalization in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002, DOC-REQ-004)
+- [X] T019 [P] [US2] Add service tests for column order, stable column IDs, empty column lists, and status ID mappings in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-004)
+- [X] T020 [P] [US2] Add router tests for `GET /api/jira/projects`, `GET /api/jira/projects/{projectKey}/boards`, and `GET /api/jira/boards/{boardId}/columns` in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Implement `JiraBrowserService.list_projects()` with allowed-project filtering in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-003)
-- [ ] T022 [US2] Implement `JiraBrowserService.list_project_boards()` with project-policy enforcement in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-004)
-- [ ] T023 [US2] Implement board metadata normalization and Jira board configuration loading in `moonmind/integrations/jira/browser.py` (DOC-REQ-004)
-- [ ] T024 [US2] Implement stable ordered column normalization with status ID mappings in `moonmind/integrations/jira/browser.py` (DOC-REQ-004)
-- [ ] T025 [US2] Implement project, board, and column routes in `api_service/api/routers/jira_browser.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
+- [X] T021 [US2] Implement `JiraBrowserService.list_projects()` with allowed-project filtering in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-003)
+- [X] T022 [US2] Implement `JiraBrowserService.list_project_boards()` with project-policy enforcement in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-004)
+- [X] T023 [US2] Implement board metadata normalization and Jira board configuration loading in `moonmind/integrations/jira/browser.py` (DOC-REQ-004)
+- [X] T024 [US2] Implement stable ordered column normalization with status ID mappings in `moonmind/integrations/jira/browser.py` (DOC-REQ-004)
+- [X] T025 [US2] Implement project, board, and column routes in `api_service/api/routers/jira_browser.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-004)
 
 **Checkpoint**: User Story 2 can be verified independently through project, board, and column browsing.
 
@@ -94,18 +94,18 @@
 
 ### Tests for User Story 3
 
-- [ ] T026 [P] [US3] Add service tests for grouping issues by status-to-column mapping in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002, DOC-REQ-005)
-- [ ] T027 [P] [US3] Add service tests for empty columns and computed column counts in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-005)
-- [ ] T028 [P] [US3] Add service tests for unmapped status handling in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-005)
-- [ ] T029 [P] [US3] Add service tests for optional issue key or summary filtering in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-005)
-- [ ] T030 [P] [US3] Add router tests for `GET /api/jira/boards/{boardId}/issues` including query filtering in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-002, DOC-REQ-005)
+- [X] T026 [P] [US3] Add service tests for grouping issues by status-to-column mapping in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-002, DOC-REQ-005)
+- [X] T027 [P] [US3] Add service tests for empty columns and computed column counts in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-005)
+- [X] T028 [P] [US3] Add service tests for unmapped status handling in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-005)
+- [X] T029 [P] [US3] Add service tests for optional issue key or summary filtering in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-005)
+- [X] T030 [P] [US3] Add router tests for `GET /api/jira/boards/{boardId}/issues` including query filtering in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-002, DOC-REQ-005)
 
 ### Implementation for User Story 3
 
-- [ ] T031 [US3] Implement `JiraBrowserService.list_board_issues()` using board status mappings in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-005)
-- [ ] T032 [US3] Implement normalized issue summary creation with safe display fields in `moonmind/integrations/jira/browser.py` (DOC-REQ-005)
-- [ ] T033 [US3] Implement explicit `unmappedItems`, empty column arrays, column counts, and optional filtering in `moonmind/integrations/jira/browser.py` (DOC-REQ-005)
-- [ ] T034 [US3] Implement the board issues route in `api_service/api/routers/jira_browser.py` (DOC-REQ-002, DOC-REQ-005)
+- [X] T031 [US3] Implement `JiraBrowserService.list_board_issues()` using board status mappings in `moonmind/integrations/jira/browser.py` (DOC-REQ-002, DOC-REQ-005)
+- [X] T032 [US3] Implement normalized issue summary creation with safe display fields in `moonmind/integrations/jira/browser.py` (DOC-REQ-005)
+- [X] T033 [US3] Implement explicit `unmappedItems`, empty column arrays, column counts, and optional filtering in `moonmind/integrations/jira/browser.py` (DOC-REQ-005)
+- [X] T034 [US3] Implement the board issues route in `api_service/api/routers/jira_browser.py` (DOC-REQ-002, DOC-REQ-005)
 
 **Checkpoint**: User Story 3 can be verified independently through the board issue listing endpoint.
 
@@ -119,19 +119,19 @@
 
 ### Tests for User Story 4
 
-- [ ] T035 [P] [US4] Add service tests for plain-text normalization of Jira rich-text descriptions in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-006)
-- [ ] T036 [P] [US4] Add service tests for acceptance criteria extraction and missing-field empty states in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-006)
-- [ ] T037 [P] [US4] Add service tests for recommended preset-instruction and step-instruction import text in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-006)
-- [ ] T038 [P] [US4] Add service tests for issue project-policy denial before detail is returned in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-003, DOC-REQ-007)
-- [ ] T039 [P] [US4] Add router tests for `GET /api/jira/issues/{issueKey}` success, invalid issue keys, and safe error mapping in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-007)
+- [X] T035 [P] [US4] Add service tests for plain-text normalization of Jira rich-text descriptions in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-006)
+- [X] T036 [P] [US4] Add service tests for acceptance criteria extraction and missing-field empty states in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-006)
+- [X] T037 [P] [US4] Add service tests for recommended preset-instruction and step-instruction import text in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-006)
+- [X] T038 [P] [US4] Add service tests for issue project-policy denial before detail is returned in `tests/unit/integrations/test_jira_browser_service.py` (DOC-REQ-003, DOC-REQ-007)
+- [X] T039 [P] [US4] Add router tests for `GET /api/jira/issues/{issueKey}` success, invalid issue keys, and safe error mapping in `tests/unit/api/routers/test_jira_browser.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-007)
 
 ### Implementation for User Story 4
 
-- [ ] T040 [US4] Implement `JiraBrowserService.get_issue_detail()` with issue project-policy enforcement in `moonmind/integrations/jira/browser.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-007)
-- [ ] T041 [US4] Implement Jira rich-text-to-plain-text normalization helpers in `moonmind/integrations/jira/browser.py` (DOC-REQ-006)
-- [ ] T042 [US4] Implement acceptance criteria extraction and missing-field empty-state handling in `moonmind/integrations/jira/browser.py` (DOC-REQ-006)
-- [ ] T043 [US4] Implement target-specific recommended import generation in `moonmind/integrations/jira/browser.py` (DOC-REQ-006)
-- [ ] T044 [US4] Implement the issue detail route in `api_service/api/routers/jira_browser.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-007)
+- [X] T040 [US4] Implement `JiraBrowserService.get_issue_detail()` with issue project-policy enforcement in `moonmind/integrations/jira/browser.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-007)
+- [X] T041 [US4] Implement Jira rich-text-to-plain-text normalization helpers in `moonmind/integrations/jira/browser.py` (DOC-REQ-006)
+- [X] T042 [US4] Implement acceptance criteria extraction and missing-field empty-state handling in `moonmind/integrations/jira/browser.py` (DOC-REQ-006)
+- [X] T043 [US4] Implement target-specific recommended import generation in `moonmind/integrations/jira/browser.py` (DOC-REQ-006)
+- [X] T044 [US4] Implement the issue detail route in `api_service/api/routers/jira_browser.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-007)
 
 **Checkpoint**: User Story 4 can be verified independently through the issue detail endpoint.
 
@@ -141,13 +141,13 @@
 
 **Purpose**: Ensure cross-story safety, existing behavior preservation, and standard verification.
 
-- [ ] T045 [P] Add or update regression coverage proving Create-page runtime config remains gated independently from trusted Jira tooling in `tests/unit/api/routers/test_task_dashboard_view_model.py` (DOC-REQ-001, DOC-REQ-003)
-- [ ] T046 [P] Run existing Jira boundary regression tests: `pytest tests/unit/integrations/test_jira_auth.py tests/unit/integrations/test_jira_client.py tests/unit/integrations/test_jira_tool_service.py tests/unit/api/test_mcp_tools_router.py -q` (DOC-REQ-003, DOC-REQ-007)
-- [ ] T047 Run focused Jira browser tests: `pytest tests/unit/integrations/test_jira_browser_service.py tests/unit/api/routers/test_jira_browser.py -q` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007)
-- [ ] T048 Run runtime config tests: `pytest tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/config/test_settings.py -q` (DOC-REQ-001, DOC-REQ-003)
-- [ ] T049 Run standard unit verification with `./tools/test_unit.sh` (DOC-REQ-001)
-- [ ] T050 Run runtime scope validation with `SPECIFY_FEATURE=157-jira-browser-api ./.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` (DOC-REQ-001)
-- [ ] T051 Run runtime diff validation with `SPECIFY_FEATURE=157-jira-browser-api ./.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main` (DOC-REQ-001)
+- [X] T045 [P] Add or update regression coverage proving Create-page runtime config remains gated independently from trusted Jira tooling in `tests/unit/api/routers/test_task_dashboard_view_model.py` (DOC-REQ-001, DOC-REQ-003)
+- [X] T046 [P] Run existing Jira boundary regression tests: `pytest tests/unit/integrations/test_jira_auth.py tests/unit/integrations/test_jira_client.py tests/unit/integrations/test_jira_tool_service.py tests/unit/api/test_mcp_tools_router.py -q` (DOC-REQ-003, DOC-REQ-007)
+- [X] T047 Run focused Jira browser tests: `pytest tests/unit/integrations/test_jira_browser_service.py tests/unit/api/routers/test_jira_browser.py -q` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007)
+- [X] T048 Run runtime config tests: `pytest tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/config/test_settings.py -q` (DOC-REQ-001, DOC-REQ-003)
+- [X] T049 Run standard unit verification with `./tools/test_unit.sh` (DOC-REQ-001)
+- [X] T050 Run runtime scope validation with `SPECIFY_FEATURE=157-jira-browser-api ./.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` (DOC-REQ-001)
+- [X] T051 Run runtime diff validation with `SPECIFY_FEATURE=157-jira-browser-api ./.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main` (DOC-REQ-001)
 
 ---
 
