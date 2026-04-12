@@ -9,7 +9,7 @@ import posixpath
 import shlex
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from moonmind.schemas.workload_models import (
     RunnerProfile,
@@ -26,6 +26,17 @@ _MAX_CAPTURED_STREAM_BYTES = 64_000
 
 class DockerWorkloadLauncherError(RuntimeError):
     """Raised when the Docker workload launcher cannot execute a request."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str = "launcher_error",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.details = dict(details or {})
 
 
 class _ConcurrencyLease:
@@ -66,11 +77,25 @@ class DockerWorkloadConcurrencyLimiter:
             if active_for_profile >= request.profile.max_concurrency:
                 raise DockerWorkloadLauncherError(
                     "workload concurrency limit exceeded for profile "
-                    f"{profile_id}"
+                    f"{profile_id}",
+                    reason="concurrency_limit_exceeded",
+                    details={
+                        "scope": "profile",
+                        "profileId": profile_id,
+                        "limit": request.profile.max_concurrency,
+                    },
                 )
-            if self._fleet_limit is not None and self._active_total >= self._fleet_limit:
+            if (
+                self._fleet_limit is not None
+                and self._active_total >= self._fleet_limit
+            ):
                 raise DockerWorkloadLauncherError(
-                    "workload concurrency limit exceeded for docker_workload fleet"
+                    "workload concurrency limit exceeded for docker_workload fleet",
+                    reason="concurrency_limit_exceeded",
+                    details={
+                        "scope": "fleet",
+                        "limit": self._fleet_limit,
+                    },
                 )
             self._active_total += 1
             self._active_by_profile[profile_id] = active_for_profile + 1
@@ -217,10 +242,18 @@ def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | N
     return context
 
 
-def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
-    timeout_seconds = request.request.timeout_seconds or request.profile.timeout_seconds
+def _operational_labels(
+    request: ValidatedWorkloadRequest,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, str]:
+    effective_timeout_seconds = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else request.request.timeout_seconds or request.profile.timeout_seconds
+    )
     expires_at = datetime.now(UTC) + timedelta(
-        seconds=timeout_seconds + request.profile.cleanup.kill_grace_seconds
+        seconds=effective_timeout_seconds + request.profile.cleanup.kill_grace_seconds
     )
     return {
         **request.ownership.labels,
@@ -411,7 +444,7 @@ class DockerContainerJanitor:
             ]
         )
         expired: list[str] = []
-        for line in _decode_stream(stdout).splitlines():
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
             parts = line.split("\t")
             if len(parts) < 3:
                 continue
@@ -455,7 +488,12 @@ class DockerWorkloadLauncher:
             concurrency_limiter or DockerWorkloadConcurrencyLimiter()
         )
 
-    def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
+    def build_run_args(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[str]:
         _ensure_paths_are_mounted(request)
         profile = request.profile
         workload = request.request
@@ -475,7 +513,10 @@ class DockerWorkloadLauncher:
             "no-new-privileges",
         ]
 
-        for key, value in _operational_labels(request).items():
+        for key, value in _operational_labels(
+            request,
+            timeout_seconds=timeout_seconds,
+        ).items():
             args.extend(["--label", f"{key}={value}"])
         for mount in (*profile.required_mounts, *profile.optional_mounts):
             args.extend(["--mount", _mount_arg(mount)])
@@ -521,7 +562,7 @@ class DockerWorkloadLauncher:
 
         try:
             process = await asyncio.create_subprocess_exec(
-                *self.build_run_args(request),
+                *self.build_run_args(request, timeout_seconds=configured_timeout),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_docker_env(docker_host=self._docker_host),

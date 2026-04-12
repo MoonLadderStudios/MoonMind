@@ -11,6 +11,7 @@ from moonmind.workflows.skills.skill_plan_contracts import (
     SkillFailure as ToolFailure,
     SkillResult,
 )
+from moonmind.workloads.docker_launcher import DockerWorkloadLauncherError
 from moonmind.workloads.registry import RunnerProfileRegistry, WorkloadPolicyError
 
 
@@ -200,6 +201,13 @@ def build_workload_tool_handler(
             validated = registry.validate_request(request)
             result = await launcher.run(validated)
         except WorkloadPolicyError as exc:
+            raise ToolFailure(
+                error_code="PERMISSION_DENIED",
+                message=str(exc),
+                retryable=False,
+                details={"reason": exc.reason, **exc.details},
+            ) from exc
+        except DockerWorkloadLauncherError as exc:
             raise ToolFailure(
                 error_code="PERMISSION_DENIED",
                 message=str(exc),

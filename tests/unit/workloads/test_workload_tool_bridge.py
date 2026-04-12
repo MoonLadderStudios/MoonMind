@@ -12,6 +12,7 @@ from moonmind.workloads.tool_bridge import (
     build_dood_tool_definition_payload,
     build_workload_tool_handler,
 )
+from moonmind.workloads.docker_launcher import DockerWorkloadLauncherError
 
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
@@ -38,12 +39,20 @@ def _profile_payload(profile_id: str = "local-python") -> dict[str, object]:
 
 
 class _FakeLauncher:
-    def __init__(self, *, status: str = "succeeded") -> None:
+    def __init__(
+        self,
+        *,
+        status: str = "succeeded",
+        error: DockerWorkloadLauncherError | None = None,
+    ) -> None:
         self.validated: Any | None = None
         self._status = status
+        self._error = error
 
     async def run(self, validated: Any) -> WorkloadResult:
         self.validated = validated
+        if self._error is not None:
+            raise self._error
         return WorkloadResult(
             requestId=validated.container_name,
             profileId=validated.profile.id,
@@ -307,6 +316,47 @@ async def test_container_run_workload_policy_failure_omits_env_values() -> None:
     }
     assert secret_value not in failure_text
     assert launcher.validated is None
+
+
+@pytest.mark.asyncio
+async def test_container_run_workload_handler_maps_launcher_policy_denial() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher(
+        error=DockerWorkloadLauncherError(
+            "workload concurrency limit exceeded for profile local-python",
+            reason="concurrency_limit_exceeded",
+            details={"scope": "profile", "profileId": "local-python", "limit": 1},
+        )
+    )
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "profileId": "local-python",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["python", "-V"],
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
+
+    failure = exc_info.value
+    assert failure.error_code == "PERMISSION_DENIED"
+    assert failure.retryable is False
+    assert failure.details == {
+        "reason": "concurrency_limit_exceeded",
+        "scope": "profile",
+        "profileId": "local-python",
+        "limit": 1,
+    }
 
 
 @pytest.mark.asyncio

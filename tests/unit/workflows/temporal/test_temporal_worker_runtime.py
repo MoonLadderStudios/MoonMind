@@ -13,6 +13,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     _enforce_codex_config_for_managed_fleet,
     _build_runtime_planner,
     _build_runtime_activities,
+    _positive_int_env,
     main_async,
     resolve_adapter_metadata,
     get_activity_route,
@@ -272,6 +273,18 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
 
     assert session_controller._network_name == "shared-moonmind-network"
     assert session_controller._moonmind_url == "http://moonmind-api:5000"
+
+
+def test_positive_int_env_reports_invalid_value_with_name(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY", "many")
+
+    with pytest.raises(
+        RuntimeError,
+        match="MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY must be a positive integer",
+    ):
+        _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
 
 
 def _make_snapshot():

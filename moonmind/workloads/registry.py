@@ -160,8 +160,11 @@ class RunnerProfileRegistry:
         except ValueError as exc:
             raise WorkloadPolicyError(
                 f"{field_name} must be under workspace root {self._workspace_root}",
-                reason="disallowed_mount",
-                details={"field": field_name, "workspaceRoot": str(self._workspace_root)},
+                reason="invalid_request",
+                details={
+                    "field": field_name,
+                    "workspaceRoot": str(self._workspace_root),
+                },
             ) from exc
 
     def _validate_profile_image_policy(self, profile: RunnerProfile) -> None:

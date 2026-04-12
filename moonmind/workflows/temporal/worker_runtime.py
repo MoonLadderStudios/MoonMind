@@ -562,7 +562,13 @@ def _positive_int_env(name: str) -> int | None:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return None
-    value = int(raw)
+    normalized = raw.strip()
+    try:
+        value = int(normalized)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{name} must be a positive integer; got {normalized!r}"
+        ) from exc
     if value < 1:
         raise RuntimeError(f"{name} must be a positive integer")
     return value
@@ -676,7 +682,9 @@ def _build_agent_runtime_deps() -> tuple[
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,
         )
-    workload_fleet_limit = _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
+    workload_fleet_limit = _positive_int_env(
+        "MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY"
+    )
     workload_launcher = DockerWorkloadLauncher(
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,

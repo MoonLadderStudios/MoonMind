@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -231,6 +232,42 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert result.metadata["containerName"] == "mm-workload-task-1-step-test-2"
     assert result.metadata["artifactsDir"] == "/work/agent_jobs/task-1/artifacts/step-test"
     assert result.metadata["stdout"] == "tests passed\n"
+
+
+@pytest.mark.asyncio
+async def test_launcher_ttl_label_uses_effective_run_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=0)
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    started_before = datetime.now(UTC)
+    await DockerWorkloadLauncher().run(
+        _validated_request(tmp_path, timeoutSeconds=120),
+        timeout_seconds=10,
+    )
+
+    run_args = created[0]
+    expires_label = next(
+        label for label in run_args if label.startswith("moonmind.expires_at=")
+    )
+    expires_at = datetime.fromisoformat(
+        expires_label.removeprefix("moonmind.expires_at=").replace("Z", "+00:00")
+    )
+    ttl_seconds = (expires_at - started_before).total_seconds()
+
+    assert 10 <= ttl_seconds < 30
 
 
 def test_launcher_wraps_multi_part_shell_command_as_single_arg(
@@ -744,7 +781,10 @@ async def test_launcher_enforces_profile_concurrency_limit(
     )
     await started.wait()
 
-    with pytest.raises(DockerWorkloadLauncherError, match="concurrency limit"):
+    with pytest.raises(
+        DockerWorkloadLauncherError,
+        match="concurrency limit",
+    ) as exc_info:
         await launcher.run(
             _validated_request(
                 tmp_path,
@@ -753,6 +793,12 @@ async def test_launcher_enforces_profile_concurrency_limit(
                 artifactsDir="/work/agent_jobs/task-concurrency-b/artifacts/step-test",
             )
         )
+    assert exc_info.value.reason == "concurrency_limit_exceeded"
+    assert exc_info.value.details == {
+        "scope": "profile",
+        "profileId": "local-python",
+        "limit": 1,
+    }
 
     release.set()
     result = await first
@@ -829,3 +875,37 @@ async def test_container_janitor_sweeps_expired_workload_orphans(
     assert ["docker", "rm", "-f", "expired123"] in created
     assert ["docker", "rm", "-f", "fresh456"] not in created
     assert ["docker", "rm", "-f", "missing789"] not in created
+
+
+@pytest.mark.asyncio
+async def test_container_janitor_sweep_decodes_full_container_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+    filler = b"fresh" * 20_000
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1:3] == ("ps", "-a"):
+            return _Process(
+                returncode=0,
+                stdout=(
+                    b"expired-first\tmm-workload-expired\t2026-04-12T00:00:00Z\n"
+                    + filler
+                    + b"\n"
+                ),
+            )
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    janitor = DockerContainerJanitor()
+    swept = await janitor.sweep_expired_workloads(
+        now_iso="2026-04-12T12:00:00Z",
+    )
+
+    assert swept == ("expired-first",)
+    assert ["docker", "rm", "-f", "expired-first"] in created

@@ -208,13 +208,23 @@ def test_registry_rejects_env_key_outside_profile_allowlist(tmp_path: Path) -> N
 def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
-    with pytest.raises(WorkloadPolicyError, match="repoDir"):
+    with pytest.raises(WorkloadPolicyError, match="repoDir") as exc_info:
         registry.validate_request(_request(repoDir="/tmp/repo"))
+    assert exc_info.value.reason == "invalid_request"
+    assert exc_info.value.details == {
+        "field": "repoDir",
+        "workspaceRoot": str(WORKSPACE_ROOT),
+    }
 
-    with pytest.raises(WorkloadPolicyError, match="artifactsDir"):
+    with pytest.raises(WorkloadPolicyError, match="artifactsDir") as exc_info:
         registry.validate_request(
             _request(artifactsDir="/work/agent_jobs/../outside/artifacts")
         )
+    assert exc_info.value.reason == "invalid_request"
+    assert exc_info.value.details == {
+        "field": "artifactsDir",
+        "workspaceRoot": str(WORKSPACE_ROOT),
+    }
 
 
 def test_registry_rejects_resource_overrides_above_profile_maximum(
