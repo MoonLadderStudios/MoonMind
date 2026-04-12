@@ -2126,6 +2126,14 @@ def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     assert manifest_actions.can_rerun is False
     assert manifest_actions.disabled_reasons["canRerun"] == "unsupported_workflow_type"
 
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", False)
+    disabled_manifest_actions = _serialize_execution(manifest_record).actions
+    assert disabled_manifest_actions.can_rerun is False
+    assert (
+        disabled_manifest_actions.disabled_reasons["canRerun"]
+        == "unsupported_workflow_type"
+    )
+
 
 def test_describe_execution_disables_actions_when_feature_flag_off(
     monkeypatch: pytest.MonkeyPatch,

@@ -3202,6 +3202,12 @@ export interface components {
             memo?: {
                 [key: string]: unknown;
             };
+            /** Inputparameters */
+            inputParameters?: {
+                [key: string]: unknown;
+            };
+            /** Inputartifactref */
+            inputArtifactRef?: string | null;
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */

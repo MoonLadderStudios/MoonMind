@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
@@ -2788,9 +2788,6 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     updateMutation.mutate({ updateName: 'SetTitle', title: title.trim() });
   };
 
-  const editHref = workflowId ? taskEditHref(workflowId) : '';
-  const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
-
   const onPause = () => {
     setActionError(null);
     signalMutation.mutate({ signalName: 'Pause', payload: {} });
@@ -2829,6 +2826,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
   const actions = execution?.actions;
   const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
+  const editHref = workflowId ? taskEditHref(workflowId) : '';
+  const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
+  const onTaskEditingNavigation = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (busy) {
+      event.preventDefault();
+    }
+  };
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
   const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions);
@@ -3164,12 +3168,22 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   </button>
                 ) : null}
                 {taskEditingOn && actions.canUpdateInputs && editHref ? (
-                  <a className="button secondary" href={editHref}>
+                  <a
+                    className="button secondary"
+                    href={editHref}
+                    aria-disabled={busy}
+                    onClick={onTaskEditingNavigation}
+                  >
                     Edit
                   </a>
                 ) : null}
                 {taskEditingOn && actions.canRerun && rerunHref ? (
-                  <a className="button secondary" href={rerunHref}>
+                  <a
+                    className="button secondary"
+                    href={rerunHref}
+                    aria-disabled={busy}
+                    onClick={onTaskEditingNavigation}
+                  >
                     Rerun
                   </a>
                 ) : null}

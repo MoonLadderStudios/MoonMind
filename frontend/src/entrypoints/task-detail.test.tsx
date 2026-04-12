@@ -1065,6 +1065,73 @@ describe('Task Detail Entrypoint', () => {
     );
   });
 
+  it('prevents task editing navigation while another action is pending', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Editable task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canSetTitle: true,
+        canUpdateInputs: true,
+        canRerun: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/update')) {
+        return new Promise<Response>(() => {});
+      }
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Renamed task');
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Rerun' })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('aria-disabled')).toBe('true');
+    });
+
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+    const allowed = screen.getByRole('link', { name: 'Rerun' }).dispatchEvent(clickEvent);
+
+    expect(allowed).toBe(false);
+    expect(clickEvent.defaultPrevented).toBe(true);
+    promptSpy.mockRestore();
+  });
+
   it('omits Temporal task editing entry points when the flag is off', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,

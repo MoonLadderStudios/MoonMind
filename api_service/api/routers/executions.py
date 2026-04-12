@@ -1014,11 +1014,11 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         if field_name in enabled:
             continue
         if field_name in {"can_update_inputs", "can_rerun"}:
-            if not temporal_task_editing_enabled:
-                disabled_reasons[alias] = "temporal_task_editing_disabled"
-                continue
             if workflow_type_value != "MoonMind.Run":
                 disabled_reasons[alias] = "unsupported_workflow_type"
+                continue
+            if not temporal_task_editing_enabled:
+                disabled_reasons[alias] = "temporal_task_editing_disabled"
                 continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
