@@ -677,7 +677,7 @@ def _build_agent_runtime_deps() -> tuple[
             / "workloads"
             / "default-runner-profiles.yaml"
         )
-        workload_registry = RunnerProfileRegistry.load_optional_file(
+        workload_registry = RunnerProfileRegistry.load_file(
             default_workload_registry,
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,

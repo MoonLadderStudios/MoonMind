@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import ValidationError
@@ -261,7 +262,7 @@ def _build_workload_request(
                 request_payload[target_key] = value
 
     if tool_name == UNREAL_RUN_TESTS_TOOL:
-        request_payload.setdefault("profileId", DEFAULT_UNREAL_PROFILE_ID)
+        request_payload["profileId"] = DEFAULT_UNREAL_PROFILE_ID
         report_paths = _unreal_report_paths(request_payload.get("reportPaths"))
         request_payload["command"] = _unreal_command(
             request_payload,
@@ -294,10 +295,32 @@ def _unreal_report_paths(value: Any) -> dict[str, str]:
     else:
         raise ValueError("unreal.run_tests reportPaths must be an object")
     return {
-        "primary": str(raw.get("primary") or "unreal/reports/results.json").strip(),
-        "summary": str(raw.get("summary") or "unreal/reports/summary.json").strip(),
-        "junit": str(raw.get("junit") or "unreal/reports/junit.xml").strip(),
+        "primary": _normalize_unreal_report_path(
+            raw.get("primary") or "unreal/reports/results.json"
+        ),
+        "summary": _normalize_unreal_report_path(
+            raw.get("summary") or "unreal/reports/summary.json"
+        ),
+        "junit": _normalize_unreal_report_path(
+            raw.get("junit") or "unreal/reports/junit.xml"
+        ),
     }
+
+
+def _normalize_unreal_report_path(value: Any) -> str:
+    normalized = str(value).strip().replace("\\", "/")
+    normalized = posixpath.normpath(normalized)
+    if normalized in {"", "."}:
+        raise ValueError("unreal.run_tests reportPaths values must be relative paths")
+    if (
+        normalized.startswith("/")
+        or normalized == ".."
+        or normalized.startswith("../")
+    ):
+        raise ValueError(
+            "unreal.run_tests reportPaths values must stay under artifactsDir"
+        )
+    return normalized
 
 
 def _unreal_declared_outputs(report_paths: Mapping[str, str]) -> dict[str, str]:
@@ -313,7 +336,10 @@ def _unreal_env_overrides(
     *,
     report_paths: Mapping[str, str],
 ) -> dict[str, str]:
-    env = dict(inputs.get("envOverrides") or {})
+    raw_env = inputs.get("envOverrides") or {}
+    if not isinstance(raw_env, Mapping):
+        raise ValueError("unreal.run_tests envOverrides must be an object")
+    env = dict(raw_env)
     project_path = str(inputs.get("projectPath") or "").strip()
     target = str(inputs.get("target") or "").strip()
     test_selector = str(inputs.get("testSelector") or "").strip()
