@@ -7,7 +7,7 @@ Task publishing controls how agent-produced changes reach the repository after e
 | Mode     | Behavior |
 |----------|----------|
 | `none`   | No publishing. Changes remain in the agent's workspace only. |
-| `branch` | Changes are committed and pushed to a work branch on the remote. |
+| `branch` | Changes are committed and pushed to the selected branch on the remote. |
 | `pr`     | Changes are committed, pushed to a work branch, and a pull request is created against the base branch. |
 
 ### `none`
@@ -17,6 +17,33 @@ The agent runs in its workspace but no git operations occur after completion. Us
 ### `branch`
 
 After the agent completes, the infrastructure pushes the current work branch to the remote. The agent is instructed to commit but **not** to push or create a PR — that is handled deterministically by the runtime.
+
+`branch` publish supports both of these operator intents:
+
+- **Update a new or separate work branch:** set `startingBranch` to the branch to clone from and `targetBranch` to the branch that should receive the agent's commits.
+- **Update an existing branch in place:** set `startingBranch` and `targetBranch` to the same non-hard-protected branch. MoonMind checks out that branch, lets the agent commit on it, and pushes the branch back to `origin`.
+
+Examples:
+
+```json
+{
+  "publishMode": "branch",
+  "git": {
+    "startingBranch": "main",
+    "targetBranch": "codex/lift-jira-config-tests"
+  }
+}
+```
+
+```json
+{
+  "publishMode": "branch",
+  "git": {
+    "startingBranch": "156-jira-ui-runtime-config",
+    "targetBranch": "156-jira-ui-runtime-config"
+  }
+}
+```
 
 ### `pr`
 
@@ -47,6 +74,8 @@ The two primary branch fields used consistently across UI, API, and internal log
 |------------------|------|-------------|
 | `startingBranch` | Base | The branch to clone from. Also used as the PR base (merge destination). |
 | `targetBranch`   | Head | The name for the agent's work branch. Becomes the PR head (source of changes). |
+
+For `publishMode: branch`, `targetBranch` may equal `startingBranch` when the desired outcome is to update that existing branch directly. For `publishMode: pr`, `targetBranch` must be distinct from the PR base branch because it is the PR source branch.
 
 Additional fallback field:
 
@@ -94,7 +123,11 @@ Before pushing, the runtime resolves the current branch name (`git rev-parse --a
 
 - `main`
 - `master`
-- The configured base branch (`startingBranch`)
+- `HEAD` / detached or unknown branch state
+
+For `publishMode: pr`, the configured base branch remains protected because the workflow must push a separate head branch and then create a PR back to the base.
+
+For `publishMode: branch`, the configured base branch is publishable when it is also the intended target branch. This is the explicit same-branch update case: `startingBranch == targetBranch`, excluding the hard-protected names above.
 
 If the branch is protected, the push is skipped with a warning log. This prevents accidental pushes to production branches if the agent switched branches or if branch creation failed.
 

@@ -3366,6 +3366,8 @@ class TemporalAgentRuntimeActivities:
                 push_kwargs: dict[str, Any] = {
                     "target_branch": target_branch,
                 }
+                if publish_mode == "branch":
+                    push_kwargs["allow_target_branch_push"] = True
                 if isinstance(head_branch, str) and head_branch.strip():
                     push_kwargs["head_branch"] = head_branch.strip()
                 if (
@@ -4037,6 +4039,7 @@ class TemporalAgentRuntimeActivities:
         target_branch: str | None = None,
         head_branch: str | None = None,
         commit_message: str | None = None,
+        allow_target_branch_push: bool = False,
     ) -> dict[str, Any]:
         """Push the workspace branch to origin.
 
@@ -4074,18 +4077,30 @@ class TemporalAgentRuntimeActivities:
                     "push_error": f"could not determine branch: {stderr_bytes.decode('utf-8', errors='replace').strip()}",
                 }
             current_branch = stdout_bytes.decode("utf-8", errors="replace").strip()
+            target_branch_name = (
+                target_branch.strip() if isinstance(target_branch, str) else ""
+            )
+            head_branch_name = (
+                head_branch.strip() if isinstance(head_branch, str) else ""
+            )
+
+            target_branch_push_allowed = (
+                allow_target_branch_push
+                and bool(target_branch_name)
+                and (not head_branch_name or head_branch_name == target_branch_name)
+            )
 
             protected = {"main", "master", "HEAD"}
-            if target_branch:
-                protected.add(target_branch)
+            if target_branch_name and not target_branch_push_allowed:
+                protected.add(target_branch_name)
             if (
                 current_branch == "HEAD"
-                and head_branch
-                and head_branch not in protected
+                and head_branch_name
+                and head_branch_name not in protected
             ):
                 repair_proc = await asyncio.create_subprocess_exec(
                     *self._workspace_git_command(
-                        workspace, "checkout", "-B", head_branch,
+                        workspace, "checkout", "-B", head_branch_name,
                     ),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -4112,16 +4127,16 @@ class TemporalAgentRuntimeActivities:
                         "push_status": "failed",
                         "push_error": (
                             "could not recover detached HEAD onto "
-                            f"'{head_branch}': {repair_detail}"
+                            f"'{head_branch_name}': {repair_detail}"
                         ),
                         "push_branch": "HEAD",
                     }
                 logger.info(
                     "Recovered detached HEAD for run %s onto branch '%s' before push",
                     run_id,
-                    head_branch,
+                    head_branch_name,
                 )
-                current_branch = head_branch
+                current_branch = head_branch_name
             if not current_branch or current_branch in protected:
                 logger.warning(
                     "Post-agent git push skipped for run %s: "
@@ -4143,6 +4158,22 @@ class TemporalAgentRuntimeActivities:
             if commit_info.get("push_status") == "failed":
                 commit_info.setdefault("push_branch", current_branch)
                 return commit_info
+
+            same_branch_publish = (
+                target_branch_push_allowed
+                and bool(target_branch_name)
+                and current_branch == target_branch_name
+            )
+            base_ref = f"origin/{target_branch_name or 'main'}"
+            commit_count: int | None = None
+            if same_branch_publish:
+                commit_count = await self._count_branch_commits_ahead(
+                    workspace=workspace,
+                    base_ref=base_ref,
+                    branch=current_branch,
+                    run_id=run_id,
+                    env=command_env,
+                )
 
             push_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
@@ -4171,44 +4202,18 @@ class TemporalAgentRuntimeActivities:
                     "push_error": error_detail,
                 }
 
-            # Verify the branch actually has commits over origin/main.
+            # Verify the branch actually has commits over the publish base.
             # git push succeeds as a no-op when the branch is already
             # up-to-date, which would cause repo.create_pr to fail
             # with HTTP 422 ("No commits between main and <branch>").
-            base_ref = f"origin/{target_branch or 'main'}"
-            try:
-                count_proc = await asyncio.create_subprocess_exec(
-                    *self._workspace_git_command(
-                        workspace,
-                        "rev-list",
-                        "--count",
-                        f"{base_ref}..{current_branch}",
-                    ),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+            if commit_count is None:
+                commit_count = await self._count_branch_commits_ahead(
+                    workspace=workspace,
+                    base_ref=base_ref,
+                    branch=current_branch,
+                    run_id=run_id,
                     env=command_env,
                 )
-                count_stdout, _ = await asyncio.wait_for(
-                    count_proc.communicate(), timeout=10,
-                )
-                if count_proc.returncode != 0:
-                    raise RuntimeError(
-                        f"git rev-list failed with return code {count_proc.returncode}"
-                    )
-                commit_count = int(
-                    count_stdout.decode("utf-8", errors="replace").strip() or "0"
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to count commits for run %s, falling back to "
-                    "assuming commits exist: %s",
-                    run_id,
-                    exc,
-                    exc_info=True,
-                )
-                # If rev-list fails, assume commits exist and let PR
-                # creation handle it.
-                commit_count = -1
 
             if commit_count == 0:
                 logger.warning(
@@ -4249,6 +4254,49 @@ class TemporalAgentRuntimeActivities:
                 "push_status": "failed",
                 "push_error": str(exc),
             }
+
+    async def _count_branch_commits_ahead(
+        self,
+        *,
+        workspace: str,
+        base_ref: str,
+        branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> int:
+        try:
+            count_proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(
+                    workspace,
+                    "rev-list",
+                    "--count",
+                    f"{base_ref}..{branch}",
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            count_stdout, _ = await asyncio.wait_for(
+                count_proc.communicate(), timeout=10,
+            )
+            if count_proc.returncode != 0:
+                raise RuntimeError(
+                    f"git rev-list failed with return code {count_proc.returncode}"
+                )
+            return int(
+                count_stdout.decode("utf-8", errors="replace").strip() or "0"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to count commits for run %s, falling back to "
+                "assuming commits exist: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
+            # If rev-list fails, assume commits exist and let PR creation or
+            # branch publication handle any remote-side rejection.
+            return -1
 
     def _detect_pr_url_from_workspace(self, run_id: str) -> str | None:
         """Best-effort detection of a PR URL from the workspace git state."""

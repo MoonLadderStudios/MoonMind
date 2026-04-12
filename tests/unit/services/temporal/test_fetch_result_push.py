@@ -274,6 +274,64 @@ class TestPushWorkspaceBranch:
         assert result["push_branch"] == "develop"
 
     @pytest.mark.asyncio
+    async def test_push_allows_target_branch_for_branch_publish(self):
+        """branch publish may update an existing non-hard-protected branch in place."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"develop\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # status --porcelain
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # pre-push rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"1\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="develop",
+                allow_target_branch_push=True,
+            )
+
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "develop"
+        assert result["push_base_ref"] == "origin/develop"
+        assert result["push_commit_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_push_keeps_target_branch_protected_when_head_differs(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"release\n", b""))
+            proc.returncode = 0
+            mock_exec.return_value = proc
+            result = await activities._push_workspace_branch(
+                "run-1",
+                target_branch="release",
+                head_branch="feature/work",
+                allow_target_branch_push=True,
+            )
+
+        assert result["push_status"] == "protected_branch"
+        assert result["push_branch"] == "release"
+
+    @pytest.mark.asyncio
     async def test_push_success(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
@@ -886,6 +944,55 @@ class TestFetchResultPushIntegration:
         mock_push.assert_called_once_with("run-1", target_branch=None)
         assert result.metadata["push_status"] == "pushed"
         assert result.metadata["push_branch"] == "my-branch"
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_allows_same_target_branch_for_branch_publish(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={
+                    "push_status": "pushed",
+                    "push_branch": "feature/existing",
+                },
+            ) as mock_push,
+            patch.object(
+                activities,
+                "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            adapter_instance = MockAdapter.return_value
+            adapter_instance.fetch_result = AsyncMock(return_value=AgentRunResult(
+                summary="done",
+                failure_class=None,
+            ))
+
+            result = await activities.agent_runtime_fetch_result(
+                {
+                    "run_id": "run-1",
+                    "agent_id": "claude",
+                    "publish_mode": "branch",
+                    "target_branch": "feature/existing",
+                    "head_branch": "feature/existing",
+                },
+            )
+
+        mock_push.assert_called_once_with(
+            "run-1",
+            target_branch="feature/existing",
+            allow_target_branch_push=True,
+            head_branch="feature/existing",
+        )
+        assert result.metadata["push_status"] == "pushed"
+        assert result.metadata["push_branch"] == "feature/existing"
 
     @pytest.mark.asyncio
     async def test_fetch_result_adds_operator_summary_from_stdout_artifact(self, tmp_path):
