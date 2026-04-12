@@ -6,9 +6,13 @@
 
 ## Remediation Items
 
+No remediation items were found.
+
+Required item fields for discovered remediations:
+
 | Severity | Artifact | Location | Problem | Remediation | Rationale |
 | --- | --- | --- | --- | --- | --- |
-| MEDIUM | `plan.md`, `tasks.md` | `plan.md:L80-L83`; `tasks.md:L120-L128` | The plan source tree places frontend work under `frontend/src/components/task-detail/`, while tasks target `frontend/src/entrypoints/task-detail.tsx` and `frontend/src/entrypoints/task-detail.test.tsx`. | Align the plan source tree to the task-detail entrypoint paths, or update the tasks if a new component directory is intentionally required. | Keeping planned source layout and task paths aligned prevents implementation drift during US4 without changing the feature contract. |
+| None | None | None | No CRITICAL, HIGH, MEDIUM, or LOW remediation issue was found. | No remediation edit is required. | The regenerated `speckit_analyze_report.md` reports 100% requirement coverage, no ambiguity, no duplication, no constitution issue, and no critical issue. |
 
 ## Runtime Scope Gate
 
@@ -22,4 +26,4 @@
 
 **Blocking Remediations**: None.
 
-**Determination Rationale**: Implementation can proceed because all functional requirements have task coverage, runtime-mode production code and validation tasks are present, no `DOC-REQ-*` traceability gate applies, and the only discovered issue is a medium path-consistency cleanup that does not block implementation.
+**Determination Rationale**: Implementation can proceed because the regenerated analysis found no remediation issues, all functional requirements have task coverage, runtime-mode production code and validation tasks are present, and no `DOC-REQ-*` traceability gate applies.
