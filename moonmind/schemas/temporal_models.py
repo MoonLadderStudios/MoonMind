@@ -561,6 +561,10 @@ class ExecutionModel(BaseModel):
         default_factory=dict, alias="searchAttributes"
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
+    input_parameters: dict[str, Any] = Field(
+        default_factory=dict, alias="inputParameters"
+    )
+    input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     model: Optional[str] = Field(None, alias="model")

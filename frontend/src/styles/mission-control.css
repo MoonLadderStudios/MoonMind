@@ -924,6 +924,11 @@ button.secondary:hover {
   border-color: rgb(var(--mm-accent));
 }
 
+.button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .queue-action,
 .queue-submit-primary {
   --queue-action-color: var(--mm-action-primary);

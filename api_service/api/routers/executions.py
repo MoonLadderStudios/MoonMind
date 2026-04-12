@@ -579,6 +579,8 @@ def _serialize_execution(
         intervention_audit=intervention_audit,
         search_attributes=search_attributes,
         memo=memo,
+        input_parameters=params,
+        input_artifact_ref=getattr(record, "input_ref", None),
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -602,7 +604,11 @@ def _serialize_execution(
             "manifest_artifact_ref",
             getattr(record, "manifest_ref", None),
         ) if is_admin else None,
-        plan_artifact_ref=_manifest_attr(manifest_status, "plan_artifact_ref"),
+        plan_artifact_ref=_manifest_attr(
+            manifest_status,
+            "plan_artifact_ref",
+            getattr(record, "plan_ref", None),
+        ),
         summary_artifact_ref=_manifest_attr(manifest_status, "summary_artifact_ref"),
         run_index_artifact_ref=_manifest_attr(
             manifest_status, "run_index_artifact_ref"
@@ -937,6 +943,7 @@ async def _load_execution_step_ledger(
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
+    workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     if not settings.temporal_dashboard.actions_enabled:
         return ExecutionActionCapabilityModel(
             disabled_reasons={
@@ -955,6 +962,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             }
         )
 
+    temporal_task_editing_enabled = bool(
+        settings.temporal_dashboard.temporal_task_editing_enabled
+    )
     state_actions = {
         "scheduled": {"can_set_title", "can_update_inputs", "can_cancel"},
         "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
@@ -986,6 +996,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "canceled": {"can_rerun"},
     }
     enabled = state_actions.get(raw_state, set())
+    if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
+        enabled = enabled - {"can_update_inputs", "can_rerun"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -997,11 +1009,18 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
     }
-    disabled_reasons = {
-        alias: "state_not_eligible"
-        for field_name, alias in capability_values.items()
-        if field_name not in enabled
-    }
+    disabled_reasons = {}
+    for field_name, alias in capability_values.items():
+        if field_name in enabled:
+            continue
+        if field_name in {"can_update_inputs", "can_rerun"}:
+            if workflow_type_value != "MoonMind.Run":
+                disabled_reasons[alias] = "unsupported_workflow_type"
+                continue
+            if not temporal_task_editing_enabled:
+                disabled_reasons[alias] = "temporal_task_editing_disabled"
+                continue
+        disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
         can_update_inputs="can_update_inputs" in enabled,

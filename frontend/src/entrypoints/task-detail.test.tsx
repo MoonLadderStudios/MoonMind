@@ -8,6 +8,7 @@ import {
   normalizeObservabilityEvent,
   TaskDetailPage,
 } from './task-detail';
+import { taskEditHref, taskRerunHref } from '../lib/temporalTaskEditing';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
 
@@ -1000,6 +1001,188 @@ describe('Task Detail Entrypoint', () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
     expect(screen.getByText(/Loading task/i)).toBeTruthy();
+  });
+
+  it('builds canonical Temporal task editing routes', () => {
+    expect(taskEditHref('mm:wf 1')).toBe('/tasks/new?editExecutionId=mm%3Awf%201');
+    expect(taskRerunHref('mm:wf 1')).toBe('/tasks/new?rerunExecutionId=mm%3Awf%201');
+  });
+
+  it('shows Edit and Rerun entry points only when Temporal task editing is flagged on and capabilities allow them', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Editable task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canSetTitle: true,
+        canUpdateInputs: true,
+        canRerun: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Task Actions' })).toBeTruthy();
+    });
+    expect(screen.getByRole('link', { name: 'Edit' }).getAttribute('href')).toBe(
+      '/tasks/new?editExecutionId=test-123',
+    );
+    expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
+      '/tasks/new?rerunExecutionId=test-123',
+    );
+  });
+
+  it('prevents task editing navigation while another action is pending', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Editable task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canSetTitle: true,
+        canUpdateInputs: true,
+        canRerun: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/update')) {
+        return new Promise<Response>(() => {});
+      }
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Renamed task');
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Rerun' })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('aria-disabled')).toBe('true');
+    });
+
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+    const allowed = screen.getByRole('link', { name: 'Rerun' }).dispatchEvent(clickEvent);
+
+    expect(allowed).toBe(false);
+    expect(clickEvent.defaultPrevented).toBe(true);
+    promptSpy.mockRestore();
+  });
+
+  it('omits Temporal task editing entry points when the flag is off', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: false,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Flagged off task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canUpdateInputs: true,
+        canRerun: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Flagged off task')).toBeTruthy();
+    });
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Task Actions' })).toBeNull();
   });
 
   it('renders task details on successful fetch', async () => {
