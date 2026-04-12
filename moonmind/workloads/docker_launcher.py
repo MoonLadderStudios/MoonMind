@@ -462,15 +462,24 @@ class DockerWorkloadLauncher:
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
         diagnostics["declaredOutputRefs"] = dict(declared_refs)
         diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
-        stdout_ref, stderr_ref, diagnostics_ref, output_refs = (
-            _publish_workload_artifacts(
+        artifact_publication: dict[str, object] = {"status": "complete"}
+        try:
+            stdout_ref, stderr_ref, diagnostics_ref, output_refs = _publish_workload_artifacts(
                 request,
                 stdout=stdout,
                 stderr=stderr,
                 diagnostics=diagnostics,
                 declared_output_refs=declared_refs,
             )
-        )
+        except OSError as exc:
+            stdout_ref = None
+            stderr_ref = None
+            diagnostics_ref = None
+            output_refs = {}
+            artifact_publication = {
+                "status": "failed",
+                "error": str(exc),
+            }
         metadata = {
             "containerName": request.container_name,
             "image": request.profile.image,
@@ -480,6 +489,7 @@ class DockerWorkloadLauncher:
             "stdout": stdout,
             "stderr": stderr,
             "workload": workload_metadata,
+            "artifactPublication": artifact_publication,
         }
         return WorkloadResult(
             requestId=request.container_name,

@@ -93,18 +93,24 @@ Required projection fields:
 
 | Field | Description |
 | --- | --- |
-| `taskRunId` | Owning task run. |
-| `stepId` | Producing step. |
-| `attempt` | Attempt number. |
-| `toolName` | Tool that launched the workload. |
-| `profileId` | Runner profile. |
-| `imageRef` | Profile-selected image reference. |
-| `workloadStatus` | Workload terminal status. |
-| `stdoutRef` | Runtime stdout artifact ref. |
-| `stderrRef` | Runtime stderr artifact ref. |
-| `diagnosticsRef` | Runtime diagnostics artifact ref. |
-| `outputRefs` | Runtime and declared output refs. |
-| `sessionContext` | Optional grouping context. |
+| `refs.taskRunId` | Owning task run when the workload result provides it. |
+| `artifacts.runtimeStdout` | Runtime stdout artifact ref. |
+| `artifacts.runtimeStderr` | Runtime stderr artifact ref. |
+| `artifacts.runtimeDiagnostics` | Runtime diagnostics artifact ref. |
+| `artifacts.outputPrimary` | Preferred declared output ref when available. |
+| `artifacts.outputSummary` | Declared summary output ref when available. |
+| `workload.taskRunId` | Owning task run. |
+| `workload.stepId` | Producing step. |
+| `workload.attempt` | Attempt number. |
+| `workload.toolName` | Tool that launched the workload. |
+| `workload.profileId` | Runner profile. |
+| `workload.imageRef` | Profile-selected image reference. |
+| `workload.status` | Workload terminal status. |
+| `workload.exitCode` | Workload process exit code when available. |
+| `workload.durationSeconds` | Workload runtime duration when available. |
+| `workload.timeoutReason` | Timeout reason when applicable. |
+| `workload.cancelReason` | Cancel reason when available. |
+| `workload.sessionContext` | Optional grouping context. |
 
 Projection rules:
 

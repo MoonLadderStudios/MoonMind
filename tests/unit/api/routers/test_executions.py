@@ -1551,6 +1551,21 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                         "runtimeDiagnostics": None,
                         "providerSnapshot": None,
                     },
+                    "workload": {
+                        "taskRunId": "task-run-1",
+                        "stepId": "run-tests",
+                        "attempt": 2,
+                        "toolName": "container.run_workload",
+                        "profileId": "local-python",
+                        "imageRef": "python:3.12-slim",
+                        "status": "succeeded",
+                        "exitCode": 0,
+                        "durationSeconds": 8.5,
+                        "sessionContext": {
+                            "sessionId": "session-1",
+                            "sessionEpoch": 4,
+                        },
+                    },
                     "lastError": None,
                 }
             ],
@@ -1568,6 +1583,12 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
     assert payload["runScope"] == "latest"
     assert payload["steps"][0]["attempt"] == 2
     assert payload["steps"][0]["refs"]["taskRunId"] == "task-run-1"
+    assert payload["steps"][0]["workload"]["profileId"] == "local-python"
+    assert payload["steps"][0]["workload"]["imageRef"] == "python:3.12-slim"
+    assert payload["steps"][0]["workload"]["sessionContext"] == {
+        "sessionId": "session-1",
+        "sessionEpoch": 4,
+    }
 
 
 def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:

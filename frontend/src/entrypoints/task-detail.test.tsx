@@ -334,6 +334,134 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('renders workload metadata and artifact refs on a workload-producing step', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Workload detail task',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'completed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    const workloadStepsSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'workload-step',
+          order: 1,
+          title: 'Run Unreal tests',
+          tool: { type: 'skill', name: 'container.run_workload', version: '1' },
+          dependsOn: [],
+          status: 'failed',
+          waitingReason: null,
+          attentionRequired: false,
+          attempt: 1,
+          startedAt: '2026-04-09T00:00:01Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          summary: 'Workload failed',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, taskRunId: 'task-run-workload' },
+          artifacts: {
+            outputSummary: 'art-summary',
+            outputPrimary: 'art-report',
+            runtimeStdout: 'art-stdout',
+            runtimeStderr: 'art-stderr',
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: 'art-diagnostics',
+            providerSnapshot: null,
+          },
+          workload: {
+            taskRunId: 'task-run-workload',
+            stepId: 'workload-step',
+            attempt: 1,
+            toolName: 'container.run_workload',
+            profileId: 'unreal-5_3-linux',
+            imageRef: 'registry.example/unreal-runner:5.3',
+            status: 'failed',
+            exitCode: 7,
+            durationSeconds: 42.5,
+            sessionContext: {
+              sessionId: 'session-1',
+              sessionEpoch: 3,
+              sourceTurnId: 'turn-9',
+            },
+          },
+          lastError: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => workloadStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-workload/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              runId: 'task-run-workload',
+              status: 'failed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/task-runs/task-run-workload/observability/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({ events: [], truncated: false }) } as Response);
+      }
+      if (url.includes('/task-runs/task-run-workload/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => 'workload stdout tail\n' } as unknown as Response);
+      }
+      if (url.includes('/task-runs/task-run-workload/logs/stdout')) {
+        return Promise.resolve({ ok: true, text: async () => 'workload stdout\n' } as unknown as Response);
+      }
+      if (url.includes('/task-runs/task-run-workload/logs/stderr')) {
+        return Promise.resolve({ ok: true, text: async () => 'workload stderr\n' } as unknown as Response);
+      }
+      if (url.includes('/task-runs/task-run-workload/diagnostics')) {
+        return Promise.resolve({ ok: true, text: async () => '{"status":"failed"}\n' } as unknown as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={stepsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Run Unreal tests' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Workload' })).toBeTruthy();
+      expect(screen.getByText('unreal-5_3-linux')).toBeTruthy();
+      expect(screen.getByText('registry.example/unreal-runner:5.3')).toBeTruthy();
+      expect(screen.getByText('art-stdout')).toBeTruthy();
+      expect(screen.getByText('art-stderr')).toBeTruthy();
+      expect(screen.getByText('art-diagnostics')).toBeTruthy();
+      expect(screen.getByText(/session-1/)).toBeTruthy();
+      expect(screen.queryByText(/managed session/i)).toBeNull();
+    });
+  });
+
   it('loads execution-wide artifacts against the latest run exposed by the step ledger', async () => {
     const mockExecution = {
       taskId: 'test-123',

@@ -318,6 +318,7 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
             "stdoutRef": result.stdout_ref,
             "stderrRef": result.stderr_ref,
             "diagnosticsRef": result.diagnostics_ref,
+            "outputRefs": dict(result.output_refs),
             "workloadMetadata": dict(result.metadata.get("workload") or {}),
         },
     )

@@ -391,6 +391,42 @@ async def test_launcher_publishes_failure_artifacts_with_session_association(
 
 
 @pytest.mark.asyncio
+async def test_launcher_reports_artifact_publication_failure_in_result_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"before publish failure\n")
+        return _Process(returncode=0)
+
+    def _fail_write(_path: Path, _payload: str) -> str:
+        raise OSError("artifact store unavailable")
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher._write_text_artifact",
+        _fail_write,
+    )
+
+    result = await DockerWorkloadLauncher().run(_validated_request(tmp_path))
+
+    assert result.status == "succeeded"
+    assert result.stdout_ref is None
+    assert result.stderr_ref is None
+    assert result.diagnostics_ref is None
+    assert result.output_refs == {}
+    assert result.metadata["artifactPublication"] == {
+        "status": "failed",
+        "error": "artifact store unavailable",
+    }
+    assert result.metadata["stdout"] == "before publish failure\n"
+
+
+@pytest.mark.asyncio
 async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

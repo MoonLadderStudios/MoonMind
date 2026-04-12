@@ -17,9 +17,9 @@
 
 **Purpose**: Confirm existing Phase 1-3 workload surfaces and prepare runtime scope.
 
-- [ ] T001 Review Phase 1-3 workload contracts and launcher surfaces in moonmind/schemas/workload_models.py, moonmind/workloads/docker_launcher.py, and moonmind/workloads/tool_bridge.py
-- [ ] T002 [P] Review workflow step artifact projection behavior in moonmind/workflows/temporal/workflows/run.py and tests/unit/workflows/temporal/workflows/test_run_step_ledger.py
-- [ ] T003 [P] Review task detail artifact/API presentation surfaces in api_service/api/routers/task_runs.py and frontend/src/entrypoints/task-detail.tsx
+- [X] T001 Review Phase 1-3 workload contracts and launcher surfaces in moonmind/schemas/workload_models.py, moonmind/workloads/docker_launcher.py, and moonmind/workloads/tool_bridge.py
+- [X] T002 [P] Review workflow step artifact projection behavior in moonmind/workflows/temporal/workflows/run.py and tests/unit/workflows/temporal/workflows/test_run_step_ledger.py
+- [X] T003 [P] Review task detail artifact/API presentation surfaces in api_service/api/routers/task_runs.py and frontend/src/entrypoints/task-detail.tsx
 
 ---
 
@@ -29,11 +29,11 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T004 [P] Add failing WorkloadRequest declared output validation tests in tests/unit/workloads/test_workload_contract.py
-- [ ] T005 [P] Add failing WorkloadResult artifact reference serialization tests in tests/unit/workloads/test_workload_contract.py
-- [ ] T006 Implement declaredOutputs validation and workload artifact reference fields in moonmind/schemas/workload_models.py
-- [ ] T007 Update Docker-backed tool output schema for stdout/stderr/diagnostics refs and workload metadata in moonmind/workloads/tool_bridge.py
-- [ ] T008 Run focused foundational tests with pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py -q --tb=short
+- [X] T004 [P] Add failing WorkloadRequest declared output validation tests in tests/unit/workloads/test_workload_contract.py
+- [X] T005 [P] Add failing WorkloadResult artifact reference serialization tests in tests/unit/workloads/test_workload_contract.py
+- [X] T006 Implement declaredOutputs validation and workload artifact reference fields in moonmind/schemas/workload_models.py
+- [X] T007 Update Docker-backed tool output schema for stdout/stderr/diagnostics refs and workload metadata in moonmind/workloads/tool_bridge.py
+- [X] T008 Run focused foundational tests with pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py -q --tb=short
 
 **Checkpoint**: Shared workload request/result contracts support artifact refs, declared outputs, and bounded metadata.
 
@@ -47,16 +47,16 @@
 
 ### Tests for User Story 1
 
-- [ ] T009 [P] [US1] Add failing success and non-zero exit artifact publication tests in tests/unit/workloads/test_docker_workload_launcher.py
-- [ ] T010 [P] [US1] Add failing timeout/cancel diagnostics publication tests in tests/unit/workloads/test_docker_workload_launcher.py
-- [ ] T011 [P] [US1] Add failing artifact publication failure/degraded observability tests in tests/unit/workloads/test_docker_workload_launcher.py
+- [X] T009 [P] [US1] Add failing success and non-zero exit artifact publication tests in tests/unit/workloads/test_docker_workload_launcher.py
+- [X] T010 [P] [US1] Add failing timeout/cancel diagnostics publication tests in tests/unit/workloads/test_docker_workload_launcher.py
+- [X] T011 [P] [US1] Add failing artifact publication failure/degraded observability tests in tests/unit/workloads/test_docker_workload_launcher.py
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Implement durable stdout/stderr/diagnostics publication in moonmind/workloads/docker_launcher.py
-- [ ] T013 [US1] Implement bounded workload diagnostics metadata including profile, image, exit code, duration, timeout reason, cancel reason, labels, task run, step, attempt, and tool name in moonmind/workloads/docker_launcher.py
-- [ ] T014 [US1] Implement operator-visible artifact publication failure handling in moonmind/workloads/docker_launcher.py
-- [ ] T015 [US1] Run User Story 1 tests with pytest tests/unit/workloads/test_docker_workload_launcher.py -q --tb=short
+- [X] T012 [US1] Implement durable stdout/stderr/diagnostics publication in moonmind/workloads/docker_launcher.py
+- [X] T013 [US1] Implement bounded workload diagnostics metadata including profile, image, exit code, duration, timeout reason, cancel reason, labels, task run, step, attempt, and tool name in moonmind/workloads/docker_launcher.py
+- [X] T014 [US1] Implement operator-visible artifact publication failure handling in moonmind/workloads/docker_launcher.py
+- [X] T015 [US1] Run User Story 1 tests with pytest tests/unit/workloads/test_docker_workload_launcher.py -q --tb=short
 
 **Checkpoint**: User Story 1 is independently functional and workload outcomes are diagnosable from durable artifacts.
 
@@ -70,16 +70,16 @@
 
 ### Tests for User Story 2
 
-- [ ] T016 [P] [US2] Add failing declared output success/missing-output tests in tests/unit/workloads/test_docker_workload_launcher.py
-- [ ] T017 [P] [US2] Add failing workload tool output mapping tests in tests/unit/workloads/test_workload_tool_bridge.py
-- [ ] T018 [P] [US2] Add failing workflow step-ledger workload artifact projection tests in tests/unit/workflows/temporal/workflows/test_run_step_ledger.py
+- [X] T016 [P] [US2] Add failing declared output success/missing-output tests in tests/unit/workloads/test_docker_workload_launcher.py
+- [X] T017 [P] [US2] Add failing workload tool output mapping tests in tests/unit/workloads/test_workload_tool_bridge.py
+- [X] T018 [P] [US2] Add failing workflow step-ledger workload artifact projection tests in tests/unit/workflows/temporal/workflows/test_run_step_ledger.py
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Implement declared output artifact collection and missing-output diagnostics in moonmind/workloads/docker_launcher.py
-- [ ] T020 [US2] Map stdoutRef, stderrRef, diagnosticsRef, outputRefs, and workloadMetadata into normal tool results in moonmind/workloads/tool_bridge.py
-- [ ] T021 [US2] Preserve workload artifact refs in producing step ledger/projection metadata in moonmind/workflows/temporal/workflows/run.py
-- [ ] T022 [US2] Run User Story 2 tests with pytest tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/workflows/test_run_step_ledger.py -q --tb=short
+- [X] T019 [US2] Implement declared output artifact collection and missing-output diagnostics in moonmind/workloads/docker_launcher.py
+- [X] T020 [US2] Map stdoutRef, stderrRef, diagnosticsRef, outputRefs, and workloadMetadata into normal tool results in moonmind/workloads/tool_bridge.py
+- [X] T021 [US2] Preserve workload artifact refs in producing step ledger/projection metadata in moonmind/workflows/temporal/workflows/run.py
+- [X] T022 [US2] Run User Story 2 tests with pytest tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/workflows/test_run_step_ledger.py -q --tb=short
 
 **Checkpoint**: User Stories 1 and 2 are independently functional, and workload outputs are step-owned.
 
@@ -93,16 +93,16 @@
 
 ### Tests for User Story 3
 
-- [ ] T023 [P] [US3] Add failing session association validation tests in tests/unit/workloads/test_workload_contract.py
-- [ ] T024 [P] [US3] Add failing session association tool result tests in tests/unit/workloads/test_workload_tool_bridge.py
-- [ ] T025 [P] [US3] Add failing managed-session boundary workflow tests in tests/unit/workflows/temporal/workflows/test_run_integration.py
+- [X] T023 [P] [US3] Add failing session association validation tests in tests/unit/workloads/test_workload_contract.py
+- [X] T024 [P] [US3] Add failing session association tool result tests in tests/unit/workloads/test_workload_tool_bridge.py
+- [X] T025 [P] [US3] Add failing managed-session boundary workflow tests in tests/unit/workflows/temporal/workflows/test_run_integration.py
 
 ### Implementation for User Story 3
 
-- [ ] T026 [US3] Enforce sessionEpoch/sourceTurnId require sessionId and reject session continuity declared output classes in moonmind/schemas/workload_models.py
-- [ ] T027 [US3] Add sessionContext as association-only workload metadata in moonmind/workloads/docker_launcher.py
-- [ ] T028 [US3] Preserve sessionContext in tool result progress/outputs without creating session continuity refs in moonmind/workloads/tool_bridge.py
-- [ ] T029 [US3] Run User Story 3 tests with pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short
+- [X] T026 [US3] Enforce sessionEpoch/sourceTurnId require sessionId and reject session continuity declared output classes in moonmind/schemas/workload_models.py
+- [X] T027 [US3] Add sessionContext as association-only workload metadata in moonmind/workloads/docker_launcher.py
+- [X] T028 [US3] Preserve sessionContext in tool result progress/outputs without creating session continuity refs in moonmind/workloads/tool_bridge.py
+- [X] T029 [US3] Run User Story 3 tests with pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short
 
 **Checkpoint**: Session association is visible as grouping context only, and workload containers remain outside managed-session identity.
 
@@ -116,16 +116,16 @@
 
 ### Tests for User Story 4
 
-- [ ] T030 [P] [US4] Add failing task-run API workload metadata projection tests in tests/unit/api/routers/test_task_runs.py
-- [ ] T031 [P] [US4] Add failing task detail workload artifact rendering tests in frontend/src/entrypoints/task-detail.test.tsx
-- [ ] T032 [P] [US4] Add failing observability event/live-tail fallback tests for workload artifacts in tests/unit/api/routers/test_task_runs.py
+- [X] T030 [P] [US4] Add failing execution/task detail API workload metadata projection tests in tests/unit/api/routers/test_executions.py and tests/unit/api/routers/test_task_runs.py
+- [X] T031 [P] [US4] Add failing task detail workload artifact rendering tests in frontend/src/entrypoints/task-detail.test.tsx
+- [X] T032 [P] [US4] Add failing observability event/live-tail fallback tests for workload artifacts in tests/unit/api/routers/test_task_runs.py
 
 ### Implementation for User Story 4
 
-- [ ] T033 [US4] Expose workload metadata and artifact refs in task-run detail/projection responses in api_service/api/routers/task_runs.py
-- [ ] T034 [US4] Render workload stdout, stderr, diagnostics, and declared output refs in the task detail experience in frontend/src/entrypoints/task-detail.tsx
-- [ ] T035 [US4] Preserve artifact-backed fallback when live workload tail data is unavailable in api_service/api/routers/task_runs.py
-- [ ] T036 [US4] Run User Story 4 tests with pytest tests/unit/api/routers/test_task_runs.py -q --tb=short and npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx
+- [X] T033 [US4] Expose workload metadata and artifact refs in execution/task detail projection responses in moonmind/schemas/temporal_models.py and api_service/api/routers/task_runs.py
+- [X] T034 [US4] Render workload stdout, stderr, diagnostics, and declared output refs in the task detail experience in frontend/src/entrypoints/task-detail.tsx
+- [X] T035 [US4] Preserve artifact-backed fallback when live workload tail data is unavailable in api_service/api/routers/task_runs.py
+- [X] T036 [US4] Run User Story 4 tests with pytest tests/unit/api/routers/test_task_runs.py -q --tb=short and npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx
 
 **Checkpoint**: Operators can inspect workload evidence through existing detail surfaces while artifacts remain durable truth.
 
@@ -135,11 +135,11 @@
 
 **Purpose**: Final validation, cleanup, and cross-story regression checks.
 
-- [ ] T037 [P] Update workload observability contract notes if implementation changes contract details in specs/155-dood-workload-observability/contracts/workload-observability-contract.md
-- [ ] T038 [P] Add or update concise operator-facing documentation references only if runtime behavior creates new visible fields in docs/ManagedAgents/DockerOutOfDocker.md
-- [ ] T039 Run quickstart validation steps from specs/155-dood-workload-observability/quickstart.md
-- [ ] T040 Run full unit verification with MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
-- [ ] T041 Run runtime scope gate with .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime
+- [X] T037 [P] Update workload observability contract notes if implementation changes contract details in specs/155-dood-workload-observability/contracts/workload-observability-contract.md
+- [X] T038 [P] Add or update concise operator-facing documentation references only if runtime behavior creates new visible fields in docs/ManagedAgents/DockerOutOfDocker.md
+- [X] T039 Run quickstart validation steps from specs/155-dood-workload-observability/quickstart.md
+- [X] T040 Run full unit verification with MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
+- [X] T041 Run runtime scope gate with .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime
 
 ---
 

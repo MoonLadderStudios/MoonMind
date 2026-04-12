@@ -190,6 +190,7 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
     assert result.outputs["stderrRef"].endswith("stderr.log")
     assert result.outputs["diagnosticsRef"].endswith("diagnostics.json")
     assert result.outputs["outputRefs"]["runtime.stdout"].endswith("stdout.log")
+    assert result.progress["outputRefs"]["runtime.stdout"].endswith("stdout.log")
     workload_metadata = result.outputs["workloadMetadata"]
     assert workload_metadata["stepId"] == "step-test"
     assert workload_metadata["sessionContext"] == {
