@@ -30,27 +30,45 @@ class MoonMindManagedSessionReconcileWorkflow:
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "agent_runtime.reconcile_managed_sessions"
         )
-        result = await workflow.execute_activity(
-            "agent_runtime.reconcile_managed_sessions",
-            {},
-            task_queue=route.task_queue,
-            start_to_close_timeout=timedelta(
-                seconds=route.timeouts.start_to_close_seconds
-            ),
-            schedule_to_close_timeout=timedelta(
-                seconds=route.timeouts.schedule_to_close_seconds
-            ),
-            heartbeat_timeout=timedelta(
-                seconds=route.timeouts.heartbeat_timeout_seconds or 30
-            ),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=5),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
-                maximum_attempts=route.retries.max_attempts,
-                non_retryable_error_types=list(route.retries.non_retryable_error_codes),
-            ),
-            summary="Reconcile managed Codex sessions",
-        )
+        try:
+            result = await workflow.execute_activity(
+                "agent_runtime.reconcile_managed_sessions",
+                {},
+                task_queue=route.task_queue,
+                start_to_close_timeout=timedelta(
+                    seconds=route.timeouts.start_to_close_seconds
+                ),
+                schedule_to_close_timeout=timedelta(
+                    seconds=route.timeouts.schedule_to_close_seconds
+                ),
+                heartbeat_timeout=timedelta(
+                    seconds=route.timeouts.heartbeat_timeout_seconds or 30
+                ),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=5),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
+                    maximum_attempts=route.retries.max_attempts,
+                    non_retryable_error_types=list(route.retries.non_retryable_error_codes),
+                ),
+                summary="Reconcile managed Codex sessions",
+            )
+        except Exception:
+            workflow.set_current_details("Managed Codex session reconcile failed")
+            workflow.upsert_search_attributes(
+                {
+                    "SessionStatus": ["failed"],
+                    "IsDegraded": [True],
+                }
+            )
+            raise
+        normalized = result or {}
+        is_degraded = bool(normalized.get("degradedSessionRecords"))
         workflow.set_current_details("Managed Codex session reconcile complete")
-        return dict(result or {})
+        workflow.upsert_search_attributes(
+            {
+                "SessionStatus": ["completed"],
+                "IsDegraded": [is_degraded],
+            }
+        )
+        return normalized

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from temporalio.common import RetryPolicy
@@ -81,7 +82,8 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
 
-def test_agent_session_initializes_bounded_temporal_visibility(
+@pytest.mark.asyncio
+async def test_agent_session_run_initializes_bounded_temporal_visibility(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -97,15 +99,31 @@ def test_agent_session_initializes_bounded_temporal_visibility(
         "upsert_search_attributes",
         lambda attributes: search_attributes.append(attributes),
     )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "wait_condition",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "all_handlers_finished",
+        True,
+        raising=False,
+    )
 
-    MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    assert current_details == []
+    assert search_attributes == []
+    workflow._termination_requested = True
 
-    assert current_details == [
+    await workflow.run(_workflow_input())
+
+    assert current_details[:1] == [
         "Codex managed session session started | "
         "session=sess:wf-run-1:codex_cli | runtime=codex_cli | "
         "epoch=1 | status=active"
     ]
-    assert search_attributes == [
+    assert search_attributes[:1] == [
         {
             "TaskRunId": ["wf-run-1"],
             "RuntimeId": ["codex_cli"],
@@ -153,6 +171,9 @@ def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_value
     )
 
     assert "Send managed Codex turn" in summary
+    assert workflow._activity_summary("agent_runtime.send_turn", None) == (
+        "Send managed Codex turn"
+    )
     _assert_forbidden_metadata_absent(summary)
     _assert_forbidden_metadata_absent(current_details)
     _assert_forbidden_metadata_absent(search_attributes)

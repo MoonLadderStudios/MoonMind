@@ -419,6 +419,7 @@ class TemporalClientAdapter:
         from temporalio.client import (
             Schedule,
             ScheduleActionStartWorkflow,
+            ScheduleUpdate,
         )
 
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
@@ -462,9 +463,9 @@ class TemporalClientAdapter:
         )
         try:
             handle = client.get_schedule_handle(MANAGED_SESSION_RECONCILE_SCHEDULE_ID)
-            async def _replace_schedule(input: Any) -> Any:  # noqa: A002
+            async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
                 del input
-                return schedule
+                return ScheduleUpdate(schedule=schedule)
 
             await handle.update(_replace_schedule)
             return MANAGED_SESSION_RECONCILE_SCHEDULE_ID

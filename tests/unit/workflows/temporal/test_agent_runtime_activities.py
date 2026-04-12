@@ -1776,3 +1776,44 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
         ],
         "truncated": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [
+                _session_record(f"sess-{index}", status="degraded")
+                for index in range(60)
+            ]
+
+    heartbeat_payloads: list[dict[str, Any]] = []
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: dict[str, Any],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert heartbeat_payloads == [
+        {"activityType": "agent_runtime.reconcile_managed_sessions"}
+    ]
+    assert result["managedSessionRecordsReconciled"] == 60
+    assert result["degradedSessionRecords"] == 60
+    assert len(result["sessionIds"]) == 50
+    assert result["truncated"] is True

@@ -78,7 +78,6 @@ class MoonMindAgentSessionWorkflow:
         self._termination_requested = False
         self._mutation_lock = asyncio.Lock()
         self._restore_continue_as_new_state(session_input)
-        self._update_operator_visibility("session started")
 
     @staticmethod
     def _retry_policy_for_route(route: TemporalActivityRoute) -> RetryPolicy:
@@ -121,7 +120,9 @@ class MoonMindAgentSessionWorkflow:
             **self._execute_kwargs_for_route(route),
         )
 
-    def _activity_summary(self, activity_name: str, payload: Mapping[str, Any]) -> str:
+    def _activity_summary(
+        self, activity_name: str, payload: Mapping[str, Any] | None
+    ) -> str:
         action = {
             "agent_runtime.launch_session": "Launch managed Codex session",
             "agent_runtime.send_turn": "Send managed Codex turn",
@@ -133,6 +134,7 @@ class MoonMindAgentSessionWorkflow:
             "agent_runtime.publish_session_artifacts": "Publish managed Codex session artifacts",
         }.get(activity_name, activity_name)
         identifiers = []
+        payload = payload or {}
         for key in ("sessionId", "sessionEpoch", "containerId", "threadId", "turnId"):
             value = payload.get(key)
             if value is not None and str(value).strip():
@@ -181,7 +183,7 @@ class MoonMindAgentSessionWorkflow:
         try:
             workflow.set_current_details(self._current_details(transition))
             workflow.upsert_search_attributes(self._search_attributes())
-        except BaseException as exc:
+        except Exception as exc:
             # Unit tests instantiate workflow classes outside a Temporal workflow
             # context. Real workflow execution records the visibility update.
             if "NotInWorkflow" in type(exc).__name__ or "Not in workflow" in str(exc):
@@ -423,6 +425,7 @@ class MoonMindAgentSessionWorkflow:
         self, session_input: CodexManagedSessionWorkflowInput
     ) -> dict[str, Any]:
         del session_input
+        self._update_operator_visibility("session started")
         while not self._termination_requested:
             await workflow.wait_condition(
                 lambda: self._termination_requested or self._should_continue_as_new()

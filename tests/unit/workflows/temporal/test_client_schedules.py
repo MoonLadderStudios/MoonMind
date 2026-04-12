@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
-from temporalio.client import ScheduleOverlapPolicy
+from temporalio.client import ScheduleOverlapPolicy, ScheduleUpdate
 
 from moonmind.workflows.temporal.client import (
     MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
@@ -192,6 +192,10 @@ class TestManagedSessionReconcileSchedule:
         assert result == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
         mock_existing_handle.update.assert_awaited_once()
         mock_client.create_schedule.assert_not_awaited()
+        updater = mock_existing_handle.update.call_args[0][0]
+        update = await updater(MagicMock())
+        assert isinstance(update, ScheduleUpdate)
+        assert update.schedule.action.workflow == "MoonMind.ManagedSessionReconcile"
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:

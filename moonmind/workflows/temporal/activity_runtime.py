@@ -3164,19 +3164,28 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.reconcile_managed_sessions"
         )
         del payload
-        records = await controller.reconcile()
+        records = await _await_with_activity_heartbeats(
+            controller.reconcile(),
+            heartbeat_payload={
+                "activityType": "agent_runtime.reconcile_managed_sessions",
+            },
+        )
+        session_id_limit = 50
         session_ids: list[str] = []
         degraded_count = 0
+        reconciled_count = 0
         for raw_record in records:
+            reconciled_count += 1
             record = CodexManagedSessionRecord.model_validate(raw_record)
-            session_ids.append(record.session_id)
+            if len(session_ids) < session_id_limit:
+                session_ids.append(record.session_id)
             if str(record.status).lower() == "degraded":
                 degraded_count += 1
         return {
-            "managedSessionRecordsReconciled": len(records),
+            "managedSessionRecordsReconciled": reconciled_count,
             "degradedSessionRecords": degraded_count,
-            "sessionIds": session_ids[:50],
-            "truncated": len(session_ids) > 50,
+            "sessionIds": session_ids,
+            "truncated": reconciled_count > session_id_limit,
         }
 
     @staticmethod
