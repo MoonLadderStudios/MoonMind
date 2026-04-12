@@ -6,6 +6,7 @@ import asyncio
 import logging as stdlib_logging
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -71,7 +72,7 @@ class JiraClient:
             try:
                 response = await self._client.request(
                     method=method,
-                    url=path,
+                    url=self._resolve_request_path(path),
                     params=params,
                     json=json_body,
                 )
@@ -172,6 +173,24 @@ class JiraClient:
         if "application/json" in content_type:
             return response.json()
         return response.text
+
+    def _resolve_request_path(self, path: str) -> str:
+        if not path.startswith("agile:"):
+            return path
+
+        agile_suffix = path.removeprefix("agile:").strip()
+        if not agile_suffix.startswith("/"):
+            agile_suffix = f"/{agile_suffix}"
+
+        parsed_base = urlparse(self._connection.base_url)
+        origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        base_path = parsed_base.path.rstrip("/")
+        marker = "/rest/api/"
+        if marker in f"{base_path}/":
+            prefix = base_path.split(marker, 1)[0]
+            return f"{origin}{prefix}/rest/agile/1.0{agile_suffix}"
+
+        return f"{origin}/rest/agile/1.0{agile_suffix}"
 
     def _retry_after_seconds(self, response: httpx.Response) -> float | None:
         raw = str(response.headers.get("Retry-After", "")).strip()

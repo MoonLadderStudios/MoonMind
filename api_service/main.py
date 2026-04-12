@@ -39,6 +39,7 @@ from api_service.api.routers.execution_integrations import (
 from api_service.api.routers.executions import router as executions_router
 from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
+from api_service.api.routers.jira_browser import router as jira_browser_router
 from api_service.api.routers.models import router as models_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
 from api_service.api.routers.planning import router as planning_router
@@ -435,6 +436,7 @@ app.include_router(
 )  # Removed prefix="/context"
 app.include_router(retrieval_router.router)
 app.include_router(mcp_tools_router)
+app.include_router(jira_browser_router)
 app.include_router(manifests_router)
 app.include_router(
     profile_router, prefix="", tags=["Profile"]

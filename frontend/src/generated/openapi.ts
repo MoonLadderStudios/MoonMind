@@ -271,6 +271,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jira/connections/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Verify Connection */
+        get: operations["verify_connection_api_jira_connections_verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jira/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Projects */
+        get: operations["list_projects_api_jira_projects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jira/projects/{project_key}/boards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Boards */
+        get: operations["list_project_boards_api_jira_projects__project_key__boards_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jira/boards/{board_id}/columns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Board Columns */
+        get: operations["list_board_columns_api_jira_boards__board_id__columns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jira/boards/{board_id}/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Board Issues */
+        get: operations["list_board_issues_api_jira_boards__board_id__issues_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jira/issues/{issue_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue */
+        get: operations["get_issue_api_jira_issues__issue_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/manifests": {
         parameters: {
             query?: never;
@@ -3546,6 +3648,143 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** JiraBoard */
+        JiraBoard: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Projectkey */
+            projectKey: string;
+            /** Type */
+            type?: string | null;
+        };
+        /** JiraBoardColumns */
+        JiraBoardColumns: {
+            board: components["schemas"]["JiraBoard"];
+            /** Columns */
+            columns: components["schemas"]["JiraColumn"][];
+        };
+        /** JiraBoardIssues */
+        JiraBoardIssues: {
+            /** Boardid */
+            boardId: string;
+            /** Columns */
+            columns: components["schemas"]["JiraColumn"][];
+            /** Itemsbycolumn */
+            itemsByColumn?: {
+                [key: string]: components["schemas"]["JiraIssueSummary"][];
+            };
+            /** Unmappeditems */
+            unmappedItems?: components["schemas"]["JiraIssueSummary"][];
+        };
+        /** JiraColumn */
+        JiraColumn: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Order */
+            order: number;
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Statusids */
+            statusIds?: string[];
+        };
+        /** JiraConnectionVerification */
+        JiraConnectionVerification: {
+            /** Ok */
+            ok: boolean;
+            /** Accountid */
+            accountId?: string | null;
+            /** Displayname */
+            displayName?: string | null;
+            /** Projectkey */
+            projectKey?: string | null;
+            /** Projectname */
+            projectName?: string | null;
+        };
+        /** JiraIssueColumn */
+        JiraIssueColumn: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** JiraIssueDetail */
+        JiraIssueDetail: {
+            /** Issuekey */
+            issueKey: string;
+            /** Url */
+            url?: string | null;
+            /** Summary */
+            summary: string;
+            /** Issuetype */
+            issueType?: string | null;
+            column?: components["schemas"]["JiraIssueColumn"] | null;
+            status?: components["schemas"]["JiraIssueStatus"] | null;
+            /**
+             * Descriptiontext
+             * @default
+             */
+            descriptionText: string;
+            /**
+             * Acceptancecriteriatext
+             * @default
+             */
+            acceptanceCriteriaText: string;
+            recommendedImports: components["schemas"]["JiraIssueRecommendations"];
+        };
+        /** JiraIssueRecommendations */
+        JiraIssueRecommendations: {
+            /** Presetinstructions */
+            presetInstructions: string;
+            /** Stepinstructions */
+            stepInstructions: string;
+        };
+        /** JiraIssueStatus */
+        JiraIssueStatus: {
+            /** Id */
+            id?: string | null;
+            /** Name */
+            name?: string | null;
+        };
+        /** JiraIssueSummary */
+        JiraIssueSummary: {
+            /** Issuekey */
+            issueKey: string;
+            /** Summary */
+            summary: string;
+            /** Issuetype */
+            issueType?: string | null;
+            /** Statusid */
+            statusId?: string | null;
+            /** Statusname */
+            statusName?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+            /** Updatedat */
+            updatedAt?: string | null;
+            /** Columnid */
+            columnId: string;
+        };
+        /** JiraListResponse[JiraBoard] */
+        JiraListResponse_JiraBoard_: {
+            /** Items */
+            items: components["schemas"]["JiraBoard"][];
+            /** Projectkey */
+            projectKey?: string | null;
+        };
+        /** JiraListResponse[JiraProject] */
+        JiraListResponse_JiraProject_: {
+            /** Items */
+            items: components["schemas"]["JiraProject"][];
+            /** Projectkey */
+            projectKey?: string | null;
+        };
         /** JiraPlanRequest */
         JiraPlanRequest: {
             /**
@@ -3564,6 +3803,15 @@ export interface components {
              * @default true
              */
             dry_run: boolean;
+        };
+        /** JiraProject */
+        JiraProject: {
+            /** Projectkey */
+            projectKey: string;
+            /** Name */
+            name: string;
+            /** Id */
+            id?: string | null;
         };
         /**
          * LinkArtifactRequest
@@ -6183,6 +6431,185 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolCallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_connection_api_jira_connections_verify_get: {
+        parameters: {
+            query?: {
+                projectKey?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraConnectionVerification"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_projects_api_jira_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraListResponse_JiraProject_"];
+                };
+            };
+        };
+    };
+    list_project_boards_api_jira_projects__project_key__boards_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraListResponse_JiraBoard_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_board_columns_api_jira_boards__board_id__columns_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraBoardColumns"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_board_issues_api_jira_boards__board_id__issues_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+            };
+            header?: never;
+            path: {
+                board_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraBoardIssues"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_api_jira_issues__issue_key__get: {
+        parameters: {
+            query?: {
+                boardId?: string | null;
+            };
+            header?: never;
+            path: {
+                issue_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraIssueDetail"];
                 };
             };
             /** @description Validation Error */
