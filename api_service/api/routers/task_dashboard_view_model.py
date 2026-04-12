@@ -23,6 +23,15 @@ _POLL_INTERVALS_MS = {
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "gemini_cli", "claude_code", "jules", "universal")
 
+_JIRA_CREATE_PAGE_SOURCES = {
+    "connections": "/api/jira/connections/verify",
+    "projects": "/api/jira/projects",
+    "boards": "/api/jira/projects/{projectKey}/boards",
+    "columns": "/api/jira/boards/{boardId}/columns",
+    "issues": "/api/jira/boards/{boardId}/issues",
+    "issue": "/api/jira/issues/{issueKey}",
+}
+
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
         "open": "queued",
@@ -150,14 +159,7 @@ def _build_jira_runtime_config() -> dict[str, Any] | None:
         return None
 
     return {
-        "sources": {
-            "connections": "/api/jira/connections/verify",
-            "projects": "/api/jira/projects",
-            "boards": "/api/jira/projects/{projectKey}/boards",
-            "columns": "/api/jira/boards/{boardId}/columns",
-            "issues": "/api/jira/boards/{boardId}/issues",
-            "issue": "/api/jira/issues/{issueKey}",
-        },
+        "sources": dict(_JIRA_CREATE_PAGE_SOURCES),
         "system": {
             "enabled": True,
             "defaultProjectKey": settings.feature_flags.jira_create_page_default_project_key,
