@@ -1,9 +1,10 @@
 # Specification Analysis Report
 
+Post-Prompt-B analysis of `spec.md`, `plan.md`, and `tasks.md`.
+
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| C1 | Coverage Gap | MEDIUM | spec.md:L74; tasks.md:L89-L98 | FR-008 requires reconciliation to check both stale degraded sessions and orphaned runtime containers, but the task coverage focuses on bounded output, routing, and workflow delegation. It does not explicitly require a validation case that proves both stale-degraded and orphaned-container detection paths are exercised. | Add or refine a US3 validation task to assert stale degraded session detection and orphaned container detection through the controller/activity boundary. |
-| U1 | Ambiguity | MEDIUM | spec.md:L73; spec.md:L83; plan.md:L32; tasks.md:L92-L100 | The recurring reconcile trigger is described as durable, configured, and idempotent, but the artifacts do not specify the cadence configuration source, default cadence, enable/disable behavior, or expected schedule ID. This can lead to inconsistent client implementation and tests. | Specify the schedule ID and cadence configuration/default in the plan or quickstart, and ensure the schedule test covers create/update with those concrete values. |
+| None | None | None | None | No consistency, coverage, ambiguity, duplication, constitution, or implementation-readiness issues found. | Proceed to implementation. |
 
 ## Coverage Summary
 
@@ -16,13 +17,14 @@
 | FR-005 readable activity summaries | Yes | T012, T013, T014, T015 | Covered for launch and session controls. |
 | FR-006 runtime worker separation | Yes | T017, T018, T020, T023 | Covered by routing and worker registration tasks. |
 | FR-007 durable recurring trigger | Yes | T019, T022, T024 | Covered by schedule helper and reconcile workflow target tasks. |
-| FR-008 stale/orphan reconcile checks with bounded outcome | Yes | T016, T021, T022 | Partially explicit. Bounded outcome is covered; stale-degraded and orphaned-container path validation should be made explicit before implementation. |
+| FR-008 stale/orphan reconcile checks with bounded outcome | Yes | T016, T021, T022 | Stale degraded session detection, orphaned runtime container detection, and bounded output are explicitly covered. |
 | FR-009 runtime code plus validation tests | Yes | T005-T024, T026, T027 | Runtime and validation task mix is present. |
 | FR-010 required validation coverage | Yes | T005-T019, T026, T027 | Required validation categories are represented. |
+| FR-011 stable recurring schedule contract | Yes | T019, T024 | Stable schedule ID, workflow ID template, default cron, timezone, and disabled paused-state behavior are covered. |
 
 ## Constitution Alignment Issues
 
-None found. The plan includes the required Constitution Check and post-design re-check, and the tasks preserve runtime implementation plus validation coverage.
+None found. The plan includes the required Constitution Check and post-design re-check, and the artifacts preserve runtime implementation plus validation coverage.
 
 ## Unmapped Tasks
 
@@ -36,15 +38,14 @@ No `DOC-REQ-*` identifiers were found in `spec.md`, `plan.md`, `tasks.md`, or th
 
 ## Metrics
 
-- Total Requirements: 10
+- Total Requirements: 11
 - Total Tasks: 27
 - Coverage %: 100%
-- Ambiguity Count: 1
+- Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
 
 ## Next Actions
 
-- Resolve C1 before `speckit-implement` if the implementation work has not already started, because it is the main behavior-specific test gap for recurring reconciliation.
-- Resolve U1 before schedule wiring implementation so the client helper and tests agree on concrete cadence and schedule identity.
-- No critical blockers were found, so implementation can proceed after the medium issues are accepted or remediated.
+- Proceed to `speckit-implement`.
+- Keep the schedule tests aligned with the concrete schedule contract if implementation changes the helper defaults.
