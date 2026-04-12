@@ -136,6 +136,52 @@ def test_find_latest_for_workflow_returns_latest_terminal_when_no_active_exists(
     assert found.run_id == "run-second"
 
 
+def test_find_latest_by_workflow_ids_returns_latest_for_each_requested_workflow(
+    tmp_path,
+):
+    store = ManagedRunStore(tmp_path)
+    started_at = datetime.now(tz=UTC)
+
+    store.save(
+        _make_record("run-wf-1-old", "completed").model_copy(
+            update={
+                "workflow_id": "mm:wf-1",
+                "started_at": started_at,
+                "finished_at": started_at,
+            }
+        )
+    )
+    store.save(
+        _make_record("run-wf-1-active", "running").model_copy(
+            update={
+                "workflow_id": "mm:wf-1",
+                "started_at": started_at + timedelta(microseconds=1),
+            }
+        )
+    )
+    store.save(
+        _make_record("run-wf-2", "completed").model_copy(
+            update={
+                "workflow_id": "mm:wf-2",
+                "started_at": started_at + timedelta(microseconds=2),
+                "finished_at": started_at + timedelta(microseconds=3),
+            }
+        )
+    )
+    store.save(
+        _make_record("run-unrequested", "running").model_copy(
+            update={"workflow_id": "mm:wf-3"}
+        )
+    )
+
+    found = store.find_latest_by_workflow_ids(["mm:wf-1", "mm:wf-2", "missing"])
+
+    assert {workflow_id: record.run_id for workflow_id, record in found.items()} == {
+        "mm:wf-1": "run-wf-1-active",
+        "mm:wf-2": "run-wf-2",
+    }
+
+
 def test_path_traversal_rejected(tmp_path):
     store = ManagedRunStore(tmp_path)
 

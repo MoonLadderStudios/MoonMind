@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Union
@@ -55,7 +56,7 @@ class ManagedRunStore:
             try:
                 os.unlink(tmp_path)
             except OSError:
-                pass  # Best-effort temp-file cleanup; original error is re-raised below
+                pass
             raise
         return path
 
@@ -111,27 +112,49 @@ class ManagedRunStore:
         if not normalized_workflow_id:
             raise ValueError("workflow_id must not be empty")
 
+        return self.find_latest_by_workflow_ids([normalized_workflow_id]).get(
+            normalized_workflow_id
+        )
+
+    def find_latest_by_workflow_ids(
+        self, workflow_ids: Iterable[str]
+    ) -> dict[str, ManagedRunRecord]:
+        """Return newest managed runs for the requested logical workflows."""
+        normalized_workflow_ids = {
+            str(workflow_id or "").strip()
+            for workflow_id in workflow_ids
+            if str(workflow_id or "").strip()
+        }
+        if not normalized_workflow_ids:
+            return {}
+
         self.store_root.mkdir(parents=True, exist_ok=True)
-        candidates: list[ManagedRunRecord] = []
+        candidates_by_workflow: dict[str, list[ManagedRunRecord]] = {
+            workflow_id: [] for workflow_id in normalized_workflow_ids
+        }
         for path in self.store_root.glob("*.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 record = ManagedRunRecord(**data)
             except (json.JSONDecodeError, ValueError):
                 continue
-            if str(record.workflow_id or "").strip() != normalized_workflow_id:
+            record_workflow_id = str(record.workflow_id or "").strip()
+            if record_workflow_id not in normalized_workflow_ids:
                 continue
-            candidates.append(record)
-
-        if not candidates:
-            return None
+            candidates_by_workflow[record_workflow_id].append(record)
 
         epoch = datetime.min.replace(tzinfo=UTC)
 
         def _sort_key(record: ManagedRunRecord) -> tuple[int, datetime, datetime]:
-            active_priority = 1 if record.status not in TERMINAL_AGENT_RUN_STATES else 0
+            active_priority = (
+                1 if record.status not in TERMINAL_AGENT_RUN_STATES else 0
+            )
             activity_time = record.finished_at or record.started_at or epoch
             started_at = record.started_at or epoch
             return (active_priority, activity_time, started_at)
 
-        return max(candidates, key=_sort_key)
+        return {
+            workflow_id: max(candidates, key=_sort_key)
+            for workflow_id, candidates in candidates_by_workflow.items()
+            if candidates
+        }
