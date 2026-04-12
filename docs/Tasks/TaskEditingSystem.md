@@ -1,56 +1,455 @@
 # Task Editing System
 
-Status: Active  
-Owners: MoonMind Engineering  
-Last Updated: 2026-03-13
+**Status:** Active
+**Owners:** MoonMind Engineering
+**Last Updated:** 2026-04-12
 
 ## 1. Purpose
 
-Add the ability to **edit a Task Payload** before the execution begins, or to edit it when cloning/resubmitting a run.
+This document defines the canonical task editing design for the Temporal era of MoonMind.
 
-This generally applies to modifying unstarted `Task Proposals` waiting for human review, modifying queued/running Temporal Workflows, or resubmitting failed/cancelled Temporal Workflows.
+The legacy application allowed operators to open a task from the task details page, edit its configuration, and resubmit the task. That behavior was lost during the migration away from queue-job-centric task execution. The Temporal-native design restores that capability without reintroducing queue-era assumptions.
 
-* It reuses the existing **Create/Submit** UI (`/tasks/new`), switching the primary CTA to **Update** or **Resubmit**.
-* It utilizes the API routes to update an existing proposal or clone a terminal workflow.
+The core idea is simple:
 
-## 2. UX Design
+- `/tasks/new` remains the single task submission surface.
+- Existing Temporal executions become the editable object.
+- The task details page regains an **Edit** action for executions that support in-place input updates.
+- Terminal executions gain a **Rerun** action that reuses the same prefilled submit experience.
 
-### 2.1 Entry points
+This keeps create, edit, and rerun on one form while making Temporal the source of truth.
 
-**Task detail**
+## 2. Scope
 
-* If the UI is viewing a `Task Proposal` that has not yet been promoted to a Temporal Workflow, show an **Edit** button.
-* If the UI is viewing a queued or running `MoonMind.Run` Temporal Workflow, show an **Edit** button.
-* If viewing a terminal `MoonMind.Run` Temporal Workflow (Failed or Cancelled), show a **Resubmit** button.
+This design applies to:
 
-### 2.2 Edit/Resubmit Flow
+- the shared task submit page at `/tasks/new`
+- Temporal-backed task detail surfaces in Mission Control
+- Temporal-backed list or card surfaces that may expose edit or rerun entry points
+- input reconstruction from Temporal execution details and referenced artifacts
+- submission through Temporal execution updates
 
-1. User clicks **Edit** or **Resubmit**.
-2. Browser navigates to `/tasks/queue/new?editJobId=<uuid>` (reusing the standard Create page alias).
-3. The Create page detects `editJobId` and fetches the job state/parameters from the API.
-4. The form is pre-filled with the original values (`priority`, `affinityKey`, `payload.instructions`, `payload.skill`).
-5. On submit:
-   * For an unstarted **Proposal** or queue job, the UI updates the proposal in place via `PUT /api/queue/jobs/{id}`.
-   * For a queued or running **Workflow Execution**, the UI submits to `POST /api/executions/{workflowId}/update` with `updateName="UpdateInputs"`. The backend implements this using Temporal Workflow Updates (`UpdateInputs`) to modify inputs in place without creating a new execution.
-   * For a terminal **Workflow Execution**, the UI submits to `POST /api/queue/jobs/{jobId}/resubmit`, which creates a fresh Temporal Workflow Execution while leaving the original terminal history untouched.
+This design does **not** apply to:
 
-## 3. Edit Mode (Queued/Running Workflows)
+- legacy queue jobs
+- proposal review flows
+- recurring schedule editing
+- inline edit modals on the detail page
+- direct mutation of previously stored artifacts
+- non-Temporal task execution systems
 
-Editing inputs for a running `MoonMind.Run` is supported natively via Temporal Workflow Updates (`UpdateInputs`). This approach modifies inputs in place, avoiding the creation of a new execution and preventing races where an old execution might continue running after a cancel request.
+## 3. Design goals
 
-When a user edits a queued or active workflow:
+### 3.1 Temporal is the source of truth
 
-* Submitting triggers `POST /api/executions/{workflowId}/update` with `updateName="UpdateInputs"`.
-* The Temporal Server applies the update synchronously, modifying the internal workflow state.
-* The API returns a successful response indicating the workflow inputs have been updated.
-* The UI updates the current run detail page.
-* The workflow continues executing seamlessly with the updated parameters.
+Task editing must operate on Temporal execution state, capabilities, and inputs. No queue-job payload should be required to support edit or rerun.
 
-## 4. Resubmit Mode (Terminal Workflows)
+### 3.2 One submit experience
 
-When editing a terminal workflow:
+Create, edit, and rerun should all reuse `/tasks/new` so operators do not learn separate flows.
 
-* Submitting triggers `POST /api/queue/jobs/{jobId}/resubmit`.
-* The API returns `201 Created` with a new execution reference.
-* The UI redirects to the new run detail page.
-* The backend appends a history/audit event: `Job resubmitted from sourceJobId` so humans can track the lineage.
+### 3.3 Preserve create-form ergonomics
+
+Editing should feel like reopening a familiar task form with the same fields, validations, templates, and artifact behavior.
+
+### 3.4 Respect lifecycle correctness
+
+Active executions can be edited only when the backend exposes that capability. Terminal executions cannot be “edited in place”; they can only be rerun.
+
+### 3.5 Preserve auditability
+
+The system must preserve operator-visible lineage between the original execution, any new artifacts created during editing, and any rerun request.
+
+### 3.6 Avoid in-place artifact mutation
+
+Editing a task must never rewrite historical artifacts. New artifacts are created for new input content.
+
+### 3.7 Remove legacy coupling
+
+The canonical model must not rely on `editJobId`, queue resubmit semantics, or queue-first route structures.
+
+## 4. Canonical model
+
+### 4.1 Editable object
+
+The editable object is a Temporal execution identified by `workflowId`.
+
+### 4.2 Supported workflow type
+
+The initial supported workflow type is:
+
+- `MoonMind.Run`
+
+Any other workflow type is out of scope until explicitly added.
+
+### 4.3 Modes
+
+`/tasks/new` supports three modes:
+
+| Mode | When used | Behavior |
+|---|---|---|
+| Create | No edit/rerun query parameter present | Starts a brand-new execution |
+| Edit | `editExecutionId` points to an active execution that supports updates | Sends `UpdateInputs` to the existing workflow |
+| Rerun | `rerunExecutionId` points to a terminal execution that supports rerun | Sends `RequestRerun` |
+
+### 4.4 Lifecycle model
+
+- **Edit** is for non-terminal executions only.
+- **Rerun** is for terminal executions only.
+- UI availability is determined by backend capability flags, not frontend guesses.
+
+## 5. Route model
+
+### 5.1 Canonical routes
+
+Create mode:
+
+```text
+/tasks/new
+```
+
+Edit mode:
+
+```text
+/tasks/new?editExecutionId=<workflowId>
+```
+
+Rerun mode:
+
+```text
+/tasks/new?rerunExecutionId=<workflowId>
+```
+
+### 5.2 Deprecated routes and params
+
+The following are deprecated and must not be used by new UI or documentation:
+
+- `/tasks/queue/new`
+- `editJobId`
+- queue-job update flows
+- queue resubmit terminology when referring to Temporal reruns
+
+### 5.3 Mode resolution order
+
+When `/tasks/new` loads, mode is resolved in this order:
+
+1. `rerunExecutionId`
+2. `editExecutionId`
+3. create mode
+
+This ensures rerun remains explicit and cannot be accidentally overridden by edit handling.
+
+## 6. Entry points
+
+### 6.1 Task detail page
+
+The task details page is the primary place where editing becomes visible again.
+
+The detail page should:
+
+- show **Edit** when `actions.canUpdateInputs` is `true`
+- show **Rerun** when `actions.canRerun` is `true`
+- navigate to `/tasks/new` using the correct query parameter
+- avoid rendering actions that are not supported by the current execution
+
+Canonical navigation targets:
+
+```text
+Edit   -> /tasks/new?editExecutionId=<workflowId>
+Rerun  -> /tasks/new?rerunExecutionId=<workflowId>
+```
+
+### 6.2 Task list or card surfaces
+
+List and card surfaces may optionally expose the same actions, but the detail page is the canonical entry point that restores the lost edit behavior.
+
+## 7. Submit-page behavior
+
+### 7.1 Shared page, mode-specific behavior
+
+`/tasks/new` remains a shared page, but mode changes:
+
+- the title
+- the primary CTA label
+- the data source for initial field values
+- the submit handler
+- some control visibility
+
+### 7.2 Mode-specific UI expectations
+
+| Mode | Page title | Primary CTA |
+|---|---|---|
+| Create | New Task | Create Task |
+| Edit | Edit Task | Save Changes |
+| Rerun | Rerun Task | Rerun Task |
+
+### 7.3 Hidden or constrained controls
+
+In edit and rerun modes:
+
+- recurring schedule controls are hidden
+- queue-specific controls are absent
+- controls unsupported by the current workflow type are disabled or omitted
+
+### 7.4 Loading behavior
+
+For edit and rerun:
+
+1. Parse the execution id from the route.
+2. Load Temporal execution detail.
+3. Validate workflow type and capabilities.
+4. Rebuild a standard submission draft from the execution and any referenced artifacts.
+5. Render the shared form with those prefilled values.
+
+## 8. Prefill model
+
+### 8.1 Draft reconstruction helper
+
+The canonical reconstruction entry point is:
+
+```ts
+buildTemporalSubmissionDraftFromExecution(execution)
+```
+
+This helper converts a Temporal execution detail payload into the same draft shape used by normal task creation.
+
+### 8.2 Draft data sources
+
+Draft reconstruction may read from:
+
+- execution detail fields
+- execution input parameters
+- referenced input artifacts
+- template metadata that was applied during original submission
+- provider/runtime configuration stored on the execution
+
+### 8.3 Fields that should prefill
+
+The reconstructed draft should prefill, where available:
+
+- runtime
+- provider profile
+- model
+- effort
+- repository
+- starting branch
+- target branch
+- publish mode
+- task instructions
+- primary skill
+- explicit steps or workflow options
+- applied template state
+- other standard create-form inputs already supported by `/tasks/new`
+
+### 8.4 Instructions and artifacts
+
+Instructions may be stored inline or in artifacts.
+
+The submit page must reconstruct the operator-visible instruction text regardless of storage strategy. Operators should not have to reason about whether the prior task used inline text or artifact-backed content.
+
+### 8.5 Fallback behavior
+
+If an execution cannot fully reconstruct a draft:
+
+- the page must show a clear error state
+- partial, misleading prefills must be avoided
+- the operator must not be allowed to submit unsupported or malformed updates
+
+## 9. Submit semantics
+
+### 9.1 Create mode
+
+Create mode continues to use the normal task creation path and is unchanged by this design.
+
+### 9.2 Edit mode
+
+Edit mode updates an existing Temporal execution in place.
+
+Flow:
+
+1. Validate the shared form.
+2. Externalize edited instructions or large inputs when required.
+3. Build a Temporal update payload.
+4. Submit the update to the existing workflow.
+
+Canonical request:
+
+```http
+POST /api/executions/{workflowId}/update
+```
+
+Canonical update name:
+
+```json
+{ "updateName": "UpdateInputs" }
+```
+
+The payload should include the newly prepared input state, which may contain:
+
+- a new `inputArtifactRef` when the edited inputs are artifact-backed
+- a `parametersPatch` for structured values
+- any other update fields required by the backend contract
+
+A helper such as `buildTemporalArtifactEditUpdatePayload(...)` may be used to assemble this request.
+
+### 9.3 Rerun mode
+
+Rerun mode uses the same prefilled form but requests a rerun instead of mutating the original terminal execution.
+
+Canonical request:
+
+```http
+POST /api/executions/{workflowId}/update
+```
+
+Canonical update name:
+
+```json
+{ "updateName": "RequestRerun" }
+```
+
+The rerun request uses the edited or confirmed form values and follows the same artifact rules as edit mode.
+
+### 9.4 No queue fallback
+
+There is no queue-era fallback path. If Temporal editing or rerun is unsupported, the UI must fail explicitly rather than silently routing through legacy queue logic.
+
+## 10. Artifact rules
+
+### 10.1 No historical mutation
+
+Previously stored input artifacts are immutable for the purpose of task editing. An edit must create new artifact references instead of mutating old ones.
+
+### 10.2 Preserve lineage
+
+The system should preserve enough metadata to understand:
+
+- which execution was edited
+- which new artifacts were created for the edit
+- whether the action was an in-place input update or a rerun request
+
+### 10.3 Externalization policy
+
+Large instruction bodies or other large inputs should continue to use the platform’s normal artifact externalization rules.
+
+## 11. API contract
+
+### 11.1 Read contract requirements
+
+The Temporal execution read path must expose enough information to rebuild the submit-page draft and render correct actions.
+
+At minimum, the detail payload should make available:
+
+- `workflowId`
+- workflow type
+- current run identity as needed by the detail page
+- current input parameters
+- referenced input artifacts
+- capability flags such as `actions.canUpdateInputs` and `actions.canRerun`
+- any template, runtime, model, repository, and publish information required to reconstruct the form
+
+### 11.2 Update contract requirements
+
+The update endpoint must support:
+
+- `updateName = "UpdateInputs"`
+- `updateName = "RequestRerun"`
+
+The contract should allow the frontend to send:
+
+- structured parameter patches
+- new artifact references for edited input content
+- enough context for the backend to validate the request against workflow state
+
+### 11.3 Response handling
+
+The frontend must handle accepted update responses and surface meaningful state to the operator.
+
+The backend may indicate outcomes such as:
+
+- applied immediately
+- scheduled for the next safe point
+- handled through continue-as-new
+
+Those states must be reflected in success messaging and redirect behavior.
+
+## 12. Redirect and refresh behavior
+
+After a successful edit or rerun request:
+
+- redirect back to the Temporal detail route for that workflow
+- refresh detail data so the operator sees the latest backend state
+- for rerun, land on the latest-run view when the detail experience supports it
+
+The operator should always return to the execution context they came from rather than being dropped into a generic queue or list page.
+
+## 13. Validation and guardrails
+
+The submit page must block submission when any of the following is true:
+
+- the workflow type is unsupported
+- the requested mode is unsupported for the current execution
+- required fields cannot be reconstructed or are missing
+- required artifacts cannot be created
+- backend capability flags do not allow the requested action
+- the backend rejects the update because the workflow state changed
+
+Errors should be explicit and operator-readable. The frontend should not pretend a task is editable if Temporal says it is not.
+
+## 14. Observability and audit
+
+The system must preserve a clear audit trail across:
+
+- the original execution
+- the operator action taken from the detail page
+- any newly created artifacts
+- any backend update result, including deferred application semantics
+- any rerun instance created from a terminal execution
+
+Operator-visible detail views should make it possible to understand whether a change was applied immediately, scheduled for a safe point, or resulted in a rerun path.
+
+## 15. Non-goals
+
+This design intentionally does not include:
+
+- a separate edit-only form distinct from `/tasks/new`
+- queue-first task editing UX
+- proposal editing
+- manifest-run editing
+- recurring schedule editing
+- inline quick-edit controls on the detail page
+- direct mutation of historical artifacts
+
+## 16. Deprecated legacy references
+
+The following concepts should be removed from canonical docs and primary UI flows when describing Temporal task editing:
+
+- `editJobId`
+- `/tasks/queue/new`
+- queue-job update behavior
+- queue resubmit language when the action is actually a Temporal rerun
+- proposal-centric wording for standard task editing
+
+## 17. Completion criteria
+
+This design is considered implemented when all of the following are true:
+
+1. The task detail page once again exposes an **Edit** action for supported Temporal executions.
+2. `/tasks/new?editExecutionId=<workflowId>` opens with a prefilled draft reconstructed from Temporal execution data and artifacts.
+3. `/tasks/new?rerunExecutionId=<workflowId>` opens the same shared form in rerun mode.
+4. Edit submissions call `UpdateInputs`.
+5. Rerun submissions call `RequestRerun`.
+6. Edited input content creates new artifact refs rather than mutating old artifacts.
+7. Operators return to the Temporal detail experience after success.
+8. Canonical documentation and UI no longer rely on queue-era route params or terminology.
+9. Regression tests cover the detail-page entry point, prefill reconstruction, submit behavior, and redirect flow.
+
+## 18. Implementation tracking
+
+Implementation sequencing and migration details should be tracked in:
+
+```text
+docs/tmp/021-TaskEditingSystemPlan.md
+```
+
+That plan should remain an execution checklist. This document is the canonical target-state design.
