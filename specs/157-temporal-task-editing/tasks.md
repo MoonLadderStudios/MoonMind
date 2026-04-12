@@ -11,11 +11,11 @@
 
 **Purpose**: Establish the test-first harness and shared contract files used by all user stories.
 
-- [ ] T001 [P] Add failing dashboard runtime-config flag coverage for `temporalTaskEditing` in `tests/unit/api/routers/test_task_dashboard_view_model.py` (Validation: DOC-REQ-011)
-- [ ] T002 [P] Add failing execution detail read-contract and capability coverage in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-001, DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007, DOC-REQ-009)
-- [ ] T003 [P] Add failing task-detail route helper and visibility coverage in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
-- [ ] T004 [P] Add contract-fixture assertions for update names and artifact-safe payload shape in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-008, DOC-REQ-010)
-- [ ] T005 Verify the OpenAPI planning contract parses cleanly in `specs/157-temporal-task-editing/contracts/temporal-task-editing.openapi.yaml`
+- [X] T001 [P] Add failing dashboard runtime-config flag coverage for `temporalTaskEditing` in `tests/unit/api/routers/test_task_dashboard_view_model.py` (Validation: DOC-REQ-011)
+- [X] T002 [P] Add failing execution detail read-contract and capability coverage in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-001, DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007, DOC-REQ-009)
+- [X] T003 [P] Add failing task-detail route helper and visibility coverage in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
+- [X] T004 [P] Add contract-fixture assertions for update names and artifact-safe payload shape in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-008, DOC-REQ-010)
+- [X] T005 Verify the OpenAPI planning contract parses cleanly in `specs/157-temporal-task-editing/contracts/temporal-task-editing.openapi.yaml`
 
 ---
 
@@ -25,11 +25,11 @@
 
 **CRITICAL**: No user story implementation should begin until this phase is complete.
 
-- [ ] T006 Add `TEMPORAL_TASK_EDITING_ENABLED` runtime setting in `moonmind/config/settings.py` (Implementation: DOC-REQ-011)
-- [ ] T007 Surface `features.temporalDashboard.temporalTaskEditing` in `api_service/api/routers/task_dashboard_view_model.py` (Implementation: DOC-REQ-011)
-- [ ] T008 Extend `ExecutionModel` with `inputParameters` and `inputArtifactRef` in `moonmind/schemas/temporal_models.py` (Implementation: DOC-REQ-001, DOC-REQ-007)
-- [ ] T009 Populate `inputParameters`, `inputArtifactRef`, and run `planArtifactRef` in `api_service/api/routers/executions.py` (Implementation: DOC-REQ-001, DOC-REQ-007)
-- [ ] T010 Create typed Temporal task editing route and contract helpers in `frontend/src/lib/temporalTaskEditing.ts` (Implementation: DOC-REQ-003, DOC-REQ-011)
+- [X] T006 Add `TEMPORAL_TASK_EDITING_ENABLED` runtime setting in `moonmind/config/settings.py` (Implementation: DOC-REQ-011)
+- [X] T007 Surface `features.temporalDashboard.temporalTaskEditing` in `api_service/api/routers/task_dashboard_view_model.py` (Implementation: DOC-REQ-011)
+- [X] T008 Extend `ExecutionModel` with `inputParameters` and `inputArtifactRef` in `moonmind/schemas/temporal_models.py` (Implementation: DOC-REQ-001, DOC-REQ-007)
+- [X] T009 Populate `inputParameters`, `inputArtifactRef`, and run `planArtifactRef` in `api_service/api/routers/executions.py` (Implementation: DOC-REQ-001, DOC-REQ-007)
+- [X] T010 Create typed Temporal task editing route and contract helpers in `frontend/src/lib/temporalTaskEditing.ts` (Implementation: DOC-REQ-003, DOC-REQ-011)
 
 **Checkpoint**: Runtime flag, execution read fields, and canonical route helpers exist for user-story work.
 
@@ -43,16 +43,16 @@
 
 ### Tests for User Story 1
 
-- [ ] T011 [P] [US1] Assert supported active `MoonMind.Run` execution detail includes `workflowId`, `workflowType`, `inputParameters`, `inputArtifactRef`, `planArtifactRef`, runtime/model/repository state, and `canUpdateInputs` in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-001, DOC-REQ-007)
-- [ ] T012 [P] [US1] Assert supported terminal `MoonMind.Run` execution detail exposes `canRerun` and does not expose in-place edit semantics in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-005, DOC-REQ-006)
-- [ ] T013 [P] [US1] Assert unsupported workflow types and feature-disabled states return false edit/rerun capabilities with explicit reasons in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-002, DOC-REQ-009, DOC-REQ-011)
-- [ ] T014 [P] [US1] Assert `UpdateInputs` and `RequestRerun` update-name contract remains recognized in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-008)
+- [X] T011 [P] [US1] Assert supported active `MoonMind.Run` execution detail includes `workflowId`, `workflowType`, `inputParameters`, `inputArtifactRef`, `planArtifactRef`, runtime/model/repository state, and `canUpdateInputs` in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-001, DOC-REQ-007)
+- [X] T012 [P] [US1] Assert supported terminal `MoonMind.Run` execution detail exposes `canRerun` and does not expose in-place edit semantics in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-005, DOC-REQ-006)
+- [X] T013 [P] [US1] Assert unsupported workflow types and feature-disabled states return false edit/rerun capabilities with explicit reasons in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-002, DOC-REQ-009, DOC-REQ-011)
+- [X] T014 [P] [US1] Assert `UpdateInputs` and `RequestRerun` update-name contract remains recognized in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-008)
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Gate `canUpdateInputs` and `canRerun` by `MoonMind.Run`, lifecycle state, actions enabled, and `temporalTaskEditing` in `api_service/api/routers/executions.py` (Implementation: DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-009, DOC-REQ-011)
-- [ ] T016 [US1] Add disabled reason values for feature-disabled, unsupported workflow type, and state-ineligible edit/rerun actions in `api_service/api/routers/executions.py` (Implementation: DOC-REQ-002, DOC-REQ-009, DOC-REQ-011)
-- [ ] T017 [US1] Preserve `UpdateInputs` and `RequestRerun` request-envelope compatibility in `moonmind/schemas/temporal_models.py` and `moonmind/workflows/temporal/service.py` (Implementation: DOC-REQ-008, DOC-REQ-010)
+- [X] T015 [US1] Gate `canUpdateInputs` and `canRerun` by `MoonMind.Run`, lifecycle state, actions enabled, and `temporalTaskEditing` in `api_service/api/routers/executions.py` (Implementation: DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-009, DOC-REQ-011)
+- [X] T016 [US1] Add disabled reason values for feature-disabled, unsupported workflow type, and state-ineligible edit/rerun actions in `api_service/api/routers/executions.py` (Implementation: DOC-REQ-002, DOC-REQ-009, DOC-REQ-011)
+- [X] T017 [US1] Preserve `UpdateInputs` and `RequestRerun` request-envelope compatibility in `moonmind/schemas/temporal_models.py` and `moonmind/workflows/temporal/service.py` (Implementation: DOC-REQ-008, DOC-REQ-010)
 
 **Checkpoint**: User Story 1 is independently functional: execution detail carries the safe read contract and authoritative capabilities.
 
@@ -66,17 +66,17 @@
 
 ### Tests for User Story 2
 
-- [ ] T018 [P] [US2] Assert `taskEditHref` and `taskRerunHref` produce canonical `/tasks/new` targets and URL-encode workflow IDs in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-003, DOC-REQ-004)
-- [ ] T019 [P] [US2] Assert Edit renders only when `temporalTaskEditing` and `actions.canUpdateInputs` are true in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
-- [ ] T020 [P] [US2] Assert Rerun renders only when `temporalTaskEditing` and `actions.canRerun` are true in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
-- [ ] T021 [P] [US2] Assert unsupported actions are omitted and no queue-era route or `editJobId` target is generated in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-004, DOC-REQ-009, DOC-REQ-012)
+- [X] T018 [P] [US2] Assert `taskEditHref` and `taskRerunHref` produce canonical `/tasks/new` targets and URL-encode workflow IDs in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-003, DOC-REQ-004)
+- [X] T019 [P] [US2] Assert Edit renders only when `temporalTaskEditing` and `actions.canUpdateInputs` are true in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
+- [X] T020 [P] [US2] Assert Rerun renders only when `temporalTaskEditing` and `actions.canRerun` are true in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
+- [X] T021 [P] [US2] Assert unsupported actions are omitted and no queue-era route or `editJobId` target is generated in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-004, DOC-REQ-009, DOC-REQ-012)
 
 ### Implementation for User Story 2
 
-- [ ] T022 [US2] Extend `ExecutionDetailSchema` to parse `actions.canUpdateInputs` in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-005, DOC-REQ-012)
-- [ ] T023 [US2] Read `features.temporalDashboard.temporalTaskEditing` in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-011, DOC-REQ-012)
-- [ ] T024 [US2] Replace direct detail-page rerun mutation with canonical Edit and Rerun links in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
-- [ ] T025 [US2] Ensure terminal executions only expose rerun, not in-place edit messaging, in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-006)
+- [X] T022 [US2] Extend `ExecutionDetailSchema` to parse `actions.canUpdateInputs` in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-005, DOC-REQ-012)
+- [X] T023 [US2] Read `features.temporalDashboard.temporalTaskEditing` in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-011, DOC-REQ-012)
+- [X] T024 [US2] Replace direct detail-page rerun mutation with canonical Edit and Rerun links in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-012)
+- [X] T025 [US2] Ensure terminal executions only expose rerun, not in-place edit messaging, in `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-006)
 
 **Checkpoint**: User Story 2 is independently functional: valid detail pages navigate to canonical edit/rerun routes and invalid actions are hidden.
 
@@ -90,16 +90,16 @@
 
 ### Tests for User Story 3
 
-- [ ] T026 [P] [US3] Add supported active, supported terminal, unsupported workflow, and feature-disabled backend fixtures in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
-- [ ] T027 [P] [US3] Add supported active, supported terminal, unsupported workflow, and feature-disabled frontend fixtures in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
-- [ ] T028 [P] [US3] Assert unsupported-state copy and disabled reasons distinguish Phase 0/1 observable unsupported workflow type, feature-disabled, state-ineligible, and missing-capability cases in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011)
-- [ ] T029 [P] [US3] Assert contract-level artifact-backed edit/rerun requests use new artifact references rather than historical mutation in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-010)
+- [X] T026 [P] [US3] Add supported active, supported terminal, unsupported workflow, and feature-disabled backend fixtures in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
+- [X] T027 [P] [US3] Add supported active, supported terminal, unsupported workflow, and feature-disabled frontend fixtures in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
+- [X] T028 [P] [US3] Assert unsupported-state copy and disabled reasons distinguish Phase 0/1 observable unsupported workflow type, feature-disabled, state-ineligible, and missing-capability cases in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011)
+- [X] T029 [P] [US3] Assert contract-level artifact-backed edit/rerun requests use new artifact references rather than historical mutation in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-010)
 
 ### Implementation for User Story 3
 
-- [ ] T030 [US3] Normalize disabled reason labels and unsupported-state copy constants for Phase 0/1 task editing states in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-009, DOC-REQ-011)
-- [ ] T031 [US3] Keep first-slice prefill fields represented in frontend/backend typed contracts in `frontend/src/lib/temporalTaskEditing.ts` and `moonmind/schemas/temporal_models.py` (Implementation: DOC-REQ-007, DOC-REQ-011)
-- [ ] T032 [US3] Verify no primary flow introduces `editJobId`, `/tasks/queue/new`, queue update routes, or queue resubmit language in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-004)
+- [X] T030 [US3] Normalize disabled reason labels and unsupported-state copy constants for Phase 0/1 task editing states in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-009, DOC-REQ-011)
+- [X] T031 [US3] Keep first-slice prefill fields represented in frontend/backend typed contracts in `frontend/src/lib/temporalTaskEditing.ts` and `moonmind/schemas/temporal_models.py` (Implementation: DOC-REQ-007, DOC-REQ-011)
+- [X] T032 [US3] Verify no primary flow introduces `editJobId`, `/tasks/queue/new`, queue update routes, or queue resubmit language in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-004)
 
 **Checkpoint**: User Story 3 is independently functional: rollout states are reproducible and unsupported behavior fails closed.
 
@@ -109,13 +109,13 @@
 
 **Purpose**: Final validation, traceability, and readiness gates across all stories.
 
-- [ ] T033 [P] Run targeted backend tests with `pytest tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/api/routers/test_executions.py -q` (Validation: DOC-REQ-001, DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007, DOC-REQ-008, DOC-REQ-009, DOC-REQ-010, DOC-REQ-011, DOC-REQ-012)
-- [ ] T034 [P] Run targeted frontend tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
-- [ ] T035 [P] Run frontend typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T036 Run full unit suite with `./tools/test_unit.sh` (Validation: DOC-REQ-011, DOC-REQ-012)
-- [ ] T037 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T038 Verify every `DOC-REQ-*` appears in at least one implementation task and one validation task in `specs/157-temporal-task-editing/tasks.md`
-- [ ] T039 Update `specs/157-temporal-task-editing/contracts/requirements-traceability.md` if implementation file paths or validation commands change during execution
+- [X] T033 [P] Run targeted backend tests with `pytest tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/api/routers/test_executions.py -q` (Validation: DOC-REQ-001, DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-007, DOC-REQ-008, DOC-REQ-009, DOC-REQ-010, DOC-REQ-011, DOC-REQ-012)
+- [X] T034 [P] Run targeted frontend tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006, DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
+- [X] T035 [P] Run frontend typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T036 Run full unit suite with `./tools/test_unit.sh` (Validation: DOC-REQ-011, DOC-REQ-012)
+- [X] T037 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T038 Verify every `DOC-REQ-*` appears in at least one implementation task and one validation task in `specs/157-temporal-task-editing/tasks.md`
+- [X] T039 Update `specs/157-temporal-task-editing/contracts/requirements-traceability.md` if implementation file paths or validation commands change during execution
 
 ---
 
