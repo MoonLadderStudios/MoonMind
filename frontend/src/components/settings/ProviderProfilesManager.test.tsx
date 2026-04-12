@@ -1,5 +1,5 @@
-import { QueryClient } from '@tanstack/react-query';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
@@ -35,6 +35,45 @@ function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
       queryClient={queryClient}
       defaultTaskModelByRuntime={{}}
     />,
+  );
+
+  return { onNotice, queryClient };
+}
+
+function renderProviderProfilesManagerWithQuery(profiles: ProviderProfile[] = []) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  queryClient.setQueryData(['provider-profiles'], profiles);
+  const onNotice = vi.fn();
+
+  function ProviderProfilesHarness() {
+    const { data = [] } = useQuery<ProviderProfile[]>({
+      queryKey: ['provider-profiles'],
+      queryFn: async () => queryClient.getQueryData<ProviderProfile[]>(['provider-profiles']) ?? profiles,
+      initialData: profiles,
+      staleTime: Infinity,
+    });
+
+    return (
+      <ProviderProfilesManager
+        profiles={data}
+        secretSlugs={['OPENAI_API_KEY']}
+        onNotice={onNotice}
+        queryClient={queryClient}
+        defaultTaskModelByRuntime={{}}
+      />
+    );
+  }
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ProviderProfilesHarness />
+    </QueryClientProvider>,
   );
 
   return { onNotice, queryClient };
@@ -290,7 +329,7 @@ describe('ProviderProfilesManager form controls', () => {
       is_default: false,
     };
 
-    renderProviderProfilesManager([profile, secondaryProfile]);
+    renderProviderProfilesManagerWithQuery([profile, secondaryProfile]);
 
     const editButtons = screen.getAllByRole('button', { name: 'Edit' });
     const secondaryEditButton = editButtons[1];
@@ -325,5 +364,11 @@ describe('ProviderProfilesManager form controls', () => {
     const [, requestInit] = fetchCall;
     const payload = JSON.parse(String((requestInit as RequestInit).body));
     expect(payload.is_default).toBe(true);
+
+    await waitFor(() => {
+      const rows = screen.getAllByRole('row');
+      expect(rows[1]?.textContent).not.toContain('Runtime default');
+      expect(rows[2]?.textContent).toContain('Runtime default');
+    });
   });
 });
