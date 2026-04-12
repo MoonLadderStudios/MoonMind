@@ -9,6 +9,7 @@ from moonmind.schemas.workload_models import (
 )
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
+    DockerWorkloadConcurrencyLimiter,
     DockerWorkloadLauncher,
     DockerWorkloadLauncherError,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "DEFAULT_UNREAL_PROFILE_ID",
     "DOOD_TOOL_NAMES",
     "DockerContainerJanitor",
+    "DockerWorkloadConcurrencyLimiter",
     "DockerWorkloadLauncher",
     "DockerWorkloadLauncherError",
     "RunnerProfile",

@@ -16,6 +16,11 @@ _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _CONTAINER_NAME_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SIZE_PATTERN = re.compile(r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>[kmgt]?i?b?)?$", re.I)
 _VOLUME_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+_AUTH_VOLUME_PATTERN = re.compile(
+    r"(codex|claude|gemini|anthropic).*(auth|credential|secret)|"
+    r"(auth|credential|secret).*(codex|claude|gemini|anthropic)",
+    re.I,
+)
 _SIZE_MULTIPLIERS: dict[str, int] = {
     "": 1,
     "b": 1,
@@ -161,6 +166,8 @@ class WorkloadMount(BaseModel):
             raise ValueError("mount type must be volume")
         if _VOLUME_NAME_PATTERN.match(self.source) is None:
             raise ValueError("mount source must be a Docker named volume")
+        if _AUTH_VOLUME_PATTERN.search(self.source):
+            raise ValueError("auth volumes must not be mounted into workload containers")
         if not _is_safe_absolute_profile_path(self.target):
             raise ValueError("mount target must be an absolute safe path")
         return self
@@ -276,6 +283,7 @@ class RunnerProfile(BaseModel):
     )
     timeout_seconds: int = Field(300, alias="timeoutSeconds", ge=1)
     max_timeout_seconds: int | None = Field(None, alias="maxTimeoutSeconds", ge=1)
+    max_concurrency: int = Field(1, alias="maxConcurrency", ge=1)
     cleanup: WorkloadCleanupPolicy = Field(
         default_factory=WorkloadCleanupPolicy,
         alias="cleanup",

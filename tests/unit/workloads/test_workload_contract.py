@@ -187,15 +187,22 @@ def test_request_rejects_empty_command() -> None:
 def test_registry_rejects_unknown_profile(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
-    with pytest.raises(WorkloadPolicyError, match="unknown runner profile"):
+    with pytest.raises(WorkloadPolicyError, match="unknown runner profile") as exc_info:
         registry.validate_request(_request(profileId="missing-profile"))
+    assert exc_info.value.reason == "unknown_profile"
+    assert exc_info.value.details == {"profileId": "missing-profile"}
 
 
 def test_registry_rejects_env_key_outside_profile_allowlist(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
-    with pytest.raises(WorkloadPolicyError, match="environment override"):
+    with pytest.raises(WorkloadPolicyError, match="environment override") as exc_info:
         registry.validate_request(_request(envOverrides={"SECRET_TOKEN": "raw"}))
+    assert exc_info.value.reason == "disallowed_env_key"
+    assert exc_info.value.details == {
+        "envKey": "SECRET_TOKEN",
+        "profileId": "local-python",
+    }
 
 
 def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path) -> None:
@@ -215,11 +222,52 @@ def test_registry_rejects_resource_overrides_above_profile_maximum(
 ) -> None:
     registry = _registry(tmp_path)
 
-    with pytest.raises(WorkloadPolicyError, match="memory"):
+    with pytest.raises(WorkloadPolicyError, match="memory") as exc_info:
         registry.validate_request(_request(resources={"memory": "8g"}))
+    assert exc_info.value.reason == "resource_request_too_large"
+    assert exc_info.value.details == {"resource": "memory", "profileId": "local-python"}
 
     with pytest.raises(WorkloadPolicyError, match="cpu"):
         registry.validate_request(_request(resources={"cpu": "8"}))
+
+
+def test_registry_enforces_image_registry_allowlist(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps({"profiles": [_profile_payload(image="python:3.12-slim")]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkloadPolicyError, match="image registry") as exc_info:
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+            allowed_image_registries=("ghcr.io",),
+        )
+
+    assert exc_info.value.reason == "disallowed_image_registry"
+    assert exc_info.value.details == {
+        "profileId": "local-python",
+        "imageRegistry": "docker.io",
+    }
+
+
+def test_registry_allows_profiles_from_approved_registry(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {"profiles": [_profile_payload(image="ghcr.io/moonmind/python:3.12")]}
+        ),
+        encoding="utf-8",
+    )
+
+    registry = RunnerProfileRegistry.load_file(
+        registry_path,
+        workspace_root=WORKSPACE_ROOT,
+        allowed_image_registries=("ghcr.io",),
+    )
+
+    assert registry.profile_ids == ("local-python",)
 
 
 @pytest.mark.parametrize(
@@ -265,6 +313,19 @@ def test_registry_rejects_resource_overrides_above_profile_maximum(
             },
             "mount target",
         ),
+        (
+            {
+                "required_mounts": [
+                    {
+                        "type": "volume",
+                        "source": "codex_auth_volume",
+                        "target": "/home/codex/.codex",
+                    }
+                ]
+            },
+            "auth volumes",
+        ),
+        ({"privileged": True}, "privileged"),
         ({"workdir_template": "/work/../tmp"}, "workdirTemplate"),
     ],
 )

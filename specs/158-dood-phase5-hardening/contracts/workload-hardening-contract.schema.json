@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moonmind.local/contracts/workload-hardening-contract.schema.json",
+  "title": "DooD Phase 5 Workload Hardening Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "runnerProfile": {
+      "$ref": "#/$defs/RunnerProfile"
+    },
+    "workloadRequest": {
+      "$ref": "#/$defs/WorkloadRequest"
+    },
+    "workloadResult": {
+      "$ref": "#/$defs/WorkloadResult"
+    },
+    "policyDenial": {
+      "$ref": "#/$defs/PolicyDenial"
+    },
+    "cleanupRecord": {
+      "$ref": "#/$defs/CleanupRecord"
+    }
+  },
+  "$defs": {
+    "RunnerProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "image",
+        "requiredMounts",
+        "networkPolicy",
+        "resources",
+        "cleanup",
+        "devicePolicy",
+        "maxConcurrency"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "one_shot"
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1
+        },
+        "envAllowlist": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "requiredMounts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/WorkloadMount"
+          }
+        },
+        "optionalMounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkloadMount"
+          }
+        },
+        "networkPolicy": {
+          "enum": [
+            "none",
+            "bridge"
+          ]
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceProfile"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/CleanupPolicy"
+        },
+        "devicePolicy": {
+          "$ref": "#/$defs/DevicePolicy"
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "WorkloadMount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "source",
+        "target"
+      ],
+      "properties": {
+        "type": {
+          "const": "volume"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readOnly": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ResourceProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "string"
+        },
+        "memory": {
+          "type": "string"
+        },
+        "shmSize": {
+          "type": "string"
+        },
+        "maxCpu": {
+          "type": "string"
+        },
+        "maxMemory": {
+          "type": "string"
+        },
+        "maxShmSize": {
+          "type": "string"
+        }
+      }
+    },
+    "CleanupPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "removeContainerOnExit",
+        "killGraceSeconds"
+      ],
+      "properties": {
+        "removeContainerOnExit": {
+          "type": "boolean"
+        },
+        "killGraceSeconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "DevicePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "const": "none"
+        }
+      }
+    },
+    "WorkloadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profileId",
+        "taskRunId",
+        "stepId",
+        "attempt",
+        "toolName",
+        "repoDir",
+        "artifactsDir",
+        "command"
+      ],
+      "properties": {
+        "profileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "taskRunId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stepId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repoDir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactsDir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "envOverrides": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceOverrides"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "ResourceOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "string"
+        },
+        "memory": {
+          "type": "string"
+        },
+        "shmSize": {
+          "type": "string"
+        }
+      }
+    },
+    "WorkloadResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "requestId",
+        "profileId",
+        "status"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "timed_out",
+            "canceled"
+          ]
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outputRefs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PolicyDenial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "unknown_profile",
+            "disallowed_image_registry",
+            "disallowed_env_key",
+            "disallowed_mount",
+            "resource_request_too_large",
+            "missing_fleet_capability",
+            "concurrency_limit_exceeded",
+            "invalid_profile",
+            "invalid_request"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "type": "object"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CleanupRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inspectedCount",
+        "removedCount",
+        "skippedCount"
+      ],
+      "properties": {
+        "inspectedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removedContainerIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skippedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

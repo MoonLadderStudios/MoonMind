@@ -272,6 +272,44 @@ async def test_container_run_workload_handler_rejects_raw_docker_fields(
 
 
 @pytest.mark.asyncio
+async def test_container_run_workload_policy_failure_omits_env_values() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+    secret_value = "inline_secret_value_for_redaction_test"
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "profileId": "local-python",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["python", "-V"],
+                "envOverrides": {"SECRET_TOKEN": secret_value},
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
+
+    failure = exc_info.value
+    failure_text = f"{failure.message} {failure.details!r}"
+    assert failure.error_code == "PERMISSION_DENIED"
+    assert failure.details == {
+        "reason": "disallowed_env_key",
+        "envKey": "SECRET_TOKEN",
+        "profileId": "local-python",
+    }
+    assert secret_value not in failure_text
+    assert launcher.validated is None
+
+
+@pytest.mark.asyncio
 async def test_container_run_workload_handler_maps_failed_result_to_tool_failure_status() -> None:
     registry = RunnerProfileRegistry(
         [RunnerProfile.model_validate(_profile_payload())],
