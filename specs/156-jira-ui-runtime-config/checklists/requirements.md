@@ -15,6 +15,7 @@
 
 - [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
+- [x] Source document requirements are identified and mapped to functional requirements
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
@@ -33,3 +34,5 @@
 
 - Runtime intent is explicit: production runtime code changes and validation tests are required deliverables.
 - Scope is limited to Phase 1 runtime discovery and rollout gating; Jira browser API endpoints and frontend browsing UI are intentionally outside this spec.
+- `DOC-REQ-001` through `DOC-REQ-006` are each mapped to at least one functional requirement in `spec.md`.
+- Traceability validation passed for all source-document requirements.

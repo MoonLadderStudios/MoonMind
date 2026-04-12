@@ -5,6 +5,17 @@
 **Status**: Draft  
 **Input**: User description: "Implement Phase 1 using test-driven development of the Jira UI plan. Treat docs/UI/CreatePage.md as the canonical desired-state. Add a Jira UI rollout contract to the dashboard runtime config. Keep this separate from existing backend Jira tool enablement. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
+## Source Document Requirements
+
+| Requirement ID | Source | Requirement Summary |
+| --- | --- | --- |
+| DOC-REQ-001 | `docs/UI/CreatePage.md` section 3, lines 45-47 | Jira must remain an external instruction source, manual entry must remain first-class when Jira is unavailable, and browser clients must call MoonMind APIs rather than Jira directly. |
+| DOC-REQ-002 | `docs/UI/CreatePage.md` section 4, lines 68-70 | The Create page must receive server-generated runtime configuration through the boot payload, and page actions must go through MoonMind APIs. |
+| DOC-REQ-003 | `docs/UI/CreatePage.md` section 13, lines 307-313 | Jira integration must not auto-create MoonMind tasks, replace the step editor or presets, change task submission into a Jira-native workflow, or make the browser talk directly to Jira. |
+| DOC-REQ-004 | `docs/UI/CreatePage.md` section 14, line 327 | The Create page may expose Jira only when runtime configuration explicitly enables it. |
+| DOC-REQ-005 | `docs/UI/CreatePage.md` section 14, lines 331-351 | The runtime contract must include Jira source entries and Jira integration settings for enabled state, default project, default board, and session board memory. |
+| DOC-REQ-006 | `docs/UI/CreatePage.md` section 14, lines 356-358 | Jira entry points must depend on `system.jiraIntegration.enabled`; Jira URLs must remain MoonMind API endpoints; browser clients must not embed Jira credentials or Jira-domain knowledge beyond documented response shapes. |
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Hide Jira UI When Disabled (Priority: P1)
@@ -65,15 +76,15 @@ As an operator, I want optional default Jira project and board preferences to ap
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST expose Jira Create-page browser capability through the dashboard runtime configuration only when the Jira Create-page rollout is enabled.
-- **FR-002**: The system MUST omit all Jira Create-page browser source and system configuration when the Jira Create-page rollout is disabled.
-- **FR-003**: The Jira Create-page rollout MUST be independent from backend Jira tool enablement, so enabling trusted server-side Jira tools does not by itself expose browser Jira controls.
-- **FR-004**: When enabled, the system MUST publish a Jira browser source contract with entries for connection verification, project listing, board listing for a project, column listing for a board, issue listing for a board, and issue detail lookup.
-- **FR-005**: When enabled, the system MUST publish a Jira integration system contract containing whether the integration is enabled, the default project key, the default board ID, and whether the browser may remember the last selected board during the current session.
-- **FR-006**: The runtime configuration MUST preserve existing Create page behavior and existing non-Jira configuration shape when the Jira Create-page rollout is disabled.
+- **FR-001**: The system MUST expose Jira Create-page browser capability through the dashboard runtime configuration only when the Jira Create-page rollout is enabled. (Maps: DOC-REQ-004, DOC-REQ-006)
+- **FR-002**: The system MUST omit all Jira Create-page browser source and system configuration when the Jira Create-page rollout is disabled. (Maps: DOC-REQ-001, DOC-REQ-004)
+- **FR-003**: The Jira Create-page rollout MUST be independent from backend Jira tool enablement, so enabling trusted server-side Jira tools does not by itself expose browser Jira controls. (Maps: DOC-REQ-003, DOC-REQ-004)
+- **FR-004**: When enabled, the system MUST publish a Jira browser source contract with entries for connection verification, project listing, board listing for a project, column listing for a board, issue listing for a board, and issue detail lookup. (Maps: DOC-REQ-002, DOC-REQ-005)
+- **FR-005**: When enabled, the system MUST publish a Jira integration system contract containing whether the integration is enabled, the default project key, the default board ID, and whether the browser may remember the last selected board during the current session. (Maps: DOC-REQ-005, DOC-REQ-006)
+- **FR-006**: The runtime configuration MUST preserve existing Create page behavior and existing non-Jira configuration shape when the Jira Create-page rollout is disabled. (Maps: DOC-REQ-001, DOC-REQ-003)
 - **FR-007**: The feature MUST include production runtime code changes; documentation or specification updates alone do not satisfy the requested deliverable.
 - **FR-008**: The feature MUST include validation tests covering the disabled state, enabled endpoint contract, and configured default project and board values.
-- **FR-009**: The browser-facing Jira contract MUST describe MoonMind-owned endpoints only; it MUST NOT introduce any requirement for the browser to receive Jira credentials or call Jira directly.
+- **FR-009**: The browser-facing Jira contract MUST describe MoonMind-owned endpoints only; it MUST NOT introduce any requirement for the browser to receive Jira credentials or call Jira directly. (Maps: DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-006)
 - **FR-010**: Operator-provided default Jira project keys MUST be normalized to a stable project-key format before being surfaced to the browser contract.
 
 ### Key Entities
