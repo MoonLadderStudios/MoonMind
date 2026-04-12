@@ -1890,6 +1890,112 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
 
 
 @pytest.mark.asyncio
+async def test_controller_duplicate_terminate_retries_container_cleanup(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="terminated",
+            workspacePath="/tmp/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+            artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "transient docker cleanup failure"
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=AsyncMock(),
+        command_runner=_fake_runner,
+    )
+
+    handle = await controller.terminate_session(
+        TerminateCodexManagedSessionRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+        )
+    )
+
+    assert handle.status == "terminated"
+    assert commands == [("docker", "rm", "-f", "ctr-1")]
+
+
+@pytest.mark.asyncio
+async def test_controller_duplicate_terminate_rejects_stale_locator(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="terminated",
+            workspacePath="/tmp/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+            artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    runner = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=AsyncMock(),
+        command_runner=runner,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="sessionEpoch does not match the durable managed session record",
+    ):
+        await controller.terminate_session(
+            TerminateCodexManagedSessionRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+            )
+        )
+
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_controller_duplicate_launch_reuses_existing_live_record(
     tmp_path: Path,
 ) -> None:
@@ -1948,6 +2054,50 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
     assert handle.status == "ready"
     assert handle.session_state.container_id == "ctr-1"
     assert commands == [("docker", "inspect", "-f", "{{.Id}}", "ctr-1")]
+
+
+def test_controller_launch_duplicate_match_requires_epoch_and_thread(
+    tmp_path: Path,
+) -> None:
+    base_request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        sessionEpoch=1,
+        threadId="logical-thread-1",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/tmp/codex-home",
+        imageRef="img",
+    )
+    record = CodexManagedSessionRecord(
+        sessionId="sess-1",
+        sessionEpoch=1,
+        taskRunId="task-1",
+        containerId="ctr-1",
+        threadId="logical-thread-1",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl="docker-exec://ctr-1",
+        status="ready",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        startedAt="2026-04-06T12:00:00Z",
+    )
+
+    assert DockerCodexManagedSessionController._request_matches_record(
+        base_request,
+        record,
+    )
+    assert not DockerCodexManagedSessionController._request_matches_record(
+        base_request.model_copy(update={"session_epoch": 2}),
+        record,
+    )
+    assert not DockerCodexManagedSessionController._request_matches_record(
+        base_request.model_copy(update={"thread_id": "logical-thread-2"}),
+        record,
+    )
 
 
 @pytest.mark.asyncio

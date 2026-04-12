@@ -311,6 +311,8 @@ class DockerCodexManagedSessionController:
         return (
             request.task_run_id == record.task_run_id
             and request.session_id == record.session_id
+            and request.session_epoch == record.session_epoch
+            and request.thread_id == record.thread_id
             and request.workspace_path == record.workspace_path
             and request.session_workspace_path == record.session_workspace_path
             and request.artifact_spool_path == record.artifact_spool_path
@@ -1544,6 +1546,8 @@ class DockerCodexManagedSessionController:
         if self._session_store is not None:
             record = self._session_store.load(request.session_id)
             if record is not None and record.status == "terminated":
+                self._matches_locator(record, request)
+                await self._remove_container(record.container_id, ignore_failure=True)
                 return CodexManagedSessionHandle(
                     sessionState=record.session_state(),
                     status="terminated",

@@ -1435,7 +1435,7 @@ class CodexManagedSessionRuntime:
             sessionState=self._session_state(state),
             turnId=request.turn_id,
             status=status,
-            metadata=dict(request.metadata),
+            metadata=dict(request.metadata) if request.metadata else {},
         )
 
     def interrupt_turn(
