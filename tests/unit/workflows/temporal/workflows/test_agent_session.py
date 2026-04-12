@@ -245,6 +245,29 @@ def test_agent_session_restore_caps_request_tracking_state(
     assert restored_entries[-1]["requestId"] == "request-104"
 
 
+def test_agent_session_continue_as_new_suggestion_calls_temporal_info_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+
+    class WorkflowInfo:
+        namespace = "default"
+        workflow_id = "wf-run-1:session:codex_cli"
+        run_id = "run-session-1"
+        task_queue = "mm.workflow"
+
+        def is_continue_as_new_suggested(self) -> bool:
+            return False
+
+        def get_current_history_length(self) -> int:
+            return 1
+
+    monkeypatch.setattr(agent_session_module.workflow, "info", WorkflowInfo)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    assert workflow._should_continue_as_new() is False
+
+
 def test_agent_session_request_tracking_rejects_cross_action_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

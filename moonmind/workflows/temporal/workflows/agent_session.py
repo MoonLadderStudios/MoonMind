@@ -410,7 +410,14 @@ class MoonMindAgentSessionWorkflow:
         if self._termination_requested:
             return False
         info = workflow.info()
-        if getattr(info, "is_continue_as_new_suggested", False):
+        is_continue_as_new_suggested = getattr(
+            info, "is_continue_as_new_suggested", False
+        )
+        if (
+            is_continue_as_new_suggested()
+            if callable(is_continue_as_new_suggested)
+            else bool(is_continue_as_new_suggested)
+        ):
             return True
         threshold = self._continue_as_new_event_threshold
         history_length = getattr(info, "get_current_history_length", None)
