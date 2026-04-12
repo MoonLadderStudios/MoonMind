@@ -1,8 +1,8 @@
 # DockerOutOfDocker Remaining Work
 
 Source doc: [`docs/ManagedAgents/DockerOutOfDocker.md`](../../ManagedAgents/DockerOutOfDocker.md)
-Status: Phases 0 through 3 complete; Phases 4 through 7 pending
-Last updated: 2026-04-11
+Status: Phases 0 through 5 complete; Phases 6 through 7 pending
+Last updated: 2026-04-12
 
 ## Phase checklist
 
@@ -10,8 +10,8 @@ Last updated: 2026-04-11
 - [x] Phase 1: Define the control-plane workload contract (`WorkloadRequest`, `WorkloadResult`, `RunnerProfile`, ownership metadata, validation rules).
 - [x] Phase 2: Build the Docker workload launcher on the existing Docker-capable `agent_runtime` worker fleet.
 - [x] Phase 3: Expose DooD through executable tools such as `container.run_workload` and `unreal.run_tests`.
-- [ ] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
-- [ ] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
+- [x] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
+- [x] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
 - [ ] Phase 6: Validate the architecture with the Unreal pilot runner profile and representative repository coverage.
 - [ ] Phase 7: Evaluate bounded helper containers only after one-shot workload containers are stable and well observed.
 
@@ -46,6 +46,24 @@ Last updated: 2026-04-11
 - `container.run_workload` exposes profile, workspace, command, env allowlist, timeout, resource, and optional session-association fields without raw image, mount, or device inputs.
 - `unreal.run_tests` maps a stable domain contract (`projectPath`, optional target/test selector) onto the curated Unreal runner profile command.
 - Focused unit tests cover tool definition generation, raw Docker input rejection, input-to-request conversion, launcher invocation/result mapping, `MoonMind.Run` routing through `mm.tool.execute`, managed-session boundary preservation, and agent-runtime task-queue selection.
+
+## Phase 4 completion notes
+
+- Workload launcher publication writes bounded `runtime.stdout`, `runtime.stderr`, and `runtime.diagnostics` artifacts under the producing step artifacts directory.
+- Diagnostics include runner profile, image ref, status, exit code, duration, cleanup policy, resource overrides, declared output refs, and missing declared outputs.
+- Session association fields (`sessionId`, `sessionEpoch`, `sourceTurnId`) are carried as grouping metadata only and are not emitted as session continuity artifacts.
+- Tool results expose workload metadata and artifact publication state for execution-detail projection without treating workload containers as managed sessions.
+- Focused unit tests cover successful and failed artifact publication, partial publication failure, declared output linking, session association metadata, and run-ledger/API workload projection.
+
+## Phase 5 completion notes
+
+- Runner profile registries enforce an image registry allowlist, defaulting to curated registry hosts and permitting operator override through `MOONMIND_WORKLOAD_ALLOWED_IMAGE_REGISTRIES`.
+- Workload profiles reject auth/credential/secret volumes for Codex, Claude, Gemini, and Anthropic runtimes, keeping managed-session auth volumes out of workload containers.
+- Docker run construction now adds explicit no-privileged hardening with `--privileged=false`, `--cap-drop ALL`, and `--security-opt no-new-privileges`.
+- Runner profiles carry a per-profile `maxConcurrency` limit, and the agent-runtime worker can apply a fleet-wide limit through `MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY`.
+- Workload containers receive a bounded `moonmind.expires_at` label and `DockerContainerJanitor.sweep_expired_workloads()` removes expired orphan containers.
+- Workload policy denials include stable reason/details fields for operator-facing diagnostics and tool failure payloads.
+- Focused unit tests cover image registry policy, denial metadata, auth-volume rejection, explicit Docker security flags, concurrency denial, and expired orphan sweeping.
 
 ## Guardrails to preserve during later phases
 

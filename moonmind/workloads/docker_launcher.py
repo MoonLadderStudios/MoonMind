@@ -7,7 +7,7 @@ import json
 import os
 import posixpath
 import shlex
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -26,6 +26,65 @@ _MAX_CAPTURED_STREAM_BYTES = 64_000
 
 class DockerWorkloadLauncherError(RuntimeError):
     """Raised when the Docker workload launcher cannot execute a request."""
+
+
+class _ConcurrencyLease:
+    def __init__(
+        self,
+        limiter: "DockerWorkloadConcurrencyLimiter",
+        profile_id: str,
+    ) -> None:
+        self._limiter = limiter
+        self._profile_id = profile_id
+        self._released = False
+
+    async def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        await self._limiter.release(self._profile_id)
+
+
+class DockerWorkloadConcurrencyLimiter:
+    """Fail-fast in-process concurrency guard for Docker workload launches."""
+
+    def __init__(self, *, fleet_limit: int | None = None) -> None:
+        if fleet_limit is not None and fleet_limit < 1:
+            raise ValueError("fleet_limit must be positive")
+        self._fleet_limit = fleet_limit
+        self._active_total = 0
+        self._active_by_profile: dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def acquire(
+        self,
+        request: ValidatedWorkloadRequest,
+    ) -> _ConcurrencyLease:
+        profile_id = request.profile.id
+        async with self._lock:
+            active_for_profile = self._active_by_profile.get(profile_id, 0)
+            if active_for_profile >= request.profile.max_concurrency:
+                raise DockerWorkloadLauncherError(
+                    "workload concurrency limit exceeded for profile "
+                    f"{profile_id}"
+                )
+            if self._fleet_limit is not None and self._active_total >= self._fleet_limit:
+                raise DockerWorkloadLauncherError(
+                    "workload concurrency limit exceeded for docker_workload fleet"
+                )
+            self._active_total += 1
+            self._active_by_profile[profile_id] = active_for_profile + 1
+        return _ConcurrencyLease(self, profile_id)
+
+    async def release(self, profile_id: str) -> None:
+        async with self._lock:
+            active_for_profile = self._active_by_profile.get(profile_id, 0)
+            if active_for_profile <= 1:
+                self._active_by_profile.pop(profile_id, None)
+            else:
+                self._active_by_profile[profile_id] = active_for_profile - 1
+            if self._active_total > 0:
+                self._active_total -= 1
 
 
 def _decode_stream(data: bytes) -> str:
@@ -131,6 +190,21 @@ def _isoformat(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _parse_iso_datetime(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | None:
     workload = request.request
     if workload.session_id is None:
@@ -141,6 +215,17 @@ def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | N
     if workload.source_turn_id is not None:
         context["sourceTurnId"] = workload.source_turn_id
     return context
+
+
+def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
+    timeout_seconds = request.request.timeout_seconds or request.profile.timeout_seconds
+    expires_at = datetime.now(UTC) + timedelta(
+        seconds=timeout_seconds + request.profile.cleanup.kill_grace_seconds
+    )
+    return {
+        **request.ownership.labels,
+        "moonmind.expires_at": _isoformat(expires_at) or "",
+    }
 
 
 def _workload_metadata(
@@ -305,6 +390,38 @@ class DockerContainerJanitor:
             if line.strip()
         )
 
+    async def sweep_expired_workloads(
+        self,
+        *,
+        now_iso: str | None = None,
+    ) -> tuple[str, ...]:
+        """Remove orphaned workload containers whose TTL label has expired."""
+
+        now = _parse_iso_datetime(now_iso or _isoformat(datetime.now(UTC)) or "")
+        if now is None:
+            now = datetime.now(UTC)
+        stdout, _stderr, _returncode = await self._run_control(
+            [
+                "ps",
+                "-a",
+                "--filter",
+                "label=moonmind.kind=workload",
+                "--format",
+                '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
+            ]
+        )
+        expired: list[str] = []
+        for line in _decode_stream(stdout).splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            container_id = parts[0].strip()
+            expires_at = _parse_iso_datetime(parts[2])
+            if container_id and expires_at is not None and expires_at <= now:
+                await self.remove(container_id)
+                expired.append(container_id)
+        return tuple(expired)
+
     async def _run_control(self, args: Sequence[str]) -> tuple[bytes, bytes, int]:
         process = await asyncio.create_subprocess_exec(
             self._docker_binary,
@@ -326,12 +443,16 @@ class DockerWorkloadLauncher:
         docker_binary: str = "docker",
         docker_host: str | None = None,
         janitor: DockerContainerJanitor | None = None,
+        concurrency_limiter: DockerWorkloadConcurrencyLimiter | None = None,
     ) -> None:
         self._docker_binary = docker_binary
         self._docker_host = docker_host
         self._janitor = janitor or DockerContainerJanitor(
             docker_binary=docker_binary,
             docker_host=docker_host,
+        )
+        self._concurrency_limiter = (
+            concurrency_limiter or DockerWorkloadConcurrencyLimiter()
         )
 
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
@@ -347,9 +468,14 @@ class DockerWorkloadLauncher:
             workload.repo_dir,
             "--network",
             profile.network_policy,
+            "--privileged=false",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
         ]
 
-        for key, value in request.ownership.labels.items():
+        for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])
         for mount in (*profile.required_mounts, *profile.optional_mounts):
             args.extend(["--mount", _mount_arg(mount)])
@@ -391,48 +517,29 @@ class DockerWorkloadLauncher:
             if timeout_seconds is not None
             else request.request.timeout_seconds or request.profile.timeout_seconds
         )
+        lease = await self._concurrency_limiter.acquire(request)
 
-        process = await asyncio.create_subprocess_exec(
-            *self.build_run_args(request),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_docker_env(docker_host=self._docker_host),
-        )
         try:
-            exit_code = await asyncio.wait_for(
-                _wait_with_limited_output(
-                    process,
-                    stdout_buffer=stdout_buffer,
-                    stderr_buffer=stderr_buffer,
-                ),
-                timeout=configured_timeout,
+            process = await asyncio.create_subprocess_exec(
+                *self.build_run_args(request),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_docker_env(docker_host=self._docker_host),
             )
-            status = "succeeded" if exit_code == 0 else "failed"
-        except asyncio.TimeoutError:
-            status = "timed_out"
-            timeout_reason = "workload exceeded timeoutSeconds"
-            await self._terminate_container(request)
             try:
-                await asyncio.wait_for(
+                exit_code = await asyncio.wait_for(
                     _wait_with_limited_output(
                         process,
                         stdout_buffer=stdout_buffer,
                         stderr_buffer=stderr_buffer,
                     ),
-                    timeout=max(1, request.profile.cleanup.kill_grace_seconds),
+                    timeout=configured_timeout,
                 )
+                status = "succeeded" if exit_code == 0 else "failed"
             except asyncio.TimeoutError:
-                process.kill()
-                await _wait_with_limited_output(
-                    process,
-                    stdout_buffer=stdout_buffer,
-                    stderr_buffer=stderr_buffer,
-                )
-            exit_code = process.returncode
-        except asyncio.CancelledError:
-            await self._terminate_container(request)
-            if process.returncode is None:
-                process.terminate()
+                status = "timed_out"
+                timeout_reason = "workload exceeded timeoutSeconds"
+                await self._terminate_container(request)
                 try:
                     await asyncio.wait_for(
                         _wait_with_limited_output(
@@ -449,10 +556,33 @@ class DockerWorkloadLauncher:
                         stdout_buffer=stdout_buffer,
                         stderr_buffer=stderr_buffer,
                     )
-            raise
+                exit_code = process.returncode
+            except asyncio.CancelledError:
+                await self._terminate_container(request)
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            _wait_with_limited_output(
+                                process,
+                                stdout_buffer=stdout_buffer,
+                                stderr_buffer=stderr_buffer,
+                            ),
+                            timeout=max(1, request.profile.cleanup.kill_grace_seconds),
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await _wait_with_limited_output(
+                            process,
+                            stdout_buffer=stdout_buffer,
+                            stderr_buffer=stderr_buffer,
+                        )
+                raise
+            finally:
+                if request.profile.cleanup.remove_container_on_exit:
+                    await self._janitor.remove(request.container_name)
         finally:
-            if request.profile.cleanup.remove_container_on_exit:
-                await self._janitor.remove(request.container_name)
+            await lease.release()
 
         completed_at = datetime.now(UTC)
         duration_seconds = (completed_at - started_at).total_seconds()

@@ -548,6 +548,26 @@ def _build_runtime_planner():
     return _runtime_planner
 
 
+def _csv_env_tuple(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    return tuple(
+        dict.fromkeys(part.strip() for part in value.split(",") if part.strip())
+    )
+
+
+def _positive_int_env(name: str) -> int | None:
+    import os
+
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    value = int(raw)
+    if value < 1:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return value
+
+
 def _build_agent_runtime_deps() -> tuple[
     ManagedRunStore,
     ManagedRunSupervisor,
@@ -559,7 +579,11 @@ def _build_agent_runtime_deps() -> tuple[
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
     from pathlib import Path
-    from moonmind.workloads import DockerWorkloadLauncher, RunnerProfileRegistry
+    from moonmind.workloads import (
+        DockerWorkloadConcurrencyLimiter,
+        DockerWorkloadLauncher,
+        RunnerProfileRegistry,
+    )
 
     class LocalRuntimeArtifactStorage:
         def __init__(self, root: str) -> None:
@@ -637,16 +661,28 @@ def _build_agent_runtime_deps() -> tuple[
         docker_host=docker_host,
     )
     workload_registry_path = os.environ.get("MOONMIND_WORKLOAD_PROFILE_REGISTRY", "")
+    allowed_image_registries = _csv_env_tuple(
+        os.environ.get("MOONMIND_WORKLOAD_ALLOWED_IMAGE_REGISTRIES")
+    )
     if workload_registry_path.strip():
         workload_registry = RunnerProfileRegistry.load_file(
             workload_registry_path,
             workspace_root=workspace_root,
+            allowed_image_registries=allowed_image_registries or None,
         )
     else:
-        workload_registry = RunnerProfileRegistry.empty(workspace_root=workspace_root)
+        workload_registry = RunnerProfileRegistry(
+            (),
+            workspace_root=workspace_root,
+            allowed_image_registries=allowed_image_registries or None,
+        )
+    workload_fleet_limit = _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
     workload_launcher = DockerWorkloadLauncher(
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
+        concurrency_limiter=DockerWorkloadConcurrencyLimiter(
+            fleet_limit=workload_fleet_limit
+        ),
     )
     return (
         store,

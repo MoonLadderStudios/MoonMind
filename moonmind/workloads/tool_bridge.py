@@ -204,6 +204,7 @@ def build_workload_tool_handler(
                 error_code="PERMISSION_DENIED",
                 message=str(exc),
                 retryable=False,
+                details={"reason": exc.reason, **exc.details},
             ) from exc
         except (ValidationError, ValueError) as exc:
             raise ToolFailure(

@@ -10,6 +10,7 @@ import pytest
 from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
+    DockerWorkloadConcurrencyLimiter,
     DockerWorkloadLauncher,
     DockerWorkloadLauncherError,
 )
@@ -199,6 +200,11 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert run_args[run_args.index("--workdir") + 1] == "/work/agent_jobs/task-1/repo"
     assert "--network" in run_args
     assert run_args[run_args.index("--network") + 1] == "none"
+    assert "--privileged=false" in run_args
+    assert "--cap-drop" in run_args
+    assert run_args[run_args.index("--cap-drop") + 1] == "ALL"
+    assert "--security-opt" in run_args
+    assert "no-new-privileges" in run_args
     assert "--cpus" in run_args
     assert run_args[run_args.index("--cpus") + 1] == "3"
     assert "--memory" in run_args
@@ -217,6 +223,7 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     )
     assert "moonmind.kind=workload" in run_args
     assert "moonmind.workload_profile=local-python" in run_args
+    assert any(label.startswith("moonmind.expires_at=") for label in run_args)
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "pytest -q"]
     assert created[-1] == ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"]
     assert result.status == "succeeded"
@@ -639,6 +646,70 @@ async def test_launcher_captures_bounded_process_output(
 
 
 @pytest.mark.asyncio
+async def test_launcher_enforces_profile_concurrency_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _ReleasePipe:
+        async def read(self, _size: int = -1) -> bytes:
+            await release.wait()
+            return b""
+
+    class _BlockingProcess(_Process):
+        def __init__(self) -> None:
+            super().__init__(never_complete=True)
+            self.stdout = _ReleasePipe()
+            self.stderr = _ReleasePipe()
+
+        async def wait(self) -> int:
+            await release.wait()
+            self.returncode = 0
+            self._closed.set()
+            return 0
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            started.set()
+            return _BlockingProcess()
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=4)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    first = asyncio.create_task(
+        launcher.run(
+            _validated_request(
+                tmp_path,
+                taskRunId="task-concurrency-a",
+                repoDir="/work/agent_jobs/task-concurrency-a/repo",
+                artifactsDir="/work/agent_jobs/task-concurrency-a/artifacts/step-test",
+            )
+        )
+    )
+    await started.wait()
+
+    with pytest.raises(DockerWorkloadLauncherError, match="concurrency limit"):
+        await launcher.run(
+            _validated_request(
+                tmp_path,
+                taskRunId="task-concurrency-b",
+                repoDir="/work/agent_jobs/task-concurrency-b/repo",
+                artifactsDir="/work/agent_jobs/task-concurrency-b/artifacts/step-test",
+            )
+        )
+
+    release.set()
+    result = await first
+    assert result.status == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_container_janitor_lists_orphans_by_labels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -673,3 +744,38 @@ async def test_container_janitor_lists_orphans_by_labels(
         "--format",
         "{{.ID}}",
     ]
+
+
+@pytest.mark.asyncio
+async def test_container_janitor_sweeps_expired_workload_orphans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1:3] == ("ps", "-a"):
+            return _Process(
+                returncode=0,
+                stdout=(
+                    b"expired123\tmm-workload-expired\t2026-04-12T00:00:00Z\n"
+                    b"fresh456\tmm-workload-fresh\t2026-04-13T00:00:00Z\n"
+                    b"missing789\tmm-workload-missing\t\n"
+                ),
+            )
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    janitor = DockerContainerJanitor()
+    swept = await janitor.sweep_expired_workloads(
+        now_iso="2026-04-12T12:00:00Z",
+    )
+
+    assert swept == ("expired123",)
+    assert ["docker", "rm", "-f", "expired123"] in created
+    assert ["docker", "rm", "-f", "fresh456"] not in created
+    assert ["docker", "rm", "-f", "missing789"] not in created
