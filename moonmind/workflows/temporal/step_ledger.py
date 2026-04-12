@@ -33,6 +33,10 @@ def default_step_artifacts() -> dict[str, Any]:
     }
 
 
+def default_step_workload() -> dict[str, Any] | None:
+    return None
+
+
 def build_initial_step_rows(
     *,
     ordered_nodes: list[dict[str, Any]],
@@ -74,6 +78,7 @@ def build_initial_step_rows(
                 "checks": [],
                 "refs": default_step_refs(),
                 "artifacts": default_step_artifacts(),
+                "workload": default_step_workload(),
                 "lastError": None,
             }
         )
@@ -142,6 +147,7 @@ def update_step_row(
     last_error: str | None | object = _UNSET,
     refs: Mapping[str, Any] | object = _UNSET,
     artifacts: Mapping[str, Any] | object = _UNSET,
+    workload: Mapping[str, Any] | None | object = _UNSET,
     increment_attempt: bool = False,
     set_started_at: bool = False,
 ) -> dict[str, Any]:
@@ -182,6 +188,8 @@ def update_step_row(
                     if key in merged_artifacts:
                         merged_artifacts[key] = value
             row["artifacts"] = merged_artifacts
+        if workload is not _UNSET:
+            row["workload"] = dict(workload) if isinstance(workload, Mapping) else None
         if status in TERMINAL_STEP_STATUSES:
             row["waitingReason"] = None
             row["attentionRequired"] = False

@@ -623,6 +623,10 @@ Every workload invocation must produce durable evidence, including:
 - diagnostics / exit metadata
 - declared output artifacts such as test reports, packages, or binaries
 
+Execution detail surfaces should present workload evidence on the producing step. Runtime stdout, stderr, diagnostics, declared primary/summary outputs, and test/report artifacts are step outputs. Bounded workload metadata such as runner profile, image reference, status, exit code, duration, and timeout/cancel reason may be displayed alongside those artifact refs.
+
+If the workload was launched from a managed-session-assisted step, `session_id`, `session_epoch`, and source-turn metadata may appear only as association context. The UI and API must not present the workload container itself as the managed session, and workload artifacts must not be grouped as session continuity artifacts by default.
+
 ### 13.3 Artifact classes
 
 Artifact classes should align with the artifact contract:

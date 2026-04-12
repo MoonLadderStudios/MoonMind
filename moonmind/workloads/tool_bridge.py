@@ -41,6 +41,13 @@ def _resources_schema() -> dict[str, Any]:
     }
 
 
+def _declared_outputs_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": {"type": "string", "minLength": 1},
+    }
+
+
 def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, Any]:
     """Return the pinned ToolDefinition payload for a Docker workload tool."""
 
@@ -67,6 +74,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                 },
                 "timeoutSeconds": {"type": "integer", "minimum": 1},
                 "resources": _resources_schema(),
+                "declaredOutputs": _declared_outputs_schema(),
                 "sessionId": {"type": "string", "minLength": 1},
                 "sessionEpoch": {"type": "integer", "minimum": 1},
                 "sourceTurnId": {"type": "string", "minLength": 1},
@@ -94,6 +102,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                     "additionalProperties": {"type": "string"},
                 },
                 "resources": _resources_schema(),
+                "declaredOutputs": _declared_outputs_schema(),
                 "sessionId": {"type": "string", "minLength": 1},
                 "sessionEpoch": {"type": "integer", "minimum": 1},
                 "sourceTurnId": {"type": "string", "minLength": 1},
@@ -120,7 +129,11 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                     "profileId": {"type": "string"},
                     "workloadStatus": {"type": "string"},
                     "exitCode": {"type": ["integer", "null"]},
+                    "stdoutRef": {"type": ["string", "null"]},
+                    "stderrRef": {"type": ["string", "null"]},
+                    "diagnosticsRef": {"type": ["string", "null"]},
                     "outputRefs": {"type": "object"},
+                    "workloadMetadata": {"type": "object"},
                 },
                 "additionalProperties": True,
             }
@@ -284,6 +297,10 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
         "timed_out": "FAILED",
         "canceled": "CANCELLED",
     }[result.status]
+    workload_metadata = dict(result.metadata.get("workload") or {})
+    workload_metadata["artifactPublication"] = result.metadata.get(
+        "artifactPublication"
+    )
     return SkillResult(
         status=status,
         outputs={
@@ -292,12 +309,21 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
             "profileId": result.profile_id,
             "workloadStatus": result.status,
             "exitCode": result.exit_code,
+            "stdoutRef": result.stdout_ref,
+            "stderrRef": result.stderr_ref,
+            "diagnosticsRef": result.diagnostics_ref,
             "outputRefs": dict(result.output_refs),
+            "workloadMetadata": workload_metadata,
         },
         progress={
             "profileId": result.profile_id,
             "workloadStatus": result.status,
             "labels": dict(result.labels),
+            "stdoutRef": result.stdout_ref,
+            "stderrRef": result.stderr_ref,
+            "diagnosticsRef": result.diagnostics_ref,
+            "outputRefs": dict(result.output_refs),
+            "workloadMetadata": workload_metadata,
         },
     )
 

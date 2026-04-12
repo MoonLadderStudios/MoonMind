@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import posixpath
 import shlex
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Mapping, Sequence
 
 from moonmind.schemas.workload_models import (
@@ -121,6 +123,137 @@ def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
         if normalized == target or normalized.startswith(f"{target}/"):
             return True
     return False
+
+
+def _isoformat(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | None:
+    workload = request.request
+    if workload.session_id is None:
+        return None
+    context: dict[str, object] = {"sessionId": workload.session_id}
+    if workload.session_epoch is not None:
+        context["sessionEpoch"] = workload.session_epoch
+    if workload.source_turn_id is not None:
+        context["sourceTurnId"] = workload.source_turn_id
+    return context
+
+
+def _workload_metadata(
+    request: ValidatedWorkloadRequest,
+    *,
+    status: str,
+    exit_code: int | None,
+    started_at: datetime,
+    completed_at: datetime,
+    duration_seconds: float,
+    timeout_reason: str | None,
+) -> dict[str, object]:
+    return {
+        "taskRunId": request.request.task_run_id,
+        "stepId": request.request.step_id,
+        "attempt": request.request.attempt,
+        "toolName": request.request.tool_name,
+        "profileId": request.profile.id,
+        "imageRef": request.profile.image,
+        "containerName": request.container_name,
+        "status": status,
+        "exitCode": exit_code,
+        "startedAt": _isoformat(started_at),
+        "completedAt": _isoformat(completed_at),
+        "durationSeconds": duration_seconds,
+        "timeoutReason": timeout_reason,
+        "labels": dict(request.ownership.labels),
+        "artifactsDir": request.request.artifacts_dir,
+        "sessionContext": _session_context(request),
+    }
+
+
+def _write_text_artifact(path: Path, payload: str) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload, encoding="utf-8")
+    return str(path)
+
+
+def _declared_output_refs(
+    request: ValidatedWorkloadRequest,
+) -> tuple[dict[str, str], dict[str, str]]:
+    artifact_root = Path(request.request.artifacts_dir)
+    refs: dict[str, str] = {}
+    missing: dict[str, str] = {}
+    for artifact_class, relative_path in request.request.declared_outputs.items():
+        output_path = (artifact_root / relative_path).resolve()
+        try:
+            output_path.relative_to(artifact_root.resolve())
+        except ValueError:
+            missing[artifact_class] = relative_path
+            continue
+        if output_path.is_file():
+            refs[artifact_class] = str(output_path)
+        else:
+            missing[artifact_class] = relative_path
+    return refs, missing
+
+
+def _publish_workload_artifacts(
+    request: ValidatedWorkloadRequest,
+    *,
+    stdout: str,
+    stderr: str,
+    diagnostics: Mapping[str, object],
+    declared_output_refs: Mapping[str, str],
+) -> tuple[str | None, str | None, str | None, dict[str, str], dict[str, object]]:
+    artifact_root = Path(request.request.artifacts_dir)
+    workload_root = artifact_root / "workload" / request.container_name
+    errors: dict[str, str] = {}
+
+    def _write(class_name: str, path: Path, payload: str) -> str | None:
+        try:
+            return _write_text_artifact(path, payload)
+        except OSError as exc:
+            errors[class_name] = str(exc)
+            return None
+
+    stdout_ref = _write("runtime.stdout", workload_root / "runtime.stdout.log", stdout)
+    stderr_ref = _write("runtime.stderr", workload_root / "runtime.stderr.log", stderr)
+    diagnostics_payload = dict(diagnostics)
+    diagnostics_payload["artifactPublication"] = (
+        {
+            "status": "failed",
+            "error": next(iter(errors.values())),
+            "errors": dict(errors),
+        }
+        if errors
+        else {"status": "complete"}
+    )
+    diagnostics_ref = _write(
+        "runtime.diagnostics",
+        workload_root / "runtime.diagnostics.json",
+        json.dumps(diagnostics_payload, sort_keys=True, indent=2) + "\n",
+    )
+    output_refs: dict[str, str] = {}
+    if stdout_ref is not None:
+        output_refs["runtime.stdout"] = stdout_ref
+        output_refs["output.logs"] = stdout_ref
+    if stderr_ref is not None:
+        output_refs["runtime.stderr"] = stderr_ref
+    if diagnostics_ref is not None:
+        output_refs["runtime.diagnostics"] = diagnostics_ref
+    output_refs.update(declared_output_refs)
+    publication: dict[str, object]
+    if errors:
+        publication = {
+            "status": "failed",
+            "error": next(iter(errors.values())),
+            "errors": errors,
+        }
+    else:
+        publication = {"status": "complete"}
+    return stdout_ref, stderr_ref, diagnostics_ref, output_refs, publication
 
 
 def _ensure_paths_are_mounted(request: ValidatedWorkloadRequest) -> None:
@@ -323,13 +456,55 @@ class DockerWorkloadLauncher:
 
         completed_at = datetime.now(UTC)
         duration_seconds = (completed_at - started_at).total_seconds()
+        stdout = _decode_stream(bytes(stdout_buffer))
+        stderr = _decode_stream(bytes(stderr_buffer))
+        workload_metadata = _workload_metadata(
+            request,
+            status=status,
+            exit_code=exit_code,
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_seconds=duration_seconds,
+            timeout_reason=timeout_reason,
+        )
+        diagnostics = {
+            **workload_metadata,
+            "command": list(request.request.command),
+            "envOverrideKeys": sorted(request.request.env_overrides),
+            "declaredOutputs": dict(request.request.declared_outputs),
+            "resourceOverrides": request.request.resources.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            ),
+            "cleanup": request.profile.cleanup.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+        }
+        declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        diagnostics["declaredOutputRefs"] = dict(declared_refs)
+        diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
+        stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
+            _publish_workload_artifacts(
+                request,
+                stdout=stdout,
+                stderr=stderr,
+                diagnostics=diagnostics,
+                declared_output_refs=declared_refs,
+            )
+        )
+        workload_metadata["artifactPublication"] = artifact_publication
         metadata = {
             "containerName": request.container_name,
             "image": request.profile.image,
+            "imageRef": request.profile.image,
             "dockerHost": self._docker_host or os.environ.get("DOCKER_HOST", ""),
             "artifactsDir": request.request.artifacts_dir,
-            "stdout": _decode_stream(bytes(stdout_buffer)),
-            "stderr": _decode_stream(bytes(stderr_buffer)),
+            "stdout": stdout,
+            "stderr": stderr,
+            "workload": workload_metadata,
+            "artifactPublication": artifact_publication,
         }
         return WorkloadResult(
             requestId=request.container_name,
@@ -341,6 +516,10 @@ class DockerWorkloadLauncher:
             completedAt=completed_at,
             durationSeconds=duration_seconds,
             timeoutReason=timeout_reason,
+            stdoutRef=stdout_ref,
+            stderrRef=stderr_ref,
+            diagnosticsRef=diagnostics_ref,
+            outputRefs=output_refs,
             metadata=metadata,
         )
 

@@ -443,6 +443,31 @@ const StepLedgerArtifactsSchema = z
     providerSnapshot: null,
   });
 
+const StepLedgerWorkloadSchema = z
+  .object({
+    taskRunId: z.string().nullable().optional(),
+    stepId: z.string().nullable().optional(),
+    attempt: z.number().nullable().optional(),
+    toolName: z.string().nullable().optional(),
+    profileId: z.string().nullable().optional(),
+    imageRef: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    exitCode: z.number().nullable().optional(),
+    durationSeconds: z.number().nullable().optional(),
+    timeoutReason: z.string().nullable().optional(),
+    cancelReason: z.string().nullable().optional(),
+    sessionContext: z.record(z.string(), z.unknown()).nullable().optional(),
+    artifactPublication: z
+      .object({
+        status: z.string(),
+        error: z.string().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
 const StepLedgerRowSchema = z
   .object({
     logicalStepId: z.string(),
@@ -460,6 +485,7 @@ const StepLedgerRowSchema = z
     checks: z.array(StepLedgerCheckSchema).default([]),
     refs: StepLedgerRefsSchema,
     artifacts: StepLedgerArtifactsSchema,
+    workload: StepLedgerWorkloadSchema.nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -1400,6 +1426,54 @@ function StepMetadataList({
   );
 }
 
+function formatOptionalValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
+}
+
+function StepWorkloadDetails({
+  workload,
+}: {
+  workload: z.infer<typeof StepLedgerWorkloadSchema> | null | undefined;
+}) {
+  if (!workload) return null;
+
+  const sessionContext = workload.sessionContext;
+  const hasSessionContext = Boolean(sessionContext && Object.keys(sessionContext).length > 0);
+
+  return (
+    <section className="step-tl-detail-section">
+      <h4>Workload</h4>
+      <ul className="step-detail-list">
+        <li><strong>Runner profile:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.profileId)}</code></li>
+        <li><strong>Image:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.imageRef)}</code></li>
+        <li><strong>Status:</strong> {formatOptionalValue(workload.status)}</li>
+        <li><strong>Exit code:</strong> {formatOptionalValue(workload.exitCode)}</li>
+        <li><strong>Duration:</strong> {formatOptionalValue(workload.durationSeconds)}s</li>
+        <li><strong>Tool:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.toolName)}</code></li>
+        <li><strong>Step:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.stepId)}</code></li>
+        <li><strong>Task run:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.taskRunId)}</code></li>
+        {workload.timeoutReason ? <li><strong>Timeout reason:</strong> {workload.timeoutReason}</li> : null}
+        {workload.cancelReason ? <li><strong>Cancel reason:</strong> {workload.cancelReason}</li> : null}
+        {workload.artifactPublication?.status === 'failed' ? (
+          <li>
+            <strong>Artifact publication:</strong>{' '}
+            <span className="text-red-500">{workload.artifactPublication.error || 'failed'}</span>
+          </li>
+        ) : null}
+        {hasSessionContext ? (
+          <li>
+            <strong>Session association:</strong>{' '}
+            <code className="text-xs break-all">{JSON.stringify(sessionContext)}</code>
+          </li>
+        ) : null}
+      </ul>
+    </section>
+  );
+}
+
 function StepObservabilityGroup({
   apiBase,
   logStreamingEnabled,
@@ -1573,6 +1647,7 @@ function StepLedgerRowCard({
               <h4>Artifacts</h4>
               <StepArtifactsList artifacts={row.artifacts} />
             </section>
+            <StepWorkloadDetails workload={row.workload} />
             <section className="step-tl-detail-section">
               <h4>Metadata</h4>
               <StepMetadataList row={row} runId={runId} />
