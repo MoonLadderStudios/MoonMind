@@ -179,6 +179,66 @@ def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_value
     _assert_forbidden_metadata_absent(search_attributes)
 
 
+def test_agent_session_logs_bounded_telemetry_context_without_payload_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    current_details: list[str] = []
+    search_attributes: list[dict[str, object]] = []
+    telemetry_contexts: list[dict[str, object]] = []
+    logger = type(
+        "Logger",
+        (),
+        {
+            "info": lambda _self, _message, **kwargs: telemetry_contexts.append(
+                dict(kwargs.get("extra", {}).get("managed_session", {}))
+            ),
+            "warning": lambda *a, **k: None,
+        },
+    )()
+    monkeypatch.setattr(agent_session_module.workflow, "logger", logger)
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "set_current_details",
+        lambda details: current_details.append(details),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "upsert_search_attributes",
+        lambda attributes: search_attributes.append(attributes),
+    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+    telemetry_contexts.clear()
+    workflow._last_control_reason = "Write a private implementation plan"
+
+    workflow._update_operator_visibility("active turn running")
+
+    assert telemetry_contexts == [
+        {
+            "transition": "active turn running",
+            "taskRunId": "wf-run-1",
+            "runtimeId": "codex_cli",
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "sessionStatus": "active",
+            "isDegraded": False,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+        }
+    ]
+    _assert_forbidden_metadata_absent(telemetry_contexts)
+    _assert_forbidden_metadata_absent(current_details)
+    _assert_forbidden_metadata_absent(search_attributes)
+
+
 def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
@@ -9,6 +10,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
     MoonMindRun,
+    OpenTelemetryLoggingFilter,
     _build_agent_runtime_deps,
     _enforce_codex_config_for_managed_fleet,
     _build_runtime_planner,
@@ -20,6 +22,56 @@ from moonmind.workflows.temporal.worker_runtime import (
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
+
+
+def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -> None:
+    record = logging.LogRecord(
+        name="moonmind.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="managed session transition",
+        args=(),
+        exc_info=None,
+    )
+    record.managed_session = {
+        "taskRunId": "wf-run-1",
+        "runtimeId": "codex_cli",
+        "sessionId": "sess:wf-run-1:codex_cli",
+        "sessionEpoch": 1,
+        "sessionStatus": "active",
+        "isDegraded": False,
+        "activityType": "agent_runtime.send_turn",
+        "transition": "active turn running",
+        "containerId": "container-1",
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "instructions": "Write a private implementation plan",
+        "rawLog": "terminal scrollback",
+        "token": "ghp_secret_token",
+    }
+
+    assert OpenTelemetryLoggingFilter().filter(record) is True
+
+    assert record.managed_session_task_run_id == "wf-run-1"
+    assert record.managed_session_runtime_id == "codex_cli"
+    assert record.managed_session_id == "sess:wf-run-1:codex_cli"
+    assert record.managed_session_epoch == "1"
+    assert record.managed_session_status == "active"
+    assert record.managed_session_is_degraded == "false"
+    assert record.managed_session_activity_type == "agent_runtime.send_turn"
+    assert record.managed_session_transition == "active turn running"
+    assert record.managed_session_container_id == "container-1"
+    assert record.managed_session_thread_id == "thread-1"
+    assert record.managed_session_turn_id == "turn-1"
+    rendered = " ".join(
+        str(getattr(record, field))
+        for field in record.__dict__
+        if field.startswith("managed_session_")
+    )
+    assert "Write a private implementation plan" not in rendered
+    assert "terminal scrollback" not in rendered
+    assert "ghp_secret_token" not in rendered
 
 
 def test_runtime_planner_preserves_execution_profile_ref():

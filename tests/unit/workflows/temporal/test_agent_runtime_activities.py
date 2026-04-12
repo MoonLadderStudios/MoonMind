@@ -1817,3 +1817,56 @@ async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeatin
     assert result["degradedSessionRecords"] == 60
     assert len(result["sessionIds"]) == 50
     assert result["truncated"] is True
+
+
+async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_contexts: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        activity_runtime_module.logger,
+        "info",
+        lambda _message, **kwargs: log_contexts.append(
+            dict(kwargs.get("extra", {}).get("managed_session", {}))
+        ),
+    )
+
+    validated = TemporalAgentRuntimeActivities._validate_session_request(
+        {
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "instructions": "Write a private implementation plan",
+        },
+        activity_type="agent_runtime.send_turn",
+        model_type=activity_runtime_module.SendCodexManagedSessionTurnRequest,
+    )
+    raw_context = activity_runtime_module._managed_session_telemetry_context(
+        {
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "instructions": "Write a private implementation plan",
+            "rawLog": "terminal scrollback",
+            "token": "ghp_secret_token",
+        },
+        activity_type="agent_runtime.send_turn",
+    )
+
+    assert validated.session_id == "sess:wf-run-1:codex_cli"
+    assert log_contexts == [
+        {
+            "activityType": "agent_runtime.send_turn",
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    ]
+    assert raw_context == log_contexts[0]
+    rendered = str(log_contexts)
+    assert "Write a private implementation plan" not in rendered
+    assert "terminal scrollback" not in rendered
+    assert "ghp_secret_token" not in rendered

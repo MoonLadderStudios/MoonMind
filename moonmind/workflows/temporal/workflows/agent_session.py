@@ -152,6 +152,26 @@ class MoonMindAgentSessionWorkflow:
             "IsDegraded": [self._is_degraded],
         }
 
+    def _telemetry_context(self, transition: str) -> dict[str, str | int | bool]:
+        binding = self._require_binding()
+        context: dict[str, str | int | bool] = {
+            "transition": transition,
+            "taskRunId": binding.task_run_id,
+            "runtimeId": binding.runtime_id,
+            "sessionId": binding.session_id,
+            "sessionEpoch": binding.session_epoch,
+            "sessionStatus": self._status,
+            "isDegraded": self._is_degraded,
+        }
+        for key, value in (
+            ("containerId", self._container_id),
+            ("threadId", self._thread_id),
+            ("turnId", self._active_turn_id),
+        ):
+            if value:
+                context[key] = value
+        return context
+
     def _current_details(self, transition: str) -> str:
         binding = self._require_binding()
         parts = [
@@ -183,6 +203,10 @@ class MoonMindAgentSessionWorkflow:
         try:
             workflow.set_current_details(self._current_details(transition))
             workflow.upsert_search_attributes(self._search_attributes())
+            workflow.logger.info(
+                "managed session transition",
+                extra={"managed_session": self._telemetry_context(transition)},
+            )
         except Exception as exc:
             # Unit tests instantiate workflow classes outside a Temporal workflow
             # context. Real workflow execution records the visibility update.

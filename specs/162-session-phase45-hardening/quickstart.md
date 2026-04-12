@@ -28,6 +28,7 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only \
   tests/unit/workflows/temporal/test_temporal_worker_runtime.py \
   tests/unit/workflows/temporal/test_agent_runtime_activities.py \
   tests/unit/workflows/temporal/test_client_schedules.py \
+  tests/unit/workflows/temporal/test_agent_session_replayer.py \
   tests/unit/services/temporal/runtime/test_managed_session_controller.py \
   tests/integration/services/temporal/workflows/test_agent_session_lifecycle.py
 ```
@@ -47,6 +48,7 @@ Run hermetic integration tests when changes touch required integration-ci seams:
 ```
 
 Provider verification remains optional and must not be required for this feature unless explicitly requested by an operator.
+No provider-verification coverage is intentionally deferred for this feature because Phase 4/5 hardening is confined to Temporal workflow visibility, runtime activity routing, reconciliation, lifecycle controls, and replay validation.
 
 ## Safety Review
 
