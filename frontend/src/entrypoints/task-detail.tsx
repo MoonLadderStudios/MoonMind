@@ -457,6 +457,14 @@ const StepLedgerWorkloadSchema = z
     timeoutReason: z.string().nullable().optional(),
     cancelReason: z.string().nullable().optional(),
     sessionContext: z.record(z.string(), z.unknown()).nullable().optional(),
+    artifactPublication: z
+      .object({
+        status: z.string(),
+        error: z.string().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -1449,6 +1457,12 @@ function StepWorkloadDetails({
         <li><strong>Task run:</strong> <code className="text-xs break-all">{formatOptionalValue(workload.taskRunId)}</code></li>
         {workload.timeoutReason ? <li><strong>Timeout reason:</strong> {workload.timeoutReason}</li> : null}
         {workload.cancelReason ? <li><strong>Cancel reason:</strong> {workload.cancelReason}</li> : null}
+        {workload.artifactPublication?.status === 'failed' ? (
+          <li>
+            <strong>Artifact publication:</strong>{' '}
+            <span className="text-red-500">{workload.artifactPublication.error || 'failed'}</span>
+          </li>
+        ) : null}
         {hasSessionContext ? (
           <li>
             <strong>Session association:</strong>{' '}

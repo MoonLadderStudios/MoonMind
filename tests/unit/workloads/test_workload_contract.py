@@ -373,3 +373,11 @@ def test_workload_request_rejects_declared_output_paths_outside_artifacts_dir() 
 def test_workload_request_rejects_session_continuity_declared_outputs() -> None:
     with pytest.raises(ValueError, match="session continuity"):
         _request(declaredOutputs={"session.summary": "summary.json"})
+
+
+@pytest.mark.parametrize("artifact_class", ["runtime.stdout", "output.logs"])
+def test_workload_request_rejects_runtime_reserved_declared_outputs(
+    artifact_class: str,
+) -> None:
+    with pytest.raises(ValueError, match="runtime artifact classes"):
+        _request(declaredOutputs={artifact_class: "logs.txt"})

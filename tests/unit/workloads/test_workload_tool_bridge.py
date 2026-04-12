@@ -86,6 +86,7 @@ class _FakeLauncher:
                         else None
                     ),
                 },
+                "artifactPublication": {"status": "complete"},
             },
         )
 
@@ -197,6 +198,10 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
         "sessionId": "session-1",
         "sessionEpoch": 3,
         "sourceTurnId": "turn-1",
+    }
+    assert workload_metadata["artifactPublication"] == {"status": "complete"}
+    assert result.progress["workloadMetadata"]["artifactPublication"] == {
+        "status": "complete"
     }
     assert "session.summary" not in result.outputs["outputRefs"]
 

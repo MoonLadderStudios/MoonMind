@@ -4672,6 +4672,7 @@ export interface components {
             checks?: components["schemas"]["StepLedgerCheckModel"][];
             refs?: components["schemas"]["StepLedgerRefsModel"];
             artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
+            workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             /** Lasterror */
             lastError?: string | null;
         };
@@ -4692,6 +4693,44 @@ export interface components {
             runScope: "latest";
             /** Steps */
             steps?: components["schemas"]["StepLedgerRowModel"][];
+        };
+        /**
+         * StepLedgerWorkloadModel
+         * @description Bounded Docker-backed workload metadata linked to a producing step.
+         */
+        StepLedgerWorkloadModel: {
+            /** Taskrunid */
+            taskRunId?: string | null;
+            /** Stepid */
+            stepId?: string | null;
+            /** Attempt */
+            attempt?: number | null;
+            /** Toolname */
+            toolName?: string | null;
+            /** Profileid */
+            profileId?: string | null;
+            /** Imageref */
+            imageRef?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Exitcode */
+            exitCode?: number | null;
+            /** Durationseconds */
+            durationSeconds?: number | null;
+            /** Timeoutreason */
+            timeoutReason?: string | null;
+            /** Cancelreason */
+            cancelReason?: string | null;
+            /** Sessioncontext */
+            sessionContext?: {
+                [key: string]: unknown;
+            } | null;
+            /** Artifactpublication */
+            artifactPublication?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
         };
         /** StoryDraft */
         StoryDraft: {

@@ -19,19 +19,23 @@ from moonmind.workloads.registry import RunnerProfileRegistry
 WORKSPACE_ROOT = Path("/work/agent_jobs")
 
 
-def _profile_payload(**overrides: object) -> dict[str, object]:
+def _profile_payload(
+    *,
+    workspace_root: Path = WORKSPACE_ROOT,
+    **overrides: object,
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "id": "local-python",
         "kind": "one_shot",
         "image": "python:3.12-slim",
         "entrypoint": ["/bin/bash"],
         "command_wrapper": ["-lc"],
-        "workdir_template": "/work/agent_jobs/${task_run_id}/repo",
+        "workdir_template": f"{workspace_root}/${{task_run_id}}/repo",
         "required_mounts": [
             {
                 "type": "volume",
                 "source": "agent_workspaces",
-                "target": "/work/agent_jobs",
+                "target": str(workspace_root),
             }
         ],
         "optional_mounts": [
@@ -69,34 +73,45 @@ def _profile_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def _registry(tmp_path: Path) -> RunnerProfileRegistry:
+def _registry(
+    tmp_path: Path,
+    *,
+    workspace_root: Path = WORKSPACE_ROOT,
+) -> RunnerProfileRegistry:
     registry_path = tmp_path / "profiles.json"
     registry_path.write_text(
-        json.dumps({"profiles": [_profile_payload()]}),
+        json.dumps({"profiles": [_profile_payload(workspace_root=workspace_root)]}),
         encoding="utf-8",
     )
     return RunnerProfileRegistry.load_file(
         registry_path,
-        workspace_root=WORKSPACE_ROOT,
+        workspace_root=workspace_root,
     )
 
 
-def _validated_request(tmp_path: Path, **overrides: object):
+def _validated_request(
+    tmp_path: Path,
+    *,
+    workspace_root: Path = WORKSPACE_ROOT,
+    **overrides: object,
+):
     payload: dict[str, object] = {
         "profileId": "local-python",
         "taskRunId": "task-1",
         "stepId": "step-test",
         "attempt": 2,
         "toolName": "container.run_workload",
-        "repoDir": "/work/agent_jobs/task-1/repo",
-        "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+        "repoDir": f"{workspace_root}/task-1/repo",
+        "artifactsDir": f"{workspace_root}/task-1/artifacts/step-test",
         "command": ["pytest -q"],
         "envOverrides": {"CI": "1"},
         "timeoutSeconds": 120,
         "resources": {"cpu": "3", "memory": "3g", "shmSize": "768m"},
     }
     payload.update(overrides)
-    return _registry(tmp_path).validate_request(WorkloadRequest.model_validate(payload))
+    return _registry(tmp_path, workspace_root=workspace_root).validate_request(
+        WorkloadRequest.model_validate(payload)
+    )
 
 
 class _Process:
@@ -298,11 +313,8 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    artifact_dir = Path("/work/agent_jobs/task-phase4/artifacts/step-test")
-    if artifact_dir.exists():
-        for child in artifact_dir.rglob("*"):
-            if child.is_file():
-                child.unlink()
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-phase4" / "artifacts" / "step-test"
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
@@ -322,7 +334,9 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
     result = await DockerWorkloadLauncher().run(
         _validated_request(
             tmp_path,
+            workspace_root=workspace_root,
             taskRunId="task-phase4",
+            repoDir=str(workspace_root / "task-phase4" / "repo"),
             artifactsDir=str(artifact_dir),
         )
     )
@@ -352,7 +366,8 @@ async def test_launcher_publishes_failure_artifacts_with_session_association(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    artifact_dir = Path("/work/agent_jobs/task-phase4-session/artifacts/step-test")
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-phase4-session" / "artifacts" / "step-test"
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
@@ -368,7 +383,9 @@ async def test_launcher_publishes_failure_artifacts_with_session_association(
     result = await DockerWorkloadLauncher().run(
         _validated_request(
             tmp_path,
+            workspace_root=workspace_root,
             taskRunId="task-phase4-session",
+            repoDir=str(workspace_root / "task-phase4-session" / "repo"),
             artifactsDir=str(artifact_dir),
             sessionId="session-1",
             sessionEpoch=4,
@@ -419,11 +436,70 @@ async def test_launcher_reports_artifact_publication_failure_in_result_metadata(
     assert result.stderr_ref is None
     assert result.diagnostics_ref is None
     assert result.output_refs == {}
-    assert result.metadata["artifactPublication"] == {
-        "status": "failed",
-        "error": "artifact store unavailable",
+    assert result.metadata["artifactPublication"]["status"] == "failed"
+    assert result.metadata["artifactPublication"]["error"] == "artifact store unavailable"
+    assert result.metadata["artifactPublication"]["errors"] == {
+        "runtime.stdout": "artifact store unavailable",
+        "runtime.stderr": "artifact store unavailable",
+        "runtime.diagnostics": "artifact store unavailable",
     }
     assert result.metadata["stdout"] == "before publish failure\n"
+
+
+@pytest.mark.asyncio
+async def test_launcher_preserves_refs_when_artifact_publication_partly_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-partial-artifacts" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"saved stdout\n", stderr=b"lost\n")
+        return _Process(returncode=0)
+
+    def _write_maybe_fail(path: Path, payload: str) -> str:
+        if path.name == "runtime.stderr.log":
+            raise OSError("stderr store unavailable")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload, encoding="utf-8")
+        return str(path)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher._write_text_artifact",
+        _write_maybe_fail,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            taskRunId="task-partial-artifacts",
+            repoDir=str(workspace_root / "task-partial-artifacts" / "repo"),
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    assert result.stdout_ref is not None
+    assert result.stderr_ref is None
+    assert result.diagnostics_ref is not None
+    assert result.output_refs["runtime.stdout"] == result.stdout_ref
+    assert result.output_refs["runtime.diagnostics"] == result.diagnostics_ref
+    assert "runtime.stderr" not in result.output_refs
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["artifactPublication"]["errors"] == {
+        "runtime.stderr": "stderr store unavailable"
+    }
+    assert result.metadata["artifactPublication"]["status"] == "failed"
+    assert result.metadata["artifactPublication"]["errors"] == {
+        "runtime.stderr": "stderr store unavailable"
+    }
 
 
 @pytest.mark.asyncio
@@ -431,7 +507,8 @@ async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    artifact_dir = Path("/work/agent_jobs/task-phase4-outputs/artifacts/step-test")
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-phase4-outputs" / "artifacts" / "step-test"
     report_path = artifact_dir / "reports" / "result.xml"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("<testsuite />\n", encoding="utf-8")
@@ -449,7 +526,9 @@ async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     result = await DockerWorkloadLauncher().run(
         _validated_request(
             tmp_path,
+            workspace_root=workspace_root,
             taskRunId="task-phase4-outputs",
+            repoDir=str(workspace_root / "task-phase4-outputs" / "repo"),
             artifactsDir=str(artifact_dir),
             declaredOutputs={
                 "test.report": "reports/result.xml",

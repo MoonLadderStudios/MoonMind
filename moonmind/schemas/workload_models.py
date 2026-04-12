@@ -113,13 +113,13 @@ def _image_has_tag_or_digest(image: str) -> bool:
     return ":" in last_segment
 
 
-def _is_under_work_path(value: str, *, allow_work_root: bool) -> bool:
+def _is_safe_absolute_profile_path(value: str) -> bool:
     normalized = posixpath.normpath(value)
     if not normalized.startswith("/"):
         return False
-    if normalized == "/work":
-        return allow_work_root
-    return normalized.startswith("/work/")
+    if normalized != value.rstrip("/"):
+        return False
+    return normalized != "/var/run/docker.sock" and "docker.sock" not in normalized
 
 
 def _validate_relative_artifact_path(value: str, *, field_name: str) -> str:
@@ -137,6 +137,10 @@ def _validate_declared_output_key(value: str) -> str:
     if normalized.startswith("session."):
         raise ValueError(
             "declaredOutputs key must not use session continuity artifact classes"
+        )
+    if normalized.startswith("runtime.") or normalized == "output.logs":
+        raise ValueError(
+            "declaredOutputs key must not override runtime artifact classes"
         )
     return normalized
 
@@ -157,10 +161,8 @@ class WorkloadMount(BaseModel):
             raise ValueError("mount type must be volume")
         if _VOLUME_NAME_PATTERN.match(self.source) is None:
             raise ValueError("mount source must be a Docker named volume")
-        if not _is_under_work_path(self.target, allow_work_root=True):
-            raise ValueError("mount target must be under /work")
-        if self.target == "/var/run/docker.sock" or "docker.sock" in self.target:
-            raise ValueError("mount target must not expose the Docker socket")
+        if not _is_safe_absolute_profile_path(self.target):
+            raise ValueError("mount target must be an absolute safe path")
         return self
 
 
@@ -289,8 +291,8 @@ class RunnerProfile(BaseModel):
             raise ValueError("image must include an explicit tag or digest")
         if self.image.rsplit("/", 1)[-1].endswith(":latest"):
             raise ValueError("image must not use the latest tag")
-        if not _is_under_work_path(self.workdir_template, allow_work_root=False):
-            raise ValueError("workdirTemplate must be under /work")
+        if not _is_safe_absolute_profile_path(self.workdir_template):
+            raise ValueError("workdirTemplate must be an absolute safe path")
         if not self.required_mounts:
             raise ValueError("requiredMounts must include a workspace mount")
         self.env_allowlist = tuple(

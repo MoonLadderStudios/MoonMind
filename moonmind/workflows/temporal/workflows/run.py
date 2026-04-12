@@ -767,7 +767,9 @@ class MoonMindRunWorkflow:
             workload_result,
             Mapping,
         ):
-            workload_metadata = workload_result.get("metadata")
+            result_metadata = workload_result.get("metadata")
+            if isinstance(result_metadata, Mapping):
+                workload_metadata = result_metadata.get("workload")
         if not isinstance(workload_metadata, Mapping):
             workload_metadata = None
 

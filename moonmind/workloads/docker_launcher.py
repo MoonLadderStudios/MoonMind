@@ -206,29 +206,54 @@ def _publish_workload_artifacts(
     stderr: str,
     diagnostics: Mapping[str, object],
     declared_output_refs: Mapping[str, str],
-) -> tuple[str, str, str, dict[str, str]]:
+) -> tuple[str | None, str | None, str | None, dict[str, str], dict[str, object]]:
     artifact_root = Path(request.request.artifacts_dir)
     workload_root = artifact_root / "workload" / request.container_name
-    stdout_ref = _write_text_artifact(
-        workload_root / "runtime.stdout.log",
-        stdout,
+    errors: dict[str, str] = {}
+
+    def _write(class_name: str, path: Path, payload: str) -> str | None:
+        try:
+            return _write_text_artifact(path, payload)
+        except OSError as exc:
+            errors[class_name] = str(exc)
+            return None
+
+    stdout_ref = _write("runtime.stdout", workload_root / "runtime.stdout.log", stdout)
+    stderr_ref = _write("runtime.stderr", workload_root / "runtime.stderr.log", stderr)
+    diagnostics_payload = dict(diagnostics)
+    diagnostics_payload["artifactPublication"] = (
+        {
+            "status": "failed",
+            "error": next(iter(errors.values())),
+            "errors": dict(errors),
+        }
+        if errors
+        else {"status": "complete"}
     )
-    stderr_ref = _write_text_artifact(
-        workload_root / "runtime.stderr.log",
-        stderr,
-    )
-    diagnostics_ref = _write_text_artifact(
+    diagnostics_ref = _write(
+        "runtime.diagnostics",
         workload_root / "runtime.diagnostics.json",
-        json.dumps(diagnostics, sort_keys=True, indent=2) + "\n",
+        json.dumps(diagnostics_payload, sort_keys=True, indent=2) + "\n",
     )
-    output_refs = {
-        "runtime.stdout": stdout_ref,
-        "runtime.stderr": stderr_ref,
-        "runtime.diagnostics": diagnostics_ref,
-        "output.logs": stdout_ref,
-    }
+    output_refs: dict[str, str] = {}
+    if stdout_ref is not None:
+        output_refs["runtime.stdout"] = stdout_ref
+        output_refs["output.logs"] = stdout_ref
+    if stderr_ref is not None:
+        output_refs["runtime.stderr"] = stderr_ref
+    if diagnostics_ref is not None:
+        output_refs["runtime.diagnostics"] = diagnostics_ref
     output_refs.update(declared_output_refs)
-    return stdout_ref, stderr_ref, diagnostics_ref, output_refs
+    publication: dict[str, object]
+    if errors:
+        publication = {
+            "status": "failed",
+            "error": next(iter(errors.values())),
+            "errors": errors,
+        }
+    else:
+        publication = {"status": "complete"}
+    return stdout_ref, stderr_ref, diagnostics_ref, output_refs, publication
 
 
 def _ensure_paths_are_mounted(request: ValidatedWorkloadRequest) -> None:
@@ -444,8 +469,6 @@ class DockerWorkloadLauncher:
         )
         diagnostics = {
             **workload_metadata,
-            "profileId": request.profile.id,
-            "imageRef": request.profile.image,
             "command": list(request.request.command),
             "envOverrideKeys": sorted(request.request.env_overrides),
             "declaredOutputs": dict(request.request.declared_outputs),
@@ -462,24 +485,16 @@ class DockerWorkloadLauncher:
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
         diagnostics["declaredOutputRefs"] = dict(declared_refs)
         diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
-        artifact_publication: dict[str, object] = {"status": "complete"}
-        try:
-            stdout_ref, stderr_ref, diagnostics_ref, output_refs = _publish_workload_artifacts(
+        stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
+            _publish_workload_artifacts(
                 request,
                 stdout=stdout,
                 stderr=stderr,
                 diagnostics=diagnostics,
                 declared_output_refs=declared_refs,
             )
-        except OSError as exc:
-            stdout_ref = None
-            stderr_ref = None
-            diagnostics_ref = None
-            output_refs = {}
-            artifact_publication = {
-                "status": "failed",
-                "error": str(exc),
-            }
+        )
+        workload_metadata["artifactPublication"] = artifact_publication
         metadata = {
             "containerName": request.container_name,
             "image": request.profile.image,

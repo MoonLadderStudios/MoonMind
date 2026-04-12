@@ -297,6 +297,10 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
         "timed_out": "FAILED",
         "canceled": "CANCELLED",
     }[result.status]
+    workload_metadata = dict(result.metadata.get("workload") or {})
+    workload_metadata["artifactPublication"] = result.metadata.get(
+        "artifactPublication"
+    )
     return SkillResult(
         status=status,
         outputs={
@@ -309,7 +313,7 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
             "stderrRef": result.stderr_ref,
             "diagnosticsRef": result.diagnostics_ref,
             "outputRefs": dict(result.output_refs),
-            "workloadMetadata": dict(result.metadata.get("workload") or {}),
+            "workloadMetadata": workload_metadata,
         },
         progress={
             "profileId": result.profile_id,
@@ -319,7 +323,7 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
             "stderrRef": result.stderr_ref,
             "diagnosticsRef": result.diagnostics_ref,
             "outputRefs": dict(result.output_refs),
-            "workloadMetadata": dict(result.metadata.get("workload") or {}),
+            "workloadMetadata": workload_metadata,
         },
     )
 

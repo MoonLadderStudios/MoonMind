@@ -455,6 +455,10 @@ class StepLedgerWorkloadModel(BaseModel):
     timeout_reason: str | None = Field(None, alias="timeoutReason")
     cancel_reason: str | None = Field(None, alias="cancelReason")
     session_context: dict[str, Any] | None = Field(None, alias="sessionContext")
+    artifact_publication: dict[str, Any] | None = Field(
+        None,
+        alias="artifactPublication",
+    )
 
 
 class StepLedgerRowModel(BaseModel):

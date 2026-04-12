@@ -393,6 +393,10 @@ describe('Task Detail Entrypoint', () => {
             status: 'failed',
             exitCode: 7,
             durationSeconds: 42.5,
+            artifactPublication: {
+              status: 'failed',
+              error: 'diagnostics store unavailable',
+            },
             sessionContext: {
               sessionId: 'session-1',
               sessionEpoch: 3,
@@ -457,6 +461,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('art-stdout')).toBeTruthy();
       expect(screen.getByText('art-stderr')).toBeTruthy();
       expect(screen.getByText('art-diagnostics')).toBeTruthy();
+      expect(screen.getByText('diagnostics store unavailable')).toBeTruthy();
       expect(screen.getByText(/session-1/)).toBeTruthy();
       expect(screen.queryByText(/managed session/i)).toBeNull();
     });
