@@ -437,6 +437,109 @@ def test_get_observability_summary_allows_owner_access() -> None:
     assert response.json()["summary"]["supportsLiveStreaming"] is True
 
 
+def test_observability_summary_allows_parent_workflow_owner() -> None:
+    owner_id = uuid4()
+    task_run_id = f"mm:{uuid4()}"
+    child_workflow_id = (
+        f"{task_run_id}:agent:tpl:speckit-orchestrate:1.0.0:12:faa43a52"
+    )
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=owner_id,
+        email="owner@example.com",
+        is_superuser=False,
+    )
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workflow_id = child_workflow_id
+
+    async def load_exact_owner_binding(
+        workflow_id: str,
+    ) -> tuple[str | None, str | None]:
+        if workflow_id == child_workflow_id:
+            return None, None
+        if workflow_id == task_run_id:
+            return "user", str(owner_id)
+        return None, None
+
+    exact_lookup = AsyncMock(side_effect=load_exact_owner_binding)
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.task_runs.ManagedRunStore.load",
+            return_value=mock_record,
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_exact_execution_owner_binding",
+                new=exact_lookup,
+            ):
+                response = test_client.get(
+                    f"{_task_run_api_path(task_run_id)}/observability-summary"
+                )
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["supportsLiveStreaming"] is True
+    assert [call.args[0] for call in exact_lookup.await_args_list] == [
+        child_workflow_id,
+        task_run_id,
+    ]
+
+
+def test_observability_summary_child_owner_blocks_parent_fallback() -> None:
+    owner_id = uuid4()
+    child_owner_id = uuid4()
+    task_run_id = f"mm:{uuid4()}"
+    child_workflow_id = (
+        f"{task_run_id}:agent:tpl:speckit-orchestrate:1.0.0:12:faa43a52"
+    )
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=owner_id,
+        email="owner@example.com",
+        is_superuser=False,
+    )
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workflow_id = child_workflow_id
+
+    async def load_exact_owner_binding(
+        workflow_id: str,
+    ) -> tuple[str | None, str | None]:
+        if workflow_id == child_workflow_id:
+            return "user", str(child_owner_id)
+        if workflow_id == task_run_id:
+            return "user", str(owner_id)
+        return None, None
+
+    exact_lookup = AsyncMock(side_effect=load_exact_owner_binding)
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.task_runs.ManagedRunStore.load",
+            return_value=mock_record,
+        ):
+            with patch(
+                "api_service.api.routers.task_runs._load_exact_execution_owner_binding",
+                new=exact_lookup,
+            ):
+                response = test_client.get(
+                    f"{_task_run_api_path(task_run_id)}/observability-summary"
+                )
+
+    assert response.status_code == 403
+    assert [call.args[0] for call in exact_lookup.await_args_list] == [
+        child_workflow_id,
+    ]
+
+
 def test_get_observability_summary_forbids_cross_owner_access() -> None:
     owner_id = uuid4()
     other_id = uuid4()
