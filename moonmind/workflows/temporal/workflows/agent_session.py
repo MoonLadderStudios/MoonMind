@@ -195,13 +195,14 @@ class MoonMindAgentSessionWorkflow:
         action: str,
         status: str,
         result_ref: str | None = None,
+        session_epoch: int | None = None,
     ) -> None:
         if request_id is None:
             return
         entry = CodexManagedSessionRequestTrackingEntry(
             requestId=request_id,
             action=action,
-            sessionEpoch=self._binding.session_epoch,
+            sessionEpoch=session_epoch or self._binding.session_epoch,
             status=status,
             resultRef=result_ref,
         )
@@ -225,7 +226,13 @@ class MoonMindAgentSessionWorkflow:
         if request_id is None:
             return
         existing = self._request_tracking_state.get(request_id)
-        if existing is not None and existing.status == "completed":
+        if existing is None:
+            return
+        if existing.action != action:
+            raise ValueError(
+                f"Managed session request {request_id} already used for action {existing.action}"
+            )
+        if existing.status == "completed":
             raise ValueError(
                 f"Managed session request {request_id} already completed as {existing.action}"
             )
@@ -285,9 +292,12 @@ class MoonMindAgentSessionWorkflow:
         self._latest_checkpoint_ref = session_input.latest_checkpoint_ref
         self._latest_control_event_ref = session_input.latest_control_event_ref
         self._latest_reset_boundary_ref = session_input.latest_reset_boundary_ref
-        self._request_tracking_state = {
-            entry.request_id: entry for entry in session_input.request_tracking_state
-        }
+        self._request_tracking_state = {}
+        for entry in session_input.request_tracking_state:
+            self._request_tracking_state[entry.request_id] = entry
+            while len(self._request_tracking_state) > MAX_REQUEST_TRACKING_ENTRIES:
+                oldest_request_id = next(iter(self._request_tracking_state))
+                del self._request_tracking_state[oldest_request_id]
 
     def _build_continue_as_new_input(self) -> dict[str, Any]:
         binding = self._require_binding()
@@ -324,8 +334,7 @@ class MoonMindAgentSessionWorkflow:
         if self._termination_requested:
             return False
         info = workflow.info()
-        is_suggested = getattr(info, "is_continue_as_new_suggested", None)
-        if callable(is_suggested) and is_suggested():
+        if getattr(info, "is_continue_as_new_suggested", False):
             return True
         threshold = self._continue_as_new_event_threshold
         history_length = getattr(info, "get_current_history_length", None)
@@ -345,9 +354,9 @@ class MoonMindAgentSessionWorkflow:
                 lambda: self._termination_requested or self._should_continue_as_new()
             )
             if self._should_continue_as_new():
-                await workflow.wait_condition(workflow.all_handlers_finished)
+                await workflow.wait_condition(lambda: workflow.all_handlers_finished)
                 workflow.continue_as_new(self._build_continue_as_new_input())
-        await workflow.wait_condition(workflow.all_handlers_finished)
+        await workflow.wait_condition(lambda: workflow.all_handlers_finished)
         self._status = AGENT_SESSION_STATUS_TERMINATED
         return self.get_status()
 
@@ -478,55 +487,68 @@ class MoonMindAgentSessionWorkflow:
     @workflow.update(name="SendFollowUp")
     async def send_follow_up(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
+        await self._await_runtime_handles()
         async with self._mutation_lock:
+            self._validate_mutation_allowed()
             request_tracking_id = self._request_tracking_id(request.request_id)
             self._validate_request_not_completed(
                 request_id=request_tracking_id,
                 action="send_turn",
             )
+            request_epoch = self._binding.session_epoch
             self._record_request_tracking(
                 request_id=request_tracking_id,
                 action="send_turn",
                 status="accepted",
+                session_epoch=request_epoch,
             )
-            await self._await_runtime_handles()
-            locator = self._require_locator()
-            response = CodexManagedSessionTurnResponse.model_validate(
-                await self._execute_routed_activity(
-                    "agent_runtime.send_turn",
-                    SendCodexManagedSessionTurnRequest(
-                        sessionId=locator.session_id,
-                        sessionEpoch=locator.session_epoch,
-                        containerId=locator.container_id,
-                        threadId=locator.thread_id,
-                        instructions=request.message,
-                        reason=request.reason,
-                    ).model_dump(by_alias=True),
+            try:
+                locator = self._require_locator()
+                response = CodexManagedSessionTurnResponse.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.send_turn",
+                        SendCodexManagedSessionTurnRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            instructions=request.message,
+                            reason=request.reason,
+                        ).model_dump(by_alias=True),
+                    )
                 )
-            )
-            session_state = self._apply_runtime_snapshot(
-                response.session_state.model_dump(mode="json", by_alias=True),
-                last_control_action="send_turn",
-                last_control_reason=request.reason,
-            )
-            continuity = await self._refresh_continuity_projection(
-                locator=self._require_locator(),
-                metadata={"action": "send_follow_up", "reason": request.reason},
-            )
-            self._apply_continuity_projection(continuity)
-            self._record_request_tracking(
-                request_id=request_tracking_id,
-                action="send_turn",
-                status="completed",
-                result_ref=continuity.get("latestControlEventRef")
-                or continuity.get("latestSummaryRef"),
-            )
-            return {
-                "turnId": response.turn_id,
-                "status": response.status,
-                "sessionState": session_state,
-                **continuity,
-            }
+                session_state = self._apply_runtime_snapshot(
+                    response.session_state.model_dump(mode="json", by_alias=True),
+                    last_control_action="send_turn",
+                    last_control_reason=request.reason,
+                )
+                continuity = await self._refresh_continuity_projection(
+                    locator=self._require_locator(),
+                    metadata={"action": "send_follow_up", "reason": request.reason},
+                )
+                self._apply_continuity_projection(continuity)
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="send_turn",
+                    status="completed",
+                    result_ref=continuity.get("latestControlEventRef")
+                    or continuity.get("latestSummaryRef"),
+                    session_epoch=request_epoch,
+                )
+                return {
+                    "turnId": response.turn_id,
+                    "status": response.status,
+                    "sessionState": session_state,
+                    **continuity,
+                }
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="send_turn",
+                    status="failed",
+                    session_epoch=request_epoch,
+                )
+                raise
 
     @send_follow_up.validator
     def validate_send_follow_up(self, payload: dict[str, Any] | None = None) -> None:
@@ -538,56 +560,70 @@ class MoonMindAgentSessionWorkflow:
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
+        await self._await_runtime_handles()
         async with self._mutation_lock:
+            self._validate_mutation_allowed()
+            self._validate_current_epoch(request.session_epoch)
             request_tracking_id = self._request_tracking_id(request.request_id)
             self._validate_request_not_completed(
                 request_id=request_tracking_id,
                 action="interrupt_turn",
             )
+            request_epoch = self._binding.session_epoch
             self._record_request_tracking(
                 request_id=request_tracking_id,
                 action="interrupt_turn",
                 status="accepted",
+                session_epoch=request_epoch,
             )
-            await self._await_runtime_handles()
-            locator = self._require_locator()
-            turn_id = self._require_active_turn()
-            response = CodexManagedSessionTurnResponse.model_validate(
-                await self._execute_routed_activity(
-                    "agent_runtime.interrupt_turn",
-                    InterruptCodexManagedSessionTurnRequest(
-                        sessionId=locator.session_id,
-                        sessionEpoch=locator.session_epoch,
-                        containerId=locator.container_id,
-                        threadId=locator.thread_id,
-                        turnId=turn_id,
-                        reason=request.reason,
-                    ).model_dump(by_alias=True),
+            try:
+                locator = self._require_locator()
+                turn_id = self._require_active_turn()
+                response = CodexManagedSessionTurnResponse.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.interrupt_turn",
+                        InterruptCodexManagedSessionTurnRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            turnId=turn_id,
+                            reason=request.reason,
+                        ).model_dump(by_alias=True),
+                    )
                 )
-            )
-            session_state = self._apply_runtime_snapshot(
-                response.session_state.model_dump(mode="json", by_alias=True),
-                last_control_action="interrupt_turn",
-                last_control_reason=request.reason,
-            )
-            continuity = await self._refresh_continuity_projection(
-                locator=self._require_locator(),
-                metadata={"action": "interrupt_turn", "reason": request.reason},
-            )
-            self._apply_continuity_projection(continuity)
-            self._record_request_tracking(
-                request_id=request_tracking_id,
-                action="interrupt_turn",
-                status="completed",
-                result_ref=continuity.get("latestControlEventRef")
-                or continuity.get("latestSummaryRef"),
-            )
-            return {
-                "turnId": response.turn_id,
-                "status": response.status,
-                "sessionState": session_state,
-                **continuity,
-            }
+                session_state = self._apply_runtime_snapshot(
+                    response.session_state.model_dump(mode="json", by_alias=True),
+                    last_control_action="interrupt_turn",
+                    last_control_reason=request.reason,
+                )
+                continuity = await self._refresh_continuity_projection(
+                    locator=self._require_locator(),
+                    metadata={"action": "interrupt_turn", "reason": request.reason},
+                )
+                self._apply_continuity_projection(continuity)
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="interrupt_turn",
+                    status="completed",
+                    result_ref=continuity.get("latestControlEventRef")
+                    or continuity.get("latestSummaryRef"),
+                    session_epoch=request_epoch,
+                )
+                return {
+                    "turnId": response.turn_id,
+                    "status": response.status,
+                    "sessionState": session_state,
+                    **continuity,
+                }
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="interrupt_turn",
+                    status="failed",
+                    session_epoch=request_epoch,
+                )
+                raise
 
     @interrupt_turn_update.validator
     def validate_interrupt_turn(self, payload: dict[str, Any] | None = None) -> None:
@@ -602,59 +638,73 @@ class MoonMindAgentSessionWorkflow:
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionSteerRequest.model_validate(payload or {})
+        await self._await_runtime_handles()
         async with self._mutation_lock:
+            self._validate_mutation_allowed()
+            self._validate_current_epoch(request.session_epoch)
             request_tracking_id = self._request_tracking_id(request.request_id)
             self._validate_request_not_completed(
                 request_id=request_tracking_id,
                 action="steer_turn",
             )
+            request_epoch = self._binding.session_epoch
             self._record_request_tracking(
                 request_id=request_tracking_id,
                 action="steer_turn",
                 status="accepted",
+                session_epoch=request_epoch,
             )
-            await self._await_runtime_handles()
-            locator = self._require_locator()
-            turn_id = self._require_active_turn()
-            response = CodexManagedSessionTurnResponse.model_validate(
-                await self._execute_routed_activity(
-                    "agent_runtime.steer_turn",
-                    SteerCodexManagedSessionTurnRequest(
-                        sessionId=locator.session_id,
-                        sessionEpoch=locator.session_epoch,
-                        containerId=locator.container_id,
-                        threadId=locator.thread_id,
-                        turnId=turn_id,
-                        instructions=request.message,
-                        metadata={
-                            **({"reason": request.reason} if request.reason else {}),
-                        },
-                    ).model_dump(by_alias=True),
+            try:
+                locator = self._require_locator()
+                turn_id = self._require_active_turn()
+                response = CodexManagedSessionTurnResponse.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.steer_turn",
+                        SteerCodexManagedSessionTurnRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            turnId=turn_id,
+                            instructions=request.message,
+                            metadata={
+                                **({"reason": request.reason} if request.reason else {}),
+                            },
+                        ).model_dump(by_alias=True),
+                    )
                 )
-            )
-            session_state = self._apply_runtime_snapshot(
-                response.session_state.model_dump(mode="json", by_alias=True),
-                last_control_action="steer_turn",
-                last_control_reason=request.reason,
-            )
-            continuity = await self._refresh_continuity_projection(
-                locator=self._require_locator(),
-                metadata={"action": "steer_turn", "reason": request.reason},
-            )
-            self._apply_continuity_projection(continuity)
-            self._record_request_tracking(
-                request_id=request_tracking_id,
-                action="steer_turn",
-                status="completed",
-                result_ref=continuity.get("latestControlEventRef")
-                or continuity.get("latestSummaryRef"),
-            )
-            return {
-                "turnId": response.turn_id,
-                "status": response.status,
-                "sessionState": session_state,
-                **continuity,
-            }
+                session_state = self._apply_runtime_snapshot(
+                    response.session_state.model_dump(mode="json", by_alias=True),
+                    last_control_action="steer_turn",
+                    last_control_reason=request.reason,
+                )
+                continuity = await self._refresh_continuity_projection(
+                    locator=self._require_locator(),
+                    metadata={"action": "steer_turn", "reason": request.reason},
+                )
+                self._apply_continuity_projection(continuity)
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="steer_turn",
+                    status="completed",
+                    result_ref=continuity.get("latestControlEventRef")
+                    or continuity.get("latestSummaryRef"),
+                    session_epoch=request_epoch,
+                )
+                return {
+                    "turnId": response.turn_id,
+                    "status": response.status,
+                    "sessionState": session_state,
+                    **continuity,
+                }
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="steer_turn",
+                    status="failed",
+                    session_epoch=request_epoch,
+                )
+                raise
 
     @steer_turn_update.validator
     def validate_steer_turn(self, payload: dict[str, Any] | None = None) -> None:
@@ -669,18 +719,23 @@ class MoonMindAgentSessionWorkflow:
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        await self._await_runtime_handles()
         async with self._mutation_lock:
+            self._validate_mutation_allowed()
+            if self._status == AGENT_SESSION_STATUS_CLEARING:
+                raise ValueError("Managed session is already clearing")
             request_tracking_id = self._request_tracking_id(request.request_id)
             self._validate_request_not_completed(
                 request_id=request_tracking_id,
                 action="clear_session",
             )
+            request_epoch = self._binding.session_epoch
             self._record_request_tracking(
                 request_id=request_tracking_id,
                 action="clear_session",
                 status="accepted",
+                session_epoch=request_epoch,
             )
-            await self._await_runtime_handles()
             binding = self._require_binding()
             locator = self._require_locator()
             self._status = AGENT_SESSION_STATUS_CLEARING
@@ -716,11 +771,20 @@ class MoonMindAgentSessionWorkflow:
                     result_ref=continuity.get("latestResetBoundaryRef")
                     or continuity.get("latestControlEventRef")
                     or continuity.get("latestSummaryRef"),
+                    session_epoch=request_epoch,
                 )
                 return {
                     "sessionState": session_state,
                     **continuity,
                 }
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="clear_session",
+                    status="failed",
+                    session_epoch=request_epoch,
+                )
+                raise
             finally:
                 if self._status == AGENT_SESSION_STATUS_CLEARING:
                     self._status = AGENT_SESSION_STATUS_ACTIVE
@@ -743,42 +807,54 @@ class MoonMindAgentSessionWorkflow:
                 request_id=request_tracking_id,
                 action="cancel_session",
             )
+            request_epoch = self._binding.session_epoch
             self._record_request_tracking(
                 request_id=request_tracking_id,
                 action="cancel_session",
                 status="accepted",
+                session_epoch=request_epoch,
             )
-            locator: CodexManagedSessionLocator | None = None
-            turn_id: str | None = None
-            if self._container_id and self._thread_id and self._active_turn_id:
-                locator = self._require_locator()
-                turn_id = self._active_turn_id
-            if locator is not None and turn_id is not None:
-                response = CodexManagedSessionTurnResponse.model_validate(
-                    await self._execute_routed_activity(
-                        "agent_runtime.interrupt_turn",
-                        InterruptCodexManagedSessionTurnRequest(
-                            sessionId=locator.session_id,
-                            sessionEpoch=locator.session_epoch,
-                            containerId=locator.container_id,
-                            threadId=locator.thread_id,
-                            turnId=turn_id,
-                            reason=request.reason,
-                        ).model_dump(by_alias=True),
+            try:
+                locator: CodexManagedSessionLocator | None = None
+                turn_id: str | None = None
+                if self._container_id and self._thread_id and self._active_turn_id:
+                    locator = self._require_locator()
+                    turn_id = self._active_turn_id
+                if locator is not None and turn_id is not None:
+                    response = CodexManagedSessionTurnResponse.model_validate(
+                        await self._execute_routed_activity(
+                            "agent_runtime.interrupt_turn",
+                            InterruptCodexManagedSessionTurnRequest(
+                                sessionId=locator.session_id,
+                                sessionEpoch=locator.session_epoch,
+                                containerId=locator.container_id,
+                                threadId=locator.thread_id,
+                                turnId=turn_id,
+                                reason=request.reason,
+                            ).model_dump(by_alias=True),
+                        )
                     )
+                    self._apply_runtime_snapshot(
+                        response.session_state.model_dump(mode="json", by_alias=True)
+                    )
+                self._status = AGENT_SESSION_STATUS_ACTIVE
+                self._last_control_action = "cancel_session"
+                self._last_control_reason = request.reason
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="cancel_session",
+                    status="completed",
+                    session_epoch=request_epoch,
                 )
-                self._apply_runtime_snapshot(
-                    response.session_state.model_dump(mode="json", by_alias=True)
+                return self.get_status()
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="cancel_session",
+                    status="failed",
+                    session_epoch=request_epoch,
                 )
-            self._status = AGENT_SESSION_STATUS_ACTIVE
-            self._last_control_action = "cancel_session"
-            self._last_control_reason = request.reason
-            self._record_request_tracking(
-                request_id=request_tracking_id,
-                action="cancel_session",
-                status="completed",
-            )
-            return self.get_status()
+                raise
 
     @cancel_session_update.validator
     def validate_cancel_session(self, payload: dict[str, Any] | None = None) -> None:
@@ -798,40 +874,52 @@ class MoonMindAgentSessionWorkflow:
                 request_id=request_tracking_id,
                 action="terminate_session",
             )
+            request_epoch = self._binding.session_epoch
             self._record_request_tracking(
                 request_id=request_tracking_id,
                 action="terminate_session",
                 status="accepted",
+                session_epoch=request_epoch,
             )
-            self._status = AGENT_SESSION_STATUS_TERMINATING
-            self._last_control_action = "terminate_session"
-            self._last_control_reason = request.reason
-            if self._container_id and self._thread_id:
-                locator = self._require_locator()
-                handle = CodexManagedSessionHandle.model_validate(
-                    await self._execute_routed_activity(
-                        "agent_runtime.terminate_session",
-                        TerminateCodexManagedSessionRequest(
-                            sessionId=locator.session_id,
-                            sessionEpoch=locator.session_epoch,
-                            containerId=locator.container_id,
-                            threadId=locator.thread_id,
-                            reason=request.reason,
-                        ).model_dump(by_alias=True),
+            try:
+                self._status = AGENT_SESSION_STATUS_TERMINATING
+                self._last_control_action = "terminate_session"
+                self._last_control_reason = request.reason
+                if self._container_id and self._thread_id:
+                    locator = self._require_locator()
+                    handle = CodexManagedSessionHandle.model_validate(
+                        await self._execute_routed_activity(
+                            "agent_runtime.terminate_session",
+                            TerminateCodexManagedSessionRequest(
+                                sessionId=locator.session_id,
+                                sessionEpoch=locator.session_epoch,
+                                containerId=locator.container_id,
+                                threadId=locator.thread_id,
+                                reason=request.reason,
+                            ).model_dump(by_alias=True),
+                        )
                     )
+                    self._apply_runtime_snapshot(
+                        handle.session_state.model_dump(mode="json", by_alias=True),
+                        last_control_action="terminate_session",
+                        last_control_reason=request.reason,
+                    )
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="terminate_session",
+                    status="completed",
+                    session_epoch=request_epoch,
                 )
-                self._apply_runtime_snapshot(
-                    handle.session_state.model_dump(mode="json", by_alias=True),
-                    last_control_action="terminate_session",
-                    last_control_reason=request.reason,
+                self._termination_requested = True
+                return self.get_status()
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="terminate_session",
+                    status="failed",
+                    session_epoch=request_epoch,
                 )
-            self._record_request_tracking(
-                request_id=request_tracking_id,
-                action="terminate_session",
-                status="completed",
-            )
-            self._termination_requested = True
-            return self.get_status()
+                raise
 
     @terminate_session_update.validator
     def validate_terminate_session(self, payload: dict[str, Any] | None = None) -> None:

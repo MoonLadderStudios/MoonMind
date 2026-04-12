@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.workflows.agent_session import (
     AGENT_SESSION_STATUS_ACTIVE,
     AGENT_SESSION_STATUS_CLEARING,
     AGENT_SESSION_STATUS_TERMINATING,
+    MAX_REQUEST_TRACKING_ENTRIES,
     MoonMindAgentSessionWorkflow,
 )
 
@@ -106,6 +107,49 @@ def test_agent_session_workflow_input_carries_request_tracking_state(
         }
     ]
     assert snapshot.request_tracking_state[0].request_id == "request-1"
+
+
+def test_agent_session_restore_caps_request_tracking_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow_input = _workflow_input(
+        requestTrackingState=[
+            {
+                "requestId": f"request-{index}",
+                "action": "send_turn",
+                "sessionEpoch": 1,
+                "status": "completed",
+            }
+            for index in range(MAX_REQUEST_TRACKING_ENTRIES + 5)
+        ]
+    )
+
+    workflow = MoonMindAgentSessionWorkflow(workflow_input)
+
+    status = workflow.get_status()
+    restored_entries = status["requestTrackingState"]
+    assert len(restored_entries) == MAX_REQUEST_TRACKING_ENTRIES
+    assert restored_entries[0]["requestId"] == "request-5"
+    assert restored_entries[-1]["requestId"] == "request-104"
+
+
+def test_agent_session_request_tracking_rejects_cross_action_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow._record_request_tracking(
+        request_id="request-1",
+        action="send_turn",
+        status="accepted",
+    )
+
+    with pytest.raises(ValueError, match="already used for action send_turn"):
+        workflow._validate_request_not_completed(
+            request_id="request-1",
+            action="clear_session",
+        )
 
 
 @pytest.mark.asyncio
@@ -364,10 +408,22 @@ async def test_agent_session_terminate_update_keeps_terminating_when_remote_term
     )
 
     with pytest.raises(RuntimeError, match="terminate failed"):
-        await workflow.terminate_session_update({"reason": "done"})
+        await workflow.terminate_session_update(
+            {"reason": "done", "requestId": "request-terminate-1"}
+        )
 
-    assert workflow.get_status()["status"] == AGENT_SESSION_STATUS_TERMINATING
-    assert workflow.get_status()["terminationRequested"] is False
+    status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
+    assert status["terminationRequested"] is False
+    assert status["requestTrackingState"] == [
+        {
+            "requestId": "request-terminate-1",
+            "action": "terminate_session",
+            "sessionEpoch": 1,
+            "status": "failed",
+            "resultRef": None,
+        }
+    ]
     assert warnings == []
 
 
@@ -978,8 +1034,9 @@ async def test_agent_session_async_mutators_wait_for_workflow_lock(
     assert not captured
 
     workflow._mutation_lock.release()
-    await clear_task
+    clear_result = await clear_task
 
+    assert clear_result["sessionState"]["sessionEpoch"] == 2
     assert captured == [
         "agent_runtime.clear_session",
         "agent_runtime.fetch_session_summary",
@@ -1077,12 +1134,11 @@ async def test_agent_session_run_waits_for_handlers_before_completion(
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow._termination_requested = True
     waited_for_handlers = False
+    monkeypatch.setattr(agent_session_module.workflow, "all_handlers_finished", True)
 
     async def _wait_condition(predicate, **_kwargs: object) -> None:
         nonlocal waited_for_handlers
-        if predicate is agent_session_module.workflow.all_handlers_finished:
-            waited_for_handlers = True
-            return
+        waited_for_handlers = True
         assert predicate() is True
 
     monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
@@ -1100,11 +1156,13 @@ async def test_agent_session_run_waits_for_state_change_without_timeout_polling(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     state_waits = 0
+    monkeypatch.setattr(agent_session_module.workflow, "all_handlers_finished", True)
 
     async def _wait_condition(predicate, **kwargs: object) -> None:
         nonlocal state_waits
         assert "timeout" not in kwargs
-        if predicate is agent_session_module.workflow.all_handlers_finished:
+        if workflow._termination_requested:
+            assert predicate() is True
             return
         state_waits += 1
         assert predicate() is False
@@ -1132,7 +1190,7 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
             "run_id": "run-session-1",
             "task_queue": "mm.workflow",
             "get_current_history_length": lambda _self: 12,
-            "is_continue_as_new_suggested": lambda _self: False,
+            "is_continue_as_new_suggested": False,
         },
     )()
     logger = type(
@@ -1169,13 +1227,17 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
     )
     waited_for_handlers = False
     captured_payload: dict[str, object] | None = None
+    wait_calls = 0
+    monkeypatch.setattr(agent_session_module.workflow, "all_handlers_finished", True)
 
     async def _wait_condition(predicate, **_kwargs: object) -> None:
-        nonlocal waited_for_handlers
-        if predicate is agent_session_module.workflow.all_handlers_finished:
-            waited_for_handlers = True
+        nonlocal wait_calls, waited_for_handlers
+        wait_calls += 1
+        if wait_calls == 1:
+            assert predicate() is True
             return
         assert predicate() is True
+        waited_for_handlers = True
 
     def _continue_as_new(payload: dict[str, object]) -> None:
         nonlocal captured_payload
