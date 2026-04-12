@@ -60,6 +60,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
+    CodexManagedSessionRecord,
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
@@ -220,6 +221,9 @@ class ManagedSessionController(Protocol):
     async def publish_session_artifacts(
         self, request: PublishCodexManagedSessionArtifactsRequest, /
     ) -> CodexManagedSessionArtifactsPublication | Mapping[str, Any]:
+        pass
+
+    async def reconcile(self) -> Sequence[CodexManagedSessionRecord | Mapping[str, Any]]:
         pass
 
 
@@ -419,6 +423,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.publish_session_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_session_artifacts",
+    ),
+    "agent_runtime.reconcile_managed_sessions": (
+        "agent_runtime",
+        "agent_runtime_reconcile_managed_sessions",
     ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
@@ -3146,6 +3154,30 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.publish_session_artifacts",
             model_type=CodexManagedSessionArtifactsPublication,
         )
+
+    async def agent_runtime_reconcile_managed_sessions(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.reconcile_managed_sessions"
+        )
+        del payload
+        records = await controller.reconcile()
+        session_ids: list[str] = []
+        degraded_count = 0
+        for raw_record in records:
+            record = CodexManagedSessionRecord.model_validate(raw_record)
+            session_ids.append(record.session_id)
+            if str(record.status).lower() == "degraded":
+                degraded_count += 1
+        return {
+            "managedSessionRecordsReconciled": len(records),
+            "degradedSessionRecords": degraded_count,
+            "sessionIds": session_ids[:50],
+            "truncated": len(session_ids) > 50,
+        }
 
     @staticmethod
     def _agent_runtime_request_identifiers(

@@ -15,7 +15,11 @@ from uuid import UUID
 import pytest
 from temporalio.client import ScheduleOverlapPolicy
 
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.client import (
+    MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
+    MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE,
+    TemporalClientAdapter,
+)
 from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAlreadyExistsError,
     ScheduleNotFoundError,
@@ -116,6 +120,50 @@ class TestCreateSchedule:
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
         assert schedule_arg.policy.catchup_window == timedelta(days=365)
+
+
+class TestManagedSessionReconcileSchedule:
+    @pytest.mark.asyncio
+    async def test_creates_managed_session_reconcile_schedule_when_missing(self) -> None:
+        mock_created_handle = MagicMock()
+        mock_created_handle.id = MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        mock_existing_handle = _mock_schedule_handle(
+            describe_side_effect=Exception("not found")
+        )
+        mock_existing_handle.update = AsyncMock(side_effect=Exception("not found"))
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock(return_value=mock_created_handle)
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.ensure_managed_session_reconcile_schedule(
+            cron_expression="*/5 * * * *"
+        )
+
+        assert result == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        mock_client.create_schedule.assert_awaited_once()
+        schedule_id, schedule = mock_client.create_schedule.call_args[0]
+        assert schedule_id == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        assert schedule.action.workflow == "MoonMind.ManagedSessionReconcile"
+        assert schedule.action.id == MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE
+        assert schedule.action.task_queue == "mm.workflow"
+        assert schedule.action.static_summary == "Managed session reconcile"
+        assert schedule.spec.cron_expressions == ["*/5 * * * *"]
+        assert schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+
+    @pytest.mark.asyncio
+    async def test_updates_existing_managed_session_reconcile_schedule(self) -> None:
+        mock_existing_handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock()
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.ensure_managed_session_reconcile_schedule()
+
+        assert result == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        mock_existing_handle.update.assert_awaited_once()
+        mock_client.create_schedule.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:

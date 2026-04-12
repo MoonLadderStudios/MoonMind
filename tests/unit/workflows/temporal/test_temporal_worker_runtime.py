@@ -642,11 +642,15 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
+    from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
+        MoonMindManagedSessionReconcileWorkflow,
+    )
     assert kwargs["workflows"] == [
         MoonMindRun,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,
+        MoonMindManagedSessionReconcileWorkflow,
         MoonMindAgentRun,
         MoonMindOAuthSession,
     ]

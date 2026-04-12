@@ -26,6 +26,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionHandle,
+    CodexManagedSessionRecord,
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
@@ -72,6 +73,24 @@ def _save_record(
             errorMessage=error_message,
         )
     )
+
+
+def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
+    return CodexManagedSessionRecord(
+        sessionId=session_id,
+        sessionEpoch=1,
+        taskRunId="wf-run-1",
+        containerId=f"container-{session_id}",
+        threadId=f"thread-{session_id}",
+        runtimeId="codex_cli",
+        imageRef="moonmind:latest",
+        controlUrl="http://session-control",
+        status=status,
+        workspacePath="/work/agent_jobs/wf-run-1/repo",
+        sessionWorkspacePath="/work/agent_jobs/wf-run-1/session",
+        artifactSpoolPath="/work/agent_jobs/wf-run-1/artifacts",
+        startedAt=datetime.now(tz=UTC),
+    ).model_dump(mode="json", by_alias=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1732,3 +1751,23 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
 
             assert result.startswith("Injected context instruction")
             assert "Managed Codex CLI note:" in result
+
+
+async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary() -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [
+                _session_record("sess-ready", status="ready"),
+                _session_record("sess-degraded", status="degraded"),
+            ]
+
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert result == {
+        "managedSessionRecordsReconciled": 2,
+        "degradedSessionRecords": 1,
+        "sessionIds": ["sess-ready", "sess-degraded"],
+        "truncated": False,
+    }

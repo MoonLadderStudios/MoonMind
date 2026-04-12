@@ -2344,6 +2344,33 @@ class MoonMindRunWorkflow:
     def _task_scoped_session_workflow_id(self, runtime_id: str) -> str:
         return f"{workflow.info().workflow_id}:session:{runtime_id}"
 
+    def _task_scoped_session_visibility(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+    ) -> dict[str, Any]:
+        return {
+            "TaskRunId": [binding.task_run_id],
+            "RuntimeId": [binding.runtime_id],
+            "SessionId": [binding.session_id],
+            "SessionEpoch": [binding.session_epoch],
+            "SessionStatus": ["active"],
+            "IsDegraded": [False],
+        }
+
+    def _task_scoped_session_static_details(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+    ) -> str:
+        return (
+            "Task-scoped Codex managed session | "
+            f"taskRunId={binding.task_run_id} | "
+            f"runtime={binding.runtime_id} | "
+            f"session={binding.session_id} | "
+            f"epoch={binding.session_epoch}"
+        )
+
     def _pending_agent_step_refs(
         self,
         *,
@@ -2372,16 +2399,24 @@ class MoonMindRunWorkflow:
             executionProfileRef=request.execution_profile_ref,
         )
         session_workflow_id = self._task_scoped_session_workflow_id(runtime_id)
+        initial_binding = CodexManagedSessionBinding.from_input(
+            workflow_id=session_workflow_id,
+            session_input=session_input,
+        )
         self._codex_session_handle = await workflow.start_child_workflow(
             "MoonMind.AgentSession",
             session_input,
             id=session_workflow_id,
             task_queue=WORKFLOW_TASK_QUEUE,
+            search_attributes=self._task_scoped_session_visibility(
+                binding=initial_binding
+            ),
+            static_summary="Task-scoped Codex managed session",
+            static_details=self._task_scoped_session_static_details(
+                binding=initial_binding
+            ),
         )
-        self._codex_session_binding = CodexManagedSessionBinding.from_input(
-            workflow_id=session_workflow_id,
-            session_input=session_input,
-        )
+        self._codex_session_binding = initial_binding
         return self._codex_session_binding
 
     async def _maybe_bind_task_scoped_session(
