@@ -12,6 +12,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionLocator,
     InterruptCodexManagedSessionTurnRequest,
     SendCodexManagedSessionTurnRequest,
+    SteerCodexManagedSessionTurnRequest,
 )
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexAppServerRpcClient,
@@ -1780,6 +1781,61 @@ def test_runtime_interrupt_turn_uses_app_server_transport(tmp_path: Path) -> Non
     }
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state.get("activeTurnId") is None
+
+
+def test_runtime_steer_turn_uses_app_server_transport(tmp_path: Path) -> None:
+    steer_record_path = tmp_path / "steer.json"
+    script = write_fake_app_server(
+        tmp_path,
+        steer_record_path=steer_record_path,
+    )
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    state_payload["activeTurnId"] = "vendor-turn-1"
+    state_payload["lastTurnId"] = "vendor-turn-1"
+    state_payload["lastTurnStatus"] = "running"
+    state_path.write_text(json.dumps(state_payload) + "\n", encoding="utf-8")
+
+    response = runtime.steer_turn(
+        SteerCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            turnId="vendor-turn-1",
+            instructions="Prefer the simpler implementation.",
+            metadata={"reason": "operator steer"},
+        )
+    )
+
+    assert response.status == "running"
+    assert response.turn_id == "vendor-turn-1"
+    assert json.loads(steer_record_path.read_text(encoding="utf-8")) == {
+        "threadId": "vendor-thread-1",
+        "turnId": "vendor-turn-1",
+        "input": [
+            {
+                "type": "text",
+                "text": "Prefer the simpler implementation.",
+            }
+        ],
+        "metadata": {"reason": "operator steer"},
+    }
+    updated_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert updated_state.get("activeTurnId") == "vendor-turn-1"
+    assert updated_state["lastControlAction"] == "steer_turn"
 
 
 def test_runtime_launch_session_exports_codex_home(tmp_path: Path) -> None:

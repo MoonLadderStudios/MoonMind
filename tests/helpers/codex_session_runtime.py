@@ -19,6 +19,7 @@ def write_fake_app_server(
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
     start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
+    steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
 ) -> Path:
@@ -41,6 +42,7 @@ import os
 import sys
 
 INTERRUPT_RECORD_PATH = __INTERRUPT_RECORD_PATH__
+STEER_RECORD_PATH = __STEER_RECORD_PATH__
 CODEX_HOME_RECORD_PATH = __CODEX_HOME_RECORD_PATH__
 FAIL_THREAD_RESUME = __FAIL_THREAD_RESUME__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
@@ -195,6 +197,15 @@ __COMPLETION_BLOCK__
             "result": {"status": "interrupted"},
         }) + "\\n")
         sys.stdout.flush()
+    elif method == "turn/steer":
+        if STEER_RECORD_PATH:
+            with open(STEER_RECORD_PATH, "w", encoding="utf-8") as handle:
+                json.dump(message["params"], handle)
+        sys.stdout.write(json.dumps({
+            "id": msg_id,
+            "result": {"status": "running"},
+        }) + "\\n")
+        sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
         turn_status = "completed" if turn_completed else "inProgress"
@@ -251,6 +262,10 @@ __COMPLETION_BLOCK__
         script_template.replace(
             "__INTERRUPT_RECORD_PATH__",
             repr(str(interrupt_record_path) if interrupt_record_path is not None else ""),
+        )
+        .replace(
+            "__STEER_RECORD_PATH__",
+            repr(str(steer_record_path) if steer_record_path is not None else ""),
         )
         .replace(
             "__CODEX_HOME_RECORD_PATH__",

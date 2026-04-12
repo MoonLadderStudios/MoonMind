@@ -1890,6 +1890,122 @@ async def test_controller_clear_and_terminate_preserve_container_boundary(
 
 
 @pytest.mark.asyncio
+async def test_controller_duplicate_launch_reuses_existing_live_record(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/tmp/codex-home",
+        imageRef="img",
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/tmp/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+            artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "inspect", "-f"):
+            return 0, "ctr-1\n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    handle = await controller.launch_session(request)
+
+    assert handle.status == "ready"
+    assert handle.session_state.container_id == "ctr-1"
+    assert commands == [("docker", "inspect", "-f", "{{.Id}}", "ctr-1")]
+
+
+@pytest.mark.asyncio
+async def test_controller_duplicate_clear_returns_existing_advanced_epoch(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/tmp/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+            artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+            latestResetBoundaryRef="sess-1/session.reset_boundary.epoch-2.json",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    handle = await controller.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+
+    assert handle.status == "ready"
+    assert handle.session_state.session_epoch == 2
+    assert handle.session_state.thread_id == "logical-thread-2"
+
+
+@pytest.mark.asyncio
 async def test_controller_clear_session_publishes_durable_reset_artifacts(
     tmp_path: Path,
 ) -> None:
