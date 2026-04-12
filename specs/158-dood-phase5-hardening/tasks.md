@@ -29,11 +29,11 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T004 [P] Add or confirm stable workload policy denial categories and non-secret details in `moonmind/workloads/registry.py`
-- [ ] T005 [P] Add or confirm workload profile security fields and validation hooks in `moonmind/schemas/workload_models.py`
-- [ ] T006 [P] Add or confirm Docker launcher operational label helpers and cleanup helper boundaries in `moonmind/workloads/docker_launcher.py`
-- [ ] T007 Add or confirm tool failure propagation preserves policy reason/details in `moonmind/workloads/tool_bridge.py`
-- [ ] T008 Add or confirm agent-runtime worker bootstrap accepts operator-owned workload policy/capacity settings in `moonmind/workflows/temporal/worker_runtime.py`
+- [ ] T004 [P] Implement or verify with failing-first tests stable workload policy denial categories and non-secret details in `moonmind/workloads/registry.py`
+- [ ] T005 [P] Implement or verify with failing-first tests workload profile security fields and validation hooks in `moonmind/schemas/workload_models.py`
+- [ ] T006 [P] Implement or verify with failing-first tests Docker launcher operational label helpers and cleanup helper boundaries in `moonmind/workloads/docker_launcher.py`
+- [ ] T007 Implement or verify with failing-first tests tool failure propagation preserves policy reason/details in `moonmind/workloads/tool_bridge.py`
+- [ ] T008 Implement or verify with failing-first tests agent-runtime worker bootstrap accepts operator-owned workload policy/capacity settings in `moonmind/workflows/temporal/worker_runtime.py`
 
 **Checkpoint**: Foundation ready. User story implementation can begin in priority order or in parallel where marked.
 
@@ -133,13 +133,14 @@
 - [ ] T036 [P] [US4] Add workload result metadata tests for selected profile, image, labels, timing, and artifact publication in `tests/unit/workloads/test_docker_workload_launcher.py`
 - [ ] T037 [P] [US4] Add workflow activity boundary tests for hardened workload results in `tests/unit/workflows/temporal/test_workload_run_activity.py`
 - [ ] T038 [P] [US4] Add activity catalog and worker topology tests for missing `docker_workload` capability diagnostics in `tests/unit/workflows/temporal/test_activity_catalog.py` and `tests/unit/workflows/temporal/test_temporal_workers.py`
+- [ ] T039 [P] [US4] Add negative diagnostics tests proving workload metadata and tool failure details omit or redact secret-like env values, auth volume paths, and raw environment dumps in `tests/unit/workloads/test_docker_workload_launcher.py` and `tests/unit/workloads/test_workload_tool_bridge.py`
 
 ### Implementation for User Story 4
 
-- [ ] T039 [US4] Add bounded launch approval and denial metadata to `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/registry.py`
-- [ ] T040 [US4] Ensure `workload.run` returns hardened result metadata at the Temporal activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T041 [US4] Ensure Docker workload capability routing failures remain operator-diagnosable in `moonmind/workflows/temporal/activity_catalog.py` and `moonmind/workflows/temporal/workers.py`
-- [ ] T042 [US4] Run `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py -q`
+- [ ] T040 [US4] Add bounded launch approval and denial metadata to `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/registry.py`
+- [ ] T041 [US4] Ensure `workload.run` returns hardened result metadata at the Temporal activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
+- [ ] T042 [US4] Ensure Docker workload capability routing failures remain operator-diagnosable in `moonmind/workflows/temporal/activity_catalog.py` and `moonmind/workflows/temporal/workers.py`
+- [ ] T043 [US4] Run `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py -q`
 
 **Checkpoint**: User Story 4 produces bounded, non-secret diagnostics for launch decisions, denials, cleanup, and capacity pressure.
 
@@ -149,11 +150,11 @@
 
 **Purpose**: Final integration checks, tracker consistency, and canonical verification.
 
-- [ ] T043 [P] Update Phase 5 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` if runtime work changes tracker state
-- [ ] T044 [P] Validate the planning contract schema with `python -m json.tool specs/158-dood-phase5-hardening/contracts/workload-hardening-contract.schema.json`
-- [ ] T045 Run focused workload and Temporal verification with `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
-- [ ] T046 Run canonical final verification with `./tools/test_unit.sh`
-- [ ] T047 Review `git diff` for unrelated changes and ensure no secrets or raw environment dumps appear in `moonmind/`, `tests/`, `docs/tmp/`, or `specs/158-dood-phase5-hardening/`
+- [ ] T044 [P] Update Phase 5 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` if runtime work changes tracker state
+- [ ] T045 [P] Validate the planning contract schema with `python -m json.tool specs/158-dood-phase5-hardening/contracts/workload-hardening-contract.schema.json`
+- [ ] T046 Run focused workload and Temporal verification with `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
+- [ ] T047 Run canonical final verification with `./tools/test_unit.sh`
+- [ ] T048 Review `git diff` for unrelated changes and ensure no secrets or raw environment dumps appear in `moonmind/`, `tests/`, `docs/tmp/`, or `specs/158-dood-phase5-hardening/`
 
 ---
 
@@ -191,7 +192,7 @@
 - US1 tests T009-T013 can run in parallel.
 - US2 tests T020-T023 can run in parallel.
 - US3 tests T029-T031 can run in parallel.
-- US4 tests T036-T038 can run in parallel.
+- US4 tests T036-T039 can run in parallel.
 - Different user stories can be implemented in parallel after Phase 2 if files are coordinated to avoid conflicts.
 
 ---
