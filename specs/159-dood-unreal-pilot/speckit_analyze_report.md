@@ -2,6 +2,8 @@
 
 Feature: `159-dood-unreal-pilot`
 
+Analysis rerun: 2026-04-12
+
 ## Findings
 
 No cross-artifact consistency issues were found that block implementation.
