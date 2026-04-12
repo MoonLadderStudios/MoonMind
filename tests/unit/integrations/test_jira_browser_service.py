@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -28,6 +29,10 @@ class _StubJiraBrowserService(JiraBrowserService):
         self.calls: list[dict[str, Any]] = []
         self._responses = list(responses or [])
 
+    @asynccontextmanager
+    async def _jira_client(self) -> Any:
+        yield object()
+
     async def _request_json(
         self,
         *,
@@ -37,6 +42,45 @@ class _StubJiraBrowserService(JiraBrowserService):
         params: dict[str, Any] | None = None,
         json_body: Any = None,
         context: dict[str, Any] | None = None,
+    ) -> Any:
+        return await self._pop_response(
+            method=method,
+            path=path,
+            action=action,
+            params=params,
+            json_body=json_body,
+            context=context,
+        )
+
+    async def _request_json_with_client(
+        self,
+        client: object,
+        *,
+        method: str,
+        path: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        context: dict[str, Any] | None = None,
+    ) -> Any:
+        return await self._pop_response(
+            method=method,
+            path=path,
+            action=action,
+            params=params,
+            json_body=json_body,
+            context=context,
+        )
+
+    async def _pop_response(
+        self,
+        *,
+        method: str,
+        path: str,
+        action: str,
+        params: dict[str, Any] | None,
+        json_body: Any,
+        context: dict[str, Any] | None,
     ) -> Any:
         self.calls.append(
             {
@@ -105,6 +149,53 @@ async def test_list_projects_fetches_only_allowed_projects() -> None:
     assert [call["path"] for call in service.calls] == ["/project/ENG", "/project/OPS"]
 
 
+async def test_list_projects_skips_failed_allowed_project_fetches() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG,OPS"),
+        responses=[
+            {"id": "10000", "key": "ENG", "name": "Engineering"},
+            JiraToolError(
+                "Jira could not find the requested project.",
+                code="jira_not_found",
+                status_code=404,
+                action="jira_browser.list_projects",
+            ),
+        ],
+    )
+
+    result = await service.list_projects()
+
+    assert [item.project_key for item in result.items] == ["ENG"]
+    assert [call["path"] for call in service.calls] == ["/project/ENG", "/project/OPS"]
+
+
+async def test_list_boards_uses_agile_path_alias() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "values": [
+                    {
+                        "id": 42,
+                        "name": "Delivery",
+                        "type": "kanban",
+                        "location": {"projectKey": "ENG"},
+                    }
+                ]
+            }
+        ],
+    )
+
+    result = await service.list_boards("ENG")
+
+    assert [item.id for item in result.items] == ["42"]
+    assert service.calls[0]["path"] == "agile:/board"
+    assert service.calls[0]["params"] == {
+        "projectKeyOrId": "ENG",
+        "maxResults": 50,
+    }
+
+
 async def test_list_boards_enforces_project_allowlist() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -168,6 +259,10 @@ async def test_board_columns_preserve_order_and_status_mapping() -> None:
     assert [column.id for column in result.columns] == ["to-do", "done"]
     assert [column.order for column in result.columns] == [0, 1]
     assert result.columns[0].status_ids == ["1"]
+    assert [call["path"] for call in service.calls] == [
+        "agile:/board/42",
+        "agile:/board/42/configuration",
+    ]
 
 
 async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
@@ -209,6 +304,7 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
                     },
                 ]
             },
+            {"issues": [], "total": 2},
         ],
     )
 
@@ -218,6 +314,64 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
     assert result.items_by_column["done"] == []
     assert [item.issue_key for item in result.unmapped_items] == ["ENG-2"]
     assert result.unmapped_items[0].column_id == "__unmapped"
+    assert [call["path"] for call in service.calls] == [
+        "agile:/board/42",
+        "agile:/board/42/configuration",
+        "agile:/board/42/issue",
+    ]
+    assert service.calls[2]["params"] == {
+        "fields": "summary,issuetype,status,assignee,updated",
+        "maxResults": 50,
+        "startAt": 0,
+    }
+
+
+async def test_board_issues_paginates_until_all_issues_are_loaded() -> None:
+    first_page = [
+        {
+            "key": f"ENG-{index}",
+            "fields": {
+                "summary": f"Issue {index}",
+                "status": {"id": "1", "name": "Open"},
+            },
+        }
+        for index in range(1, 51)
+    ]
+    second_page = [
+        {
+            "key": "ENG-51",
+            "fields": {
+                "summary": "Issue 51",
+                "status": {"id": "1", "name": "Open"},
+            },
+        }
+    ]
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "ENG"},
+            },
+            {
+                "columnConfig": {
+                    "columns": [
+                        {"name": "To Do", "statuses": [{"id": "1", "name": "Open"}]},
+                    ]
+                }
+            },
+            {"issues": first_page, "total": 51},
+            {"issues": second_page, "total": 51},
+        ],
+    )
+
+    result = await service.list_issues("42")
+
+    assert len(result.items_by_column["to-do"]) == 51
+    issue_calls = [call for call in service.calls if call["path"] == "agile:/board/42/issue"]
+    assert [call["params"]["startAt"] for call in issue_calls] == [0, 50]
 
 
 async def test_board_issues_filters_by_query_text() -> None:
@@ -249,6 +403,7 @@ async def test_board_issues_filters_by_query_text() -> None:
                     },
                 ]
             },
+            {"issues": [], "total": 2},
         ],
     )
 

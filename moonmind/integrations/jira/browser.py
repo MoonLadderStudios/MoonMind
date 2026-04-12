@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from collections.abc import Mapping
-from typing import Any, Generic, TypeVar
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -17,11 +20,14 @@ from moonmind.integrations.jira.auth import resolve_jira_connection
 from moonmind.integrations.jira.client import JiraClient
 from moonmind.integrations.jira.errors import JiraToolError
 
+logger = logging.getLogger(__name__)
+
 T = TypeVar("T")
 
 _JIRA_PROJECT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ISSUE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+-\d+$")
 _BOARD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_JIRA_BROWSER_PAGE_SIZE = 50
 _ACCEPTANCE_HEADING_RE = re.compile(
     r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
 )
@@ -210,14 +216,29 @@ class JiraBrowserService:
         self._ensure_enabled()
         allowed = sorted(self._allowed_projects())
         if allowed:
-            projects = []
-            for project_key in allowed:
-                payload = await self._request_json(
-                    method="GET",
-                    path=f"/project/{project_key}",
-                    action="jira_browser.list_projects",
-                    context={"projectKey": project_key},
+            async with self._jira_client() as client:
+                results = await asyncio.gather(
+                    *(
+                        self._request_json_with_client(
+                            client,
+                            method="GET",
+                            path=f"/project/{project_key}",
+                            action="jira_browser.list_projects",
+                            context={"projectKey": project_key},
+                        )
+                        for project_key in allowed
+                    ),
+                    return_exceptions=True,
                 )
+            projects = []
+            for project_key, payload in zip(allowed, results, strict=True):
+                if isinstance(payload, Exception):
+                    logger.info(
+                        "jira_browser_project_fetch_failed project_key=%s error_type=%s",
+                        project_key,
+                        type(payload).__name__,
+                    )
+                    continue
                 projects.append(self._normalize_project(payload, fallback_key=project_key))
             return JiraListResponse[JiraProject](items=projects)
 
@@ -258,8 +279,9 @@ class JiraBrowserService:
     async def list_columns(self, board_id: str) -> JiraBoardColumns:
         self._ensure_enabled()
         normalized_board_id = self._normalize_board_id(board_id)
-        board = await self._fetch_board(normalized_board_id)
-        config = await self._fetch_board_configuration(normalized_board_id)
+        async with self._jira_client() as client:
+            board = await self._fetch_board(normalized_board_id, client=client)
+            config = await self._fetch_board_configuration(normalized_board_id, client=client)
         columns = self._normalize_columns(config)
         return JiraBoardColumns(board=board, columns=columns)
 
@@ -270,7 +292,15 @@ class JiraBrowserService:
     ) -> JiraBoardIssues:
         self._ensure_enabled()
         normalized_board_id = self._normalize_board_id(board_id)
-        columns_response = await self.list_columns(normalized_board_id)
+        async with self._jira_client() as client:
+            columns_response = await self._list_columns_with_client(
+                normalized_board_id,
+                client=client,
+            )
+            issues_payload = await self._fetch_board_issues(
+                normalized_board_id,
+                client=client,
+            )
         columns = columns_response.columns
         status_to_column = {
             status_id: column.id
@@ -281,18 +311,8 @@ class JiraBrowserService:
             column.id: [] for column in columns
         }
         unmapped_items: list[JiraIssueSummary] = []
-        payload = await self._request_json(
-            method="GET",
-            path=f"agile:/board/{normalized_board_id}/issue",
-            action="jira_browser.list_issues",
-            params={
-                "fields": "summary,issuetype,status,assignee,updated",
-                "maxResults": 50,
-            },
-            context={"boardId": normalized_board_id},
-        )
         filter_text = str(q or "").strip().lower()
-        for raw_issue in payload.get("issues", []):
+        for raw_issue in issues_payload:
             summary = self._normalize_issue_summary(raw_issue, status_to_column)
             if (
                 filter_text
@@ -339,8 +359,23 @@ class JiraBrowserService:
         )
         board_columns: list[JiraColumn] = []
         if normalized_board_id is not None:
-            board_columns = (await self.list_columns(normalized_board_id)).columns
+            async with self._jira_client() as client:
+                board_columns = (
+                    await self._list_columns_with_client(
+                        normalized_board_id,
+                        client=client,
+                    )
+                ).columns
         return self._normalize_issue_detail(payload, board_columns=board_columns)
+
+    @asynccontextmanager
+    async def _jira_client(self) -> AsyncIterator[JiraClient]:
+        connection = await resolve_jira_connection(self._settings)
+        client = JiraClient(connection=connection)
+        try:
+            yield client
+        finally:
+            await client.aclose()
 
     async def _request_json(
         self,
@@ -352,10 +387,9 @@ class JiraBrowserService:
         json_body: Any = None,
         context: dict[str, Any] | None = None,
     ) -> Any:
-        connection = await resolve_jira_connection(self._settings)
-        client = JiraClient(connection=connection)
-        try:
-            return await client.request_json(
+        async with self._jira_client() as client:
+            return await self._request_json_with_client(
+                client,
                 method=method,
                 path=path,
                 action=action,
@@ -363,11 +397,41 @@ class JiraBrowserService:
                 json_body=json_body,
                 context=context,
             )
-        finally:
-            await client.aclose()
 
-    async def _fetch_board(self, board_id: str) -> JiraBoard:
-        payload = await self._request_json(
+    async def _request_json_with_client(
+        self,
+        client: JiraClient,
+        *,
+        method: str,
+        path: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
+        context: dict[str, Any] | None = None,
+    ) -> Any:
+        return await client.request_json(
+            method=method,
+            path=path,
+            action=action,
+            params=params,
+            json_body=json_body,
+            context=context,
+        )
+
+    async def _list_columns_with_client(
+        self,
+        board_id: str,
+        *,
+        client: JiraClient,
+    ) -> JiraBoardColumns:
+        board = await self._fetch_board(board_id, client=client)
+        config = await self._fetch_board_configuration(board_id, client=client)
+        columns = self._normalize_columns(config)
+        return JiraBoardColumns(board=board, columns=columns)
+
+    async def _fetch_board(self, board_id: str, *, client: JiraClient) -> JiraBoard:
+        payload = await self._request_json_with_client(
+            client,
             method="GET",
             path=f"agile:/board/{board_id}",
             action="jira_browser.get_board",
@@ -378,8 +442,14 @@ class JiraBrowserService:
             self._ensure_project_allowed(board.project_key)
         return board
 
-    async def _fetch_board_configuration(self, board_id: str) -> Mapping[str, Any]:
-        payload = await self._request_json(
+    async def _fetch_board_configuration(
+        self,
+        board_id: str,
+        *,
+        client: JiraClient,
+    ) -> Mapping[str, Any]:
+        payload = await self._request_json_with_client(
+            client,
             method="GET",
             path=f"agile:/board/{board_id}/configuration",
             action="jira_browser.list_columns",
@@ -393,6 +463,40 @@ class JiraBrowserService:
             if project_key:
                 self._ensure_project_allowed(project_key)
         return payload
+
+    async def _fetch_board_issues(
+        self,
+        board_id: str,
+        *,
+        client: JiraClient,
+    ) -> list[Mapping[str, Any]]:
+        issues: list[Mapping[str, Any]] = []
+        start_at = 0
+        while True:
+            payload = await self._request_json_with_client(
+                client,
+                method="GET",
+                path=f"agile:/board/{board_id}/issue",
+                action="jira_browser.list_issues",
+                params={
+                    "fields": "summary,issuetype,status,assignee,updated",
+                    "maxResults": _JIRA_BROWSER_PAGE_SIZE,
+                    "startAt": start_at,
+                },
+                context={"boardId": board_id},
+            )
+            raw_page_items = payload.get("issues", []) if isinstance(payload, Mapping) else []
+            page_items = raw_page_items if isinstance(raw_page_items, list) else []
+            issues.extend(item for item in page_items if isinstance(item, Mapping))
+
+            total = payload.get("total") if isinstance(payload, Mapping) else None
+            returned = len(page_items)
+            start_at += returned
+            if returned < _JIRA_BROWSER_PAGE_SIZE:
+                break
+            if isinstance(total, int) and start_at >= total:
+                break
+        return issues
 
     def _ensure_enabled(self) -> None:
         if not self._feature_flags.jira_create_page_enabled:

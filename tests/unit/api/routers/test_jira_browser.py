@@ -230,7 +230,7 @@ async def test_router_maps_jira_errors_to_safe_details(
     detail = response.json()["detail"]
     assert detail == {
         "code": "jira_policy_denied",
-        "message": "Jira browser request failed.",
+        "message": "Project is not allowed.",
     }
 
 
@@ -239,7 +239,7 @@ async def test_router_sanitizes_secret_like_error_messages(
 ) -> None:
     app, service = router_app
     service.raise_error = JiraToolError(
-        "credential material should not escape",
+        "token=secret-value should not escape",
         code="jira_request_failed",
         status_code=502,
         action="jira_browser.get_issue",
@@ -254,4 +254,4 @@ async def test_router_sanitizes_secret_like_error_messages(
     detail = response.json()["detail"]
     assert response.status_code == 502
     assert detail["message"] == "Jira browser request failed."
-    assert "credential material" not in str(detail)
+    assert "secret-value" not in str(detail)

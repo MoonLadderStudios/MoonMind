@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -25,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jira", tags=["jira-browser"])
 
+_SECRET_MESSAGE_RE = re.compile(
+    r"(?i)(ghp_|github_pat_|AIza|ATATT|AKIA|token=|password=|authorization:|private key)"
+)
+_GENERIC_ERROR_MESSAGE = "Jira browser request failed."
+
 
 def _get_service() -> JiraBrowserService:
     return JiraBrowserService(
@@ -40,11 +46,14 @@ def _to_http_exception(exc: JiraToolError) -> HTTPException:
         exc.status_code,
         exc.action,
     )
+    message = str(exc.args[0]) if exc.args else _GENERIC_ERROR_MESSAGE
+    if _SECRET_MESSAGE_RE.search(message):
+        message = _GENERIC_ERROR_MESSAGE
     return HTTPException(
         status_code=exc.status_code,
         detail={
             "code": exc.code,
-            "message": "Jira browser request failed.",
+            "message": message,
         },
     )
 
@@ -73,7 +82,7 @@ async def verify_connection(
 async def list_projects(
     _user: User = Depends(get_current_user()),
     service: JiraBrowserService = Depends(_get_service),
-) -> JiraListResponse:
+) -> JiraListResponse[JiraProject]:
     try:
         return await service.list_projects()
     except JiraToolError as exc:
@@ -89,7 +98,7 @@ async def list_project_boards(
     project_key: str,
     _user: User = Depends(get_current_user()),
     service: JiraBrowserService = Depends(_get_service),
-) -> JiraListResponse:
+) -> JiraListResponse[JiraBoard]:
     try:
         return await service.list_boards(project_key.upper())
     except JiraToolError as exc:
