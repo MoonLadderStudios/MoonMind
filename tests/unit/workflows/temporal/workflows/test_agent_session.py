@@ -108,6 +108,89 @@ def test_agent_session_workflow_input_carries_request_tracking_state(
     assert snapshot.request_tracking_state[0].request_id == "request-1"
 
 
+@pytest.mark.asyncio
+async def test_agent_session_request_tracking_prefers_temporal_update_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(
+        _workflow_input(containerId="container-1", threadId="thread-1")
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "current_update_info",
+        lambda: agent_session_module.workflow.UpdateInfo(
+            id="temporal-update-1",
+            name="SendFollowUp",
+        ),
+    )
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        del payload
+        if activity_name == "agent_runtime.send_turn":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-2",
+                "status": "completed",
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-2",
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-2",
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    await workflow.send_follow_up(
+        {
+            "message": "Continue the task-scoped session.",
+            "requestId": "caller-request-1",
+        }
+    )
+
+    assert workflow.get_status()["requestTrackingState"] == [
+        {
+            "requestId": "temporal-update-1",
+            "action": "send_turn",
+            "sessionEpoch": 1,
+            "status": "completed",
+            "resultRef": "art-summary-2",
+        }
+    ]
+
+
 def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1007,6 +1090,32 @@ async def test_agent_session_run_waits_for_handlers_before_completion(
     status = await workflow.run(_workflow_input())
 
     assert waited_for_handlers is True
+    assert status["status"] == "terminated"
+
+
+@pytest.mark.asyncio
+async def test_agent_session_run_waits_for_state_change_without_timeout_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    state_waits = 0
+
+    async def _wait_condition(predicate, **kwargs: object) -> None:
+        nonlocal state_waits
+        assert "timeout" not in kwargs
+        if predicate is agent_session_module.workflow.all_handlers_finished:
+            return
+        state_waits += 1
+        assert predicate() is False
+        workflow._termination_requested = True
+        assert predicate() is True
+
+    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+
+    status = await workflow.run(_workflow_input())
+
+    assert state_waits == 1
     assert status["status"] == "terminated"
 
 
