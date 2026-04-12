@@ -32,6 +32,24 @@ _JIRA_CREATE_PAGE_SOURCES = {
     "issue": "/api/jira/issues/{issueKey}",
 }
 
+
+def _build_jira_sources() -> dict[str, str]:
+    """Return validated MoonMind-owned Jira browser endpoint templates."""
+
+    sources = dict(_JIRA_CREATE_PAGE_SOURCES)
+    invalid = [
+        name
+        for name, value in sources.items()
+        if not value.startswith("/api/") or "://" in value
+    ]
+    if invalid:
+        invalid_names = ", ".join(sorted(invalid))
+        raise ValueError(
+            "Jira Create-page sources must be MoonMind API path templates: "
+            f"{invalid_names}"
+        )
+    return sources
+
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
         "open": "queued",
@@ -159,7 +177,7 @@ def _build_jira_runtime_config() -> dict[str, Any] | None:
         return None
 
     return {
-        "sources": dict(_JIRA_CREATE_PAGE_SOURCES),
+        "sources": _build_jira_sources(),
         "system": {
             "enabled": True,
             "defaultProjectKey": settings.feature_flags.jira_create_page_default_project_key,

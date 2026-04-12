@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+import api_service.api.routers.task_dashboard_view_model as dashboard_view_model
 from api_service.api.routers.task_dashboard_view_model import (
     build_live_logs_feature_config,
     build_runtime_config,
@@ -196,6 +199,27 @@ def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
         "defaultBoardId": "",
         "rememberLastBoardInSession": True,
     }
+    assert all(
+        value.startswith("/api/") and "://" not in value
+        for value in config["sources"]["jira"].values()
+    )
+
+
+def test_build_runtime_config_rejects_non_moonmind_jira_source_paths(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_JIRA_CREATE_PAGE_SOURCES",
+        {
+            **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+            "projects": "https://jira.example.test/rest/api/3/project",
+        },
+    )
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        build_runtime_config("/tasks/new")
 
 
 def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
