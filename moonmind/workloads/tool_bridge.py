@@ -48,6 +48,18 @@ def _declared_outputs_schema() -> dict[str, Any]:
     }
 
 
+def _unreal_report_paths_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "primary": {"type": "string", "minLength": 1},
+            "summary": {"type": "string", "minLength": 1},
+            "junit": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    }
+
+
 def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, Any]:
     """Return the pinned ToolDefinition payload for a Docker workload tool."""
 
@@ -96,6 +108,7 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
                 "projectPath": {"type": "string", "minLength": 1},
                 "target": {"type": "string", "minLength": 1},
                 "testSelector": {"type": "string", "minLength": 1},
+                "reportPaths": _unreal_report_paths_schema(),
                 "timeoutSeconds": {"type": "integer", "minimum": 1},
                 "envOverrides": {
                     "type": "object",
@@ -249,14 +262,77 @@ def _build_workload_request(
 
     if tool_name == UNREAL_RUN_TESTS_TOOL:
         request_payload.setdefault("profileId", DEFAULT_UNREAL_PROFILE_ID)
-        request_payload["command"] = _unreal_command(request_payload)
-        for curated_only_key in ("projectPath", "target", "testSelector"):
+        report_paths = _unreal_report_paths(request_payload.get("reportPaths"))
+        request_payload["command"] = _unreal_command(
+            request_payload,
+            report_paths=report_paths,
+        )
+        request_payload["declaredOutputs"] = {
+            **dict(request_payload.get("declaredOutputs") or {}),
+            **_unreal_declared_outputs(report_paths),
+        }
+        request_payload["envOverrides"] = _unreal_env_overrides(
+            request_payload,
+            report_paths=report_paths,
+        )
+        for curated_only_key in (
+            "projectPath",
+            "target",
+            "testSelector",
+            "reportPaths",
+        ):
             request_payload.pop(curated_only_key, None)
 
     return WorkloadRequest.model_validate(request_payload)
 
 
-def _unreal_command(inputs: Mapping[str, Any]) -> tuple[str, ...]:
+def _unreal_report_paths(value: Any) -> dict[str, str]:
+    if value is None:
+        raw: Mapping[str, Any] = {}
+    elif isinstance(value, Mapping):
+        raw = value
+    else:
+        raise ValueError("unreal.run_tests reportPaths must be an object")
+    return {
+        "primary": str(raw.get("primary") or "unreal/reports/results.json").strip(),
+        "summary": str(raw.get("summary") or "unreal/reports/summary.json").strip(),
+        "junit": str(raw.get("junit") or "unreal/reports/junit.xml").strip(),
+    }
+
+
+def _unreal_declared_outputs(report_paths: Mapping[str, str]) -> dict[str, str]:
+    return {
+        "output.primary": report_paths["primary"],
+        "output.summary": report_paths["summary"],
+        "output.logs.junit": report_paths["junit"],
+    }
+
+
+def _unreal_env_overrides(
+    inputs: Mapping[str, Any],
+    *,
+    report_paths: Mapping[str, str],
+) -> dict[str, str]:
+    env = dict(inputs.get("envOverrides") or {})
+    project_path = str(inputs.get("projectPath") or "").strip()
+    target = str(inputs.get("target") or "").strip()
+    test_selector = str(inputs.get("testSelector") or "").strip()
+    env["UE_PROJECT_PATH"] = project_path
+    if target:
+        env["UE_TARGET"] = target
+    if test_selector:
+        env["UE_TEST_SELECTOR"] = test_selector
+    env["UE_REPORT_PATH"] = report_paths["primary"]
+    env["UE_SUMMARY_PATH"] = report_paths["summary"]
+    env["UE_JUNIT_PATH"] = report_paths["junit"]
+    return {str(key): str(value) for key, value in env.items()}
+
+
+def _unreal_command(
+    inputs: Mapping[str, Any],
+    *,
+    report_paths: Mapping[str, str],
+) -> tuple[str, ...]:
     project_path = str(inputs.get("projectPath") or "").strip()
     if not project_path:
         raise ValueError("unreal.run_tests projectPath is required")
@@ -267,6 +343,9 @@ def _unreal_command(inputs: Mapping[str, Any]) -> tuple[str, ...]:
     test_selector = str(inputs.get("testSelector") or "").strip()
     if test_selector:
         command.extend(["--test", test_selector])
+    command.extend(["--report", report_paths["primary"]])
+    command.extend(["--summary", report_paths["summary"]])
+    command.extend(["--junit", report_paths["junit"]])
     return tuple(command)
 
 

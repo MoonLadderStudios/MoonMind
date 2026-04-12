@@ -270,6 +270,40 @@ def test_registry_allows_profiles_from_approved_registry(tmp_path: Path) -> None
     assert registry.profile_ids == ("local-python",)
 
 
+def test_default_registry_contains_unreal_pilot_profile() -> None:
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root=WORKSPACE_ROOT,
+        allowed_image_registries=("ghcr.io",),
+    )
+
+    profile = registry.get("unreal-5_3-linux")
+
+    assert profile is not None
+    assert profile.image == "ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3"
+    assert profile.network_policy == "none"
+    assert profile.device_policy.mode == "none"
+    assert profile.timeout_seconds == 7200
+    assert profile.max_timeout_seconds == 7200
+    assert profile.max_concurrency == 1
+    assert {mount.source for mount in profile.required_mounts} == {"agent_workspaces"}
+    assert {mount.source for mount in profile.optional_mounts} == {
+        "unreal_ccache_volume",
+        "unreal_ubt_volume",
+    }
+    assert set(profile.env_allowlist) == {
+        "CI",
+        "CCACHE_DIR",
+        "UBT_CACHE_DIR",
+        "UE_PROJECT_PATH",
+        "UE_TARGET",
+        "UE_TEST_SELECTOR",
+        "UE_REPORT_PATH",
+        "UE_SUMMARY_PATH",
+        "UE_JUNIT_PATH",
+    }
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

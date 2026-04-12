@@ -1,7 +1,7 @@
 # DockerOutOfDocker Remaining Work
 
 Source doc: [`docs/ManagedAgents/DockerOutOfDocker.md`](../../ManagedAgents/DockerOutOfDocker.md)
-Status: Phases 0 through 5 complete; Phases 6 through 7 pending
+Status: Phases 0 through 6 complete; Phase 7 pending
 Last updated: 2026-04-12
 
 ## Phase checklist
@@ -12,7 +12,7 @@ Last updated: 2026-04-12
 - [x] Phase 3: Expose DooD through executable tools such as `container.run_workload` and `unreal.run_tests`.
 - [x] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
 - [x] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
-- [ ] Phase 6: Validate the architecture with the Unreal pilot runner profile and representative repository coverage.
+- [x] Phase 6: Validate the architecture with the Unreal pilot runner profile and representative repository coverage.
 - [ ] Phase 7: Evaluate bounded helper containers only after one-shot workload containers are stable and well observed.
 
 ## Phase 0 completion notes
@@ -64,6 +64,22 @@ Last updated: 2026-04-12
 - Workload containers receive a bounded `moonmind.expires_at` label and `DockerContainerJanitor.sweep_expired_workloads()` removes expired orphan containers.
 - Workload policy denials include stable reason/details fields for operator-facing diagnostics and tool failure payloads.
 - Focused unit tests cover image registry policy, denial metadata, auth-volume rejection, explicit Docker security flags, concurrency denial, and expired orphan sweeping.
+
+## Phase 6 completion notes
+
+- MoonMind ships a deployment-owned default workload profile registry at `config/workloads/default-runner-profiles.yaml` with the curated `unreal-5_3-linux` profile.
+- The Unreal pilot profile pins `ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3`, mounts `agent_workspaces`, and uses `unreal_ccache_volume` plus `unreal_ubt_volume` as approved cache volumes.
+- The profile keeps the Phase 5 safety posture: no host networking, no privileged launch, no implicit device access, bounded resources, and `maxConcurrency: 1`.
+- Agent-runtime worker bootstrap loads the built-in profile registry when `MOONMIND_WORKLOAD_PROFILE_REGISTRY` is unset; operators can still set that env var to replace the registry with a deployment-owned file.
+- `unreal.run_tests` now accepts `reportPaths` for primary, summary, and junit outputs, maps them to declared workload artifacts, and injects only allowlisted Unreal env keys.
+- Representative unit coverage validates default profile loading, worker bootstrap behavior, curated command construction, invalid report path rejection, cache-volume launch args, and safe Docker posture.
+
+### Unreal operator enablement path
+
+1. Publish or mirror `ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3` according to deployment policy, or provide an operator registry file through `MOONMIND_WORKLOAD_PROFILE_REGISTRY`.
+2. Ensure Docker named volumes exist for `agent_workspaces`, `unreal_ccache_volume`, and `unreal_ubt_volume`.
+3. Keep the Docker-capable `agent_runtime` worker connected to the Docker proxy and carrying the `docker_workload` capability.
+4. Invoke `unreal.run_tests` with `projectPath`, optional `target`/`testSelector`, and optional relative `reportPaths`; inspect runtime logs and reports under the step artifacts directory.
 
 ## Guardrails to preserve during later phases
 
