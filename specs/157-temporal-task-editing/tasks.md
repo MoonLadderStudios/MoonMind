@@ -92,12 +92,12 @@
 
 - [ ] T026 [P] [US3] Add supported active, supported terminal, unsupported workflow, and feature-disabled backend fixtures in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
 - [ ] T027 [P] [US3] Add supported active, supported terminal, unsupported workflow, and feature-disabled frontend fixtures in `frontend/src/entrypoints/task-detail.test.tsx` (Validation: DOC-REQ-009, DOC-REQ-011, DOC-REQ-012)
-- [ ] T028 [P] [US3] Assert unsupported-state copy and disabled reasons distinguish unsupported workflow type, feature-disabled, state-ineligible, malformed input, and unavailable artifact cases in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011)
-- [ ] T029 [P] [US3] Assert artifact-backed edit/rerun contracts use new artifact references rather than historical mutation in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-010)
+- [ ] T028 [P] [US3] Assert unsupported-state copy and disabled reasons distinguish Phase 0/1 observable unsupported workflow type, feature-disabled, state-ineligible, and missing-capability cases in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-009, DOC-REQ-011)
+- [ ] T029 [P] [US3] Assert contract-level artifact-backed edit/rerun requests use new artifact references rather than historical mutation in `tests/unit/api/routers/test_executions.py` (Validation: DOC-REQ-010)
 
 ### Implementation for User Story 3
 
-- [ ] T030 [US3] Normalize disabled reason labels and unsupported-state copy constants for task editing states in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-009, DOC-REQ-011)
+- [ ] T030 [US3] Normalize disabled reason labels and unsupported-state copy constants for Phase 0/1 task editing states in `api_service/api/routers/executions.py` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-009, DOC-REQ-011)
 - [ ] T031 [US3] Keep first-slice prefill fields represented in frontend/backend typed contracts in `frontend/src/lib/temporalTaskEditing.ts` and `moonmind/schemas/temporal_models.py` (Implementation: DOC-REQ-007, DOC-REQ-011)
 - [ ] T032 [US3] Verify no primary flow introduces `editJobId`, `/tasks/queue/new`, queue update routes, or queue resubmit language in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-detail.tsx` (Implementation: DOC-REQ-004)
 

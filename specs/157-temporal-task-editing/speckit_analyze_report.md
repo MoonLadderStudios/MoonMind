@@ -1,8 +1,14 @@
 # Specification Analysis Report
 
-| ID | Category | Severity | Location(s) | Summary | Recommendation |
+## Remediated Findings
+
+| ID | Category | Original Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| U1 | Underspecification | MEDIUM | spec.md:107, tasks.md:T028-T030 | The spec requires unsupported-state copy for malformed draft data and unavailable artifacts "when those states are surfaced", but Phase 0/1 explicitly stops before draft reconstruction and artifact reads. Tasks T028-T030 could be interpreted as requiring runtime handling for malformed draft/artifact states in this phase. | Before implementation, either narrow T028-T030 to the Phase 0/1 states that can actually occur (unsupported workflow, feature disabled, state ineligible, missing capability) or add a task note that malformed draft/artifact copy is contract-only scaffolding deferred to Phase 2. |
+| U1 | Underspecification | MEDIUM | spec.md:107, plan.md:24-25, tasks.md:T028-T030 | Remediated by narrowing Phase 0/1 unsupported-state scope to observable unsupported workflow, feature-disabled, state-ineligible, and missing-capability states while explicitly deferring malformed draft and unreadable artifact handling until draft reconstruction/artifact reads are implemented. | No further action required before implementation. Later phases must reintroduce malformed draft and artifact-read validation when `/tasks/new` reconstruction is implemented. |
+
+## Active Findings
+
+None.
 
 ## Coverage Summary
 
@@ -23,7 +29,7 @@
 | FR-013 placeholder-mode-types | Yes | T010, T031 | Covered by frontend helper/types task. |
 | FR-014 first-slice-prefill-fields | Yes | T011, T031, T033 | Covered by typed contract/read-field tasks. |
 | FR-015 fixtures | Yes | T026, T027, T033, T034 | Covered by backend/frontend fixture tasks. |
-| FR-016 unsupported-state-copy | Yes | T013, T016, T028, T030, T033 | Covered, with scope caveat in U1. |
+| FR-016 unsupported-state-copy | Yes | T013, T016, T028, T030, T033 | Covered for Phase 0/1 observable unsupported states; malformed draft and artifact-read copy are deferred to later reconstruction work. |
 | FR-017 no-queue-fallback | Yes | T003, T018, T021, T024, T032, T034 | Covered by route and code-search tasks. |
 | FR-018 runtime-code-and-tests | Yes | T006-T010, T015-T017, T022-T025, T030-T032, T033-T038 | Covered by runtime and validation tasks. |
 
@@ -60,10 +66,10 @@ These are acceptable cross-cutting tasks and do not block implementation.
 - Duplication Count: 0
 - Critical Issues Count: 0
 - High Issues Count: 0
-- Medium Issues Count: 1
+- Medium Issues Count: 0
 - Low Issues Count: 0
 
 ## Next Actions
 
-- Resolve U1 before `speckit-implement` if the team wants strict Phase 0/1 scope. The simplest remediation is to narrow T028-T030 to states observable in Phase 0/1 and defer malformed draft/artifact copy to Phase 2.
-- If U1 is accepted as intentional forward-contract scaffolding, implementation can proceed with care not to build Phase 2 draft reconstruction early.
+- U1 has been remediated. Proceed to implementation after rerunning runtime scope and DOC-REQ coverage validation.
+- Later phases must add draft reconstruction and artifact-read failure handling before exposing edit/rerun submit flows.

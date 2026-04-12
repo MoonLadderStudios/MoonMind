@@ -18,8 +18,8 @@ The implementation deliberately stops before full `/tasks/new` draft reconstruct
 **Target Platform**: MoonMind API service and Mission Control task dashboard served from the existing Docker Compose deployment  
 **Project Type**: Single repository with backend service modules, frontend Mission Control entrypoints, and unit/contract tests  
 **Performance Goals**: No additional polling loops; execution detail responses remain bounded to existing detail-read costs; route-helper and feature-flag evaluation are constant-time UI operations  
-**Constraints**: Runtime mode requires production code and validation tests; `MoonMind.Run` only; no queue fallback; unsupported actions omitted; historical artifacts not mutated; capability flags remain authoritative; workflow/update contract changes require boundary coverage  
-**Scale/Scope**: Phase 0 and Phase 1 only: read contract scaffolding, rollout flag, route helpers, typed contracts, detail-page Edit/Rerun entry points, fixtures/tests for supported, unsupported, active, terminal, and flag-disabled states
+**Constraints**: Runtime mode requires production code and validation tests; `MoonMind.Run` only; no queue fallback; unsupported actions omitted; historical artifacts not mutated; capability flags remain authoritative; workflow/update contract changes require boundary coverage; malformed draft and unreadable artifact handling is deferred until draft reconstruction and artifact reads are implemented
+**Scale/Scope**: Phase 0 and Phase 1 only: read contract scaffolding, rollout flag, route helpers, typed contracts, detail-page Edit/Rerun entry points, fixtures/tests for supported, unsupported, active, terminal, state-ineligible, missing-capability, and flag-disabled states
 
 ## Constitution Check
 
@@ -115,6 +115,7 @@ Research is captured in [research.md](research.md). Decisions:
 - Reuse the existing plan artifact field for run and manifest contexts rather than adding a duplicate.
 - Compute `actions.canUpdateInputs` and `actions.canRerun` from workflow type, lifecycle state, existing actions enablement, and the new `temporalTaskEditing` rollout flag.
 - Return explicit disabled reasons for unsupported workflow type, feature-disabled, and state-ineligible cases.
+- Preserve contract hooks for later malformed-draft and unreadable-artifact failures without implementing Phase 2 draft reconstruction or artifact-read UX in this slice.
 
 ### 2. Runtime Configuration
 

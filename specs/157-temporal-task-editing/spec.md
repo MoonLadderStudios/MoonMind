@@ -80,8 +80,8 @@ As a MoonMind maintainer, I need local and CI fixtures plus consistent unsupport
 - Active `MoonMind.Run` without `canUpdateInputs`; Edit must be omitted.
 - Terminal `MoonMind.Run` without `canRerun`; Rerun must be omitted.
 - Unsupported workflow type with lifecycle state that would otherwise look eligible.
-- Missing or malformed input parameter metadata in execution detail.
-- Missing or unreadable input artifact references in the read contract.
+- Missing input parameter metadata in execution detail must not make unsupported actions appear eligible.
+- Malformed draft data and unreadable input artifacts remain later-phase reconstruction error states; Phase 0/1 only preserves the contract hooks needed to surface them later.
 - Both edit and rerun route helpers available in the same page; active edit and terminal rerun language must remain distinct.
 - Any attempted fallback to `editJobId`, `/tasks/queue/new`, queue routes, or queue resubmit terminology.
 
@@ -104,7 +104,7 @@ As a MoonMind maintainer, I need local and CI fixtures plus consistent unsupport
 - **FR-013**: The system MUST provide placeholder page-mode types and typed API-facing contracts for create, edit, and rerun modes so later phases can consume the same contract without redefining it. (Maps: DOC-REQ-011)
 - **FR-014**: The first-slice prefill field set MUST be explicitly decided and represented in contract or fixture coverage, including runtime, provider profile, model, effort, repository, branches, publish mode, task instructions, primary skill, and template state where available. (Maps: DOC-REQ-007, DOC-REQ-011)
 - **FR-015**: The system MUST include fixtures or mocked responses for supported active, supported terminal, unsupported workflow, and feature-disabled states. (Maps: DOC-REQ-011, DOC-REQ-012)
-- **FR-016**: Operator-facing unsupported-state copy MUST be explicit enough to distinguish unsupported workflow type, missing capability, malformed draft data, and unavailable artifacts when those states are surfaced. (Maps: DOC-REQ-009, DOC-REQ-011)
+- **FR-016**: Operator-facing unsupported-state copy MUST be explicit enough to distinguish unsupported workflow type, missing capability, feature-disabled, and state-ineligible conditions in Phase 0/1; malformed draft data and unavailable artifact copy remain later-phase requirements when draft reconstruction and artifact reads are introduced. (Maps: DOC-REQ-009, DOC-REQ-011)
 - **FR-017**: New primary flows MUST NOT use or generate `editJobId`, `/tasks/queue/new`, queue update routes, or queue resubmit terminology. (Maps: DOC-REQ-004)
 - **FR-018**: Required deliverables MUST include production runtime code changes and validation tests; docs-only or spec-only changes do not satisfy this feature. (Maps: DOC-REQ-011, DOC-REQ-012)
 
@@ -121,6 +121,7 @@ As a MoonMind maintainer, I need local and CI fixtures plus consistent unsupport
 - The initial vertical slice targets `MoonMind.Run` only.
 - Capability flags are authoritative for UI visibility; frontend lifecycle guesses are not sufficient.
 - Phase 0 and Phase 1 do not require full `/tasks/new` draft reconstruction or submit behavior, but they must prepare stable contracts for those later phases.
+- Malformed draft data and unavailable artifact handling are intentionally deferred until draft reconstruction and artifact reads are implemented.
 - Artifact-backed instructions are read-only historical inputs for this phase; later edit/rerun submit phases must create new artifact references.
 - Existing create-task UX remains available at `/tasks/new` in create mode.
 
