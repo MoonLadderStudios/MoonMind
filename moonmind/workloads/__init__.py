@@ -11,6 +11,7 @@ from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
     DockerWorkloadLauncher,
     DockerWorkloadLauncherError,
+    WorkloadConcurrencyLimiter,
 )
 from moonmind.workloads.registry import RunnerProfileRegistry, WorkloadPolicyError
 from moonmind.workloads.tool_bridge import (
@@ -36,6 +37,7 @@ __all__ = [
     "UNREAL_RUN_TESTS_TOOL",
     "ValidatedWorkloadRequest",
     "WorkloadOwnershipMetadata",
+    "WorkloadConcurrencyLimiter",
     "WorkloadPolicyError",
     "WorkloadRequest",
     "WorkloadResult",

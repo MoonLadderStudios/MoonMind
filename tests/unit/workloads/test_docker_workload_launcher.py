@@ -10,6 +10,7 @@ import pytest
 from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
+    WorkloadConcurrencyLimiter,
     DockerWorkloadLauncher,
     DockerWorkloadLauncherError,
 )
@@ -673,3 +674,78 @@ async def test_container_janitor_lists_orphans_by_labels(
         "--format",
         "{{.ID}}",
     ]
+
+
+@pytest.mark.asyncio
+async def test_launcher_denies_when_fleet_concurrency_limit_is_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+    limiter = WorkloadConcurrencyLimiter(
+        fleet_limit=1,
+        per_profile_limits={"local-python": 1},
+    )
+    lease = await limiter.acquire("local-python")
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    try:
+        with pytest.raises(DockerWorkloadLauncherError, match="concurrency limit"):
+            await DockerWorkloadLauncher(concurrency_limiter=limiter).run(
+                _validated_request(tmp_path)
+            )
+    finally:
+        await lease.__aexit__(None, None, None)
+
+    assert created == []
+
+
+@pytest.mark.asyncio
+async def test_container_janitor_sweeps_orphans_by_labels_and_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1:3] == ("ps", "-a"):
+            return _Process(returncode=0, stdout=b"old-1\nold-2\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    removed = await DockerContainerJanitor().sweep_orphans_by_labels(
+        {
+            "moonmind.kind": "workload",
+            "moonmind.workload_profile": "unreal-5_3-linux",
+        },
+        ttl_seconds=3600,
+    )
+
+    assert removed == ("old-1", "old-2")
+    assert created[0] == [
+        "docker",
+        "ps",
+        "-a",
+        "--filter",
+        "label=moonmind.kind=workload",
+        "--filter",
+        "label=moonmind.workload_profile=unreal-5_3-linux",
+        "--filter",
+        "until=3600s",
+        "--format",
+        "{{.ID}}",
+    ]
+    assert ["docker", "rm", "-f", "old-1"] in created
+    assert ["docker", "rm", "-f", "old-2"] in created

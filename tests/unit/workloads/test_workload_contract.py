@@ -194,8 +194,90 @@ def test_registry_rejects_unknown_profile(tmp_path: Path) -> None:
 def test_registry_rejects_env_key_outside_profile_allowlist(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
-    with pytest.raises(WorkloadPolicyError, match="environment override"):
+    with pytest.raises(WorkloadPolicyError, match="environment override") as exc_info:
         registry.validate_request(_request(envOverrides={"SECRET_TOKEN": "raw"}))
+
+    assert exc_info.value.reason == "disallowed_env_key"
+    assert exc_info.value.diagnostics == {
+        "reason": "disallowed_env_key",
+        "profileId": "local-python",
+        "envKey": "SECRET_TOKEN",
+    }
+
+
+def test_registry_enforces_image_registry_allowlist(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps({"profiles": [_profile_payload(image="python:3.12-slim")]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkloadPolicyError, match="image registry") as exc_info:
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+            allowed_image_registries=("ghcr.io/moonladderstudios",),
+        )
+
+    assert exc_info.value.reason == "disallowed_image_registry"
+    assert exc_info.value.diagnostics["image"] == "python:3.12-slim"
+    assert exc_info.value.diagnostics["allowedImageRegistries"] == [
+        "ghcr.io/moonladderstudios"
+    ]
+
+
+def test_registry_allows_images_from_approved_registry_prefix(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    _profile_payload(
+                        image="ghcr.io/moonladderstudios/runners/python:3.12"
+                    )
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = RunnerProfileRegistry.load_file(
+        registry_path,
+        workspace_root=WORKSPACE_ROOT,
+        allowed_image_registries=("ghcr.io/moonladderstudios",),
+    )
+
+    assert registry.profile_ids == ("local-python",)
+
+
+def test_registry_rejects_implicit_auth_volume_mounts(tmp_path: Path) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    _profile_payload(
+                        optional_mounts=[
+                            {
+                                "type": "volume",
+                                "source": "codex_auth_volume",
+                                "target": "/work/auth/codex",
+                            }
+                        ]
+                    )
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkloadPolicyError, match="auth volume") as exc_info:
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+        )
+
+    assert exc_info.value.reason == "disallowed_auth_volume"
 
 
 def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path) -> None:

@@ -1,8 +1,8 @@
 # DockerOutOfDocker Remaining Work
 
 Source doc: [`docs/ManagedAgents/DockerOutOfDocker.md`](../../ManagedAgents/DockerOutOfDocker.md)
-Status: Phases 0 through 3 complete; Phases 4 through 7 pending
-Last updated: 2026-04-11
+Status: Phases 0 through 5 complete; Phases 6 through 7 pending
+Last updated: 2026-04-12
 
 ## Phase checklist
 
@@ -10,8 +10,8 @@ Last updated: 2026-04-11
 - [x] Phase 1: Define the control-plane workload contract (`WorkloadRequest`, `WorkloadResult`, `RunnerProfile`, ownership metadata, validation rules).
 - [x] Phase 2: Build the Docker workload launcher on the existing Docker-capable `agent_runtime` worker fleet.
 - [x] Phase 3: Expose DooD through executable tools such as `container.run_workload` and `unreal.run_tests`.
-- [ ] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
-- [ ] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
+- [x] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
+- [x] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
 - [ ] Phase 6: Validate the architecture with the Unreal pilot runner profile and representative repository coverage.
 - [ ] Phase 7: Evaluate bounded helper containers only after one-shot workload containers are stable and well observed.
 
@@ -46,6 +46,20 @@ Last updated: 2026-04-11
 - `container.run_workload` exposes profile, workspace, command, env allowlist, timeout, resource, and optional session-association fields without raw image, mount, or device inputs.
 - `unreal.run_tests` maps a stable domain contract (`projectPath`, optional target/test selector) onto the curated Unreal runner profile command.
 - Focused unit tests cover tool definition generation, raw Docker input rejection, input-to-request conversion, launcher invocation/result mapping, `MoonMind.Run` routing through `mm.tool.execute`, managed-session boundary preservation, and agent-runtime task-queue selection.
+
+## Phase 4 completion notes
+
+- Workload execution publishes bounded runtime artifacts for stdout, stderr, diagnostics, and declared output artifacts under the workload artifacts directory.
+- Result metadata includes selected profile, image reference, status, exit code, duration, timeout reason, labels, artifact publication state, and optional session-association context.
+- Session association remains grouping metadata only; workload artifacts do not become session continuity artifacts.
+
+## Phase 5 completion notes
+
+- Runner profile loading can enforce deployment-owned image registry allowlists through `MOONMIND_WORKLOAD_ALLOWED_IMAGE_REGISTRIES`.
+- Policy denials carry audit-friendly reason codes and structured diagnostics for unknown profiles, disallowed env keys, disallowed mounts, oversized resources, oversized timeouts, disallowed image provenance, duplicate profiles, and auth-volume inheritance.
+- Runner profile policy rejects implicit Codex/Claude/Gemini auth volume mounts so workload containers do not inherit managed-session credentials by default.
+- The agent-runtime workload launcher supports fleet-wide and per-profile concurrency limits through `MOONMIND_WORKLOAD_FLEET_CONCURRENCY` and `MOONMIND_WORKLOAD_PROFILE_CONCURRENCY`.
+- `DockerContainerJanitor` can sweep stale workload containers by deterministic ownership labels plus TTL and remove the matching orphan containers.
 
 ## Guardrails to preserve during later phases
 

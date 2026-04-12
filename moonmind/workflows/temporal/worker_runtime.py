@@ -559,7 +559,11 @@ def _build_agent_runtime_deps() -> tuple[
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
     from pathlib import Path
-    from moonmind.workloads import DockerWorkloadLauncher, RunnerProfileRegistry
+    from moonmind.workloads import (
+        DockerWorkloadLauncher,
+        RunnerProfileRegistry,
+        WorkloadConcurrencyLimiter,
+    )
 
     class LocalRuntimeArtifactStorage:
         def __init__(self, root: str) -> None:
@@ -637,16 +641,32 @@ def _build_agent_runtime_deps() -> tuple[
         docker_host=docker_host,
     )
     workload_registry_path = os.environ.get("MOONMIND_WORKLOAD_PROFILE_REGISTRY", "")
+    workload_image_registries = _csv_env(
+        os.environ.get("MOONMIND_WORKLOAD_ALLOWED_IMAGE_REGISTRIES", "")
+    )
     if workload_registry_path.strip():
         workload_registry = RunnerProfileRegistry.load_file(
             workload_registry_path,
             workspace_root=workspace_root,
+            allowed_image_registries=workload_image_registries,
         )
     else:
-        workload_registry = RunnerProfileRegistry.empty(workspace_root=workspace_root)
+        workload_registry = RunnerProfileRegistry.empty(
+            workspace_root=workspace_root,
+            allowed_image_registries=workload_image_registries,
+        )
+    workload_concurrency = WorkloadConcurrencyLimiter(
+        fleet_limit=_optional_int_env(
+            os.environ.get("MOONMIND_WORKLOAD_FLEET_CONCURRENCY", "")
+        ),
+        per_profile_limits=_profile_limit_env(
+            os.environ.get("MOONMIND_WORKLOAD_PROFILE_CONCURRENCY", "")
+        ),
+    )
     workload_launcher = DockerWorkloadLauncher(
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
+        concurrency_limiter=workload_concurrency,
     )
     return (
         store,
@@ -656,6 +676,37 @@ def _build_agent_runtime_deps() -> tuple[
         workload_registry,
         workload_launcher,
     )
+
+
+def _csv_env(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in str(raw or "").split(",") if item.strip())
+
+
+def _optional_int_env(raw: str) -> int | None:
+    normalized = str(raw or "").strip()
+    if not normalized:
+        return None
+    return int(normalized)
+
+
+def _profile_limit_env(raw: str) -> dict[str, int]:
+    normalized = str(raw or "").strip()
+    if not normalized:
+        return {}
+    if normalized.startswith("{"):
+        payload = json.loads(normalized)
+        if not isinstance(payload, Mapping):
+            raise ValueError("MOONMIND_WORKLOAD_PROFILE_CONCURRENCY must be an object")
+        return {str(key): int(value) for key, value in payload.items()}
+    limits: dict[str, int] = {}
+    for item in normalized.split(","):
+        profile_id, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(
+                "MOONMIND_WORKLOAD_PROFILE_CONCURRENCY entries must use profile=limit"
+            )
+        limits[profile_id.strip()] = int(value.strip())
+    return limits
 
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
