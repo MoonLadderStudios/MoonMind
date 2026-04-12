@@ -79,8 +79,9 @@ api_service/
 
 frontend/
 └── src/
-    └── components/
-        └── task-detail/
+    └── entrypoints/
+        ├── task-detail.tsx
+        └── task-detail.test.tsx
 
 tests/
 └── unit/
