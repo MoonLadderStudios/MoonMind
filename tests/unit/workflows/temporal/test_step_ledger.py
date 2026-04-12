@@ -99,6 +99,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "runtimeDiagnostics": None,
                 "providerSnapshot": None,
             },
+            "workload": None,
             "lastError": None,
         }
     ]

@@ -247,17 +247,68 @@ async def test_agent_session_terminate_update_keeps_terminating_when_remote_term
         _execute_activity,
     )
 
-    status = await workflow.terminate_session_update({"reason": "done"})
+    with pytest.raises(RuntimeError, match="terminate failed"):
+        await workflow.terminate_session_update({"reason": "done"})
 
-    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
-    assert status["terminationRequested"] is True
-    assert status["lastControlAction"] == "terminate_session"
-    assert status["lastControlReason"] == "done"
-    assert status["activeTurnId"] == "turn-1"
-    assert warnings == [
-        "Managed session terminate activity failed for sess:wf-run-1:codex_cli: "
-        "terminate failed"
-    ]
+    assert workflow.get_status()["status"] == AGENT_SESSION_STATUS_TERMINATING
+    assert workflow.get_status()["terminationRequested"] is False
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_agent_session_cancel_interrupts_active_turn_without_terminating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    captured: list[str] = []
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        captured.append(activity_name)
+        if activity_name == "agent_runtime.interrupt_turn":
+            assert payload["turnId"] == "turn-1"
+            assert payload["reason"] == "operator cancel"
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-1",
+                "status": "interrupted",
+                "outputRefs": [],
+                "metadata": {},
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    status = await workflow.cancel_session_update({"reason": "operator cancel"})
+
+    assert captured == ["agent_runtime.interrupt_turn"]
+    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
+    assert status["terminationRequested"] is False
+    assert status["activeTurnId"] is None
+    assert status["lastControlAction"] == "cancel_session"
+    assert status["lastControlReason"] == "operator cancel"
 
 
 @pytest.mark.asyncio

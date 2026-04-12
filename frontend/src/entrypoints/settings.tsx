@@ -7,6 +7,7 @@ import {
   type WorkerPauseConfig,
 } from '../components/settings/OperationsSettingsSection';
 import {
+  PROVIDER_PROFILE_QUERY_KEY,
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
@@ -135,7 +136,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
     isLoading: areProfilesLoading,
     isError: areProfilesErrored,
   } = useQuery<ProviderProfile[]>({
-    queryKey: ['provider-profiles'],
+    queryKey: PROVIDER_PROFILE_QUERY_KEY,
     queryFn: async () => {
       const response = await fetch('/api/v1/provider-profiles', {
         headers: { Accept: 'application/json' },

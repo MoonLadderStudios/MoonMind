@@ -712,6 +712,20 @@ class MoonMindRunWorkflow:
                     return value.strip()
             return None
 
+        def _output_refs_map() -> dict[str, str]:
+            value = outputs.get("outputRefs") or outputs.get("output_refs")
+            if not isinstance(value, Mapping):
+                return {}
+            refs: dict[str, str] = {}
+            for raw_key, raw_value in value.items():
+                if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+                    continue
+                key = raw_key.strip()
+                ref = raw_value.strip()
+                if key and ref:
+                    refs[key] = ref
+            return refs
+
         def _output_ref_list(*keys: str) -> list[str]:
             for key in keys:
                 value = outputs.get(key)
@@ -721,34 +735,85 @@ class MoonMindRunWorkflow:
                         for item in value
                         if isinstance(item, str) and item.strip()
                     ]
+                if isinstance(value, Mapping):
+                    return [
+                        item.strip()
+                        for item in value.values()
+                        if isinstance(item, str) and item.strip()
+                    ]
             return []
+
+        output_refs_by_class = _output_refs_map()
+
+        def _artifact_class_ref(*classes: str) -> str | None:
+            for artifact_class in classes:
+                value = output_refs_by_class.get(artifact_class)
+                if value:
+                    return value
+            return None
 
         output_refs = _output_ref_list("outputRefs", "output_refs")
         agent_result_ref = _output_ref(
             "outputAgentResultRef",
             "output_agent_result_ref",
         )
+        workload_metadata = outputs.get("workloadMetadata") or outputs.get(
+            "workload_metadata"
+        )
+        workload_result = outputs.get("workloadResult") or outputs.get(
+            "workload_result"
+        )
+        if not isinstance(workload_metadata, Mapping) and isinstance(
+            workload_result,
+            Mapping,
+        ):
+            result_metadata = workload_result.get("metadata")
+            if isinstance(result_metadata, Mapping):
+                workload_metadata = result_metadata.get("workload")
+        if not isinstance(workload_metadata, Mapping):
+            workload_metadata = None
 
         refs = {
             "childWorkflowId": _output_ref("childWorkflowId", "child_workflow_id"),
             "childRunId": _output_ref("childRunId", "child_run_id"),
-            "taskRunId": _output_ref("taskRunId", "task_run_id"),
+            "taskRunId": _output_ref("taskRunId", "task_run_id")
+            or (
+                str(workload_metadata.get("taskRunId")).strip()
+                if isinstance(workload_metadata, Mapping)
+                and workload_metadata.get("taskRunId") is not None
+                else None
+            ),
         }
         artifacts = {
-            "outputSummary": _output_ref("outputSummaryRef", "output_summary_ref"),
+            "outputSummary": _output_ref("outputSummaryRef", "output_summary_ref")
+            or _artifact_class_ref("output.summary"),
             "outputPrimary": _output_ref(
                 "outputPrimaryRef",
                 "output_primary_ref",
-            ),
-            "runtimeStdout": _output_ref("stdoutArtifactRef", "stdout_artifact_ref"),
-            "runtimeStderr": _output_ref("stderrArtifactRef", "stderr_artifact_ref"),
+            )
+            or _artifact_class_ref("output.primary"),
+            "runtimeStdout": _output_ref(
+                "stdoutArtifactRef",
+                "stdout_artifact_ref",
+                "stdoutRef",
+                "stdout_ref",
+            )
+            or _artifact_class_ref("runtime.stdout"),
+            "runtimeStderr": _output_ref(
+                "stderrArtifactRef",
+                "stderr_artifact_ref",
+                "stderrRef",
+                "stderr_ref",
+            )
+            or _artifact_class_ref("runtime.stderr"),
             "runtimeMergedLogs": _output_ref(
                 "mergedLogArtifactRef",
                 "merged_log_artifact_ref",
                 "logArtifactRef",
                 "log_artifact_ref",
             ),
-            "runtimeDiagnostics": _output_ref("diagnosticsRef", "diagnostics_ref"),
+            "runtimeDiagnostics": _output_ref("diagnosticsRef", "diagnostics_ref")
+            or _artifact_class_ref("runtime.diagnostics"),
             "providerSnapshot": _output_ref(
                 "providerSnapshotRef",
                 "provider_snapshot_ref",
@@ -775,6 +840,7 @@ class MoonMindRunWorkflow:
             updated_at=updated_at,
             refs=refs,
             artifacts=artifacts,
+            workload=workload_metadata,
         ):
             return
         self._sync_progress_snapshot(updated_at=updated_at)

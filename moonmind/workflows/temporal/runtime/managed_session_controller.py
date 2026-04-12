@@ -293,6 +293,33 @@ class DockerCodexManagedSessionController:
         return "busy"
 
     @staticmethod
+    def _handle_status_from_record_status(
+        status: ManagedSessionRecordStatus | str,
+    ) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"launching", "ready", "busy", "terminating", "terminated"}:
+            return normalized
+        if normalized in {"degraded", "failed"}:
+            return "failed"
+        return "ready"
+
+    @staticmethod
+    def _request_matches_record(
+        request: LaunchCodexManagedSessionRequest,
+        record: CodexManagedSessionRecord,
+    ) -> bool:
+        return (
+            request.task_run_id == record.task_run_id
+            and request.session_id == record.session_id
+            and request.session_epoch == record.session_epoch
+            and request.thread_id == record.thread_id
+            and request.workspace_path == record.workspace_path
+            and request.session_workspace_path == record.session_workspace_path
+            and request.artifact_spool_path == record.artifact_spool_path
+            and (request.image_ref == record.image_ref)
+        )
+
+    @staticmethod
     def _turn_error_message(response: CodexManagedSessionTurnResponse) -> str | None:
         if response.status != "failed":
             return None
@@ -1162,6 +1189,21 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         self._validate_launch_request(request)
+        if self._session_store is not None:
+            existing_record = self._session_store.load(request.session_id)
+            if (
+                existing_record is not None
+                and self._request_matches_record(request, existing_record)
+                and await self._container_exists(existing_record.container_id)
+            ):
+                return CodexManagedSessionHandle(
+                    sessionState=existing_record.session_state(),
+                    status=self._handle_status_from_record_status(
+                        existing_record.status
+                    ),
+                    imageRef=existing_record.image_ref,
+                    controlUrl=existing_record.control_url,
+                )
         await self._ensure_workspace_paths(request)
         container_name = self._container_name(request.session_id)
         await self._remove_container(container_name, ignore_failure=True)
@@ -1395,6 +1437,17 @@ class DockerCodexManagedSessionController:
         self,
         request: InterruptCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
+        if self._session_store is not None:
+            record = self._session_store.load(request.session_id)
+            if record is not None:
+                self._matches_locator(record, request)
+                if record.active_turn_id is None and record.status == "ready":
+                    return CodexManagedSessionTurnResponse(
+                        sessionState=record.session_state(),
+                        turnId=request.turn_id,
+                        status="interrupted",
+                        metadata={"reason": request.reason or "already interrupted"},
+                    )
         payload = await self._invoke_json(
             container_id=request.container_id,
             action="interrupt_turn",
@@ -1436,6 +1489,20 @@ class DockerCodexManagedSessionController:
         if session_store is not None:
             previous_record = session_store.load(request.session_id)
             if previous_record is not None:
+                if (
+                    previous_record.session_epoch == request.session_epoch + 1
+                    and previous_record.container_id == request.container_id
+                    and previous_record.thread_id == request.new_thread_id
+                    and previous_record.latest_reset_boundary_ref
+                ):
+                    return CodexManagedSessionHandle(
+                        sessionState=previous_record.session_state(),
+                        status=self._handle_status_from_record_status(
+                            previous_record.status
+                        ),
+                        imageRef=previous_record.image_ref,
+                        controlUrl=previous_record.control_url,
+                    )
                 self._matches_locator(previous_record, request)
         payload = await self._invoke_json(
             container_id=request.container_id,
@@ -1476,6 +1543,17 @@ class DockerCodexManagedSessionController:
         self,
         request: TerminateCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
+        if self._session_store is not None:
+            record = self._session_store.load(request.session_id)
+            if record is not None and record.status == "terminated":
+                self._matches_locator(record, request)
+                await self._remove_container(record.container_id, ignore_failure=True)
+                return CodexManagedSessionHandle(
+                    sessionState=record.session_state(),
+                    status="terminated",
+                    imageRef=record.image_ref,
+                    controlUrl=record.control_url,
+                )
         await self._remove_container(request.container_id, ignore_failure=True)
         handle = CodexManagedSessionHandle(
             sessionState={

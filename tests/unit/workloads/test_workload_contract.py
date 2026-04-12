@@ -360,3 +360,24 @@ def test_workload_result_serializes_bounded_metadata() -> None:
     assert dumped["stdoutRef"] == "artifact:stdout"
     assert dumped["stderrRef"] == "artifact:stderr"
     assert dumped["metadata"] == {"summary": "pytest failed"}
+
+
+def test_workload_request_rejects_declared_output_paths_outside_artifacts_dir() -> None:
+    with pytest.raises(ValueError, match="declaredOutputs"):
+        _request(declaredOutputs={"output.primary": "../outside.txt"})
+
+    with pytest.raises(ValueError, match="declaredOutputs"):
+        _request(declaredOutputs={"output.primary": "/tmp/outside.txt"})
+
+
+def test_workload_request_rejects_session_continuity_declared_outputs() -> None:
+    with pytest.raises(ValueError, match="session continuity"):
+        _request(declaredOutputs={"session.summary": "summary.json"})
+
+
+@pytest.mark.parametrize("artifact_class", ["runtime.stdout", "output.logs"])
+def test_workload_request_rejects_runtime_reserved_declared_outputs(
+    artifact_class: str,
+) -> None:
+    with pytest.raises(ValueError, match="runtime artifact classes"):
+        _request(declaredOutputs={artifact_class: "logs.txt"})

@@ -61,7 +61,7 @@ interface ProviderProfileFormState {
   accountLabel: string;
 }
 
-const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
+export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
 
 export function defaultFormState(): ProviderProfileFormState {
   return {
@@ -249,8 +249,9 @@ export function ProviderProfilesManager({
             : `Failed to ${isEditing ? 'update' : 'create'} provider profile.`;
         throw new Error(detail);
       }
+      return response.json() as Promise<ProviderProfile>;
     },
-    onSuccess: () => {
+    onSuccess: (savedProfile) => {
       onNotice({
         level: 'ok',
         text: isEditing
@@ -259,6 +260,30 @@ export function ProviderProfilesManager({
       });
       setEditingProfileId(null);
       setForm(defaultFormState());
+      queryClient.setQueryData<ProviderProfile[]>(
+        PROVIDER_PROFILE_QUERY_KEY,
+        (currentProfiles = []) => {
+          const nextProfiles = currentProfiles.some(
+            (profile) => profile.profile_id === savedProfile.profile_id,
+          )
+            ? currentProfiles.map((profile) =>
+                profile.profile_id === savedProfile.profile_id ? savedProfile : profile,
+              )
+            : [...currentProfiles, savedProfile];
+
+          if (!savedProfile.is_default) {
+            return nextProfiles;
+          }
+
+          return nextProfiles.map((profile) =>
+            profile.runtime_id === savedProfile.runtime_id &&
+            profile.profile_id !== savedProfile.profile_id &&
+            profile.is_default
+              ? { ...profile, is_default: false }
+              : profile,
+          );
+        },
+      );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
     },
     onError: (error: Error) => {

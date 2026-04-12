@@ -438,6 +438,29 @@ class StepLedgerArtifactsModel(BaseModel):
     provider_snapshot: str | None = Field(None, alias="providerSnapshot")
 
 
+class StepLedgerWorkloadModel(BaseModel):
+    """Bounded Docker-backed workload metadata linked to a producing step."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    task_run_id: str | None = Field(None, alias="taskRunId")
+    step_id: str | None = Field(None, alias="stepId")
+    attempt: int | None = Field(None, alias="attempt", ge=1)
+    tool_name: str | None = Field(None, alias="toolName")
+    profile_id: str | None = Field(None, alias="profileId")
+    image_ref: str | None = Field(None, alias="imageRef")
+    status: str | None = Field(None, alias="status")
+    exit_code: int | None = Field(None, alias="exitCode")
+    duration_seconds: float | None = Field(None, alias="durationSeconds", ge=0)
+    timeout_reason: str | None = Field(None, alias="timeoutReason")
+    cancel_reason: str | None = Field(None, alias="cancelReason")
+    session_context: dict[str, Any] | None = Field(None, alias="sessionContext")
+    artifact_publication: dict[str, Any] | None = Field(
+        None,
+        alias="artifactPublication",
+    )
+
+
 class StepLedgerRowModel(BaseModel):
     """Current/latest attempt state for one logical step in the active run."""
 
@@ -470,6 +493,7 @@ class StepLedgerRowModel(BaseModel):
     artifacts: StepLedgerArtifactsModel = Field(
         default_factory=StepLedgerArtifactsModel, alias="artifacts"
     )
+    workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     last_error: str | None = Field(None, alias="lastError")
 
 

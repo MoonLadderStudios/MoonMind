@@ -541,6 +541,79 @@ def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     assert step["artifacts"]["runtimeDiagnostics"] == "art_diag_1"
 
 
+def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "workload-step",
+                "tool": {
+                    "type": "skill",
+                    "name": "container.run_workload",
+                    "version": "1",
+                },
+                "inputs": {"title": "Run workload"},
+            }
+        ],
+        dependency_map={"workload-step": []},
+        updated_at=now,
+    )
+    workflow._record_step_result_evidence(
+        "workload-step",
+        execution_result={
+            "status": "FAILED",
+            "outputs": {
+                "stdoutRef": "art_stdout_1",
+                "stderrRef": "art_stderr_1",
+                "diagnosticsRef": "art_diag_1",
+                "outputRefs": {
+                    "runtime.stdout": "art_stdout_1",
+                    "runtime.stderr": "art_stderr_1",
+                    "runtime.diagnostics": "art_diag_1",
+                    "output.summary": "art_summary_1",
+                    "test.report": "art_report_1",
+                },
+                "workloadMetadata": {
+                    "taskRunId": "wf-1",
+                    "stepId": "workload-step",
+                    "attempt": 1,
+                    "toolName": "container.run_workload",
+                    "profileId": "local-python",
+                    "imageRef": "python:3.12-slim",
+                    "status": "failed",
+                    "exitCode": 7,
+                    "durationSeconds": 4.25,
+                    "sessionContext": {
+                        "sessionId": "session-1",
+                        "sessionEpoch": 3,
+                    },
+                },
+            },
+        },
+        updated_at=now,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+
+    assert step["refs"]["taskRunId"] == "wf-1"
+    assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
+    assert step["artifacts"]["runtimeStderr"] == "art_stderr_1"
+    assert step["artifacts"]["runtimeDiagnostics"] == "art_diag_1"
+    assert step["artifacts"]["outputSummary"] == "art_summary_1"
+    assert step["artifacts"]["outputPrimary"] == "art_report_1"
+    assert step["workload"]["profileId"] == "local-python"
+    assert step["workload"]["imageRef"] == "python:3.12-slim"
+    assert step["workload"]["sessionContext"] == {
+        "sessionId": "session-1",
+        "sessionEpoch": 3,
+    }
+
+
 def test_run_accepts_tuple_output_refs_and_ignores_string_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -581,6 +654,53 @@ def test_run_accepts_tuple_output_refs_and_ignores_string_values(
 
     assert step["artifacts"]["outputPrimary"] == "art_primary_1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
+
+
+def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "workload-step",
+                "tool": {"type": "skill", "name": "container.run_workload"},
+                "inputs": {"title": "Run workload"},
+            }
+        ],
+        dependency_map={"workload-step": []},
+        updated_at=now,
+    )
+    workflow._record_step_result_evidence(
+        "workload-step",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "workloadResult": {
+                    "metadata": {
+                        "stdout": "large bounded stdout must not be ledger metadata",
+                        "workload": {
+                            "taskRunId": "wf-legacy",
+                            "stepId": "workload-step",
+                            "profileId": "local-python",
+                        },
+                    }
+                }
+            },
+        },
+        updated_at=now,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+
+    assert step["refs"]["taskRunId"] == "wf-legacy"
+    assert step["workload"]["taskRunId"] == "wf-legacy"
+    assert step["workload"]["stepId"] == "workload-step"
+    assert step["workload"]["profileId"] == "local-python"
+    assert "stdout" not in step["workload"]
 
 
 @pytest.mark.asyncio

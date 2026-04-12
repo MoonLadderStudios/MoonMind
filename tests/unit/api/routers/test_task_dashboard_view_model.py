@@ -148,11 +148,11 @@ def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
     assert "jiraIntegration" not in config["system"]
 
 
-def test_build_runtime_config_keeps_jira_ui_separate_from_backend_tool_enablement(
+def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
     monkeypatch,
 ) -> None:
-    # Trusted backend Jira tools do not imply browser Jira controls.
     monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
+    monkeypatch.setattr(settings.atlassian.jira, "jira_enabled", True)
     monkeypatch.setattr(settings.atlassian.jira, "jira_tool_enabled", True)
 
     config = build_runtime_config("/tasks/new")
