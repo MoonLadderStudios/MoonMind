@@ -130,10 +130,6 @@ CLOSE_STATUS_FAILED = "failed"
 DEPENDENCY_RESOLUTION_NOT_APPLICABLE = "not_applicable"
 DEPENDENCY_RESOLUTION_SATISFIED = "satisfied"
 DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
-DEPENDENCY_STATE_NONE = "none"
-DEPENDENCY_STATE_BLOCKED = "blocked"
-DEPENDENCY_STATE_SATISFIED = "satisfied"
-DEPENDENCY_STATE_FAILED = "dependency_failed"
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -975,15 +971,6 @@ class MoonMindRunWorkflow:
         if normalized_state == "timed_out":
             return "dependency_timed_out"
         return "dependency_failed"
-
-    def _dependency_state_marker(self) -> str:
-        if not self._declared_dependencies:
-            return DEPENDENCY_STATE_NONE
-        if self._dependency_failure is not None:
-            return DEPENDENCY_STATE_FAILED
-        if self._dependency_resolution == DEPENDENCY_RESOLUTION_SATISFIED:
-            return DEPENDENCY_STATE_SATISFIED
-        return DEPENDENCY_STATE_BLOCKED
 
     def _update_dependency_wait_duration(self) -> None:
         if self._dependency_wait_started_at is None:
@@ -3900,10 +3887,6 @@ class MoonMindRunWorkflow:
             SearchAttributePair(
                 SearchAttributeKey.for_bool("mm_has_dependencies"),
                 bool(self._declared_dependencies),
-            ),
-            SearchAttributePair(
-                SearchAttributeKey.for_keyword("mm_dependency_state"),
-                self._dependency_state_marker(),
             ),
             SearchAttributePair(
                 SearchAttributeKey.for_int("mm_dependency_count"),

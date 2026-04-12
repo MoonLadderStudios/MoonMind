@@ -18,10 +18,8 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_updated_at": "Datetime",
     "mm_repo": "Keyword",
     "mm_integration": "Keyword",
-    "mm_continue_as_new_cause": "Keyword",
     "mm_scheduled_for": "Datetime",
     "mm_has_dependencies": "Bool",
-    "mm_dependency_state": "Keyword",
     "mm_dependency_count": "Int",
     "TaskRunId": "Keyword",
     "RuntimeId": "Keyword",
@@ -46,6 +44,17 @@ LEGACY_SEARCH_ATTRIBUTES = {
             "IsDegraded",
         }
     )
+}
+RETIRED_SEARCH_ATTRIBUTES = {
+    "CustomKeywordField",
+    "CustomStringField",
+    "CustomTextField",
+    "CustomIntField",
+    "CustomDatetimeField",
+    "CustomDoubleField",
+    "CustomBoolField",
+    "mm_continue_as_new_cause",
+    "mm_dependency_state",
 }
 
 
@@ -74,9 +83,24 @@ append_search_attribute() {
   attr_type="$2"
   file="${state_dir}/search-attributes.txt"
   touch "$file"
+  if [ "$attr_type" = "Keyword" ] && [ -n "${FAKE_TEMPORAL_KEYWORD_LIMIT:-}" ]; then
+    current_count="$(awk '$2 == "Keyword" { count++ } END { print count + 0 }' "$file")"
+    if ! grep -Eq "^${name} " "$file" && [ "$current_count" -ge "$FAKE_TEMPORAL_KEYWORD_LIMIT" ]; then
+      printf '%s\\n' "cannot have more than ${FAKE_TEMPORAL_KEYWORD_LIMIT} search attribute of type Keyword." >&2
+      exit 1
+    fi
+  fi
   if ! grep -Eq "^${name} ${attr_type}$" "$file"; then
     printf '%s %s\\n' "$name" "$attr_type" >> "$file"
   fi
+}
+
+remove_search_attribute() {
+  name="$1"
+  file="${state_dir}/search-attributes.txt"
+  [ -f "$file" ] || return 0
+  sed "/^${name} /d" "$file" > "${file}.tmp"
+  mv "${file}.tmp" "$file"
 }
 
 case "$cmd" in
@@ -113,6 +137,20 @@ case "$cmd" in
             append_search_attribute "$name" "$2"
             shift 2
           fi
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    exit 0
+    ;;
+  *"search-attribute remove"*)
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --name)
+          remove_search_attribute "$2"
+          shift 2
           ;;
         *)
           shift
@@ -239,7 +277,6 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert result.returncode == 0, result.stderr
     assert "Registered missing search attributes:" in result.stdout
     assert "mm_has_dependencies" in result.stdout
-    assert "mm_dependency_state" in result.stdout
     assert "mm_dependency_count" in result.stdout
     assert "TaskRunId" in result.stdout
     assert "RuntimeId" in result.stdout
@@ -249,8 +286,78 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "IsDegraded" in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
-    assert calls.count("search-attribute create") == 9
+    assert calls.count("search-attribute create") == 8
 
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
         assert f"{name} {attr_type}" in registered
+
+
+def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgrade(
+    tmp_path: Path,
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "namespace.exists").touch()
+    _write_search_attributes(
+        state_dir,
+        {
+            "CustomKeywordField": "Keyword",
+            "mm_entry": "Keyword",
+            "mm_owner_id": "Keyword",
+            "mm_owner_type": "Keyword",
+            "mm_state": "Keyword",
+            "mm_repo": "Keyword",
+            "mm_integration": "Keyword",
+            "mm_continue_as_new_cause": "Keyword",
+            "mm_dependency_state": "Keyword",
+            "TaskRunId": "Keyword",
+            "mm_updated_at": "Datetime",
+            "mm_scheduled_for": "Datetime",
+            "mm_has_dependencies": "Bool",
+            "mm_dependency_count": "Int",
+            "SessionEpoch": "Int",
+            "IsDegraded": "Bool",
+        },
+    )
+    _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
+    env["FAKE_TEMPORAL_KEYWORD_LIMIT"] = "10"
+    env["TEMPORAL_ADDRESS"] = "temporal:7233"
+    env["TEMPORAL_NAMESPACE"] = "default"
+    env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
+
+    result = subprocess.run(
+        ["sh", str(BOOTSTRAP_SCRIPT)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Removed retired search attributes:" in result.stdout
+    assert "CustomKeywordField" in result.stdout
+    assert "mm_continue_as_new_cause" in result.stdout
+    assert "mm_dependency_state" in result.stdout
+    assert "Registered missing search attributes:" in result.stdout
+    assert "RuntimeId" in result.stdout
+    assert "SessionId" in result.stdout
+    assert "SessionStatus" in result.stdout
+
+    registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
+    for name in RETIRED_SEARCH_ATTRIBUTES:
+        assert f"{name} " not in registered
+    for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
+        assert f"{name} {attr_type}" in registered
+
+    keyword_count = sum(
+        1 for line in registered.splitlines() if line.endswith(" Keyword")
+    )
+    assert keyword_count == 10
