@@ -34,7 +34,7 @@
 - [ ] T007 [P] Add activity catalog expectations for heartbeat-enabled session controls in `tests/unit/workflows/temporal/test_activity_runtime.py`
 - [ ] T008 Add heartbeat timeout policy for `agent_runtime.steer_turn`, `agent_runtime.interrupt_turn`, `agent_runtime.clear_session`, and `agent_runtime.terminate_session` in `moonmind/workflows/temporal/activity_catalog.py`
 - [ ] T009 Add heartbeat wrapping for blocking session control activities in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T010 Add permanent session-control failure classification tests in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [ ] T010 Add permanent session-control failure classification tests for invalid input, stale locator, and unsupported control-state activity failures in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
 - [ ] T011 Implement permanent failure classification for invalid/stale session-control requests in `moonmind/workflows/temporal/activity_runtime.py`
 
 **Checkpoint**: Activity route policies and shared failure/heartbeat behavior are ready for story work.
@@ -73,7 +73,7 @@
 ### Tests for User Story 2
 
 - [ ] T019 [P] [US2] Add workflow cancel-vs-terminate tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T020 [P] [US2] Add controller duplicate interrupt and failed interrupt preservation tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [ ] T020 [P] [US2] Add controller duplicate interrupt, stale locator, unsupported state, and failed interrupt preservation tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 ### Implementation for User Story 2
 
@@ -116,7 +116,7 @@
 
 ### Tests for User Story 4
 
-- [ ] T031 [P] [US4] Add duplicate launch and duplicate clear tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [ ] T031 [P] [US4] Add duplicate launch, duplicate clear, and stale locator idempotency-boundary tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 - [ ] T032 [P] [US4] Add activity heartbeat wrapper tests in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
 - [ ] T033 [P] [US4] Add route heartbeat timeout and retry policy tests in `tests/unit/workflows/temporal/test_activity_runtime.py`
 
@@ -126,7 +126,7 @@
 - [ ] T035 [US4] Implement terminate and interrupt idempotency guards using durable record proof in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
 - [ ] T036 [US4] Apply heartbeat wrapping and permanent failure classification to control activity methods in `moonmind/workflows/temporal/activity_runtime.py`
 - [ ] T037 [US4] Confirm heartbeat timeout and retry policy metadata in `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T038 [US4] Run focused retry/cancellation validation with `python -m pytest -q tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/workflows/temporal/test_activity_runtime.py`
+- [ ] T038 [US4] Run focused retry/cancellation validation, including stale locator and unsupported-state non-retryable assertions, with `python -m pytest -q tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/workflows/temporal/test_activity_runtime.py`
 
 **Checkpoint**: User Story 4 is independently functional and testable.
 
@@ -136,7 +136,7 @@
 
 **Purpose**: Validate the complete feature and clean up any cross-story drift.
 
-- [ ] T039 [P] Re-run contract checklist against `specs/155-codex-session-phase2-runtime/contracts/managed-session-phase2-controls.md`
+- [ ] T039 [P] Re-run the explicit validation checklist in `specs/155-codex-session-phase2-runtime/contracts/managed-session-phase2-controls.md` against completed implementation tasks and tests
 - [ ] T040 [P] Verify no docs-only scope drift with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
 - [ ] T041 Run focused end-to-end unit validation from `specs/155-codex-session-phase2-runtime/quickstart.md`
 - [ ] T042 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`

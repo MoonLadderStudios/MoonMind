@@ -147,3 +147,14 @@ Minimum automated validation coverage:
 - Controller duplicate launch, clear, interrupt, and terminate return durable state without duplicating side effects.
 - Activity catalog/wrappers expose heartbeat behavior for blocking controls.
 - Permanent stale/invalid control inputs fail deterministically.
+
+### Implementation Checklist
+
+Use this checklist for the final contract trace task:
+
+- [ ] `CancelSession` validation proves active work is interrupted without destroying the container or marking the session terminated.
+- [ ] `TerminateSession` validation proves cleanup/finalization completes before workflow completion readiness is set.
+- [ ] `SteerTurn` validation proves the Codex App Server steering protocol is called and no production path returns the old hardcoded unsupported result.
+- [ ] Duplicate launch, clear, interrupt, and terminate validation proves durable state prevents duplicated side effects.
+- [ ] Stale locator, stale epoch, invalid input, and unsupported control-state validation proves permanent failures are non-retryable at activity and controller or workflow boundaries.
+- [ ] Heartbeat validation proves blocking control activity routes declare heartbeat timeouts and wrapper behavior emits heartbeats.
