@@ -2,7 +2,7 @@
 
 ## Source Requirement Mapping
 
-| Source ID | Functional Requirements | Planned Implementation Surfaces | Validation Strategy |
+| DOC-REQ ID | Functional Requirements | Planned Implementation Surfaces | Validation Strategy |
 | --- | --- | --- | --- |
 | DOC-REQ-001 | FR-001, FR-002 | `frontend/src/entrypoints/task-create.tsx`; `api_service/api/routers/task_dashboard_view_model.py` | Runtime config tests prove Jira config is omitted when disabled; Create page tests prove controls are hidden when disabled. |
 | DOC-REQ-002 | FR-008 | `frontend/src/entrypoints/task-create.tsx`; `api_service/api/routers/task_dashboard_view_model.py` | Runtime config tests validate MoonMind-owned endpoint templates; Create page fetch mocks assert browser calls configured `/api/jira/...` paths. |
@@ -28,9 +28,9 @@
 | FR-009 | Board column order test. |
 | FR-010 | Column switch issue visibility test. |
 | FR-011 | Issue preview loading test. |
-| FR-012 | Existing submission/objective tests remain passing; Phase 4 browser tests do not assert any draft mutation. |
+| FR-012 | Existing submission/objective tests remain passing; Phase 4 browser tests assert issue preview does not mutate draft fields. |
 | FR-013 | Typecheck over replace-or-append preference state; import execution intentionally absent. |
-| FR-014 | Browser-local error tests to add during implementation if not already present. |
+| FR-014 | Browser-local error tests verify Jira failures stay inside the browser and manual task creation remains available. |
 | FR-015 | Final validation requires focused frontend tests plus `./tools/test_unit.sh`. |
 
 ## Traceability Gate

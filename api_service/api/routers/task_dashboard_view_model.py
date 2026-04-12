@@ -37,7 +37,7 @@ def _validate_jira_source_templates(sources: Mapping[str, str]) -> None:
     invalid = [
         name
         for name, value in sources.items()
-        if not value.startswith("/api/") or "://" in value
+        if not value.strip() or not value.startswith("/api/") or "://" in value
     ]
     if invalid:
         invalid_names = ", ".join(sorted(invalid))

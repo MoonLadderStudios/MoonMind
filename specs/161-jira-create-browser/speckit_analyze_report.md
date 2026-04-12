@@ -19,7 +19,7 @@
 | FR-009-ordered-columns | Yes | T021, T023, T025, T029 | Column order is tested and implemented from MoonMind responses. |
 | FR-010-column-switch-updates-issues | Yes | T021, T025, T026, T029 | Active-column issue visibility is covered. |
 | FR-011-load-issue-detail-on-selection | Yes | T022, T023, T027, T029 | Detail loading and preview rendering are covered. |
-| FR-012-no-import-or-draft-mutation | Yes | T022, T026, T027, T029, T037 | Phase 4 no-import boundary is explicitly tested. |
+| FR-012-no-import-or-draft-mutation | Yes | T022, T026, T027, T029, T037 | Phase 4 no-import boundary is explicitly tested, including draft field preservation after preview. |
 | FR-013-replace-append-preference-state-only | Yes | T006, T027, T035 | Preference state is typed and rendered without import execution. |
 | FR-014-local-jira-failure-isolation | Yes | T030, T031, T032, T033, T034, T037 | Failure handling is local to the browser and covered by tests. |
 | FR-015-runtime-code-and-validation-tests | Yes | T009, T010, T016, T021, T022, T030, T031, T035, T036, T037, T038 | Runtime implementation and validation tasks are present. |
