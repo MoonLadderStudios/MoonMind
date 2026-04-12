@@ -1436,6 +1436,23 @@ class DockerCodexManagedSessionController:
         if session_store is not None:
             previous_record = session_store.load(request.session_id)
             if previous_record is not None:
+                if (
+                    previous_record.session_epoch == request.session_epoch + 1
+                    and previous_record.container_id == request.container_id
+                    and previous_record.thread_id == request.new_thread_id
+                    and (
+                        previous_record.latest_reset_boundary_ref
+                        or previous_record.latest_control_event_ref
+                    )
+                ):
+                    return CodexManagedSessionHandle(
+                        sessionState=previous_record.session_state(),
+                        status=self._record_status_from_handle_status(
+                            previous_record.status
+                        ),
+                        imageRef=previous_record.image_ref,
+                        controlUrl=previous_record.control_url,
+                    )
                 self._matches_locator(previous_record, request)
         payload = await self._invoke_json(
             container_id=request.container_id,

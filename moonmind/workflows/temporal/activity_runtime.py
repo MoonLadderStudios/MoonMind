@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel
+from temporalio.exceptions import ApplicationError
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
@@ -2748,7 +2749,14 @@ class TemporalAgentRuntimeActivities:
         else:
             raw_payload = request
         payload = _coerce_activity_request(raw_payload, activity_type=activity_type)
-        return model_type.model_validate(payload)
+        try:
+            return model_type.model_validate(payload)
+        except Exception as exc:
+            raise ApplicationError(
+                f"{activity_type} received an invalid managed-session request",
+                type="INVALID_MANAGED_SESSION_REQUEST",
+                non_retryable=True,
+            ) from exc
 
     @staticmethod
     def _validate_session_response(
@@ -2760,8 +2768,10 @@ class TemporalAgentRuntimeActivities:
         try:
             return model_type.model_validate(response)
         except Exception as exc:
-            raise TemporalActivityRuntimeError(
-                f"{activity_type} returned an invalid session contract payload"
+            raise ApplicationError(
+                f"{activity_type} returned an invalid session contract payload",
+                type="INVALID_MANAGED_SESSION_RESPONSE",
+                non_retryable=True,
             ) from exc
 
     @staticmethod
@@ -3000,7 +3010,16 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.steer_turn",
             model_type=SteerCodexManagedSessionTurnRequest,
         )
-        response = await controller.steer_turn(validated)
+        response = await _await_with_activity_heartbeats(
+            controller.steer_turn(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.steer_turn",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+                "threadId": validated.thread_id,
+                "turnId": validated.turn_id,
+            },
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.steer_turn",
@@ -3022,7 +3041,16 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.interrupt_turn",
             model_type=InterruptCodexManagedSessionTurnRequest,
         )
-        response = await controller.interrupt_turn(validated)
+        response = await _await_with_activity_heartbeats(
+            controller.interrupt_turn(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.interrupt_turn",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+                "threadId": validated.thread_id,
+                "turnId": validated.turn_id,
+            },
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.interrupt_turn",
@@ -3042,7 +3070,15 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.clear_session",
             model_type=CodexManagedSessionClearRequest,
         )
-        response = await controller.clear_session(validated)
+        response = await _await_with_activity_heartbeats(
+            controller.clear_session(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.clear_session",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+                "threadId": validated.thread_id,
+            },
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.clear_session",
@@ -3062,7 +3098,15 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.terminate_session",
             model_type=TerminateCodexManagedSessionRequest,
         )
-        response = await controller.terminate_session(validated)
+        response = await _await_with_activity_heartbeats(
+            controller.terminate_session(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.terminate_session",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+                "threadId": validated.thread_id,
+            },
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.terminate_session",

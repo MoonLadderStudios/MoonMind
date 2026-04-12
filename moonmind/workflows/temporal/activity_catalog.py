@@ -28,6 +28,10 @@ LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
+MANAGED_SESSION_NON_RETRYABLE_ERRORS = (
+    "INVALID_MANAGED_SESSION_REQUEST",
+    "INVALID_MANAGED_SESSION_RESPONSE",
+)
 
 
 class TemporalActivityCatalogError(ValueError):
@@ -777,7 +781,11 @@ def build_default_activity_catalog(
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 240, heartbeat_timeout_seconds=30),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
+            retries=_activity_retries(
+                max_attempts=3,
+                max_interval_seconds=120,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.load_session_snapshot",
@@ -804,7 +812,11 @@ def build_default_activity_catalog(
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=30,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
             heartbeat_required=True,
         ),
         TemporalActivityDefinition(
@@ -827,7 +839,11 @@ def build_default_activity_catalog(
                 SEND_TURN_ACTIVITY_SCHEDULE_TO_CLOSE_SECONDS,
                 heartbeat_timeout_seconds=SEND_TURN_ACTIVITY_HEARTBEAT_TIMEOUT_SECONDS,
             ),
-            retries=_activity_retries(max_attempts=1, max_interval_seconds=60),
+            retries=_activity_retries(
+                max_attempts=1,
+                max_interval_seconds=60,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.steer_turn",
@@ -835,8 +851,13 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=60,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.interrupt_turn",
@@ -844,8 +865,13 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=60,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.clear_session",
@@ -853,8 +879,13 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=60,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.terminate_session",
@@ -862,8 +893,13 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=60,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.fetch_session_summary",
@@ -872,7 +908,11 @@ def build_default_activity_catalog(
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 180),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=30,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.publish_session_artifacts",
@@ -881,7 +921,11 @@ def build_default_activity_catalog(
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 240, heartbeat_timeout_seconds=30),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            retries=_activity_retries(
+                max_attempts=2,
+                max_interval_seconds=60,
+                non_retryable=MANAGED_SESSION_NON_RETRYABLE_ERRORS,
+            ),
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.status",

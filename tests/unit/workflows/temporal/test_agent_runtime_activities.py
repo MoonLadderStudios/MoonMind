@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel
+from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
@@ -918,6 +919,24 @@ async def test_await_with_activity_heartbeats_accepts_existing_task(
     )
 
     assert result == "done"
+
+
+async def test_managed_session_activity_invalid_request_is_non_retryable() -> None:
+    activities = TemporalAgentRuntimeActivities(session_controller=AsyncMock())
+
+    with pytest.raises(ApplicationError) as exc_info:
+        await activities.agent_runtime_steer_turn(
+            {
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            }
+        )
+
+    assert exc_info.value.type == "INVALID_MANAGED_SESSION_REQUEST"
+    assert exc_info.value.non_retryable is True
 
 
 async def test_steer_turn_delegates_to_remote_session_controller() -> None:

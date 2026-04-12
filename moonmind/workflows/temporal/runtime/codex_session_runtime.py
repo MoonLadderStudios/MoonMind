@@ -1392,17 +1392,61 @@ class CodexManagedSessionRuntime:
         request: SteerCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
         state = self._validate_locator(request)
-        self._append_spool("stderr", f"steer not supported for turn {request.turn_id}\n")
+        if state.active_turn_id != request.turn_id:
+            if (
+                state.last_turn_id == request.turn_id
+                and state.last_turn_status == "interrupted"
+            ):
+                return CodexManagedSessionTurnResponse(
+                    sessionState=self._session_state(state),
+                    turnId=request.turn_id,
+                    status="interrupted",
+                    metadata={"reason": state.last_turn_error or "interrupt requested"},
+                )
+            return CodexManagedSessionTurnResponse(
+                sessionState=self._session_state(state),
+                turnId=request.turn_id,
+                status="failed",
+                metadata={
+                    "reason": "steer_turn requires the active managed-session turn id"
+                },
+            )
+        client = self._app_server_client()
+        client.initialize()
+        vendor_thread_id = self._resume_thread(
+            client=client,
+            state=state,
+            allow_fallback_start=False,
+        )
+        response = client.request(
+            "turn/steer",
+            {
+                "threadId": vendor_thread_id,
+                "expectedTurnId": request.turn_id,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": request.instructions,
+                    }
+                ],
+            },
+        )
+        response_turn_id = str(response.get("turnId") or request.turn_id).strip()
+        if response_turn_id != request.turn_id:
+            raise RuntimeError("codex app-server turn/steer returned an unexpected turn id")
+        state.active_turn_id = request.turn_id
+        state.last_turn_id = request.turn_id
+        state.last_turn_status = "running"
+        state.last_turn_error = None
+        state.last_control_action = "steer_turn"
+        state.last_control_at = time.time()
+        self._save_state(state)
+        self._append_spool("stdout", f"turn steered: {request.turn_id}\n")
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),
             turnId=request.turn_id,
-            status="failed",
-            metadata={
-                "reason": (
-                    "steer_turn is not supported by the transitional synchronous "
-                    "Codex managed-session runtime"
-                )
-            },
+            status="running",
+            metadata=dict(request.metadata),
         )
 
     def interrupt_turn(

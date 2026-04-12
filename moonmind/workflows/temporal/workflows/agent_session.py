@@ -512,16 +512,41 @@ class MoonMindAgentSessionWorkflow:
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
-        self._status = AGENT_SESSION_STATUS_TERMINATING
-        self._termination_requested = True
         self._last_control_action = "cancel_session"
         self._last_control_reason = request.reason
+        if self._active_turn_id:
+            locator = self._require_locator()
+            turn_id = self._active_turn_id
+            response = CodexManagedSessionTurnResponse.model_validate(
+                await self._execute_routed_activity(
+                    "agent_runtime.interrupt_turn",
+                    InterruptCodexManagedSessionTurnRequest(
+                        sessionId=locator.session_id,
+                        sessionEpoch=locator.session_epoch,
+                        containerId=locator.container_id,
+                        threadId=locator.thread_id,
+                        turnId=turn_id,
+                        reason=request.reason or "cancel_session requested",
+                    ).model_dump(by_alias=True),
+                )
+            )
+            self._apply_runtime_snapshot(
+                response.session_state.model_dump(mode="json", by_alias=True),
+                last_control_action="cancel_session",
+                last_control_reason=request.reason,
+            )
+            await self._refresh_continuity_projection(
+                locator=self._require_locator(),
+                metadata={"action": "cancel_session", "reason": request.reason},
+            )
+        self._status = AGENT_SESSION_STATUS_ACTIVE
         return self.get_status()
 
     @cancel_session_update.validator
     def validate_cancel_session(self, payload: dict[str, Any] | None = None) -> None:
         CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
+        self._require_locator()
 
     @workflow.update(name="TerminateSession")
     async def terminate_session_update(
@@ -531,33 +556,24 @@ class MoonMindAgentSessionWorkflow:
         self._status = AGENT_SESSION_STATUS_TERMINATING
         self._last_control_action = "terminate_session"
         self._last_control_reason = request.reason
-        if self._container_id and self._thread_id:
-            locator = self._require_locator()
-            try:
-                handle = CodexManagedSessionHandle.model_validate(
-                    await self._execute_routed_activity(
-                        "agent_runtime.terminate_session",
-                        TerminateCodexManagedSessionRequest(
-                            sessionId=locator.session_id,
-                            sessionEpoch=locator.session_epoch,
-                            containerId=locator.container_id,
-                            threadId=locator.thread_id,
-                            reason=request.reason,
-                        ).model_dump(by_alias=True),
-                    )
-                )
-            except Exception as exc:
-                workflow.logger.warning(
-                    "Managed session terminate activity failed for %s: %s",
-                    self._binding.session_id,
-                    exc,
-                )
-            else:
-                self._apply_runtime_snapshot(
-                    handle.session_state.model_dump(mode="json", by_alias=True),
-                    last_control_action="terminate_session",
-                    last_control_reason=request.reason,
-                )
+        locator = self._require_locator()
+        handle = CodexManagedSessionHandle.model_validate(
+            await self._execute_routed_activity(
+                "agent_runtime.terminate_session",
+                TerminateCodexManagedSessionRequest(
+                    sessionId=locator.session_id,
+                    sessionEpoch=locator.session_epoch,
+                    containerId=locator.container_id,
+                    threadId=locator.thread_id,
+                    reason=request.reason,
+                ).model_dump(by_alias=True),
+            )
+        )
+        self._apply_runtime_snapshot(
+            handle.session_state.model_dump(mode="json", by_alias=True),
+            last_control_action="terminate_session",
+            last_control_reason=request.reason,
+        )
         self._termination_requested = True
         return self.get_status()
 
@@ -565,3 +581,4 @@ class MoonMindAgentSessionWorkflow:
     def validate_terminate_session(self, payload: dict[str, Any] | None = None) -> None:
         CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
+        self._require_locator()
