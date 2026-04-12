@@ -77,7 +77,7 @@
 
 ## Phase 5: User Story 3 - Surface Operator Defaults (Priority: P2)
 
-**Goal**: Surface configured default Jira project, board, and session-memory values under the enabled Jira integration block.
+**Goal**: Surface configured Jira default project, board, and session-memory values under the enabled Jira integration block.
 
 **Independent Test**: Build runtime config with configured defaults and verify those defaults appear only when the Jira Create-page rollout is enabled.
 
