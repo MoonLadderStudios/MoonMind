@@ -1,0 +1,336 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Jira Browser API
+  version: 0.1.0
+  description: MoonMind-owned Jira browser read contract for the Create page.
+paths:
+  /api/jira/connections/verify:
+    get:
+      summary: Verify the configured Jira browser connection
+      parameters:
+        - name: projectKey
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connection is usable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraConnectionVerification"
+        "403":
+          $ref: "#/components/responses/JiraPolicyDenied"
+        "404":
+          $ref: "#/components/responses/JiraUnavailable"
+        "503":
+          $ref: "#/components/responses/JiraUnavailable"
+  /api/jira/projects:
+    get:
+      summary: List Jira projects visible to the browser policy
+      responses:
+        "200":
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/JiraProject"
+        "403":
+          $ref: "#/components/responses/JiraPolicyDenied"
+  /api/jira/projects/{projectKey}/boards:
+    get:
+      summary: List boards for an allowed project
+      parameters:
+        - $ref: "#/components/parameters/ProjectKey"
+      responses:
+        "200":
+          description: Board list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projectKey, items]
+                properties:
+                  projectKey:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/JiraBoard"
+        "403":
+          $ref: "#/components/responses/JiraPolicyDenied"
+        "404":
+          $ref: "#/components/responses/JiraNotFound"
+  /api/jira/boards/{boardId}/columns:
+    get:
+      summary: List normalized board columns
+      parameters:
+        - $ref: "#/components/parameters/BoardId"
+      responses:
+        "200":
+          description: Board columns in board order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraBoardColumns"
+        "404":
+          $ref: "#/components/responses/JiraNotFound"
+  /api/jira/boards/{boardId}/issues:
+    get:
+      summary: List board issues grouped by normalized column
+      parameters:
+        - $ref: "#/components/parameters/BoardId"
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional issue key or summary filter.
+      responses:
+        "200":
+          description: Issues grouped by board column
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraBoardIssues"
+        "404":
+          $ref: "#/components/responses/JiraNotFound"
+  /api/jira/issues/{issueKey}:
+    get:
+      summary: Load normalized issue detail for preview and import
+      parameters:
+        - $ref: "#/components/parameters/IssueKey"
+        - name: boardId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional board context for column mapping.
+      responses:
+        "200":
+          description: Normalized issue detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraIssueDetail"
+        "403":
+          $ref: "#/components/responses/JiraPolicyDenied"
+        "404":
+          $ref: "#/components/responses/JiraNotFound"
+components:
+  parameters:
+    ProjectKey:
+      name: projectKey
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[A-Z][A-Z0-9]+$"
+    BoardId:
+      name: boardId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    IssueKey:
+      name: issueKey
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[A-Z][A-Z0-9]+-[0-9]+$"
+  schemas:
+    JiraConnectionVerification:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        accountId:
+          type: string
+        displayName:
+          type: string
+        projectKey:
+          type: string
+        projectName:
+          type: string
+    JiraProject:
+      type: object
+      required: [projectKey, name]
+      properties:
+        projectKey:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+    JiraBoard:
+      type: object
+      required: [id, name, projectKey]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        projectKey:
+          type: string
+        type:
+          type: string
+    JiraColumn:
+      type: object
+      required: [id, name, order, count, statusIds]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        order:
+          type: integer
+          minimum: 0
+        count:
+          type: integer
+          minimum: 0
+        statusIds:
+          type: array
+          items:
+            type: string
+    JiraBoardColumns:
+      type: object
+      required: [board, columns]
+      properties:
+        board:
+          $ref: "#/components/schemas/JiraBoard"
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraColumn"
+    JiraIssueSummary:
+      type: object
+      required: [issueKey, summary, columnId]
+      properties:
+        issueKey:
+          type: string
+        summary:
+          type: string
+        issueType:
+          type: string
+        statusId:
+          type: string
+        statusName:
+          type: string
+        assignee:
+          type: string
+        updatedAt:
+          type: string
+        columnId:
+          type: string
+    JiraBoardIssues:
+      type: object
+      required: [boardId, columns, itemsByColumn, unmappedItems]
+      properties:
+        boardId:
+          type: string
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraColumn"
+        itemsByColumn:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/JiraIssueSummary"
+        unmappedItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraIssueSummary"
+    JiraIssueDetail:
+      type: object
+      required:
+        - issueKey
+        - summary
+        - descriptionText
+        - acceptanceCriteriaText
+        - recommendedImports
+      properties:
+        issueKey:
+          type: string
+        url:
+          type: string
+        summary:
+          type: string
+        issueType:
+          type: string
+        column:
+          $ref: "#/components/schemas/JiraColumnRef"
+        status:
+          $ref: "#/components/schemas/JiraStatusRef"
+        descriptionText:
+          type: string
+        acceptanceCriteriaText:
+          type: string
+        recommendedImports:
+          $ref: "#/components/schemas/JiraRecommendedImports"
+    JiraColumnRef:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    JiraStatusRef:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    JiraRecommendedImports:
+      type: object
+      required: [presetInstructions, stepInstructions]
+      properties:
+        presetInstructions:
+          type: string
+        stepInstructions:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+  responses:
+    JiraPolicyDenied:
+      description: Jira policy denied the requested project or operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    JiraUnavailable:
+      description: Jira browser integration is disabled or unavailable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    JiraNotFound:
+      description: Jira project, board, or issue was not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
