@@ -16,11 +16,11 @@
 
 **Purpose**: Confirm the active runtime surfaces and make the task branch ready for implementation.
 
-- [ ] T001 Review existing managed-session workflow control handlers in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [ ] T002 [P] Review existing session activity wrappers and route policies in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T003 [P] Review existing Docker controller behavior in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [ ] T004 [P] Review existing container-side Codex session runtime behavior in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
-- [ ] T005 [P] Review current unit coverage in `tests/unit/workflows/temporal/workflows/test_agent_session.py`, `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`, and `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T001 Review existing managed-session workflow control handlers in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [X] T002 [P] Review existing session activity wrappers and route policies in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/temporal/activity_catalog.py`
+- [X] T003 [P] Review existing Docker controller behavior in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [X] T004 [P] Review existing container-side Codex session runtime behavior in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
+- [X] T005 [P] Review current unit coverage in `tests/unit/workflows/temporal/workflows/test_agent_session.py`, `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`, and `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 ---
 
@@ -30,12 +30,12 @@
 
 **CRITICAL**: No user story implementation should begin until these shared prerequisites are complete.
 
-- [ ] T006 [P] Add shared fake Codex App Server steering recording support in `tests/helpers/codex_session_runtime.py`
-- [ ] T007 [P] Add activity catalog expectations for heartbeat-enabled session controls in `tests/unit/workflows/temporal/test_activity_runtime.py`
-- [ ] T008 Add heartbeat timeout policy for `agent_runtime.steer_turn`, `agent_runtime.interrupt_turn`, `agent_runtime.clear_session`, and `agent_runtime.terminate_session` in `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T009 Add heartbeat wrapping for blocking session control activities in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T010 Add permanent session-control failure classification tests for invalid input, stale locator, and unsupported control-state activity failures in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
-- [ ] T011 Implement permanent failure classification for invalid/stale session-control requests in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T006 [P] Add shared fake Codex App Server steering recording support in `tests/helpers/codex_session_runtime.py`
+- [X] T007 [P] Add activity catalog expectations for heartbeat-enabled session controls in `tests/unit/workflows/temporal/test_activity_runtime.py`
+- [X] T008 Add heartbeat timeout policy for `agent_runtime.steer_turn`, `agent_runtime.interrupt_turn`, `agent_runtime.clear_session`, and `agent_runtime.terminate_session` in `moonmind/workflows/temporal/activity_catalog.py`
+- [X] T009 Add heartbeat wrapping for blocking session control activities in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T010 Add permanent session-control failure classification tests for invalid input, stale locator, and unsupported control-state activity failures in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [X] T011 Implement permanent failure classification for invalid/stale session-control requests in `moonmind/workflows/temporal/activity_runtime.py`
 
 **Checkpoint**: Activity route policies and shared failure/heartbeat behavior are ready for story work.
 
@@ -49,16 +49,16 @@
 
 ### Tests for User Story 1
 
-- [ ] T012 [P] [US1] Add workflow termination cleanup ordering tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T013 [P] [US1] Add controller terminate finalization and duplicate terminate tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
-- [ ] T014 [P] [US1] Add parent workflow termination regression tests in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
+- [X] T012 [P] [US1] Add workflow termination cleanup ordering tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T013 [P] [US1] Add controller terminate finalization and duplicate terminate tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T014 [P] [US1] Add parent workflow termination regression tests in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Update `TerminateSession` workflow behavior in `moonmind/workflows/temporal/workflows/agent_session.py` so cleanup failures are not swallowed and completion readiness is set only after cleanup confirmation
-- [ ] T016 [US1] Update controller termination idempotency and supervision finalization behavior in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [ ] T017 [US1] Update container-side terminate state persistence in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
-- [ ] T018 [US1] Run focused termination validation with `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
+- [X] T015 [US1] Update `TerminateSession` workflow behavior in `moonmind/workflows/temporal/workflows/agent_session.py` so cleanup failures are not swallowed and completion readiness is set only after cleanup confirmation
+- [X] T016 [US1] Update controller termination idempotency and supervision finalization behavior in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [X] T017 [US1] Update container-side terminate state persistence in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
+- [X] T018 [US1] Run focused termination validation with `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
 
 **Checkpoint**: User Story 1 is independently functional and testable.
 
@@ -72,14 +72,14 @@
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Add workflow cancel-vs-terminate tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T020 [P] [US2] Add controller duplicate interrupt, stale locator, unsupported state, and failed interrupt preservation tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T019 [P] [US2] Add workflow cancel-vs-terminate tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T020 [P] [US2] Add controller duplicate interrupt, stale locator, unsupported state, and failed interrupt preservation tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Update `CancelSession` workflow behavior in `moonmind/workflows/temporal/workflows/agent_session.py` to interrupt active turns without setting termination readiness
-- [ ] T022 [US2] Update controller interrupt idempotency to return durable idle/interrupted state only when the record proves the turn is already stopped in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [ ] T023 [US2] Run focused cancellation validation with `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T021 [US2] Update `CancelSession` workflow behavior in `moonmind/workflows/temporal/workflows/agent_session.py` to interrupt active turns without setting termination readiness
+- [X] T022 [US2] Update controller interrupt idempotency to return durable idle/interrupted state only when the record proves the turn is already stopped in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [X] T023 [US2] Run focused cancellation validation with `python -m pytest -q tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 **Checkpoint**: User Story 2 is independently functional and testable.
 
@@ -93,16 +93,16 @@
 
 ### Tests for User Story 3
 
-- [ ] T024 [P] [US3] Add container-runtime steering protocol tests in `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`
-- [ ] T025 [P] [US3] Add workflow `SteerTurn` state update tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T026 [P] [US3] Add controller steering observability/state tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T024 [P] [US3] Add container-runtime steering protocol tests in `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`
+- [X] T025 [P] [US3] Add workflow `SteerTurn` state update tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T026 [P] [US3] Add controller steering observability/state tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Implement real `steer_turn` runtime protocol behavior in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
-- [ ] T028 [US3] Update controller steering response persistence in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [ ] T029 [US3] Ensure workflow `SteerTurn` applies returned session state and latest control metadata in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [ ] T030 [US3] Run focused steering validation with `python -m pytest -q tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T027 [US3] Implement real `steer_turn` runtime protocol behavior in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
+- [X] T028 [US3] Update controller steering response persistence in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [X] T029 [US3] Ensure workflow `SteerTurn` applies returned session state and latest control metadata in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [X] T030 [US3] Run focused steering validation with `python -m pytest -q tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 **Checkpoint**: User Story 3 is independently functional and testable.
 
@@ -116,17 +116,17 @@
 
 ### Tests for User Story 4
 
-- [ ] T031 [P] [US4] Add duplicate launch, duplicate clear, and stale locator idempotency-boundary tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
-- [ ] T032 [P] [US4] Add activity heartbeat wrapper tests in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
-- [ ] T033 [P] [US4] Add route heartbeat timeout and retry policy tests in `tests/unit/workflows/temporal/test_activity_runtime.py`
+- [X] T031 [P] [US4] Add duplicate launch, duplicate clear, and stale locator idempotency-boundary tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [X] T032 [P] [US4] Add activity heartbeat wrapper tests in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [X] T033 [P] [US4] Add route heartbeat timeout and retry policy tests in `tests/unit/workflows/temporal/test_activity_runtime.py`
 
 ### Implementation for User Story 4
 
-- [ ] T034 [US4] Implement launch and clear idempotency guards using durable record proof in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [ ] T035 [US4] Implement terminate and interrupt idempotency guards using durable record proof in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [ ] T036 [US4] Apply heartbeat wrapping and permanent failure classification to control activity methods in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T037 [US4] Confirm heartbeat timeout and retry policy metadata in `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T038 [US4] Run focused retry/cancellation validation, including stale locator and unsupported-state non-retryable assertions, with `python -m pytest -q tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/workflows/temporal/test_activity_runtime.py`
+- [X] T034 [US4] Implement launch and clear idempotency guards using durable record proof in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [X] T035 [US4] Implement terminate and interrupt idempotency guards using durable record proof in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [X] T036 [US4] Apply heartbeat wrapping and permanent failure classification to control activity methods in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T037 [US4] Confirm heartbeat timeout and retry policy metadata in `moonmind/workflows/temporal/activity_catalog.py`
+- [X] T038 [US4] Run focused retry/cancellation validation, including stale locator and unsupported-state non-retryable assertions, with `python -m pytest -q tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/workflows/temporal/test_activity_runtime.py`
 
 **Checkpoint**: User Story 4 is independently functional and testable.
 
@@ -136,11 +136,11 @@
 
 **Purpose**: Validate the complete feature and clean up any cross-story drift.
 
-- [ ] T039 [P] Re-run the explicit validation checklist in `specs/155-codex-session-phase2-runtime/contracts/managed-session-phase2-controls.md` against completed implementation tasks and tests
-- [ ] T040 [P] Verify no docs-only scope drift with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T041 Run focused end-to-end unit validation from `specs/155-codex-session-phase2-runtime/quickstart.md`
-- [ ] T042 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [ ] T043 Review final diff for unrelated changes with `git status --short`
+- [X] T039 [P] Re-run the explicit validation checklist in `specs/155-codex-session-phase2-runtime/contracts/managed-session-phase2-controls.md` against completed implementation tasks and tests
+- [X] T040 [P] Verify no docs-only scope drift with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T041 Run focused end-to-end unit validation from `specs/155-codex-session-phase2-runtime/quickstart.md`
+- [X] T042 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [X] T043 Review final diff for unrelated changes with `git status --short`
 
 ---
 
