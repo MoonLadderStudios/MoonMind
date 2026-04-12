@@ -244,7 +244,7 @@ class JiraBrowserService:
         self._ensure_project_allowed(normalized_project)
         payload = await self._request_json(
             method="GET",
-            path="/rest/agile/1.0/board",
+            path="agile:/board",
             action="jira_browser.list_boards",
             params={"projectKeyOrId": normalized_project, "maxResults": 50},
             context={"projectKey": normalized_project},
@@ -283,7 +283,7 @@ class JiraBrowserService:
         unmapped_items: list[JiraIssueSummary] = []
         payload = await self._request_json(
             method="GET",
-            path=f"/rest/agile/1.0/board/{normalized_board_id}/issue",
+            path=f"agile:/board/{normalized_board_id}/issue",
             action="jira_browser.list_issues",
             params={
                 "fields": "summary,issuetype,status,assignee,updated",
@@ -324,6 +324,9 @@ class JiraBrowserService:
         self._ensure_enabled()
         normalized_issue_key = self._normalize_issue_key(issue_key)
         self._ensure_project_allowed(self._project_from_issue_key(normalized_issue_key))
+        normalized_board_id = (
+            self._normalize_board_id(board_id) if board_id is not None else None
+        )
         payload = await self._request_json(
             method="GET",
             path=f"/issue/{normalized_issue_key}",
@@ -334,7 +337,10 @@ class JiraBrowserService:
             },
             context={"issueKey": normalized_issue_key},
         )
-        return self._normalize_issue_detail(payload, board_id=board_id)
+        board_columns: list[JiraColumn] = []
+        if normalized_board_id is not None:
+            board_columns = (await self.list_columns(normalized_board_id)).columns
+        return self._normalize_issue_detail(payload, board_columns=board_columns)
 
     async def _request_json(
         self,
@@ -363,7 +369,7 @@ class JiraBrowserService:
     async def _fetch_board(self, board_id: str) -> JiraBoard:
         payload = await self._request_json(
             method="GET",
-            path=f"/rest/agile/1.0/board/{board_id}",
+            path=f"agile:/board/{board_id}",
             action="jira_browser.get_board",
             context={"boardId": board_id},
         )
@@ -375,7 +381,7 @@ class JiraBrowserService:
     async def _fetch_board_configuration(self, board_id: str) -> Mapping[str, Any]:
         payload = await self._request_json(
             method="GET",
-            path=f"/rest/agile/1.0/board/{board_id}/configuration",
+            path=f"agile:/board/{board_id}/configuration",
             action="jira_browser.list_columns",
             context={"boardId": board_id},
         )
@@ -499,7 +505,7 @@ class JiraBrowserService:
         self,
         payload: Mapping[str, Any],
         *,
-        board_id: str | None,
+        board_columns: list[JiraColumn],
     ) -> JiraIssueDetail:
         fields = payload.get("fields") if isinstance(payload.get("fields"), Mapping) else {}
         names = payload.get("names") if isinstance(payload.get("names"), Mapping) else {}
@@ -511,6 +517,8 @@ class JiraBrowserService:
         issue_type = fields.get("issuetype") if isinstance(fields.get("issuetype"), Mapping) else {}
         status = fields.get("status") if isinstance(fields.get("status"), Mapping) else {}
         issue_key = str(payload.get("key") or "").strip().upper()
+        status_id = str(status.get("id") or "").strip() or None
+        column = self._column_for_status(status_id, board_columns)
         recommended = self._build_recommendations(
             issue_key=issue_key,
             summary=summary,
@@ -523,14 +531,27 @@ class JiraBrowserService:
             url=url,
             summary=summary,
             issueType=str(issue_type.get("name") or "").strip() or None,
+            column=column,
             status=JiraIssueStatus(
-                id=str(status.get("id") or "").strip() or None,
+                id=status_id,
                 name=str(status.get("name") or "").strip() or None,
             ),
             descriptionText=description_text,
             acceptanceCriteriaText=acceptance_text,
             recommendedImports=recommended,
         )
+
+    def _column_for_status(
+        self,
+        status_id: str | None,
+        board_columns: list[JiraColumn],
+    ) -> JiraIssueColumn | None:
+        if not status_id:
+            return None
+        for column in board_columns:
+            if status_id in column.status_ids:
+                return JiraIssueColumn(id=column.id, name=column.name)
+        return None
 
     def _extract_acceptance_criteria(
         self,

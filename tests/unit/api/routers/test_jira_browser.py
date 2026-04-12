@@ -17,6 +17,7 @@ from moonmind.integrations.jira.browser import (
     JiraBoardIssues,
     JiraColumn,
     JiraConnectionVerification,
+    JiraIssueColumn,
     JiraIssueDetail,
     JiraIssueRecommendations,
     JiraIssueSummary,
@@ -98,6 +99,11 @@ class _FakeJiraBrowserService:
         return JiraIssueDetail(
             issueKey=issue_key,
             summary="Build browser",
+            column=(
+                JiraIssueColumn(id="to-do", name="To Do")
+                if board_id is not None
+                else None
+            ),
             descriptionText="Description",
             acceptanceCriteriaText="Given a board",
             recommendedImports=JiraIssueRecommendations(
@@ -199,6 +205,7 @@ async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
 
     assert response.status_code == 200
     assert response.json()["recommendedImports"]["stepInstructions"] == "Complete Jira story ENG-1"
+    assert response.json()["column"] == {"id": "to-do", "name": "To Do"}
     assert service.calls == [("get_issue", {"issue_key": "ENG-1", "board_id": "42"})]
 
 

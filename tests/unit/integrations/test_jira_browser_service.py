@@ -78,6 +78,18 @@ async def test_browser_service_requires_create_page_feature_flag() -> None:
     assert service.calls == []
 
 
+async def test_browser_service_surfaces_missing_jira_configuration() -> None:
+    service = JiraBrowserService(
+        atlassian_settings=_settings(),
+        feature_flags=FeatureFlagsSettings(jira_create_page_enabled=True),
+    )
+
+    with pytest.raises(JiraToolError) as excinfo:
+        await service.verify_connection()
+
+    assert excinfo.value.code == "jira_not_configured"
+
+
 async def test_list_projects_fetches_only_allowed_projects() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG,OPS"),
@@ -102,6 +114,24 @@ async def test_list_boards_enforces_project_allowlist() -> None:
         await service.list_boards("OPS")
 
     assert excinfo.value.code == "jira_policy_denied"
+    assert service.calls == []
+
+
+async def test_browser_service_rejects_invalid_path_inputs_before_request() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+    )
+
+    with pytest.raises(JiraToolError) as project_error:
+        await service.list_boards("bad-key")
+    with pytest.raises(JiraToolError) as board_error:
+        await service.list_columns("../42")
+    with pytest.raises(JiraToolError) as issue_error:
+        await service.get_issue("not-an-issue-key")
+
+    assert project_error.value.code == "jira_validation_failed"
+    assert board_error.value.code == "jira_validation_failed"
+    assert issue_error.value.code == "jira_validation_failed"
     assert service.calls == []
 
 
@@ -190,6 +220,43 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
     assert result.unmapped_items[0].column_id == "__unmapped"
 
 
+async def test_board_issues_filters_by_query_text() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "ENG"},
+            },
+            {
+                "columnConfig": {
+                    "columns": [
+                        {"name": "To Do", "statuses": [{"id": "1", "name": "Open"}]},
+                    ]
+                }
+            },
+            {
+                "issues": [
+                    {
+                        "key": "ENG-1",
+                        "fields": {"summary": "Build browser", "status": {"id": "1"}},
+                    },
+                    {
+                        "key": "ENG-2",
+                        "fields": {"summary": "Write docs", "status": {"id": "1"}},
+                    },
+                ]
+            },
+        ],
+    )
+
+    result = await service.list_issues("42", q="docs")
+
+    assert [item.issue_key for item in result.items_by_column["to-do"]] == ["ENG-2"]
+
+
 async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -235,6 +302,49 @@ async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     assert result.acceptance_criteria_text == "Given a board"
     assert "ENG-123: Add Jira browser" in result.recommended_imports.preset_instructions
     assert "Acceptance criteria\nGiven a board" in result.recommended_imports.step_instructions
+
+
+async def test_issue_detail_maps_status_to_board_column_when_board_context_is_provided() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "key": "ENG-123",
+                "fields": {
+                    "summary": "Add Jira browser",
+                    "status": {"id": "2", "name": "In Progress"},
+                    "description": "Do the work",
+                },
+            },
+            {
+                "id": 42,
+                "name": "Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "ENG"},
+            },
+            {
+                "columnConfig": {
+                    "columns": [
+                        {
+                            "name": "In Progress",
+                            "statuses": [{"id": "2", "name": "In Progress"}],
+                        },
+                    ]
+                }
+            },
+        ],
+    )
+
+    result = await service.get_issue("ENG-123", board_id="42")
+
+    assert result.column is not None
+    assert result.column.id == "in-progress"
+    assert result.column.name == "In Progress"
+    assert [call["path"] for call in service.calls] == [
+        "/issue/ENG-123",
+        "agile:/board/42",
+        "agile:/board/42/configuration",
+    ]
 
 
 async def test_issue_detail_falls_back_to_description_acceptance_section() -> None:
