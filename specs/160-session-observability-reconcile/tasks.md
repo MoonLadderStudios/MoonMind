@@ -86,18 +86,18 @@
 
 ### Tests for User Story 3
 
-- [ ] T016 [P] [US3] Add failing tests for bounded reconcile activity output and forbidden record/log/credential leakage in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [ ] T016 [P] [US3] Add failing tests for stale degraded session detection, orphaned runtime container detection, bounded reconcile activity output, and forbidden record/log/credential leakage in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
 - [ ] T017 [P] [US3] Add failing tests that `agent_runtime.reconcile_managed_sessions` is cataloged and routed to the agent-runtime worker family in `tests/unit/workflows/temporal/test_temporal_workers.py`
 - [ ] T018 [P] [US3] Add failing tests that the main workflow fleet registers the reconcile workflow without moving Docker/runtime activity work onto workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
-- [ ] T019 [P] [US3] Add failing tests for idempotent create/update behavior of the managed-session reconcile Temporal Schedule in `tests/unit/workflows/temporal/test_client_schedules.py`
+- [ ] T019 [P] [US3] Add failing tests for idempotent create/update behavior, schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cron `*/10 * * * *`, `UTC` timezone, and disabled paused-state behavior of the managed-session reconcile Temporal Schedule in `tests/unit/workflows/temporal/test_client_schedules.py`
 
 ### Implementation for User Story 3
 
 - [ ] T020 [US3] Add `agent_runtime.reconcile_managed_sessions` to the activity catalog and runtime task-queue mapping in `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T021 [US3] Implement the bounded managed-session reconcile activity wrapper and outcome normalization in `moonmind/workflows/temporal/activity_runtime.py`
+- [ ] T021 [US3] Implement the bounded managed-session reconcile activity wrapper and outcome normalization for stale degraded session records and orphaned runtime containers in `moonmind/workflows/temporal/activity_runtime.py`
 - [ ] T022 [US3] Add the `MoonMind.ManagedSessionReconcile` workflow target that delegates reconciliation to `agent_runtime.reconcile_managed_sessions` in `moonmind/workflows/temporal/workflows/managed_session_reconcile.py`
 - [ ] T023 [US3] Register the reconcile workflow on workflow-processing workers while preserving runtime activity separation in `moonmind/workflows/temporal/workers.py`, `moonmind/workflows/temporal/worker_entrypoint.py`, and `moonmind/workflows/temporal/worker_runtime.py`
-- [ ] T024 [US3] Add the Temporal client helper that creates or updates the recurring managed-session reconcile schedule with bounded metadata in `moonmind/workflows/temporal/client.py`
+- [ ] T024 [US3] Add the Temporal client helper that creates or updates the recurring managed-session reconcile schedule with bounded metadata, stable schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cron `*/10 * * * *`, `UTC` timezone, and disabled paused-state behavior in `moonmind/workflows/temporal/client.py`
 
 **Checkpoint**: User Story 3 is independently testable through schedule, workflow registration, activity routing, and bounded reconcile outcome assertions.
 

@@ -74,13 +74,14 @@ An operator needs managed session reconciliation to run durably on a recurring b
 - **FR-008**: System MUST have managed session reconciliation check for stale degraded sessions and orphaned runtime containers and return a bounded operator-readable outcome.
 - **FR-009**: Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests.
 - **FR-010**: Validation tests MUST cover bounded visibility metadata, transition detail updates, activity summaries, runtime worker separation, and recurring reconcile wiring.
+- **FR-011**: The recurring managed-session reconcile trigger MUST use Temporal client helper arguments as its configuration source, stable schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cadence `*/10 * * * *` in `UTC`, and a safe disabled state that leaves the schedule present but paused until re-enabled.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Managed Session Visibility Metadata**: Bounded operator-facing session identity and state, including task run ID, runtime ID, session ID, session epoch, session status, degradation flag, and compact continuity references.
 - **Managed Session Transition**: A lifecycle or control boundary that changes what an operator should see for the session, such as start, active turn, interruption, clear/reset, degradation, termination in progress, and terminated.
 - **Managed Session Reconcile Outcome**: A bounded summary of recurring recovery work, including counts and compact identifiers for reconciled or degraded session records.
-- **Recurring Reconcile Trigger**: Durable operational trigger that starts managed session reconciliation on a configured cadence without relying on ad hoc manual polling.
+- **Recurring Reconcile Trigger**: Durable operational trigger that starts managed session reconciliation on a configured cadence without relying on ad hoc manual polling. The trigger is configured through Temporal client helper arguments, identified by schedule ID `mm-operational:managed-session-reconcile`, starts workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, defaults to cron cadence `*/10 * * * *` in `UTC`, and treats disabled configuration as a paused schedule rather than deleting the schedule.
 
 ## Success Criteria *(mandatory)*
 
@@ -92,3 +93,4 @@ An operator needs managed session reconciliation to run durably on a recurring b
 - **SC-004**: Runtime/container reconciliation work is routed through the runtime activity boundary and not through workflow-processing workers.
 - **SC-005**: A recurring reconcile trigger can be created or updated idempotently and invokes managed session reconciliation with a bounded outcome.
 - **SC-006**: Automated validation covers the required runtime behavior and passes in the required unit test runner.
+- **SC-007**: Schedule validation confirms the stable schedule ID, workflow ID template, default cadence, timezone, and disabled paused-state behavior.

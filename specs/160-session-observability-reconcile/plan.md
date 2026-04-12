@@ -16,7 +16,7 @@ Add runtime-owned observability and recurring recovery for the Codex managed ses
 **Target Platform**: Docker/Compose-hosted MoonMind Temporal workers and task-scoped managed Codex session containers  
 **Project Type**: Backend runtime/workflow observability and operational recovery  
 **Performance Goals**: Visibility updates must stay bounded and reference-sized; recurring reconcile results must remain compact even when many records are inspected; runtime activity routing must not add workflow-worker Docker privileges  
-**Constraints**: Runtime mode only; deliver production runtime code and validation tests; no docs/spec-only completion; do not put prompts, transcripts, scrollback, raw logs, credentials, or secrets in workflow visibility, schedule metadata, or activity summaries; keep Docker/runtime work on the agent-runtime activity boundary  
+**Constraints**: Runtime mode only; deliver production runtime code and validation tests; no docs/spec-only completion; do not put prompts, transcripts, scrollback, raw logs, credentials, or secrets in workflow visibility, schedule metadata, or activity summaries; keep Docker/runtime work on the agent-runtime activity boundary; recurring reconcile schedule construction uses stable schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, helper defaults `cron_expression="*/10 * * * *"`, `timezone="UTC"`, `enabled=True`, and disabled helper calls produce a paused schedule state rather than schedule deletion
 **Scale/Scope**: One task-scoped Codex managed session per task; no cross-task session reuse, frontend UI redesign, multi-runtime session-plane expansion, standalone image path, or canonical-doc migration in this feature
 
 ## Constitution Check
@@ -112,8 +112,8 @@ Implementation surfaces:
 3. Add readable activity summaries for launch and session control activities without including instructions, logs, or credentials.
 4. Add `agent_runtime.reconcile_managed_sessions` to the activity catalog/runtime binding on the agent-runtime fleet.
 5. Add a `MoonMind.ManagedSessionReconcile` workflow and register it with workflow workers.
-6. Add/update Temporal client schedule wiring to create or update the recurring managed-session reconcile schedule.
-7. Add focused tests across workflow visibility, schedule wiring, activity routing, worker registration, and bounded reconcile output.
+6. Add/update Temporal client schedule wiring to create or update the recurring managed-session reconcile schedule. The helper contract is `ensure_managed_session_reconcile_schedule(cron_expression="*/10 * * * *", timezone="UTC", enabled=True)`, returning stable schedule ID `mm-operational:managed-session-reconcile`, targeting workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, and mapping `enabled=False` to a paused schedule state.
+7. Add focused tests across workflow visibility, schedule wiring, activity routing, worker registration, stale degraded session detection, orphaned container detection, and bounded reconcile output.
 
 ## Post-Design Constitution Check
 
