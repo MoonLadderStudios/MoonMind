@@ -245,6 +245,7 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert store.store_root == tmp_path / "managed_runs"
     assert supervisor._log_streamer._storage._root == artifacts_root
     assert workload_registry.workspace_root == tmp_path
+    assert "unreal-5_3-linux" in workload_registry.profile_ids
     assert workload_launcher is not None
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()

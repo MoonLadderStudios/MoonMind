@@ -243,6 +243,56 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
 
 
+def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> None:
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root=WORKSPACE_ROOT,
+        allowed_image_registries=("ghcr.io",),
+    )
+    validated = registry.validate_request(
+        WorkloadRequest.model_validate(
+            {
+                "profileId": "unreal-5_3-linux",
+                "taskRunId": "task-1",
+                "stepId": "unreal-tests",
+                "attempt": 1,
+                "toolName": "unreal.run_tests",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+                "command": [
+                    "unreal-run-tests",
+                    "--project",
+                    "Game/Game.uproject",
+                    "--report",
+                    "unreal/reports/results.json",
+                ],
+                "envOverrides": {
+                    "UE_PROJECT_PATH": "Game/Game.uproject",
+                    "UE_REPORT_PATH": "unreal/reports/results.json",
+                    "CCACHE_DIR": "/work/.ccache",
+                    "UBT_CACHE_DIR": "/work/ubt-cache",
+                },
+                "declaredOutputs": {
+                    "output.primary": "unreal/reports/results.json",
+                },
+            }
+        )
+    )
+
+    run_args = DockerWorkloadLauncher().build_run_args(validated)
+
+    assert "--network" in run_args
+    assert run_args[run_args.index("--network") + 1] == "none"
+    assert "--privileged=false" in run_args
+    assert "--cap-drop" in run_args
+    assert "--security-opt" in run_args
+    assert "type=volume,source=agent_workspaces,target=/work/agent_jobs" in run_args
+    assert "type=volume,source=unreal_ccache_volume,target=/work/.ccache" in run_args
+    assert "type=volume,source=unreal_ubt_volume,target=/work/ubt-cache" in run_args
+    assert "ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3" in run_args
+    assert "/var/run/docker.sock" not in " ".join(run_args)
+
+
 def test_launcher_rejects_artifacts_dir_outside_profile_mount(
     tmp_path: Path,
 ) -> None:

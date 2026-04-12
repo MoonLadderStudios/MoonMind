@@ -30,7 +30,15 @@ def _profile_payload(profile_id: str = "local-python") -> dict[str, object]:
                 "target": "/work/agent_jobs",
             }
         ],
-        "envAllowlist": ["CI"],
+        "envAllowlist": [
+            "CI",
+            "UE_PROJECT_PATH",
+            "UE_TARGET",
+            "UE_TEST_SELECTOR",
+            "UE_REPORT_PATH",
+            "UE_SUMMARY_PATH",
+            "UE_JUNIT_PATH",
+        ],
         "networkPolicy": "none",
         "timeoutSeconds": 300,
         "maxTimeoutSeconds": 600,
@@ -134,6 +142,7 @@ def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
     assert "image" not in definition["inputs"]["schema"]["properties"]
     assert "mounts" not in definition["inputs"]["schema"]["properties"]
     assert "devices" not in definition["inputs"]["schema"]["properties"]
+    assert "reportPaths" in definition["inputs"]["schema"]["properties"]
     resources_schema = definition["inputs"]["schema"]["properties"]["resources"]
     assert resources_schema == {
         "type": "object",
@@ -357,6 +366,11 @@ async def test_unreal_run_tests_handler_builds_curated_command() -> None:
             "projectPath": "Game/Game.uproject",
             "target": "Editor",
             "testSelector": "Project.Functional",
+            "reportPaths": {
+                "primary": "reports/unreal/results.json",
+                "summary": "reports/unreal/summary.json",
+                "junit": "reports/unreal/junit.xml",
+            },
         },
         {"workflow_id": "task-1", "node_id": "unreal-tests"},
     )
@@ -373,7 +387,188 @@ async def test_unreal_run_tests_handler_builds_curated_command() -> None:
         "Editor",
         "--test",
         "Project.Functional",
+        "--report",
+        "reports/unreal/results.json",
+        "--summary",
+        "reports/unreal/summary.json",
+        "--junit",
+        "reports/unreal/junit.xml",
     )
+    assert launcher.validated.request.env_overrides == {
+        "UE_PROJECT_PATH": "Game/Game.uproject",
+        "UE_TARGET": "Editor",
+        "UE_TEST_SELECTOR": "Project.Functional",
+        "UE_REPORT_PATH": "reports/unreal/results.json",
+        "UE_SUMMARY_PATH": "reports/unreal/summary.json",
+        "UE_JUNIT_PATH": "reports/unreal/junit.xml",
+    }
+    assert launcher.validated.request.declared_outputs == {
+        "output.primary": "reports/unreal/results.json",
+        "output.summary": "reports/unreal/summary.json",
+        "output.logs.junit": "reports/unreal/junit.xml",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unreal_run_tests_handler_enforces_curated_profile() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="unreal.run_tests",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    await handler(
+        {
+            "profileId": "unapproved-profile",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+            "projectPath": "Game/Game.uproject",
+        },
+        {"workflow_id": "task-1", "node_id": "unreal-tests"},
+    )
+
+    assert launcher.validated is not None
+    assert launcher.validated.request.profile_id == "unreal-5_3-linux"
+
+
+@pytest.mark.asyncio
+async def test_unreal_run_tests_handler_normalizes_report_paths() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="unreal.run_tests",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    await handler(
+        {
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+            "projectPath": "Game/Game.uproject",
+            "reportPaths": {
+                "primary": r"reports\unreal\.\results.json",
+                "summary": "reports/unreal/../unreal/summary.json",
+                "junit": r"reports\unreal\junit.xml",
+            },
+        },
+        {"workflow_id": "task-1", "node_id": "unreal-tests"},
+    )
+
+    assert launcher.validated is not None
+    assert launcher.validated.request.command[-6:] == (
+        "--report",
+        "reports/unreal/results.json",
+        "--summary",
+        "reports/unreal/summary.json",
+        "--junit",
+        "reports/unreal/junit.xml",
+    )
+    assert launcher.validated.request.env_overrides["UE_JUNIT_PATH"] == (
+        "reports/unreal/junit.xml"
+    )
+    assert launcher.validated.request.declared_outputs == {
+        "output.primary": "reports/unreal/results.json",
+        "output.summary": "reports/unreal/summary.json",
+        "output.logs.junit": "reports/unreal/junit.xml",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unreal_run_tests_handler_uses_default_report_outputs() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="unreal.run_tests",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    await handler(
+        {
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+            "projectPath": "Game/Game.uproject",
+        },
+        {"workflow_id": "task-1", "node_id": "unreal-tests"},
+    )
+
+    assert launcher.validated is not None
+    assert launcher.validated.request.declared_outputs == {
+        "output.primary": "unreal/reports/results.json",
+        "output.summary": "unreal/reports/summary.json",
+        "output.logs.junit": "unreal/reports/junit.xml",
+    }
+    assert "--report" in launcher.validated.request.command
+
+
+@pytest.mark.asyncio
+async def test_unreal_run_tests_handler_rejects_report_paths_outside_artifacts() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="unreal.run_tests",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+                "projectPath": "Game/Game.uproject",
+                "reportPaths": {"primary": "../escape.json"},
+            },
+            {"workflow_id": "task-1", "node_id": "unreal-tests"},
+        )
+
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert "reportPaths" in exc_info.value.message
+    assert launcher.validated is None
+
+
+@pytest.mark.asyncio
+async def test_unreal_run_tests_handler_rejects_non_mapping_env_overrides() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload("unreal-5_3-linux"))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="unreal.run_tests",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/unreal",
+                "projectPath": "Game/Game.uproject",
+                "envOverrides": 1,
+            },
+            {"workflow_id": "task-1", "node_id": "unreal-tests"},
+        )
+
+    assert exc_info.value.error_code == "INVALID_INPUT"
+    assert "envOverrides" in exc_info.value.message
+    assert launcher.validated is None
 
 
 @pytest.mark.asyncio

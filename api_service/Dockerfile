@@ -330,6 +330,7 @@ RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
 # This ensures that code changes don't invalidate the dependency cache
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
+COPY config /app/config/
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /app/api_service/static/task_dashboard/

@@ -674,8 +674,14 @@ def _build_agent_runtime_deps() -> tuple[
             allowed_image_registries=allowed_image_registries or None,
         )
     else:
-        workload_registry = RunnerProfileRegistry(
-            (),
+        default_workload_registry = (
+            Path(__file__).resolve().parents[3]
+            / "config"
+            / "workloads"
+            / "default-runner-profiles.yaml"
+        )
+        workload_registry = RunnerProfileRegistry.load_file(
+            default_workload_registry,
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,
         )
