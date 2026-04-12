@@ -15,8 +15,8 @@
 
 **Purpose**: Confirm the feature branch context and planned contract before runtime changes.
 
-- [X] T001 Review the runtime-config contract in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/specs/156-jira-ui-runtime-config/contracts/runtime-config-jira.schema.json`
-- [X] T002 Review the source traceability matrix in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/specs/156-jira-ui-runtime-config/contracts/requirements-traceability.md`
+- [X] T001 Review the runtime-config contract in `specs/156-jira-ui-runtime-config/contracts/runtime-config-jira.schema.json`
+- [X] T002 Review the source traceability matrix in `specs/156-jira-ui-runtime-config/contracts/requirements-traceability.md`
 
 ---
 
@@ -26,8 +26,8 @@
 
 **CRITICAL**: No user story runtime behavior should be implemented before the feature flag and default-setting shape exists.
 
-- [X] T003 [P] Add Create-page Jira rollout setting fields and safe defaults for DOC-REQ-004 and DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/moonmind/config/settings.py`
-- [X] T004 [P] Add disabled-by-default Jira Create-page config template entries for DOC-REQ-004 and DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/config.template.toml`
+- [X] T003 [P] Add Create-page Jira rollout setting fields and safe defaults for DOC-REQ-004 and DOC-REQ-005 in `moonmind/config/settings.py`
+- [X] T004 [P] Add disabled-by-default Jira Create-page config template entries for DOC-REQ-004 and DOC-REQ-005 in `api_service/config.template.toml`
 
 **Checkpoint**: Runtime settings can represent disabled state, optional defaults, and session-memory preference.
 
@@ -43,13 +43,13 @@
 
 > Write these tests first and confirm they fail before implementation when the runtime behavior is missing.
 
-- [X] T005 [P] [US1] Add disabled-state runtime config tests for DOC-REQ-001 and DOC-REQ-004 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [X] T006 [P] [US1] Add backend-tool-independence regression tests for DOC-REQ-003 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T005 [P] [US1] Add disabled-state runtime config tests for DOC-REQ-001 and DOC-REQ-004 in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T006 [P] [US1] Add backend-tool-independence regression tests for DOC-REQ-003 in `tests/unit/api/routers/test_task_dashboard_view_model.py`
 
 ### Implementation for User Story 1
 
-- [X] T007 [US1] Implement disabled-state omission of `sources.jira` and `system.jiraIntegration` for DOC-REQ-001 and DOC-REQ-004 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/api/routers/task_dashboard_view_model.py`
-- [X] T008 [US1] Ensure Jira UI rollout logic does not read backend Jira tool enablement for DOC-REQ-003 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/api/routers/task_dashboard_view_model.py`
+- [X] T007 [US1] Implement disabled-state omission of `sources.jira` and `system.jiraIntegration` for DOC-REQ-001 and DOC-REQ-004 in `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T008 [US1] Ensure Jira UI rollout logic does not read backend Jira tool enablement for DOC-REQ-003 in `api_service/api/routers/task_dashboard_view_model.py`
 
 **Checkpoint**: User Story 1 is independently complete when disabled runtime config omits Jira UI blocks and preserves existing Create page config.
 
@@ -65,11 +65,11 @@
 
 > Write these tests first and confirm they fail before implementation when the enabled contract is missing.
 
-- [X] T009 [P] [US2] Add enabled endpoint-template tests for DOC-REQ-002, DOC-REQ-005, and DOC-REQ-006 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T009 [P] [US2] Add enabled endpoint-template tests for DOC-REQ-002, DOC-REQ-005, and DOC-REQ-006 in `tests/unit/api/routers/test_task_dashboard_view_model.py`
 
 ### Implementation for User Story 2
 
-- [X] T010 [US2] Implement the Jira source and integration system blocks for DOC-REQ-002, DOC-REQ-005, and DOC-REQ-006 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/api/routers/task_dashboard_view_model.py`
+- [X] T010 [US2] Implement the Jira source and integration system blocks for DOC-REQ-002, DOC-REQ-005, and DOC-REQ-006 in `api_service/api/routers/task_dashboard_view_model.py`
 
 **Checkpoint**: User Story 2 is independently complete when enabled runtime config matches `contracts/runtime-config-jira.schema.json`.
 
@@ -77,7 +77,7 @@
 
 ## Phase 5: User Story 3 - Surface Operator Defaults (Priority: P2)
 
-**Goal**: Surface configured default Jira project, board, and session-memory values under the enabled Jira integration block.
+**Goal**: Surface configured Jira default project, board, and session-memory values under the enabled Jira integration block.
 
 **Independent Test**: Build runtime config with configured defaults and verify those defaults appear only when the Jira Create-page rollout is enabled.
 
@@ -85,13 +85,13 @@
 
 > Write these tests first and confirm they fail before implementation when defaults are not surfaced or normalized.
 
-- [X] T011 [P] [US3] Add runtime config default-value tests for DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [X] T012 [P] [US3] Add settings normalization tests for DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/tests/config/test_atlassian_settings.py`
+- [X] T011 [P] [US3] Add runtime config default-value tests for DOC-REQ-005 in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T012 [P] [US3] Add settings normalization tests for DOC-REQ-005 in `tests/config/test_atlassian_settings.py`
 
 ### Implementation for User Story 3
 
-- [X] T013 [US3] Surface configured Jira default project, board, and session-memory values for DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/api/routers/task_dashboard_view_model.py`
-- [X] T014 [US3] Normalize Jira Create-page default project and board settings for DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/moonmind/config/settings.py`
+- [X] T013 [US3] Surface configured Jira default project, board, and session-memory values for DOC-REQ-005 in `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T014 [US3] Normalize Jira Create-page default project and board settings for DOC-REQ-005 in `moonmind/config/settings.py`
 
 **Checkpoint**: User Story 3 is independently complete when configured defaults are reflected in enabled runtime config and omitted when disabled.
 
@@ -103,8 +103,8 @@
 
 - [X] T015 [P] Run focused validation for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, and DOC-REQ-006 with `./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard_view_model.py tests/config/test_atlassian_settings.py`
 - [X] T016 Run final unit validation for runtime scope with `./tools/test_unit.sh`
-- [X] T017 [P] Confirm no Jira credentials, raw Jira domains, or browser-side Jira auth hints are exposed in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/api/routers/task_dashboard_view_model.py`
-- [X] T018 [P] Confirm implementation remains aligned with `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/specs/156-jira-ui-runtime-config/contracts/requirements-traceability.md`
+- [X] T017 [P] Confirm no Jira credentials, raw Jira domains, or browser-side Jira auth hints are exposed in `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T018 [P] Confirm implementation remains aligned with `specs/156-jira-ui-runtime-config/contracts/requirements-traceability.md`
 
 ---
 
