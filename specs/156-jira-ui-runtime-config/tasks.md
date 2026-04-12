@@ -26,7 +26,7 @@
 
 **CRITICAL**: No user story runtime behavior should be implemented before the feature flag and default-setting shape exists.
 
-- [ ] T003 [P] Add Create-page Jira rollout settings and validators for DOC-REQ-004 and DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/moonmind/config/settings.py`
+- [ ] T003 [P] Add Create-page Jira rollout setting fields and safe defaults for DOC-REQ-004 and DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/moonmind/config/settings.py`
 - [ ] T004 [P] Add disabled-by-default Jira Create-page config template entries for DOC-REQ-004 and DOC-REQ-005 in `/work/agent_jobs/mm:0f0c7188-1fcf-446b-bb54-8f217f54e2b9/repo/api_service/config.template.toml`
 
 **Checkpoint**: Runtime settings can represent disabled state, optional defaults, and session-memory preference.
