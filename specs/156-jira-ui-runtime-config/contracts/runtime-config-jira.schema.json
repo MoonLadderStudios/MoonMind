@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moonmind.local/contracts/runtime-config-jira.schema.json",
+  "title": "Create Page Jira Runtime Config Contract",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "sources": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "jira": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "connections",
+            "projects",
+            "boards",
+            "columns",
+            "issues",
+            "issue"
+          ],
+          "properties": {
+            "connections": {
+              "const": "/api/jira/connections/verify"
+            },
+            "projects": {
+              "const": "/api/jira/projects"
+            },
+            "boards": {
+              "const": "/api/jira/projects/{projectKey}/boards"
+            },
+            "columns": {
+              "const": "/api/jira/boards/{boardId}/columns"
+            },
+            "issues": {
+              "const": "/api/jira/boards/{boardId}/issues"
+            },
+            "issue": {
+              "const": "/api/jira/issues/{issueKey}"
+            }
+          }
+        }
+      }
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "jiraIntegration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "defaultProjectKey",
+            "defaultBoardId",
+            "rememberLastBoardInSession"
+          ],
+          "properties": {
+            "enabled": {
+              "const": true
+            },
+            "defaultProjectKey": {
+              "type": "string"
+            },
+            "defaultBoardId": {
+              "type": "string"
+            },
+            "rememberLastBoardInSession": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  }
+}
