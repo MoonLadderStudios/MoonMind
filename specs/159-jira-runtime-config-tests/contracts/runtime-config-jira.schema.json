@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://moonmind.local/contracts/runtime-config-jira.schema.json",
+  "$id": "https://moonmind.local/contracts/runtime-config-jira-tests.schema.json",
   "title": "Create Page Jira Runtime Config",
   "type": "object",
   "additionalProperties": true,
@@ -27,7 +27,16 @@
   "$defs": {
     "moonmindApiPath": {
       "type": "string",
-      "pattern": "^/api/"
+      "allOf": [
+        {
+          "pattern": "^/api/"
+        },
+        {
+          "not": {
+            "pattern": "://"
+          }
+        }
+      ]
     },
     "jiraSources": {
       "type": "object",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from copy import deepcopy
-from typing import Any
+from typing import Any, Mapping
 
 from moonmind.config.settings import WorkflowSettings, settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
@@ -33,10 +33,7 @@ _JIRA_CREATE_PAGE_SOURCES = {
 }
 
 
-def _build_jira_sources() -> dict[str, str]:
-    """Return validated MoonMind-owned Jira browser endpoint templates."""
-
-    sources = dict(_JIRA_CREATE_PAGE_SOURCES)
+def _validate_jira_source_templates(sources: Mapping[str, str]) -> None:
     invalid = [
         name
         for name, value in sources.items()
@@ -48,7 +45,15 @@ def _build_jira_sources() -> dict[str, str]:
             "Jira Create-page sources must be MoonMind API path templates: "
             f"{invalid_names}"
         )
-    return sources
+
+
+_validate_jira_source_templates(_JIRA_CREATE_PAGE_SOURCES)
+
+
+def _build_jira_sources() -> dict[str, str]:
+    """Return MoonMind-owned Jira browser endpoint templates."""
+
+    return dict(_JIRA_CREATE_PAGE_SOURCES)
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {

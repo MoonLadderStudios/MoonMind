@@ -9,7 +9,7 @@ Implement Phase 3 of the Jira UI plan in runtime mode by making Create-page Jira
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 application code; TypeScript consumers are downstream and unchanged in this phase  
+**Language/Version**: Python 3.12 application code; TypeScript consumers are downstream and unchanged in this phase  
 **Primary Dependencies**: Pydantic settings, FastAPI-hosted dashboard runtime config, pytest  
 **Storage**: N/A; runtime configuration is generated from process settings and request context  
 **Testing**: `./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard_view_model.py` for focused verification; `./tools/test_unit.sh` for final unit-suite verification  
