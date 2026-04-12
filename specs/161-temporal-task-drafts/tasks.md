@@ -11,11 +11,11 @@
 
 **Purpose**: Establish shared fixtures and contract expectations before production code changes.
 
-- [ ] T001 [P] Add shared edit/rerun execution fixtures with inline and artifact-backed instructions in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T002 [P] Add route mode precedence tests for create, edit, rerun, and both identifiers in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T003 [P] Add draft reconstruction helper tests for first-slice fields and missing instructions in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T004 [P] Add contract shape assertions for execution detail and artifact-backed draft inputs in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T005 Verify the OpenAPI planning contract parses cleanly in `specs/161-temporal-task-drafts/contracts/temporal-task-drafts.openapi.yaml`
+- [X] T001 [P] Add shared edit/rerun execution fixtures with inline and artifact-backed instructions in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T002 [P] Add route mode precedence tests for create, edit, rerun, and both identifiers in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T003 [P] Add draft reconstruction helper tests for first-slice fields and missing instructions in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T004 [P] Add contract shape assertions for execution detail and artifact-backed draft inputs in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T005 Verify the OpenAPI planning contract parses cleanly in `specs/161-temporal-task-drafts/contracts/temporal-task-drafts.openapi.yaml`
 
 ---
 
@@ -25,13 +25,13 @@
 
 **CRITICAL**: No user story implementation should begin until this phase is complete.
 
-- [ ] T006 Create `TaskSubmitPageModeResolution` and `TemporalSubmissionDraft` types in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T007 Implement canonical `resolveTaskSubmitPageMode` mode precedence helper in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T008 Extend `TemporalTaskEditingExecutionContract` with all Phase 2 draft source fields in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T009 Add `buildTemporalSubmissionDraftFromExecution` skeleton with explicit incomplete-draft failure in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T010 Read `features.temporalDashboard.temporalTaskEditing` in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T011 [P] Add execution detail read-contract regression coverage for Phase 2 draft source fields in `tests/unit/api/routers/test_executions.py`
-- [ ] T012 Ensure execution detail serialization continues exposing Phase 2 draft source fields in `api_service/api/routers/executions.py`
+- [X] T006 Create `TaskSubmitPageModeResolution` and `TemporalSubmissionDraft` types in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T007 Implement canonical `resolveTaskSubmitPageMode` mode precedence helper in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T008 Extend `TemporalTaskEditingExecutionContract` with all Phase 2 draft source fields in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T009 Add `buildTemporalSubmissionDraftFromExecution` skeleton with explicit incomplete-draft failure in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T010 Read `features.temporalDashboard.temporalTaskEditing` in `frontend/src/entrypoints/task-create.tsx`
+- [X] T011 [P] Add execution detail read-contract regression coverage for Phase 2 draft source fields in `tests/unit/api/routers/test_executions.py`
+- [X] T012 Ensure execution detail serialization continues exposing Phase 2 draft source fields in `api_service/api/routers/executions.py`
 
 **Checkpoint**: Shared mode and draft contracts exist; user-story implementation can proceed.
 
@@ -45,19 +45,19 @@
 
 ### Tests for User Story 1
 
-- [ ] T013 [P] [US1] Add failing create-mode no-execution-load test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T014 [P] [US1] Add failing edit-mode route parsing and title/CTA test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T015 [P] [US1] Add failing rerun-mode precedence and title/CTA test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T016 [P] [US1] Add failing feature-flag-disabled edit/rerun error test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T017 [P] [US1] Add failing no queue-era route or `editJobId` assertion in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T013 [P] [US1] Add failing create-mode no-execution-load test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T014 [P] [US1] Add failing edit-mode route parsing and title/CTA test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T015 [P] [US1] Add failing rerun-mode precedence and title/CTA test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T016 [P] [US1] Add failing feature-flag-disabled edit/rerun error test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T017 [P] [US1] Add failing no queue-era route or `editJobId` assertion in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Wire `resolveTaskSubmitPageMode` into `TaskCreatePage` in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T019 [US1] Render mode-specific page title and primary CTA in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T020 [US1] Show feature-disabled edit/rerun error state without loading execution detail in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T021 [US1] Prevent edit/rerun modes from submitting through create semantics in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T022 [US1] Ensure create mode keeps existing task creation behavior unchanged in `frontend/src/entrypoints/task-create.tsx`
+- [X] T018 [US1] Wire `resolveTaskSubmitPageMode` into `TaskCreatePage` in `frontend/src/entrypoints/task-create.tsx`
+- [X] T019 [US1] Render mode-specific page title and primary CTA in `frontend/src/entrypoints/task-create.tsx`
+- [X] T020 [US1] Show feature-disabled edit/rerun error state without loading execution detail in `frontend/src/entrypoints/task-create.tsx`
+- [X] T021 [US1] Prevent edit/rerun modes from submitting through create semantics in `frontend/src/entrypoints/task-create.tsx`
+- [X] T022 [US1] Ensure create mode keeps existing task creation behavior unchanged in `frontend/src/entrypoints/task-create.tsx`
 
 **Checkpoint**: User Story 1 is independently functional: mode resolution works and create mode remains unchanged.
 
@@ -71,20 +71,20 @@
 
 ### Tests for User Story 2
 
-- [ ] T023 [P] [US2] Add failing inline-instruction draft reconstruction test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T024 [P] [US2] Add failing artifact-backed instruction reconstruction test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T025 [P] [US2] Add failing edit-mode form prefill test for runtime/profile/model/effort/repository/branches/publish/skill in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T026 [P] [US2] Add failing rerun-mode form prefill test with artifact download in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T027 [P] [US2] Add failing applied template state reconstruction test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T023 [P] [US2] Add failing inline-instruction draft reconstruction test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T024 [P] [US2] Add failing artifact-backed instruction reconstruction test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T025 [P] [US2] Add failing edit-mode form prefill test for runtime/profile/model/effort/repository/branches/publish/skill in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T026 [P] [US2] Add failing rerun-mode form prefill test with artifact download in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T027 [P] [US2] Add failing applied template state reconstruction test in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T028 [US2] Complete `buildTemporalSubmissionDraftFromExecution` field mapping in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T029 [US2] Add immutable input artifact read helper for artifact-backed instructions in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T030 [US2] Load `/api/executions/{workflowId}?source=temporal` for edit and rerun modes in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T031 [US2] Apply reconstructed draft state to the shared form fields in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T032 [US2] Preserve provider profile/model defaults without overwriting reconstructed draft values in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T033 [US2] Restore applied template state from reconstructed draft data in `frontend/src/entrypoints/task-create.tsx`
+- [X] T028 [US2] Complete `buildTemporalSubmissionDraftFromExecution` field mapping in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T029 [US2] Add immutable input artifact read helper for artifact-backed instructions in `frontend/src/entrypoints/task-create.tsx`
+- [X] T030 [US2] Load `/api/executions/{workflowId}?source=temporal` for edit and rerun modes in `frontend/src/entrypoints/task-create.tsx`
+- [X] T031 [US2] Apply reconstructed draft state to the shared form fields in `frontend/src/entrypoints/task-create.tsx`
+- [X] T032 [US2] Preserve provider profile/model defaults without overwriting reconstructed draft values in `frontend/src/entrypoints/task-create.tsx`
+- [X] T033 [US2] Restore applied template state from reconstructed draft data in `frontend/src/entrypoints/task-create.tsx`
 
 **Checkpoint**: User Story 2 is independently functional: supported executions open with reviewable prefilled drafts.
 
@@ -98,20 +98,20 @@
 
 ### Tests for User Story 3
 
-- [ ] T034 [P] [US3] Add failing unsupported workflow type error test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T035 [P] [US3] Add failing missing edit capability error test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T036 [P] [US3] Add failing missing rerun capability error test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T037 [P] [US3] Add failing unreadable input artifact error test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T038 [P] [US3] Add failing malformed artifact and incomplete draft error tests in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T039 [P] [US3] Add failing schedule-controls-hidden test for edit and rerun modes in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T034 [P] [US3] Add failing unsupported workflow type error test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T035 [P] [US3] Add failing missing edit capability error test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T036 [P] [US3] Add failing missing rerun capability error test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T037 [P] [US3] Add failing unreadable input artifact error test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T038 [P] [US3] Add failing malformed artifact and incomplete draft error tests in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T039 [P] [US3] Add failing schedule-controls-hidden test for edit and rerun modes in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T040 [US3] Validate `MoonMind.Run` workflow type before draft application in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T041 [US3] Validate `actions.canUpdateInputs` for edit mode and `actions.canRerun` for rerun mode in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T042 [US3] Convert artifact read failures and JSON parse failures into operator-readable errors in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T043 [US3] Prevent incomplete drafts from being applied to submit-ready form state in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T044 [US3] Hide recurring schedule controls outside create mode in `frontend/src/entrypoints/task-create.tsx`
+- [X] T040 [US3] Validate `MoonMind.Run` workflow type before draft application in `frontend/src/entrypoints/task-create.tsx`
+- [X] T041 [US3] Validate `actions.canUpdateInputs` for edit mode and `actions.canRerun` for rerun mode in `frontend/src/entrypoints/task-create.tsx`
+- [X] T042 [US3] Convert artifact read failures and JSON parse failures into operator-readable errors in `frontend/src/entrypoints/task-create.tsx`
+- [X] T043 [US3] Prevent incomplete drafts from being applied to submit-ready form state in `frontend/src/entrypoints/task-create.tsx`
+- [X] T044 [US3] Hide recurring schedule controls outside create mode in `frontend/src/entrypoints/task-create.tsx`
 
 **Checkpoint**: All user stories are independently functional and unsafe states fail closed.
 
@@ -121,13 +121,13 @@
 
 **Purpose**: Final validation and cleanup across all stories.
 
-- [ ] T045 [P] Run targeted task-create Vitest coverage with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T046 [P] Run existing task-detail Vitest coverage with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx`
-- [ ] T047 [P] Run frontend TypeScript typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T048 Run full unit suite with `./tools/test_unit.sh`
-- [ ] T049 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T050 Verify no task editing code path introduces `editJobId`, `/tasks/queue/new`, queue update routes, or queue resubmit wording in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-create.tsx`
-- [ ] T051 Update `specs/161-temporal-task-drafts/quickstart.md` if validation commands change during implementation
+- [X] T045 [P] Run targeted task-create Vitest coverage with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T046 [P] Run existing task-detail Vitest coverage with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T047 [P] Run frontend TypeScript typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T048 Run full unit suite with `./tools/test_unit.sh`
+- [X] T049 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T050 Verify no task editing code path introduces `editJobId`, `/tasks/queue/new`, queue update routes, or queue resubmit wording in `frontend/src/lib/temporalTaskEditing.ts` and `frontend/src/entrypoints/task-create.tsx`
+- [X] T051 Update `specs/161-temporal-task-drafts/quickstart.md` if validation commands change during implementation
 
 ---
 

@@ -393,6 +393,98 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Ano-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:no-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              inputParameters: {
+                task: { instructions: "Existing task instructions." },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Ano-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:no-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputParameters: {
+                task: { instructions: "Terminal task instructions." },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Amissing-artifact?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:missing-artifact",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputArtifactRef: "missing-input",
+              inputParameters: { task: {} },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (
+          url === "/api/executions/mm%3Amalformed-artifact?source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:malformed-artifact",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputArtifactRef: "malformed-input",
+              inputParameters: { task: {} },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aincomplete?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:incomplete",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -473,6 +565,20 @@ describe("Task Create Entrypoint", () => {
               }),
           } as Response);
         }
+        if (url === "/api/artifacts/missing-input/download") {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            text: async () => "",
+          } as Response);
+        }
+        if (url === "/api/artifacts/malformed-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () => "not-json",
+          } as Response);
+        }
         return Promise.resolve({
           ok: false,
           status: 404,
@@ -503,6 +609,26 @@ describe("Task Create Entrypoint", () => {
       mode: "rerun",
       executionId: "mm:rerun",
     });
+  });
+
+  it("does not load an execution detail draft in create mode", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Create Task" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/tasks/skills",
+        expect.objectContaining({
+          headers: { Accept: "application/json" },
+        }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        /^\/api\/executions\/[^?]+\?source=temporal$/.test(String(url)),
+      ),
+    ).toBe(false);
   });
 
   it("reconstructs a create-form draft from Temporal execution fields", () => {
@@ -554,6 +680,75 @@ describe("Task Create Entrypoint", () => {
         inputs: { feature_name: "Task Editing" },
       }),
     ]);
+  });
+
+  it("reconstructs a draft from an artifact-backed execution contract", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:rerun-123",
+        workflowType: "MoonMind.Run",
+        inputArtifactRef: "historical-input",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              profileId: "profile:codex-secondary",
+            },
+          },
+        },
+        actions: {
+          canUpdateInputs: false,
+          canRerun: true,
+        },
+      },
+      {
+        repository: "MoonLadderStudios/MoonMind",
+        task: {
+          instructions: "Rerun from immutable artifact input.",
+          git: {
+            startingBranch: "main",
+            targetBranch: "rerun-target",
+          },
+          publish: { mode: "pr" },
+          skill: { id: "speckit-orchestrate" },
+        },
+      },
+    );
+
+    expect(draft).toMatchObject({
+      runtime: "codex_cli",
+      providerProfile: "profile:codex-secondary",
+      model: "gpt-5.4",
+      effort: "medium",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "rerun-target",
+      publishMode: "pr",
+      taskInstructions: "Rerun from immutable artifact input.",
+      primarySkill: "speckit-orchestrate",
+    });
+  });
+
+  it("fails draft reconstruction when instructions are missing", () => {
+    expect(() =>
+      buildTemporalSubmissionDraftFromExecution({
+        workflowId: "mm:incomplete",
+        workflowType: "MoonMind.Run",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+            },
+          },
+        },
+      }),
+    ).toThrow("Task instructions could not be reconstructed from this execution.");
   });
 
   it("loads edit mode from an active Temporal execution and prefills the shared form", async () => {
@@ -628,7 +823,39 @@ describe("Task Create Entrypoint", () => {
         headers: { Accept: "application/json" },
       }),
     );
+    expect(screen.queryByText("Schedule (optional)")).toBeNull();
     expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+  });
+
+  it("shows a feature-disabled error without loading execution detail", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+    const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      disabledPayload.initialData as {
+        dashboardConfig: {
+          features: { temporalDashboard: { temporalTaskEditing: boolean } };
+        };
+      }
+    ).dashboardConfig.features.temporalDashboard.temporalTaskEditing = false;
+
+    renderWithClient(<TaskCreatePage payload={disabledPayload} />);
+
+    expect(
+      await screen.findByText("Temporal task editing is not enabled."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/executions/mm%3Aedit-123?source=temporal",
+      ),
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it("shows an explicit error for unsupported Temporal workflow types", async () => {
@@ -643,6 +870,101 @@ describe("Task Create Entrypoint", () => {
     expect(
       await screen.findByText(
         "This execution cannot be edited here because only MoonMind.Run is supported.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when edit capability is missing", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Ano-edit",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "This execution does not currently allow editing its inputs.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when rerun capability is missing", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Ano-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText("This execution does not currently allow rerun."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when the input artifact cannot be read", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Amissing-artifact",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "Task instructions could not be loaded from the input artifact.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows explicit errors for malformed artifacts and incomplete drafts", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Amalformed-artifact",
+    );
+
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText("Task input artifact did not contain valid JSON."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    unmount();
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aincomplete",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "Task instructions could not be reconstructed from this execution.",
       ),
     ).toBeTruthy();
     expect(
