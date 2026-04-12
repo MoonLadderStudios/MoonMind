@@ -5,6 +5,23 @@
 **Status**: Draft  
 **Input**: User description: "Implement Phase 4 using test-driven development of the Jira UI plan. Treat docs/UI/CreatePage.md as the desired-state contract for the Create page Jira browsing experience. Add frontend Jira state, data hooks, and one shared browser surface in the Create page so users can open a \"Browse Jira story\" modal or drawer from either the preset Feature Request / Initial Instructions field or from any step Instructions field. The browser must be runtime-config gated, use MoonMind-owned Jira browser endpoints exposed by runtime config, and allow navigation from project to board to board columns to issue list to issue detail without importing text yet. It must preserve existing Create page behavior when Jira UI is disabled, keep one browser surface open at a time, preselect the correct target when opened from preset or step context, and keep manual task creation usable when Jira data loading fails. Add frontend types for JiraIntegrationConfig, JiraProject, JiraBoard, JiraColumn, JiraIssueSummary, JiraIssueDetail, and JiraImportTarget. Add state for selected project, selected board, active column, issue list by column, selected issue, browser open/closed, current import target, replace/append preference, and loading/error states. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
+## Source Document Requirements
+
+The source contract is `docs/UI/CreatePage.md`. The following requirements are extracted for the Phase 4 browser-shell scope and are mapped to functional requirements below.
+
+| ID | Source | Requirement Summary | Functional Requirement Mapping |
+| --- | --- | --- | --- |
+| DOC-REQ-001 | `docs/UI/CreatePage.md` section 14, "Jira integration: runtime config contract" | The Create page may expose Jira browser entry points only when runtime configuration explicitly enables Jira integration; `sources.jira` alone is insufficient. | FR-001, FR-002 |
+| DOC-REQ-002 | `docs/UI/CreatePage.md` section 14, "Jira integration: runtime config contract" | Browser clients must call MoonMind-owned Jira endpoints and must not embed Jira credentials or Jira-domain knowledge beyond documented response shapes. | FR-008 |
+| DOC-REQ-003 | `docs/UI/CreatePage.md` section 15.1, "Column contract" | Jira columns are board-specific, column mapping is resolved by MoonMind, and the browser renders columns in board order. | FR-009 |
+| DOC-REQ-004 | `docs/UI/CreatePage.md` section 15.2, "Issue-list contract" | The issue-list browser model must support issues grouped by active board column, including empty columns, without browser-side status inference. | FR-009, FR-010 |
+| DOC-REQ-005 | `docs/UI/CreatePage.md` section 15.3, "Issue-detail contract" | Issue detail must be normalized for preview, including description and acceptance criteria text, and the browser consumes normalized text rather than Jira rich text. | FR-011 |
+| DOC-REQ-006 | `docs/UI/CreatePage.md` section 16, "Jira integration: shared browser surface" | Jira browsing is one shared secondary instruction-source surface that opens from a target field, preserves the rest of the draft, and shows target, project, board, columns, issue list, and preview. | FR-003, FR-004, FR-005, FR-012 |
+| DOC-REQ-007 | `docs/UI/CreatePage.md` section 16, "Jira integration: shared browser surface" | Selecting a Jira issue must not write into the draft automatically. | FR-012 |
+| DOC-REQ-008 | `docs/UI/CreatePage.md` section 17, "Jira integration: target model" | Jira import targeting must include the preset objective field and any step instruction field, with the browser displaying the selected target explicitly. | FR-003, FR-004, FR-005 |
+
+Out-of-scope source requirements for later Jira phases: text import execution, import modes, import actions, preset reapply behavior, provenance display, and session memory. This Phase 4 specification preserves their contracts by not performing text import or task payload changes.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Open Jira Browser From Preset Instructions (Priority: P1)
@@ -83,18 +100,18 @@ An operator can continue editing and creating manual tasks even if Jira browser 
 
 ### Functional Requirements
 
-- **FR-001**: The Create page MUST show Jira browser entry controls only when runtime configuration explicitly enables the Jira browser capability and provides MoonMind-owned Jira browser sources.
-- **FR-002**: When Jira browser capability is disabled, the Create page MUST preserve existing step editing, preset editing, dependency selection, runtime configuration, scheduling, and submission behavior.
-- **FR-003**: Users MUST be able to open a single shared `Browse Jira story` browser surface from the preset `Feature Request / Initial Instructions` field.
-- **FR-004**: Users MUST be able to open the same shared `Browse Jira story` browser surface from any step `Instructions` field.
-- **FR-005**: The browser MUST identify the active import target as either the preset instruction field or the specific step instruction field that opened it.
+- **FR-001**: The Create page MUST show Jira browser entry controls only when runtime configuration explicitly enables the Jira browser capability and provides MoonMind-owned Jira browser sources. Maps to DOC-REQ-001.
+- **FR-002**: When Jira browser capability is disabled, the Create page MUST preserve existing step editing, preset editing, dependency selection, runtime configuration, scheduling, and submission behavior. Maps to DOC-REQ-001.
+- **FR-003**: Users MUST be able to open a single shared `Browse Jira story` browser surface from the preset `Feature Request / Initial Instructions` field. Maps to DOC-REQ-006 and DOC-REQ-008.
+- **FR-004**: Users MUST be able to open the same shared `Browse Jira story` browser surface from any step `Instructions` field. Maps to DOC-REQ-006 and DOC-REQ-008.
+- **FR-005**: The browser MUST identify the active import target as either the preset instruction field or the specific step instruction field that opened it. Maps to DOC-REQ-006 and DOC-REQ-008.
 - **FR-006**: The browser MUST maintain state for selected project, selected board, active column, issue list by column, selected issue, open or closed status, current import target, replace or append preference, and loading and error states.
 - **FR-007**: The implementation MUST use explicit client-side representations for Jira integration configuration, Jira projects, Jira boards, Jira columns, Jira issue summaries, Jira issue detail, and Jira import targets.
-- **FR-008**: The browser MUST fetch Jira projects, boards, columns, board issues, and issue detail only through MoonMind-owned endpoints supplied by runtime configuration.
-- **FR-009**: The browser MUST render board columns in the order returned by MoonMind and MUST not infer column membership from raw issue status text.
-- **FR-010**: The browser MUST show issues for the active column and update the visible issue list when the active column changes.
-- **FR-011**: The browser MUST load and display normalized issue detail only after the user explicitly selects an issue.
-- **FR-012**: Selecting an issue MUST NOT modify preset instructions, step instructions, task objective, task title, task submission payload, or already-expanded preset steps in this phase.
+- **FR-008**: The browser MUST fetch Jira projects, boards, columns, board issues, and issue detail only through MoonMind-owned endpoints supplied by runtime configuration. Maps to DOC-REQ-002.
+- **FR-009**: The browser MUST render board columns in the order returned by MoonMind and MUST not infer column membership from raw issue status text. Maps to DOC-REQ-003 and DOC-REQ-004.
+- **FR-010**: The browser MUST show issues for the active column and update the visible issue list when the active column changes. Maps to DOC-REQ-004.
+- **FR-011**: The browser MUST load and display normalized issue detail only after the user explicitly selects an issue. Maps to DOC-REQ-005.
+- **FR-012**: Selecting an issue MUST NOT modify preset instructions, step instructions, task objective, task title, task submission payload, or already-expanded preset steps in this phase. Maps to DOC-REQ-006 and DOC-REQ-007.
 - **FR-013**: The browser MUST expose replace-or-append preference state without performing text import in this phase.
 - **FR-014**: Jira browser loading failures MUST remain local to the browser and MUST NOT prevent manual task creation or manual instruction editing.
 - **FR-015**: Required deliverables MUST include production runtime behavior changes and validation tests; docs-only or spec-only changes are insufficient for this feature.

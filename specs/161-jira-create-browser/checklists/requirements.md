@@ -21,6 +21,7 @@
 - [x] Edge cases are identified
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
+- [x] Source document requirements are identified and mapped to functional requirements
 
 ## Feature Readiness
 
@@ -33,3 +34,4 @@
 
 - Runtime intent is explicit: the specification requires production runtime behavior changes and validation tests, not docs-only or spec-only deliverables.
 - User-provided Phase 4 boundaries are preserved: browsing and preview are in scope; text import, provenance persistence, and session memory are deferred.
+- `DOC-REQ-001` through `DOC-REQ-008` are present in `spec.md`, and each maps to at least one `FR-*` item.
