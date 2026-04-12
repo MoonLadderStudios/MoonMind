@@ -514,6 +514,20 @@ class CodexManagedSessionWorkflowInput(BaseModel):
     execution_profile_ref: str | None = Field(None, alias="executionProfileRef")
     session_id: str | None = Field(None, alias="sessionId")
     session_epoch: int = Field(1, alias="sessionEpoch", ge=1)
+    container_id: str | None = Field(None, alias="containerId")
+    thread_id: str | None = Field(None, alias="threadId")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
+    last_control_action: ManagedSessionControlAction | None = Field(
+        None, alias="lastControlAction"
+    )
+    last_control_reason: str | None = Field(None, alias="lastControlReason")
+    latest_summary_ref: str | None = Field(None, alias="latestSummaryRef")
+    latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
+    latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
+    latest_reset_boundary_ref: str | None = Field(None, alias="latestResetBoundaryRef")
+    continue_as_new_event_threshold: int | None = Field(
+        None, alias="continueAsNewEventThreshold", ge=1
+    )
 
     @model_validator(mode="after")
     def _normalize(self) -> "CodexManagedSessionWorkflowInput":
@@ -529,6 +543,43 @@ class CodexManagedSessionWorkflowInput(BaseModel):
             )
         if self.session_id is not None:
             self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        if self.container_id is not None:
+            self.container_id = require_non_blank(
+                self.container_id,
+                field_name="containerId",
+            )
+        if self.thread_id is not None:
+            self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
+        if self.active_turn_id is not None:
+            self.active_turn_id = require_non_blank(
+                self.active_turn_id,
+                field_name="activeTurnId",
+            )
+        if self.last_control_reason is not None:
+            self.last_control_reason = require_non_blank(
+                self.last_control_reason,
+                field_name="lastControlReason",
+            )
+        if self.latest_summary_ref is not None:
+            self.latest_summary_ref = require_non_blank(
+                self.latest_summary_ref,
+                field_name="latestSummaryRef",
+            )
+        if self.latest_checkpoint_ref is not None:
+            self.latest_checkpoint_ref = require_non_blank(
+                self.latest_checkpoint_ref,
+                field_name="latestCheckpointRef",
+            )
+        if self.latest_control_event_ref is not None:
+            self.latest_control_event_ref = require_non_blank(
+                self.latest_control_event_ref,
+                field_name="latestControlEventRef",
+            )
+        if self.latest_reset_boundary_ref is not None:
+            self.latest_reset_boundary_ref = require_non_blank(
+                self.latest_reset_boundary_ref,
+                field_name="latestResetBoundaryRef",
+            )
         return self
 
 
@@ -606,6 +657,10 @@ class CodexManagedSessionSnapshot(BaseModel):
         None, alias="lastControlAction"
     )
     last_control_reason: str | None = Field(None, alias="lastControlReason")
+    latest_summary_ref: str | None = Field(None, alias="latestSummaryRef")
+    latest_checkpoint_ref: str | None = Field(None, alias="latestCheckpointRef")
+    latest_control_event_ref: str | None = Field(None, alias="latestControlEventRef")
+    latest_reset_boundary_ref: str | None = Field(None, alias="latestResetBoundaryRef")
     termination_requested: bool = Field(False, alias="terminationRequested")
 
 

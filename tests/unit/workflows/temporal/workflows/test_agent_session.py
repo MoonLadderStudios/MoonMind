@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -65,14 +66,13 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
 
 
-def test_agent_session_send_follow_up_validator_requires_runtime_handles(
+def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
 
-    with pytest.raises(ValueError, match="runtime handles are not attached yet"):
-        workflow.validate_send_follow_up({"message": "Continue the task-scoped session."})
+    workflow.validate_send_follow_up({"message": "Continue the task-scoped session."})
 
 
 def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
@@ -721,7 +721,7 @@ def test_agent_session_legacy_control_action_signal_replays_clear_session(
 
 
 @pytest.mark.asyncio
-async def test_agent_session_clear_session_update_preserves_concurrent_terminating_state(
+async def test_agent_session_async_mutators_wait_for_workflow_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -734,27 +734,15 @@ async def test_agent_session_clear_session_update_preserves_concurrent_terminati
         }
     )
 
+    captured: list[str] = []
+
     async def _execute_activity(
         activity_name: str,
         payload: dict[str, object],
         **_kwargs: object,
     ) -> dict[str, object]:
-        if activity_name == "agent_runtime.terminate_session":
-            return {
-                "sessionState": {
-                    "sessionId": "sess:wf-run-1:codex_cli",
-                    "sessionEpoch": 1,
-                    "containerId": "container-1",
-                    "threadId": "thread-1",
-                    "activeTurnId": None,
-                },
-                "status": "terminated",
-                "imageRef": "moonmind:latest",
-                "controlUrl": "http://session-control",
-                "metadata": {},
-            }
+        captured.append(activity_name)
         if activity_name == "agent_runtime.clear_session":
-            await workflow.terminate_session_update({"reason": "Shutdown now"})
             return {
                 "sessionState": {
                     "sessionId": "sess:wf-run-1:codex_cli",
@@ -807,8 +795,209 @@ async def test_agent_session_clear_session_update_preserves_concurrent_terminati
         _execute_activity,
     )
 
-    await workflow.clear_session_update({"reason": "Reset stale context"})
+    await workflow._mutation_lock.acquire()
+    clear_task = asyncio.create_task(
+        workflow.clear_session_update({"reason": "Reset stale context"})
+    )
+    await asyncio.sleep(0)
 
-    status = workflow.get_status()
-    assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
-    assert status["terminationRequested"] is True
+    assert not captured
+
+    workflow._mutation_lock.release()
+    await clear_task
+
+    assert captured == [
+        "agent_runtime.clear_session",
+        "agent_runtime.fetch_session_summary",
+        "agent_runtime.publish_session_artifacts",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_session_send_follow_up_waits_for_runtime_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    wait_calls = 0
+    activity_names: list[str] = []
+
+    async def _wait_condition(predicate, **_kwargs: object) -> None:
+        nonlocal wait_calls
+        wait_calls += 1
+        assert predicate() is False
+        workflow.attach_runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+            }
+        )
+        assert predicate() is True
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        activity_names.append(activity_name)
+        if activity_name == "agent_runtime.send_turn":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-2",
+                "status": "completed",
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-2",
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-2",
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    result = await workflow.send_follow_up({"message": "Continue after launch."})
+
+    assert wait_calls == 1
+    assert result["latestSummaryRef"] == "art-summary-2"
+    assert workflow.get_status()["latestSummaryRef"] == "art-summary-2"
+    assert activity_names == [
+        "agent_runtime.send_turn",
+        "agent_runtime.fetch_session_summary",
+        "agent_runtime.publish_session_artifacts",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_session_run_waits_for_handlers_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow._termination_requested = True
+    waited_for_handlers = False
+
+    async def _wait_condition(predicate, **_kwargs: object) -> None:
+        nonlocal waited_for_handlers
+        if predicate is agent_session_module.workflow.all_handlers_finished:
+            waited_for_handlers = True
+            return
+        assert predicate() is True
+
+    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+
+    status = await workflow.run(_workflow_input())
+
+    assert waited_for_handlers is True
+    assert status["status"] == "terminated"
+
+
+@pytest.mark.asyncio
+async def test_agent_session_continue_as_new_carries_bounded_session_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-run-1:session:codex_cli",
+            "run_id": "run-session-1",
+            "task_queue": "mm.workflow",
+            "get_current_history_length": lambda _self: 12,
+            "is_continue_as_new_suggested": lambda _self: False,
+        },
+    )()
+    logger = type(
+        "Logger",
+        (),
+        {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+    )
+    monkeypatch.setattr(agent_session_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(agent_session_module.workflow, "logger", logger)
+
+    workflow = MoonMindAgentSessionWorkflow(
+        _workflow_input(
+            executionProfileRef="codex-default",
+            containerId="container-1",
+            threadId="thread-1",
+            activeTurnId="turn-1",
+            lastControlAction="send_turn",
+            lastControlReason="operator follow-up",
+            latestSummaryRef="art-summary",
+            latestCheckpointRef="art-checkpoint",
+            latestControlEventRef="art-control",
+            latestResetBoundaryRef="art-reset",
+            continueAsNewEventThreshold=10,
+        )
+    )
+    waited_for_handlers = False
+    captured_payload: dict[str, object] | None = None
+
+    async def _wait_condition(predicate, **_kwargs: object) -> None:
+        nonlocal waited_for_handlers
+        if predicate is agent_session_module.workflow.all_handlers_finished:
+            waited_for_handlers = True
+            return
+        assert predicate() is True
+
+    def _continue_as_new(payload: dict[str, object]) -> None:
+        nonlocal captured_payload
+        captured_payload = payload
+        raise RuntimeError("continue-as-new requested")
+
+    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "continue_as_new",
+        _continue_as_new,
+    )
+
+    with pytest.raises(RuntimeError, match="continue-as-new requested"):
+        await workflow.run(_workflow_input())
+
+    assert waited_for_handlers is True
+    assert captured_payload == {
+        "taskRunId": "wf-run-1",
+        "runtimeId": "codex_cli",
+        "sessionId": "sess:wf-run-1:codex_cli",
+        "sessionEpoch": 1,
+        "executionProfileRef": "codex-default",
+        "containerId": "container-1",
+        "threadId": "thread-1",
+        "activeTurnId": "turn-1",
+        "lastControlAction": "send_turn",
+        "lastControlReason": "operator follow-up",
+        "latestSummaryRef": "art-summary",
+        "latestCheckpointRef": "art-checkpoint",
+        "latestControlEventRef": "art-control",
+        "latestResetBoundaryRef": "art-reset",
+        "continueAsNewEventThreshold": 10,
+    }

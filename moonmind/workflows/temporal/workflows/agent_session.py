@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
@@ -61,7 +62,16 @@ class MoonMindAgentSessionWorkflow:
         self._active_turn_id: str | None = None
         self._last_control_action: str | None = None
         self._last_control_reason: str | None = None
+        self._latest_summary_ref: str | None = None
+        self._latest_checkpoint_ref: str | None = None
+        self._latest_control_event_ref: str | None = None
+        self._latest_reset_boundary_ref: str | None = None
+        self._continue_as_new_event_threshold = (
+            session_input.continue_as_new_event_threshold
+        )
         self._termination_requested = False
+        self._mutation_lock = asyncio.Lock()
+        self._restore_continue_as_new_state(session_input)
 
     @staticmethod
     def _retry_policy_for_route(route: TemporalActivityRoute) -> RetryPolicy:
@@ -117,6 +127,14 @@ class MoonMindAgentSessionWorkflow:
             threadId=self._thread_id,
         )
 
+    def _runtime_handles_attached(self) -> bool:
+        return bool(self._container_id and self._thread_id)
+
+    async def _await_runtime_handles(self) -> None:
+        if self._runtime_handles_attached():
+            return
+        await workflow.wait_condition(self._runtime_handles_attached)
+
     def _validate_mutation_allowed(self) -> None:
         if self._status in {
             AGENT_SESSION_STATUS_TERMINATING,
@@ -158,6 +176,12 @@ class MoonMindAgentSessionWorkflow:
         if last_control_reason is not None or last_control_action is not None:
             self._last_control_reason = last_control_reason
         return session_state.model_dump(mode="json", by_alias=True)
+
+    def _apply_continuity_projection(self, projection: Mapping[str, Any]) -> None:
+        self._latest_summary_ref = projection.get("latestSummaryRef")
+        self._latest_checkpoint_ref = projection.get("latestCheckpointRef")
+        self._latest_control_event_ref = projection.get("latestControlEventRef")
+        self._latest_reset_boundary_ref = projection.get("latestResetBoundaryRef")
 
     async def _refresh_continuity_projection(
         self,
@@ -201,12 +225,79 @@ class MoonMindAgentSessionWorkflow:
             or summary.latest_reset_boundary_ref,
         }
 
+    def _restore_continue_as_new_state(
+        self,
+        session_input: CodexManagedSessionWorkflowInput,
+    ) -> None:
+        self._container_id = session_input.container_id
+        self._thread_id = session_input.thread_id
+        self._active_turn_id = session_input.active_turn_id
+        self._last_control_action = session_input.last_control_action
+        self._last_control_reason = session_input.last_control_reason
+        self._latest_summary_ref = session_input.latest_summary_ref
+        self._latest_checkpoint_ref = session_input.latest_checkpoint_ref
+        self._latest_control_event_ref = session_input.latest_control_event_ref
+        self._latest_reset_boundary_ref = session_input.latest_reset_boundary_ref
+
+    def _build_continue_as_new_input(self) -> dict[str, Any]:
+        binding = self._require_binding()
+        payload: dict[str, Any] = {
+            "taskRunId": binding.task_run_id,
+            "runtimeId": binding.runtime_id,
+            "sessionId": binding.session_id,
+            "sessionEpoch": binding.session_epoch,
+        }
+        optional_fields = {
+            "executionProfileRef": binding.execution_profile_ref,
+            "containerId": self._container_id,
+            "threadId": self._thread_id,
+            "activeTurnId": self._active_turn_id,
+            "lastControlAction": self._last_control_action,
+            "lastControlReason": self._last_control_reason,
+            "latestSummaryRef": self._latest_summary_ref,
+            "latestCheckpointRef": self._latest_checkpoint_ref,
+            "latestControlEventRef": self._latest_control_event_ref,
+            "latestResetBoundaryRef": self._latest_reset_boundary_ref,
+            "continueAsNewEventThreshold": self._continue_as_new_event_threshold,
+        }
+        payload.update(
+            {key: value for key, value in optional_fields.items() if value is not None}
+        )
+        return payload
+
+    def _should_continue_as_new(self) -> bool:
+        if self._termination_requested:
+            return False
+        info = workflow.info()
+        is_suggested = getattr(info, "is_continue_as_new_suggested", None)
+        if callable(is_suggested) and is_suggested():
+            return True
+        threshold = self._continue_as_new_event_threshold
+        history_length = getattr(info, "get_current_history_length", None)
+        return bool(
+            threshold is not None
+            and callable(history_length)
+            and history_length() >= threshold
+        )
+
     @workflow.run
     async def run(
         self, session_input: CodexManagedSessionWorkflowInput
     ) -> dict[str, Any]:
         del session_input
-        await workflow.wait_condition(lambda: self._termination_requested)
+        while not self._termination_requested:
+            if self._should_continue_as_new():
+                await workflow.wait_condition(workflow.all_handlers_finished)
+                workflow.continue_as_new(self._build_continue_as_new_input())
+            try:
+                await workflow.wait_condition(
+                    lambda: self._termination_requested
+                    or self._should_continue_as_new(),
+                    timeout=timedelta(seconds=60),
+                )
+            except TimeoutError:
+                pass
+        await workflow.wait_condition(workflow.all_handlers_finished)
         self._status = AGENT_SESSION_STATUS_TERMINATED
         return self.get_status()
 
@@ -325,6 +416,10 @@ class MoonMindAgentSessionWorkflow:
             activeTurnId=self._active_turn_id,
             lastControlAction=self._last_control_action,
             lastControlReason=self._last_control_reason,
+            latestSummaryRef=self._latest_summary_ref,
+            latestCheckpointRef=self._latest_checkpoint_ref,
+            latestControlEventRef=self._latest_control_event_ref,
+            latestResetBoundaryRef=self._latest_reset_boundary_ref,
             terminationRequested=self._termination_requested,
         )
         return snapshot.model_dump(mode="json", by_alias=True)
@@ -332,192 +427,53 @@ class MoonMindAgentSessionWorkflow:
     @workflow.update(name="SendFollowUp")
     async def send_follow_up(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
-        locator = self._require_locator()
-        response = CodexManagedSessionTurnResponse.model_validate(
-            await self._execute_routed_activity(
-                "agent_runtime.send_turn",
-                SendCodexManagedSessionTurnRequest(
-                    sessionId=locator.session_id,
-                    sessionEpoch=locator.session_epoch,
-                    containerId=locator.container_id,
-                    threadId=locator.thread_id,
-                    instructions=request.message,
-                    reason=request.reason,
-                ).model_dump(by_alias=True),
+        async with self._mutation_lock:
+            await self._await_runtime_handles()
+            locator = self._require_locator()
+            response = CodexManagedSessionTurnResponse.model_validate(
+                await self._execute_routed_activity(
+                    "agent_runtime.send_turn",
+                    SendCodexManagedSessionTurnRequest(
+                        sessionId=locator.session_id,
+                        sessionEpoch=locator.session_epoch,
+                        containerId=locator.container_id,
+                        threadId=locator.thread_id,
+                        instructions=request.message,
+                        reason=request.reason,
+                    ).model_dump(by_alias=True),
+                )
             )
-        )
-        session_state = self._apply_runtime_snapshot(
-            response.session_state.model_dump(mode="json", by_alias=True),
-            last_control_action="send_turn",
-            last_control_reason=request.reason,
-        )
-        continuity = await self._refresh_continuity_projection(
-            locator=self._require_locator(),
-            metadata={"action": "send_follow_up", "reason": request.reason},
-        )
-        return {
-            "turnId": response.turn_id,
-            "status": response.status,
-            "sessionState": session_state,
-            **continuity,
-        }
+            session_state = self._apply_runtime_snapshot(
+                response.session_state.model_dump(mode="json", by_alias=True),
+                last_control_action="send_turn",
+                last_control_reason=request.reason,
+            )
+            continuity = await self._refresh_continuity_projection(
+                locator=self._require_locator(),
+                metadata={"action": "send_follow_up", "reason": request.reason},
+            )
+            self._apply_continuity_projection(continuity)
+            return {
+                "turnId": response.turn_id,
+                "status": response.status,
+                "sessionState": session_state,
+                **continuity,
+            }
 
     @send_follow_up.validator
     def validate_send_follow_up(self, payload: dict[str, Any] | None = None) -> None:
         CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
         self._validate_mutation_allowed()
-        self._require_locator()
 
     @workflow.update(name="InterruptTurn")
     async def interrupt_turn_update(
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
-        locator = self._require_locator()
-        turn_id = self._require_active_turn()
-        response = CodexManagedSessionTurnResponse.model_validate(
-            await self._execute_routed_activity(
-                "agent_runtime.interrupt_turn",
-                InterruptCodexManagedSessionTurnRequest(
-                    sessionId=locator.session_id,
-                    sessionEpoch=locator.session_epoch,
-                    containerId=locator.container_id,
-                    threadId=locator.thread_id,
-                    turnId=turn_id,
-                    reason=request.reason,
-                ).model_dump(by_alias=True),
-            )
-        )
-        session_state = self._apply_runtime_snapshot(
-            response.session_state.model_dump(mode="json", by_alias=True),
-            last_control_action="interrupt_turn",
-            last_control_reason=request.reason,
-        )
-        continuity = await self._refresh_continuity_projection(
-            locator=self._require_locator(),
-            metadata={"action": "interrupt_turn", "reason": request.reason},
-        )
-        return {
-            "turnId": response.turn_id,
-            "status": response.status,
-            "sessionState": session_state,
-            **continuity,
-        }
-
-    @interrupt_turn_update.validator
-    def validate_interrupt_turn(self, payload: dict[str, Any] | None = None) -> None:
-        request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
-        self._validate_mutation_allowed()
-        self._require_locator()
-        self._validate_current_epoch(request.session_epoch)
-        self._require_active_turn()
-
-    @workflow.update(name="SteerTurn")
-    async def steer_turn_update(
-        self, payload: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        request = CodexManagedSessionSteerRequest.model_validate(payload or {})
-        locator = self._require_locator()
-        turn_id = self._require_active_turn()
-        response = CodexManagedSessionTurnResponse.model_validate(
-            await self._execute_routed_activity(
-                "agent_runtime.steer_turn",
-                SteerCodexManagedSessionTurnRequest(
-                    sessionId=locator.session_id,
-                    sessionEpoch=locator.session_epoch,
-                    containerId=locator.container_id,
-                    threadId=locator.thread_id,
-                    turnId=turn_id,
-                    instructions=request.message,
-                    metadata={
-                        **({"reason": request.reason} if request.reason else {}),
-                    },
-                ).model_dump(by_alias=True),
-            )
-        )
-        session_state = self._apply_runtime_snapshot(
-            response.session_state.model_dump(mode="json", by_alias=True),
-            last_control_action="steer_turn",
-            last_control_reason=request.reason,
-        )
-        continuity = await self._refresh_continuity_projection(
-            locator=self._require_locator(),
-            metadata={"action": "steer_turn", "reason": request.reason},
-        )
-        return {
-            "turnId": response.turn_id,
-            "status": response.status,
-            "sessionState": session_state,
-            **continuity,
-        }
-
-    @steer_turn_update.validator
-    def validate_steer_turn(self, payload: dict[str, Any] | None = None) -> None:
-        request = CodexManagedSessionSteerRequest.model_validate(payload or {})
-        self._validate_mutation_allowed()
-        self._require_locator()
-        self._validate_current_epoch(request.session_epoch)
-        self._require_active_turn()
-
-    @workflow.update(name="ClearSession")
-    async def clear_session_update(
-        self, payload: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
-        binding = self._require_binding()
-        locator = self._require_locator()
-        self._status = AGENT_SESSION_STATUS_CLEARING
-        try:
-            next_thread_id = f"thread:{binding.session_id}:{binding.session_epoch + 1}"
-            handle = CodexManagedSessionHandle.model_validate(
-                await self._execute_routed_activity(
-                    "agent_runtime.clear_session",
-                    CodexManagedSessionClearRequest(
-                        sessionId=locator.session_id,
-                        sessionEpoch=locator.session_epoch,
-                        containerId=locator.container_id,
-                        threadId=locator.thread_id,
-                        newThreadId=next_thread_id,
-                        reason=request.reason,
-                    ).model_dump(by_alias=True),
-                )
-            )
-            session_state = self._apply_runtime_snapshot(
-                handle.session_state.model_dump(mode="json", by_alias=True),
-                last_control_action="clear_session",
-                last_control_reason=request.reason,
-            )
-            continuity = await self._refresh_continuity_projection(
-                locator=self._require_locator(),
-                metadata={"action": "clear_session", "reason": request.reason},
-            )
-            return {
-                "sessionState": session_state,
-                **continuity,
-            }
-        finally:
-            if self._status == AGENT_SESSION_STATUS_CLEARING:
-                self._status = AGENT_SESSION_STATUS_ACTIVE
-
-    @clear_session_update.validator
-    def validate_clear_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
-        self._validate_mutation_allowed()
-        self._require_locator()
-        if self._status == AGENT_SESSION_STATUS_CLEARING:
-            raise ValueError("Managed session is already clearing")
-
-    @workflow.update(name="CancelSession")
-    async def cancel_session_update(
-        self, payload: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
-        locator: CodexManagedSessionLocator | None = None
-        turn_id: str | None = None
-        if self._container_id and self._thread_id and self._active_turn_id:
+        async with self._mutation_lock:
+            await self._await_runtime_handles()
             locator = self._require_locator()
-            turn_id = self._active_turn_id
-        if locator is not None and turn_id is not None:
+            turn_id = self._require_active_turn()
             response = CodexManagedSessionTurnResponse.model_validate(
                 await self._execute_routed_activity(
                     "agent_runtime.interrupt_turn",
@@ -531,13 +487,163 @@ class MoonMindAgentSessionWorkflow:
                     ).model_dump(by_alias=True),
                 )
             )
-            self._apply_runtime_snapshot(
-                response.session_state.model_dump(mode="json", by_alias=True)
+            session_state = self._apply_runtime_snapshot(
+                response.session_state.model_dump(mode="json", by_alias=True),
+                last_control_action="interrupt_turn",
+                last_control_reason=request.reason,
             )
-        self._status = AGENT_SESSION_STATUS_ACTIVE
-        self._last_control_action = "cancel_session"
-        self._last_control_reason = request.reason
-        return self.get_status()
+            continuity = await self._refresh_continuity_projection(
+                locator=self._require_locator(),
+                metadata={"action": "interrupt_turn", "reason": request.reason},
+            )
+            self._apply_continuity_projection(continuity)
+            return {
+                "turnId": response.turn_id,
+                "status": response.status,
+                "sessionState": session_state,
+                **continuity,
+            }
+
+    @interrupt_turn_update.validator
+    def validate_interrupt_turn(self, payload: dict[str, Any] | None = None) -> None:
+        request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
+        self._validate_mutation_allowed()
+        self._validate_current_epoch(request.session_epoch)
+        if self._runtime_handles_attached():
+            self._require_active_turn()
+
+    @workflow.update(name="SteerTurn")
+    async def steer_turn_update(
+        self, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        request = CodexManagedSessionSteerRequest.model_validate(payload or {})
+        async with self._mutation_lock:
+            await self._await_runtime_handles()
+            locator = self._require_locator()
+            turn_id = self._require_active_turn()
+            response = CodexManagedSessionTurnResponse.model_validate(
+                await self._execute_routed_activity(
+                    "agent_runtime.steer_turn",
+                    SteerCodexManagedSessionTurnRequest(
+                        sessionId=locator.session_id,
+                        sessionEpoch=locator.session_epoch,
+                        containerId=locator.container_id,
+                        threadId=locator.thread_id,
+                        turnId=turn_id,
+                        instructions=request.message,
+                        metadata={
+                            **({"reason": request.reason} if request.reason else {}),
+                        },
+                    ).model_dump(by_alias=True),
+                )
+            )
+            session_state = self._apply_runtime_snapshot(
+                response.session_state.model_dump(mode="json", by_alias=True),
+                last_control_action="steer_turn",
+                last_control_reason=request.reason,
+            )
+            continuity = await self._refresh_continuity_projection(
+                locator=self._require_locator(),
+                metadata={"action": "steer_turn", "reason": request.reason},
+            )
+            self._apply_continuity_projection(continuity)
+            return {
+                "turnId": response.turn_id,
+                "status": response.status,
+                "sessionState": session_state,
+                **continuity,
+            }
+
+    @steer_turn_update.validator
+    def validate_steer_turn(self, payload: dict[str, Any] | None = None) -> None:
+        request = CodexManagedSessionSteerRequest.model_validate(payload or {})
+        self._validate_mutation_allowed()
+        self._validate_current_epoch(request.session_epoch)
+        if self._runtime_handles_attached():
+            self._require_active_turn()
+
+    @workflow.update(name="ClearSession")
+    async def clear_session_update(
+        self, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        async with self._mutation_lock:
+            await self._await_runtime_handles()
+            binding = self._require_binding()
+            locator = self._require_locator()
+            self._status = AGENT_SESSION_STATUS_CLEARING
+            try:
+                next_thread_id = f"thread:{binding.session_id}:{binding.session_epoch + 1}"
+                handle = CodexManagedSessionHandle.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.clear_session",
+                        CodexManagedSessionClearRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            newThreadId=next_thread_id,
+                            reason=request.reason,
+                        ).model_dump(by_alias=True),
+                    )
+                )
+                session_state = self._apply_runtime_snapshot(
+                    handle.session_state.model_dump(mode="json", by_alias=True),
+                    last_control_action="clear_session",
+                    last_control_reason=request.reason,
+                )
+                continuity = await self._refresh_continuity_projection(
+                    locator=self._require_locator(),
+                    metadata={"action": "clear_session", "reason": request.reason},
+                )
+                self._apply_continuity_projection(continuity)
+                return {
+                    "sessionState": session_state,
+                    **continuity,
+                }
+            finally:
+                if self._status == AGENT_SESSION_STATUS_CLEARING:
+                    self._status = AGENT_SESSION_STATUS_ACTIVE
+
+    @clear_session_update.validator
+    def validate_clear_session(self, payload: dict[str, Any] | None = None) -> None:
+        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        self._validate_mutation_allowed()
+        if self._status == AGENT_SESSION_STATUS_CLEARING:
+            raise ValueError("Managed session is already clearing")
+
+    @workflow.update(name="CancelSession")
+    async def cancel_session_update(
+        self, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        async with self._mutation_lock:
+            locator: CodexManagedSessionLocator | None = None
+            turn_id: str | None = None
+            if self._container_id and self._thread_id and self._active_turn_id:
+                locator = self._require_locator()
+                turn_id = self._active_turn_id
+            if locator is not None and turn_id is not None:
+                response = CodexManagedSessionTurnResponse.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.interrupt_turn",
+                        InterruptCodexManagedSessionTurnRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            turnId=turn_id,
+                            reason=request.reason,
+                        ).model_dump(by_alias=True),
+                    )
+                )
+                self._apply_runtime_snapshot(
+                    response.session_state.model_dump(mode="json", by_alias=True)
+                )
+            self._status = AGENT_SESSION_STATUS_ACTIVE
+            self._last_control_action = "cancel_session"
+            self._last_control_reason = request.reason
+            return self.get_status()
 
     @cancel_session_update.validator
     def validate_cancel_session(self, payload: dict[str, Any] | None = None) -> None:
@@ -549,32 +655,33 @@ class MoonMindAgentSessionWorkflow:
         self, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
-        if self._termination_requested:
-            return self.get_status()
-        self._status = AGENT_SESSION_STATUS_TERMINATING
-        self._last_control_action = "terminate_session"
-        self._last_control_reason = request.reason
-        if self._container_id and self._thread_id:
-            locator = self._require_locator()
-            handle = CodexManagedSessionHandle.model_validate(
-                await self._execute_routed_activity(
-                    "agent_runtime.terminate_session",
-                    TerminateCodexManagedSessionRequest(
-                        sessionId=locator.session_id,
-                        sessionEpoch=locator.session_epoch,
-                        containerId=locator.container_id,
-                        threadId=locator.thread_id,
-                        reason=request.reason,
-                    ).model_dump(by_alias=True),
+        async with self._mutation_lock:
+            if self._termination_requested:
+                return self.get_status()
+            self._status = AGENT_SESSION_STATUS_TERMINATING
+            self._last_control_action = "terminate_session"
+            self._last_control_reason = request.reason
+            if self._container_id and self._thread_id:
+                locator = self._require_locator()
+                handle = CodexManagedSessionHandle.model_validate(
+                    await self._execute_routed_activity(
+                        "agent_runtime.terminate_session",
+                        TerminateCodexManagedSessionRequest(
+                            sessionId=locator.session_id,
+                            sessionEpoch=locator.session_epoch,
+                            containerId=locator.container_id,
+                            threadId=locator.thread_id,
+                            reason=request.reason,
+                        ).model_dump(by_alias=True),
+                    )
                 )
-            )
-            self._apply_runtime_snapshot(
-                handle.session_state.model_dump(mode="json", by_alias=True),
-                last_control_action="terminate_session",
-                last_control_reason=request.reason,
-            )
-        self._termination_requested = True
-        return self.get_status()
+                self._apply_runtime_snapshot(
+                    handle.session_state.model_dump(mode="json", by_alias=True),
+                    last_control_action="terminate_session",
+                    last_control_reason=request.reason,
+                )
+            self._termination_requested = True
+            return self.get_status()
 
     @terminate_session_update.validator
     def validate_terminate_session(self, payload: dict[str, Any] | None = None) -> None:
