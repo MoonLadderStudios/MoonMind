@@ -152,6 +152,34 @@ class TestManagedSessionReconcileSchedule:
         assert schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
 
     @pytest.mark.asyncio
+    async def test_managed_session_reconcile_schedule_defaults_and_disabled_state(
+        self,
+    ) -> None:
+        mock_created_handle = MagicMock()
+        mock_created_handle.id = MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        mock_existing_handle = _mock_schedule_handle(
+            describe_side_effect=Exception("not found")
+        )
+        mock_existing_handle.update = AsyncMock(side_effect=Exception("not found"))
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock(return_value=mock_created_handle)
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.ensure_managed_session_reconcile_schedule(
+            enabled=False
+        )
+
+        assert result == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        schedule_id, schedule = mock_client.create_schedule.call_args[0]
+        assert schedule_id == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        assert schedule.action.id == MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE
+        assert schedule.spec.cron_expressions == ["*/10 * * * *"]
+        assert schedule.spec.time_zone_name == "UTC"
+        assert schedule.state.paused is True
+        assert schedule.state.note == "Managed Codex session reconcile and orphan sweep"
+
+    @pytest.mark.asyncio
     async def test_updates_existing_managed_session_reconcile_schedule(self) -> None:
         mock_existing_handle = _mock_schedule_handle()
         mock_client = MagicMock()

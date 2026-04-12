@@ -17,8 +17,8 @@
 
 **Purpose**: Confirm the active implementation surfaces and preserve the runtime-mode scope guard.
 
-- [ ] T001 Review runtime scope, forbidden metadata, and verification commands in `specs/160-session-observability-reconcile/spec.md`, `specs/160-session-observability-reconcile/plan.md`, `specs/160-session-observability-reconcile/contracts/managed-session-observability-contract.md`, and `specs/160-session-observability-reconcile/quickstart.md`
-- [ ] T002 [P] Inspect existing managed-session workflow, launch, worker, activity, and schedule surfaces in `moonmind/workflows/temporal/workflows/agent_session.py`, `moonmind/workflows/temporal/workflows/run.py`, `moonmind/workflows/temporal/workflows/agent_run.py`, `moonmind/workflows/temporal/activity_catalog.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/workers.py`, `moonmind/workflows/temporal/worker_entrypoint.py`, `moonmind/workflows/temporal/worker_runtime.py`, and `moonmind/workflows/temporal/client.py`
+- [X] T001 Review runtime scope, forbidden metadata, and verification commands in `specs/160-session-observability-reconcile/spec.md`, `specs/160-session-observability-reconcile/plan.md`, `specs/160-session-observability-reconcile/contracts/managed-session-observability-contract.md`, and `specs/160-session-observability-reconcile/quickstart.md`
+- [X] T002 [P] Inspect existing managed-session workflow, launch, worker, activity, and schedule surfaces in `moonmind/workflows/temporal/workflows/agent_session.py`, `moonmind/workflows/temporal/workflows/run.py`, `moonmind/workflows/temporal/workflows/agent_run.py`, `moonmind/workflows/temporal/activity_catalog.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/workers.py`, `moonmind/workflows/temporal/worker_entrypoint.py`, `moonmind/workflows/temporal/worker_runtime.py`, and `moonmind/workflows/temporal/client.py`
 
 ---
 
@@ -28,8 +28,8 @@
 
 **CRITICAL**: No story implementation should begin until the bounded-field vocabulary and test helpers are in place.
 
-- [ ] T003 Add shared test helpers for asserting bounded managed-session metadata and forbidden-value absence in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T004 [P] Add the canonical bounded Search Attribute names, transition labels, and metadata formatting helpers in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [X] T003 Add shared test helpers for asserting bounded managed-session metadata and forbidden-value absence in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T004 [P] Add the canonical bounded Search Attribute names, transition labels, and metadata formatting helpers in `moonmind/workflows/temporal/workflows/agent_session.py`
 
 **Checkpoint**: Tests and runtime code can reference one bounded vocabulary for session identity, status, degradation, and continuity refs.
 
@@ -43,16 +43,16 @@
 
 ### Tests for User Story 1
 
-- [ ] T005 [P] [US1] Add failing tests for initial static/current details and exact Search Attribute keys in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T006 [P] [US1] Add failing tests for task-scoped child workflow static summary/details and initial bounded Search Attributes in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
-- [ ] T007 [P] [US1] Add failing tests for current-detail updates on started, active turn running, interrupted, cleared to new epoch, degraded, terminating, and terminated transitions in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T008 [P] [US1] Add failing tests that prompt-like, transcript-like, raw-log-like, credential-like, and raw-error-like values are excluded from workflow metadata in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T005 [P] [US1] Add failing tests for initial static/current details and exact Search Attribute keys in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T006 [P] [US1] Add failing tests for task-scoped child workflow static summary/details and initial bounded Search Attributes in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
+- [X] T007 [P] [US1] Add failing tests for current-detail updates on started, active turn running, interrupted, cleared to new epoch, degraded, terminating, and terminated transitions in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T008 [P] [US1] Add failing tests that prompt-like, transcript-like, raw-log-like, credential-like, and raw-error-like values are excluded from workflow metadata in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Implement bounded Search Attribute upserts and current details updates for session start and all major transitions in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [ ] T010 [US1] Attach static summary/details and initial bounded Search Attributes when `MoonMind.Run` starts the task-scoped session child workflow in `moonmind/workflows/temporal/workflows/run.py`
-- [ ] T011 [US1] Ensure `MoonMind.AgentRun` launch orchestration propagates only bounded task/session/runtime identity into session visibility metadata in `moonmind/workflows/temporal/workflows/agent_run.py`
+- [X] T009 [US1] Implement bounded Search Attribute upserts and current details updates for session start and all major transitions in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [X] T010 [US1] Attach static summary/details and initial bounded Search Attributes when `MoonMind.Run` starts the task-scoped session child workflow in `moonmind/workflows/temporal/workflows/run.py`
+- [X] T011 [US1] Ensure `MoonMind.AgentRun` launch orchestration propagates only bounded task/session/runtime identity into session visibility metadata in `moonmind/workflows/temporal/workflows/agent_run.py`
 
 **Checkpoint**: User Story 1 is independently testable with bounded operator metadata and no forbidden content.
 
@@ -66,13 +66,13 @@
 
 ### Tests for User Story 2
 
-- [ ] T012 [P] [US2] Add failing activity-summary assertions for send, interrupt, clear, and terminate scheduling in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T013 [P] [US2] Add failing launch activity-summary assertions for task-scoped managed session launch in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
+- [X] T012 [P] [US2] Add failing activity-summary assertions for send, interrupt, clear, and terminate scheduling in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [X] T013 [P] [US2] Add failing launch activity-summary assertions for task-scoped managed session launch in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Add readable bounded summaries to managed-session send, interrupt, clear, and terminate activity scheduling in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [ ] T015 [US2] Add readable bounded summaries to managed-session launch activity scheduling in `moonmind/workflows/temporal/workflows/run.py` and `moonmind/workflows/temporal/workflows/agent_run.py`
+- [X] T014 [US2] Add readable bounded summaries to managed-session send, interrupt, clear, and terminate activity scheduling in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [X] T015 [US2] Add readable bounded summaries to managed-session launch activity scheduling in `moonmind/workflows/temporal/workflows/run.py` and `moonmind/workflows/temporal/workflows/agent_run.py`
 
 **Checkpoint**: User Story 2 is independently testable through activity history summary assertions.
 
@@ -86,18 +86,18 @@
 
 ### Tests for User Story 3
 
-- [ ] T016 [P] [US3] Add failing tests for stale degraded session detection, orphaned runtime container detection, bounded reconcile activity output, and forbidden record/log/credential leakage in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
-- [ ] T017 [P] [US3] Add failing tests that `agent_runtime.reconcile_managed_sessions` is cataloged and routed to the agent-runtime worker family in `tests/unit/workflows/temporal/test_temporal_workers.py`
-- [ ] T018 [P] [US3] Add failing tests that the main workflow fleet registers the reconcile workflow without moving Docker/runtime activity work onto workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
-- [ ] T019 [P] [US3] Add failing tests for idempotent create/update behavior, schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cron `*/10 * * * *`, `UTC` timezone, and disabled paused-state behavior of the managed-session reconcile Temporal Schedule in `tests/unit/workflows/temporal/test_client_schedules.py`
+- [X] T016 [P] [US3] Add failing tests for stale degraded session detection, orphaned runtime container detection, bounded reconcile activity output, and forbidden record/log/credential leakage in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [X] T017 [P] [US3] Add failing tests that `agent_runtime.reconcile_managed_sessions` is cataloged and routed to the agent-runtime worker family in `tests/unit/workflows/temporal/test_temporal_workers.py`
+- [X] T018 [P] [US3] Add failing tests that the main workflow fleet registers the reconcile workflow without moving Docker/runtime activity work onto workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T019 [P] [US3] Add failing tests for idempotent create/update behavior, schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cron `*/10 * * * *`, `UTC` timezone, and disabled paused-state behavior of the managed-session reconcile Temporal Schedule in `tests/unit/workflows/temporal/test_client_schedules.py`
 
 ### Implementation for User Story 3
 
-- [ ] T020 [US3] Add `agent_runtime.reconcile_managed_sessions` to the activity catalog and runtime task-queue mapping in `moonmind/workflows/temporal/activity_catalog.py`
-- [ ] T021 [US3] Implement the bounded managed-session reconcile activity wrapper and outcome normalization for stale degraded session records and orphaned runtime containers in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T022 [US3] Add the `MoonMind.ManagedSessionReconcile` workflow target that delegates reconciliation to `agent_runtime.reconcile_managed_sessions` in `moonmind/workflows/temporal/workflows/managed_session_reconcile.py`
-- [ ] T023 [US3] Register the reconcile workflow on workflow-processing workers while preserving runtime activity separation in `moonmind/workflows/temporal/workers.py`, `moonmind/workflows/temporal/worker_entrypoint.py`, and `moonmind/workflows/temporal/worker_runtime.py`
-- [ ] T024 [US3] Add the Temporal client helper that creates or updates the recurring managed-session reconcile schedule with bounded metadata, stable schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cron `*/10 * * * *`, `UTC` timezone, and disabled paused-state behavior in `moonmind/workflows/temporal/client.py`
+- [X] T020 [US3] Add `agent_runtime.reconcile_managed_sessions` to the activity catalog and runtime task-queue mapping in `moonmind/workflows/temporal/activity_catalog.py`
+- [X] T021 [US3] Implement the bounded managed-session reconcile activity wrapper and outcome normalization for stale degraded session records and orphaned runtime containers in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T022 [US3] Add the `MoonMind.ManagedSessionReconcile` workflow target that delegates reconciliation to `agent_runtime.reconcile_managed_sessions` in `moonmind/workflows/temporal/workflows/managed_session_reconcile.py`
+- [X] T023 [US3] Register the reconcile workflow on workflow-processing workers while preserving runtime activity separation in `moonmind/workflows/temporal/workers.py`, `moonmind/workflows/temporal/worker_entrypoint.py`, and `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T024 [US3] Add the Temporal client helper that creates or updates the recurring managed-session reconcile schedule with bounded metadata, stable schedule ID `mm-operational:managed-session-reconcile`, workflow ID template `mm-operational:managed-session-reconcile:{{.ScheduleTime}}`, default cron `*/10 * * * *`, `UTC` timezone, and disabled paused-state behavior in `moonmind/workflows/temporal/client.py`
 
 **Checkpoint**: User Story 3 is independently testable through schedule, workflow registration, activity routing, and bounded reconcile outcome assertions.
 
@@ -107,9 +107,9 @@
 
 **Purpose**: Validate the whole runtime slice and keep the feature artifacts aligned with the implemented verification surface.
 
-- [ ] T025 [P] Update focused verification commands if any test class or path names changed in `specs/160-session-observability-reconcile/quickstart.md`
-- [ ] T026 Run the focused runtime verification command from `specs/160-session-observability-reconcile/quickstart.md`
-- [ ] T027 Run the required unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [X] T025 [P] Update focused verification commands if any test class or path names changed in `specs/160-session-observability-reconcile/quickstart.md`
+- [X] T026 Run the focused runtime verification command from `specs/160-session-observability-reconcile/quickstart.md`
+- [X] T027 Run the required unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 
 ---
 

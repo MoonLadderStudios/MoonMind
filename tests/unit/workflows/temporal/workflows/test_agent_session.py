@@ -49,6 +49,19 @@ def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
     return CodexManagedSessionWorkflowInput.model_validate(payload)
 
 
+def _assert_forbidden_metadata_absent(value: object) -> None:
+    rendered = str(value)
+    for forbidden in (
+        "Write a private implementation plan",
+        "terminal scrollback",
+        "raw log line",
+        "ghp_secret_token",
+        "password=hunter2",
+        "traceback body",
+    ):
+        assert forbidden not in rendered
+
+
 def test_agent_session_initializes_task_scoped_codex_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -102,6 +115,47 @@ def test_agent_session_initializes_bounded_temporal_visibility(
             "IsDegraded": [False],
         }
     ]
+
+
+def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    current_details: list[str] = []
+    search_attributes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "set_current_details",
+        lambda details: current_details.append(details),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "upsert_search_attributes",
+        lambda attributes: search_attributes.append(attributes),
+    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    summary = workflow._activity_summary(
+        "agent_runtime.send_turn",
+        {
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "instructions": "Write a private implementation plan",
+            "transcript": "terminal scrollback",
+            "rawLog": "raw log line",
+            "token": "ghp_secret_token",
+            "password": "password=hunter2",
+            "error": "traceback body",
+        },
+    )
+
+    assert "Send managed Codex turn" in summary
+    _assert_forbidden_metadata_absent(summary)
+    _assert_forbidden_metadata_absent(current_details)
+    _assert_forbidden_metadata_absent(search_attributes)
 
 
 def test_agent_session_send_follow_up_validator_allows_pre_handle_request(

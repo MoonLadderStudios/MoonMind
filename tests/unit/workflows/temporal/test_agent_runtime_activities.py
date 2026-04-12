@@ -1758,7 +1758,8 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
         async def reconcile(self) -> list[dict[str, Any]]:
             return [
                 _session_record("sess-ready", status="ready"),
-                _session_record("sess-degraded", status="degraded"),
+                _session_record("sess-stale-degraded", status="degraded"),
+                _session_record("sess-orphaned-container", status="degraded"),
             ]
 
     activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
@@ -1766,8 +1767,12 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
     result = await activities.agent_runtime_reconcile_managed_sessions({})
 
     assert result == {
-        "managedSessionRecordsReconciled": 2,
-        "degradedSessionRecords": 1,
-        "sessionIds": ["sess-ready", "sess-degraded"],
+        "managedSessionRecordsReconciled": 3,
+        "degradedSessionRecords": 2,
+        "sessionIds": [
+            "sess-ready",
+            "sess-stale-degraded",
+            "sess-orphaned-container",
+        ],
         "truncated": False,
     }
