@@ -17,9 +17,9 @@
 
 **Purpose**: Confirm the current workload runtime and planning artifacts are ready for Phase 6 work.
 
-- [ ] T001 Verify existing DooD workload runtime surfaces in `moonmind/workloads/tool_bridge.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, and `moonmind/workflows/temporal/worker_runtime.py`
-- [ ] T002 [P] Verify Phase 6 planning artifacts in `specs/159-dood-unreal-pilot/spec.md`, `specs/159-dood-unreal-pilot/plan.md`, `specs/159-dood-unreal-pilot/research.md`, `specs/159-dood-unreal-pilot/data-model.md`, `specs/159-dood-unreal-pilot/contracts/unreal-run-tests-contract.schema.json`, and `specs/159-dood-unreal-pilot/quickstart.md`
-- [ ] T003 [P] Verify existing workload tests in `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, and `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T001 Verify existing DooD workload runtime surfaces in `moonmind/workloads/tool_bridge.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, and `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T002 [P] Verify Phase 6 planning artifacts in `specs/159-dood-unreal-pilot/spec.md`, `specs/159-dood-unreal-pilot/plan.md`, `specs/159-dood-unreal-pilot/research.md`, `specs/159-dood-unreal-pilot/data-model.md`, `specs/159-dood-unreal-pilot/contracts/unreal-run-tests-contract.schema.json`, and `specs/159-dood-unreal-pilot/quickstart.md`
+- [X] T003 [P] Verify existing workload tests in `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, and `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
 
 ---
 
@@ -29,9 +29,9 @@
 
 **CRITICAL**: No user story implementation can begin until this phase is complete.
 
-- [ ] T004 [P] Add or verify the `unreal.run_tests` JSON input contract in `specs/159-dood-unreal-pilot/contracts/unreal-run-tests-contract.schema.json`
-- [ ] T005 [P] Add or verify Unreal runner profile data-model coverage in `specs/159-dood-unreal-pilot/data-model.md`
-- [ ] T006 [P] Add or verify Unreal pilot research decisions and alternatives in `specs/159-dood-unreal-pilot/research.md`
+- [X] T004 [P] Add or verify the `unreal.run_tests` JSON input contract in `specs/159-dood-unreal-pilot/contracts/unreal-run-tests-contract.schema.json`
+- [X] T005 [P] Add or verify Unreal runner profile data-model coverage in `specs/159-dood-unreal-pilot/data-model.md`
+- [X] T006 [P] Add or verify Unreal pilot research decisions and alternatives in `specs/159-dood-unreal-pilot/research.md`
 
 **Checkpoint**: Foundation ready. User story implementation can proceed.
 
@@ -47,15 +47,15 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T007 [P] [US1] Add default Unreal profile registry validation in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T008 [P] [US1] Add agent-runtime default registry bootstrap validation in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
-- [ ] T009 [P] [US1] Add Unreal profile safe Docker launch posture validation in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T007 [P] [US1] Add default Unreal profile registry validation in `tests/unit/workloads/test_workload_contract.py`
+- [X] T008 [P] [US1] Add agent-runtime default registry bootstrap validation in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T009 [P] [US1] Add Unreal profile safe Docker launch posture validation in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Add the built-in `unreal-5_3-linux` runner profile in `config/workloads/default-runner-profiles.yaml`
-- [ ] T011 [US1] Load `config/workloads/default-runner-profiles.yaml` from `moonmind/workflows/temporal/worker_runtime.py` when `MOONMIND_WORKLOAD_PROFILE_REGISTRY` is unset
-- [ ] T012 [US1] Verify the profile remains compatible with existing registry policy in `moonmind/workloads/registry.py` without adding arbitrary image or mount bypasses
+- [X] T010 [US1] Add the built-in `unreal-5_3-linux` runner profile in `config/workloads/default-runner-profiles.yaml`
+- [X] T011 [US1] Load `config/workloads/default-runner-profiles.yaml` from `moonmind/workflows/temporal/worker_runtime.py` when `MOONMIND_WORKLOAD_PROFILE_REGISTRY` is unset
+- [X] T012 [US1] Verify the profile remains compatible with existing registry policy in `moonmind/workloads/registry.py` without adding arbitrary image or mount bypasses
 
 **Checkpoint**: User Story 1 exposes the curated Unreal profile safely and can be validated independently.
 
@@ -71,15 +71,15 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T013 [P] [US2] Add `reportPaths` ToolDefinition schema validation in `tests/unit/workloads/test_workload_tool_bridge.py`
-- [ ] T014 [P] [US2] Add curated Unreal command, env override, and declared output mapping validation in `tests/unit/workloads/test_workload_tool_bridge.py`
-- [ ] T015 [P] [US2] Add invalid Unreal report path rejection validation in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T013 [P] [US2] Add `reportPaths` ToolDefinition schema validation in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T014 [P] [US2] Add curated Unreal command, env override, and declared output mapping validation in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T015 [P] [US2] Add invalid Unreal report path rejection validation in `tests/unit/workloads/test_workload_tool_bridge.py`
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] Extend `unreal.run_tests` ToolDefinition inputs with `reportPaths` in `moonmind/workloads/tool_bridge.py`
-- [ ] T017 [US2] Map Unreal report paths to curated command flags and declared workload outputs in `moonmind/workloads/tool_bridge.py`
-- [ ] T018 [US2] Inject only allowlisted Unreal environment keys from `unreal.run_tests` in `moonmind/workloads/tool_bridge.py`
+- [X] T016 [US2] Extend `unreal.run_tests` ToolDefinition inputs with `reportPaths` in `moonmind/workloads/tool_bridge.py`
+- [X] T017 [US2] Map Unreal report paths to curated command flags and declared workload outputs in `moonmind/workloads/tool_bridge.py`
+- [X] T018 [US2] Inject only allowlisted Unreal environment keys from `unreal.run_tests` in `moonmind/workloads/tool_bridge.py`
 
 **Checkpoint**: User Story 2 can execute through the existing workload tool path without exposing raw Docker controls.
 
@@ -95,15 +95,15 @@
 
 > Write these tests first and confirm they fail before implementation when behavior is missing.
 
-- [ ] T019 [P] [US3] Add Unreal cache mount and no-auth-volume launch validation in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T020 [P] [US3] Add declared Unreal report output publication validation in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T021 [P] [US3] Add or verify timeout/cancel cleanup coverage remains valid for Unreal-profile workloads in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T019 [P] [US3] Add Unreal cache mount and no-auth-volume launch validation in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T020 [P] [US3] Add declared Unreal report output publication validation in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T021 [P] [US3] Add or verify timeout/cancel cleanup coverage remains valid for Unreal-profile workloads in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 3
 
-- [ ] T022 [US3] Ensure `config/workloads/default-runner-profiles.yaml` defines `unreal_ccache_volume` and `unreal_ubt_volume` as approved cache mounts only
-- [ ] T023 [US3] Ensure `moonmind/workloads/docker_launcher.py` treats Unreal report files as declared outputs under `artifactsDir` and never publishes cache contents as durable outputs
-- [ ] T024 [US3] Update operator rollout notes for Unreal cache and artifact expectations in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+- [X] T022 [US3] Ensure `config/workloads/default-runner-profiles.yaml` defines `unreal_ccache_volume` and `unreal_ubt_volume` as approved cache mounts only
+- [X] T023 [US3] Ensure `moonmind/workloads/docker_launcher.py` treats Unreal report files as declared outputs under `artifactsDir` and never publishes cache contents as durable outputs
+- [X] T024 [US3] Update operator rollout notes for Unreal cache and artifact expectations in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
 
 **Checkpoint**: User Story 3 preserves cache reuse and durable artifact truth independently of real Unreal Engine availability.
 
@@ -113,11 +113,11 @@
 
 **Purpose**: Final validation, tracking, and scope checks.
 
-- [ ] T025 [P] Validate the Unreal tool contract JSON with `python -m json.tool specs/159-dood-unreal-pilot/contracts/unreal-run-tests-contract.schema.json`
-- [ ] T026 [P] Run focused workload validation with `pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
-- [ ] T027 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [ ] T028 Run runtime task scope validation with `SPECIFY_FEATURE=159-dood-unreal-pilot .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T029 Review `git diff --check` and confirm no unrelated changes or secret-like values were introduced in `config/`, `moonmind/`, `tests/`, `docs/tmp/`, or `specs/159-dood-unreal-pilot/`
+- [X] T025 [P] Validate the Unreal tool contract JSON with `python -m json.tool specs/159-dood-unreal-pilot/contracts/unreal-run-tests-contract.schema.json`
+- [X] T026 [P] Run focused workload validation with `pytest tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
+- [X] T027 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [X] T028 Run runtime task scope validation with `SPECIFY_FEATURE=159-dood-unreal-pilot .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T029 Review `git diff --check` and confirm no unrelated changes or secret-like values were introduced in `config/`, `moonmind/`, `tests/`, `docs/tmp/`, or `specs/159-dood-unreal-pilot/`
 
 ---
 
