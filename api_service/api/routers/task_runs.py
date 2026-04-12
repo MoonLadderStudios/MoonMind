@@ -126,22 +126,20 @@ def _execution_owner_binding_candidates(workflow_id: str) -> tuple[str, ...]:
     candidates: list[str] = [normalized_workflow_id]
     parent_workflow_id: str | None = None
     if ":agent:" in normalized_workflow_id:
-        parent_workflow_id = normalized_workflow_id.split(":agent:", 1)[0]
+        parent_workflow_id = normalized_workflow_id.partition(":agent:")[0]
     elif ":session:" in normalized_workflow_id:
-        parent_workflow_id = normalized_workflow_id.split(":session:", 1)[0]
+        parent_workflow_id = normalized_workflow_id.partition(":session:")[0]
     else:
         parts = normalized_workflow_id.split(":")
         if normalized_workflow_id.startswith("mm:") and len(parts) >= 2:
             parent_workflow_id = f"{parts[0]}:{parts[1]}"
-        elif parts:
+        elif len(parts) > 1:
             parent_workflow_id = parts[0]
 
-    normalized_parent_workflow_id = str(parent_workflow_id or "").strip()
-    if (
-        normalized_parent_workflow_id
-        and normalized_parent_workflow_id != normalized_workflow_id
-    ):
-        candidates.append(normalized_parent_workflow_id)
+    if parent_workflow_id:
+        parent_workflow_id = parent_workflow_id.strip()
+        if parent_workflow_id and parent_workflow_id != normalized_workflow_id:
+            candidates.append(parent_workflow_id)
 
     return tuple(dict.fromkeys(candidates))
 
