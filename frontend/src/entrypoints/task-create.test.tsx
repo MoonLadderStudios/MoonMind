@@ -11,6 +11,10 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
+import {
+  buildTemporalSubmissionDraftFromExecution,
+  resolveTaskSubmitPageMode,
+} from "../lib/temporalTaskEditing";
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
@@ -61,6 +65,11 @@ const mockPayload: BootPayload = {
           detail: "/api/task-step-templates/{slug}",
           expand: "/api/task-step-templates/{slug}:expand",
           saveFromTask: "/api/task-step-templates/save-from-task",
+        },
+      },
+      features: {
+        temporalDashboard: {
+          temporalTaskEditing: true,
         },
       },
     },
@@ -284,6 +293,106 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aedit-123?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:edit-123",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "gemini_cli",
+              profileId: "profile:gemini-default",
+              model: "gemini-2.5-pro",
+              effort: "high",
+              repository: "MoonLadderStudios/MoonMind",
+              startingBranch: "main",
+              targetBranch: "task-editing-phase-2",
+              publishMode: "branch",
+              targetSkill: "speckit-implement",
+              inputParameters: {
+                targetRuntime: "gemini_cli",
+                task: {
+                  instructions: "Rebuild the Temporal task draft.",
+                  runtime: {
+                    mode: "gemini_cli",
+                    model: "gemini-2.5-pro",
+                    effort: "high",
+                    profileId: "profile:gemini-default",
+                  },
+                  git: {
+                    startingBranch: "main",
+                    targetBranch: "task-editing-phase-2",
+                  },
+                  publish: { mode: "branch" },
+                  tool: { type: "skill", name: "speckit-implement" },
+                  appliedStepTemplates: [
+                    {
+                      slug: "speckit-demo",
+                      version: "1.2.3",
+                      inputs: { feature_name: "Task Editing" },
+                      stepIds: ["tpl:speckit-demo:1.2.3:01"],
+                      appliedAt: "2026-04-12T00:00:00Z",
+                      capabilities: ["git"],
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Arerun-123?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:rerun-123",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputArtifactRef: "historical-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aunsupported?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:unsupported",
+              workflowType: "MoonMind.ManifestIngest",
+              state: "completed",
+              inputParameters: {},
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -344,6 +453,26 @@ describe("Task Create Entrypoint", () => {
             json: async () => ({ artifact_id: "art-001" }),
           } as Response);
         }
+        if (url === "/api/artifacts/historical-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/MoonMind",
+                task: {
+                  instructions: "Rerun from artifact-backed instructions.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
         return Promise.resolve({
           ok: false,
           status: 404,
@@ -355,6 +484,171 @@ describe("Task Create Entrypoint", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("resolves task submit mode with rerun taking precedence over edit", () => {
+    expect(resolveTaskSubmitPageMode("")).toEqual({
+      mode: "create",
+      executionId: null,
+    });
+    expect(resolveTaskSubmitPageMode("?editExecutionId=mm%3Aedit")).toEqual({
+      mode: "edit",
+      executionId: "mm:edit",
+    });
+    expect(
+      resolveTaskSubmitPageMode(
+        "?editExecutionId=mm%3Aedit&rerunExecutionId=mm%3Arerun",
+      ),
+    ).toEqual({
+      mode: "rerun",
+      executionId: "mm:rerun",
+    });
+  });
+
+  it("reconstructs a create-form draft from Temporal execution fields", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:edit-123",
+      workflowType: "MoonMind.Run",
+      targetRuntime: "gemini_cli",
+      profileId: "profile:gemini-default",
+      model: "gemini-2.5-pro",
+      effort: "high",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "task-editing-phase-2",
+      publishMode: "branch",
+      targetSkill: "speckit-implement",
+      inputParameters: {
+        task: {
+          instructions: "Rebuild the Temporal task draft.",
+          appliedStepTemplates: [
+            {
+              slug: "speckit-demo",
+              version: "1.2.3",
+              inputs: { feature_name: "Task Editing" },
+              stepIds: ["tpl:speckit-demo:1.2.3:01"],
+              appliedAt: "2026-04-12T00:00:00Z",
+              capabilities: ["git"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: "gemini_cli",
+      providerProfile: "profile:gemini-default",
+      model: "gemini-2.5-pro",
+      effort: "high",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "task-editing-phase-2",
+      publishMode: "branch",
+      taskInstructions: "Rebuild the Temporal task draft.",
+      primarySkill: "speckit-implement",
+    });
+    expect(draft.appliedTemplates).toEqual([
+      expect.objectContaining({
+        slug: "speckit-demo",
+        version: "1.2.3",
+        inputs: { feature_name: "Task Editing" },
+      }),
+    ]);
+  });
+
+  it("loads edit mode from an active Temporal execution and prefills the shared form", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Rebuild the Temporal task draft.");
+      expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(
+        "gemini_cli",
+      );
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:gemini-default");
+      expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
+        "gemini-2.5-pro",
+      );
+      expect((screen.getByLabelText("Effort") as HTMLInputElement).value).toBe(
+        "high",
+      );
+      expect(
+        (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
+      ).toBe("MoonLadderStudios/MoonMind");
+      expect(
+        (screen.getByLabelText("Starting Branch (optional)") as HTMLInputElement)
+          .value,
+      ).toBe("main");
+      expect(
+        (screen.getByLabelText("Target Branch (optional)") as HTMLInputElement)
+          .value,
+      ).toBe("task-editing-phase-2");
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("branch");
+      expect(
+        (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
+      ).toBe("speckit-implement");
+    });
+    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
+  });
+
+  it("loads rerun mode instructions from an input artifact when inline instructions are absent", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Rerun from artifact-backed instructions.");
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-secondary");
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/artifacts/historical-input/download",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+  });
+
+  it("shows an explicit error for unsupported Temporal workflow types", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aunsupported",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "This execution cannot be edited here because only MoonMind.Run is supported.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it("submits the queue-shaped Temporal task payload and redirects on success", async () => {
