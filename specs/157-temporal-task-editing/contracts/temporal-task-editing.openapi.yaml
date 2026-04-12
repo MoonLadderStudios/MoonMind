@@ -1,0 +1,267 @@
+openapi: 3.1.0
+info:
+  title: Temporal Task Editing Entry Point Contract
+  version: 0.1.0
+  description: >
+    Phase 0/1 contract for Temporal-native task editing. This contract covers
+    execution-detail read fields, runtime feature flag exposure, and reserved
+    update envelopes for later edit/rerun submit phases.
+paths:
+  /api/executions/{workflowId}:
+    get:
+      summary: Read Temporal execution detail for task editing decisions
+      operationId: getTemporalExecutionForTaskEditing
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Execution detail payload with task editing read fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalExecutionDetail"
+        "404":
+          description: Execution was not found or is not visible to the operator
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Submit a Temporal execution update for later edit/rerun phases
+      operationId: updateTemporalExecutionTaskInputs
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemporalTaskEditingUpdateRequest"
+      responses:
+        "200":
+          description: Update accepted or rejected with a structured outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalTaskEditingUpdateResponse"
+        "403":
+          description: Execution actions are disabled or not allowed for this operator
+        "422":
+          description: Update request is invalid for the execution state or workflow type
+  /tasks/new:
+    get:
+      summary: Shared task submit page in create, edit, or rerun mode
+      operationId: getTaskSubmitPage
+      parameters:
+        - name: editExecutionId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+        - name: rerunExecutionId
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Shared submit page shell. Phase 0/1 only requires canonical route targets.
+  /dashboard-runtime-config:
+    get:
+      summary: Runtime dashboard configuration payload
+      operationId: getDashboardRuntimeConfigForTemporalTaskEditing
+      responses:
+        "200":
+          description: Dashboard runtime config including Temporal task editing flag
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardRuntimeConfig"
+components:
+  schemas:
+    DashboardRuntimeConfig:
+      type: object
+      required:
+        - features
+      properties:
+        features:
+          type: object
+          required:
+            - temporalDashboard
+          properties:
+            temporalDashboard:
+              type: object
+              required:
+                - actionsEnabled
+                - temporalTaskEditing
+              properties:
+                actionsEnabled:
+                  type: boolean
+                temporalTaskEditing:
+                  type: boolean
+                submitEnabled:
+                  type: boolean
+                debugFieldsEnabled:
+                  type: boolean
+    TemporalExecutionDetail:
+      type: object
+      required:
+        - workflowId
+        - workflowType
+        - state
+        - temporalStatus
+        - actions
+      properties:
+        workflowId:
+          type: string
+          minLength: 1
+        workflowType:
+          type: string
+          enum:
+            - MoonMind.Run
+            - MoonMind.ManifestIngest
+        state:
+          type: string
+        rawState:
+          type: string
+        temporalStatus:
+          type: string
+          enum:
+            - running
+            - completed
+            - failed
+            - canceled
+        inputParameters:
+          type: object
+          additionalProperties: true
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        planArtifactRef:
+          type:
+            - string
+            - "null"
+        targetRuntime:
+          type:
+            - string
+            - "null"
+        profileId:
+          type:
+            - string
+            - "null"
+        model:
+          type:
+            - string
+            - "null"
+        requestedModel:
+          type:
+            - string
+            - "null"
+        resolvedModel:
+          type:
+            - string
+            - "null"
+        effort:
+          type:
+            - string
+            - "null"
+        repository:
+          type:
+            - string
+            - "null"
+        startingBranch:
+          type:
+            - string
+            - "null"
+        targetBranch:
+          type:
+            - string
+            - "null"
+        publishMode:
+          type:
+            - string
+            - "null"
+        targetSkill:
+          type:
+            - string
+            - "null"
+        taskSkills:
+          type:
+            - array
+            - "null"
+          items:
+            type: string
+        actions:
+          $ref: "#/components/schemas/TemporalExecutionActions"
+    TemporalExecutionActions:
+      type: object
+      required:
+        - canUpdateInputs
+        - canRerun
+      properties:
+        canUpdateInputs:
+          type: boolean
+          default: false
+        canRerun:
+          type: boolean
+          default: false
+        canSetTitle:
+          type: boolean
+        canCancel:
+          type: boolean
+        disabledReasons:
+          type: object
+          additionalProperties:
+            type: string
+    TemporalTaskEditingUpdateRequest:
+      type: object
+      required:
+        - updateName
+      properties:
+        updateName:
+          type: string
+          enum:
+            - UpdateInputs
+            - RequestRerun
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        parametersPatch:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type:
+            - string
+            - "null"
+    TemporalTaskEditingUpdateResponse:
+      type: object
+      required:
+        - accepted
+        - applied
+        - message
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum:
+            - immediate
+            - next_safe_point
+            - continue_as_new
+        message:
+          type: string
+        execution:
+          oneOf:
+            - $ref: "#/components/schemas/TemporalExecutionDetail"
+            - type: "null"
