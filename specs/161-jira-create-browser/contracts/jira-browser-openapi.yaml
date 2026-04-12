@@ -1,0 +1,207 @@
+openapi: 3.1.0
+info:
+  title: Jira Create Browser Consumed Contracts
+  version: 0.1.0
+  description: >
+    Contract shapes consumed by the Create page Jira browser. Browser clients
+    discover these MoonMind-owned paths through runtime config and do not call
+    Jira directly.
+paths:
+  /api/jira/connections/verify:
+    get:
+      summary: Verify configured Jira browser access
+      responses:
+        "200":
+          description: Connection verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                required: [ok]
+  /api/jira/projects:
+    get:
+      summary: List Jira projects available to the Create page browser
+      responses:
+        "200":
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/JiraProject"
+                required: [items]
+  /api/jira/projects/{projectKey}/boards:
+    get:
+      summary: List boards for a Jira project
+      parameters:
+        - name: projectKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Board list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/JiraBoard"
+                required: [items]
+  /api/jira/boards/{boardId}/columns:
+    get:
+      summary: List board columns in board order
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ordered board columns
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  board:
+                    $ref: "#/components/schemas/JiraBoard"
+                  columns:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/JiraColumn"
+                required: [columns]
+  /api/jira/boards/{boardId}/issues:
+    get:
+      summary: List board issues grouped by MoonMind-resolved column id
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Issues grouped by column
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  boardId:
+                    type: string
+                  columns:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/JiraColumn"
+                  itemsByColumn:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/JiraIssueSummary"
+                required: [boardId, itemsByColumn]
+  /api/jira/issues/{issueKey}:
+    get:
+      summary: Get normalized Jira issue detail for preview
+      parameters:
+        - name: issueKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Normalized issue detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraIssueDetail"
+components:
+  schemas:
+    JiraProject:
+      type: object
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+      required: [key, name]
+    JiraBoard:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        projectKey:
+          type: string
+      required: [id, name]
+    JiraColumn:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        count:
+          type: integer
+          minimum: 0
+      required: [id, name]
+    JiraIssueSummary:
+      type: object
+      properties:
+        issueKey:
+          type: string
+        summary:
+          type: string
+        issueType:
+          type: string
+        statusName:
+          type: string
+        assignee:
+          type: string
+        updatedAt:
+          type: string
+      required: [issueKey, summary]
+    JiraIssueDetail:
+      allOf:
+        - $ref: "#/components/schemas/JiraIssueSummary"
+        - type: object
+          properties:
+            url:
+              type: string
+            column:
+              $ref: "#/components/schemas/JiraColumn"
+            status:
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+            descriptionText:
+              type: string
+            acceptanceCriteriaText:
+              type: string
+            recommendedImports:
+              type: object
+              properties:
+                presetInstructions:
+                  type: string
+                stepInstructions:
+                  type: string
