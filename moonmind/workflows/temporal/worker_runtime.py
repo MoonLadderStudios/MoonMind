@@ -70,6 +70,9 @@ from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_ser
 from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow as MoonMindAgentSession,
 )
+from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
+    MoonMindManagedSessionReconcileWorkflow as MoonMindManagedSessionReconcile,
+)
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     resolve_adapter_metadata,
@@ -916,6 +919,7 @@ async def main_async() -> None:
             MoonMindManifestIngest,
             MoonMindProviderProfileManager,
             MoonMindAgentSession,
+            MoonMindManagedSessionReconcile,
             MoonMindAgentRun,
             MoonMindOAuthSession,
         ]

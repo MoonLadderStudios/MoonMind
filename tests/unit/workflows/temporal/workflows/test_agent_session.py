@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from temporalio.common import RetryPolicy
@@ -49,6 +50,19 @@ def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
     return CodexManagedSessionWorkflowInput.model_validate(payload)
 
 
+def _assert_forbidden_metadata_absent(value: object) -> None:
+    rendered = str(value)
+    for forbidden in (
+        "Write a private implementation plan",
+        "terminal scrollback",
+        "raw log line",
+        "ghp_secret_token",
+        "password=hunter2",
+        "traceback body",
+    ):
+        assert forbidden not in rendered
+
+
 def test_agent_session_initializes_task_scoped_codex_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -66,6 +80,103 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["sessionEpoch"] == 1
     assert status["binding"]["executionProfileRef"] == "codex-default"
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
+
+
+@pytest.mark.asyncio
+async def test_agent_session_run_initializes_bounded_temporal_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    current_details: list[str] = []
+    search_attributes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "set_current_details",
+        lambda details: current_details.append(details),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "upsert_search_attributes",
+        lambda attributes: search_attributes.append(attributes),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "wait_condition",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "all_handlers_finished",
+        True,
+        raising=False,
+    )
+
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    assert current_details == []
+    assert search_attributes == []
+    workflow._termination_requested = True
+
+    await workflow.run(_workflow_input())
+
+    assert current_details[:1] == [
+        "Codex managed session session started | "
+        "session=sess:wf-run-1:codex_cli | runtime=codex_cli | "
+        "epoch=1 | status=active"
+    ]
+    assert search_attributes[:1] == [
+        {
+            "TaskRunId": ["wf-run-1"],
+            "RuntimeId": ["codex_cli"],
+            "SessionId": ["sess:wf-run-1:codex_cli"],
+            "SessionEpoch": [1],
+            "SessionStatus": ["active"],
+            "IsDegraded": [False],
+        }
+    ]
+
+
+def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    current_details: list[str] = []
+    search_attributes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "set_current_details",
+        lambda details: current_details.append(details),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "upsert_search_attributes",
+        lambda attributes: search_attributes.append(attributes),
+    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+
+    summary = workflow._activity_summary(
+        "agent_runtime.send_turn",
+        {
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "instructions": "Write a private implementation plan",
+            "transcript": "terminal scrollback",
+            "rawLog": "raw log line",
+            "token": "ghp_secret_token",
+            "password": "password=hunter2",
+            "error": "traceback body",
+        },
+    )
+
+    assert "Send managed Codex turn" in summary
+    assert workflow._activity_summary("agent_runtime.send_turn", None) == (
+        "Send managed Codex turn"
+    )
+    _assert_forbidden_metadata_absent(summary)
+    _assert_forbidden_metadata_absent(current_details)
+    _assert_forbidden_metadata_absent(search_attributes)
 
 
 def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
@@ -638,10 +749,116 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
     for name, _payload, kwargs in captured:
         assert kwargs["task_queue"] == "mm.activity.agent_runtime"
         assert isinstance(kwargs["retry_policy"], RetryPolicy)
+        assert "summary" in kwargs
         route = agent_session_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(name)
         assert kwargs["start_to_close_timeout"] == timedelta(
             seconds=route.timeouts.start_to_close_seconds
         )
+
+    assert captured[0][2]["summary"] == (
+        "Send managed Codex turn: "
+        "sessionId=sess:wf-run-1:codex_cli, sessionEpoch=1, "
+        "containerId=container-1, threadId=thread-1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_session_updates_visibility_on_major_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    current_details: list[str] = []
+    search_attributes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "set_current_details",
+        lambda details: current_details.append(details),
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "upsert_search_attributes",
+        lambda attributes: search_attributes.append(attributes),
+    )
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        {
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "activeTurnId": "turn-1",
+        }
+    )
+
+    async def _execute_activity(
+        activity_name: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        if activity_name == "agent_runtime.interrupt_turn":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "turn-1",
+                "status": "interrupted",
+                "outputRefs": [],
+                "metadata": {},
+            }
+        if activity_name == "agent_runtime.fetch_session_summary":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-after-interrupt",
+                "latestCheckpointRef": "art-checkpoint-after-interrupt",
+                "latestControlEventRef": "art-control-after-interrupt",
+            }
+        if activity_name == "agent_runtime.publish_session_artifacts":
+            return {
+                "sessionState": {
+                    "sessionId": "sess:wf-run-1:codex_cli",
+                    "sessionEpoch": 1,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "latestSummaryRef": "art-summary-after-interrupt",
+                "latestCheckpointRef": "art-checkpoint-after-interrupt",
+                "latestControlEventRef": "art-control-after-interrupt",
+            }
+        raise AssertionError(f"unexpected activity: {activity_name}")
+
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "execute_activity",
+        _execute_activity,
+    )
+
+    await workflow.interrupt_turn_update(
+        {"sessionEpoch": 1, "reason": "Stop this turn."}
+    )
+
+    assert any("active turn running" in details for details in current_details)
+    assert any("interrupted" in details for details in current_details)
+    assert current_details[-1].endswith(
+        "checkpointRef=art-checkpoint-after-interrupt | "
+        "controlRef=art-control-after-interrupt"
+    )
+    assert search_attributes[-1] == {
+        "TaskRunId": ["wf-run-1"],
+        "RuntimeId": ["codex_cli"],
+        "SessionId": ["sess:wf-run-1:codex_cli"],
+        "SessionEpoch": [1],
+        "SessionStatus": ["active"],
+        "IsDegraded": [False],
+    }
 
 
 @pytest.mark.asyncio

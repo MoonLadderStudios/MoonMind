@@ -23,11 +23,29 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_has_dependencies": "Bool",
     "mm_dependency_state": "Keyword",
     "mm_dependency_count": "Int",
+    "TaskRunId": "Keyword",
+    "RuntimeId": "Keyword",
+    "SessionId": "Keyword",
+    "SessionEpoch": "Int",
+    "SessionStatus": "Keyword",
+    "IsDegraded": "Bool",
 }
 LEGACY_SEARCH_ATTRIBUTES = {
     key: value
     for key, value in REQUIRED_SEARCH_ATTRIBUTES.items()
-    if not key.startswith("mm_dependency_") and key != "mm_has_dependencies"
+    if (
+        not key.startswith("mm_dependency_")
+        and key != "mm_has_dependencies"
+        and key
+        not in {
+            "TaskRunId",
+            "RuntimeId",
+            "SessionId",
+            "SessionEpoch",
+            "SessionStatus",
+            "IsDegraded",
+        }
+    )
 }
 
 
@@ -223,9 +241,15 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "mm_has_dependencies" in result.stdout
     assert "mm_dependency_state" in result.stdout
     assert "mm_dependency_count" in result.stdout
+    assert "TaskRunId" in result.stdout
+    assert "RuntimeId" in result.stdout
+    assert "SessionId" in result.stdout
+    assert "SessionEpoch" in result.stdout
+    assert "SessionStatus" in result.stdout
+    assert "IsDegraded" in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
-    assert calls.count("search-attribute create") == 3
+    assert calls.count("search-attribute create") == 9
 
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():

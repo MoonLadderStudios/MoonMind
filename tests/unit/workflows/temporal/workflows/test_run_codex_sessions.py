@@ -59,7 +59,7 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    start_calls: list[tuple[str, Any, str, str]] = []
+    start_calls: list[tuple[str, Any, str, str, dict[str, Any]]] = []
 
     class _FakeHandle:
         async def signal(self, _signal_name: str, _payload: Any = None) -> None:
@@ -71,9 +71,9 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
         *,
         id: str,
         task_queue: str,
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> _FakeHandle:
-        start_calls.append((workflow_name, payload, id, task_queue))
+        start_calls.append((workflow_name, payload, id, task_queue, kwargs))
         return _FakeHandle()
 
     monkeypatch.setattr(
@@ -88,13 +88,26 @@ async def test_run_starts_one_task_scoped_codex_session_and_reuses_it(
     )
 
     assert len(start_calls) == 1
-    workflow_name, payload, workflow_id, task_queue = start_calls[0]
+    workflow_name, payload, workflow_id, task_queue, kwargs = start_calls[0]
     assert workflow_name == "MoonMind.AgentSession"
     assert workflow_id == "wf-run-1:session:codex_cli"
     assert task_queue == run_module.WORKFLOW_TASK_QUEUE
     assert payload.task_run_id == "wf-run-1"
     assert payload.runtime_id == "codex_cli"
     assert payload.execution_profile_ref == "codex-default"
+    assert kwargs["static_summary"] == "Task-scoped Codex managed session"
+    assert kwargs["static_details"] == (
+        "Task-scoped Codex managed session | taskRunId=wf-run-1 | "
+        "runtime=codex_cli | session=sess:wf-run-1:codex_cli | epoch=1"
+    )
+    assert kwargs["search_attributes"] == {
+        "TaskRunId": ["wf-run-1"],
+        "RuntimeId": ["codex_cli"],
+        "SessionId": ["sess:wf-run-1:codex_cli"],
+        "SessionEpoch": [1],
+        "SessionStatus": ["active"],
+        "IsDegraded": [False],
+    }
     assert first.managed_session is not None
     assert second.managed_session is not None
     assert first.managed_session == second.managed_session

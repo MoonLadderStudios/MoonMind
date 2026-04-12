@@ -302,6 +302,13 @@ class MoonMindAgentRun:
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         kwargs = self._execute_kwargs_for_route(route)
         kwargs.update(overrides)
+        kwargs.setdefault(
+            "summary",
+            {
+                "agent_runtime.launch_session": "Launch managed Codex session",
+                "agent_runtime.session_status": "Fetch managed Codex session status",
+            }.get(activity_name, activity_name),
+        )
         return await workflow.execute_activity(
             activity_name,
             args,

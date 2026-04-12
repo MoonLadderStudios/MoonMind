@@ -187,6 +187,12 @@ mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
 mm_dependency_state:Keyword
 mm_dependency_count:Int
+TaskRunId:Keyword
+RuntimeId:Keyword
+SessionId:Keyword
+SessionEpoch:Int
+SessionStatus:Keyword
+IsDegraded:Bool
 EOF
 )
 

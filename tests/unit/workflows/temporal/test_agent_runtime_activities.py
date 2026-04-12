@@ -26,6 +26,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionHandle,
+    CodexManagedSessionRecord,
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
@@ -72,6 +73,24 @@ def _save_record(
             errorMessage=error_message,
         )
     )
+
+
+def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
+    return CodexManagedSessionRecord(
+        sessionId=session_id,
+        sessionEpoch=1,
+        taskRunId="wf-run-1",
+        containerId=f"container-{session_id}",
+        threadId=f"thread-{session_id}",
+        runtimeId="codex_cli",
+        imageRef="moonmind:latest",
+        controlUrl="http://session-control",
+        status=status,
+        workspacePath="/work/agent_jobs/wf-run-1/repo",
+        sessionWorkspacePath="/work/agent_jobs/wf-run-1/session",
+        artifactSpoolPath="/work/agent_jobs/wf-run-1/artifacts",
+        startedAt=datetime.now(tz=UTC),
+    ).model_dump(mode="json", by_alias=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1732,3 +1751,69 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
 
             assert result.startswith("Injected context instruction")
             assert "Managed Codex CLI note:" in result
+
+
+async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary() -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [
+                _session_record("sess-ready", status="ready"),
+                _session_record("sess-stale-degraded", status="degraded"),
+                _session_record("sess-orphaned-container", status="degraded"),
+            ]
+
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert result == {
+        "managedSessionRecordsReconciled": 3,
+        "degradedSessionRecords": 2,
+        "sessionIds": [
+            "sess-ready",
+            "sess-stale-degraded",
+            "sess-orphaned-container",
+        ],
+        "truncated": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [
+                _session_record(f"sess-{index}", status="degraded")
+                for index in range(60)
+            ]
+
+    heartbeat_payloads: list[dict[str, Any]] = []
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: dict[str, Any],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert heartbeat_payloads == [
+        {"activityType": "agent_runtime.reconcile_managed_sessions"}
+    ]
+    assert result["managedSessionRecordsReconciled"] == 60
+    assert result["degradedSessionRecords"] == 60
+    assert len(result["sessionIds"]) == 50
+    assert result["truncated"] is True
