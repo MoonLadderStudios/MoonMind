@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement the remaining runtime work for Codex managed session Phase 4 and Phase 5 without duplicating behavior that is already complete. The plan hardens bounded operator visibility, control-history readability, runtime worker separation, recurring reconciliation, lifecycle integration coverage, Continue-As-New carry-forward validation, and replay safety. The implementation remains runtime-mode work: production code changes plus validation tests are required, and docs-only completion is invalid.
+Implement the remaining runtime work for Codex managed session Phase 4 and Phase 5 without duplicating behavior that is already complete. The plan hardens bounded operator visibility, control-history readability, metrics/tracing/log correlation, runtime worker separation, recurring reconciliation, lifecycle integration coverage, Continue-As-New carry-forward validation, and replay safety. The implementation remains runtime-mode work: production code changes plus validation tests are required, and docs-only completion is invalid.
 
 ## Technical Context
 
@@ -15,8 +15,8 @@ Implement the remaining runtime work for Codex managed session Phase 4 and Phase
 **Testing**: `./tools/test_unit.sh`, focused pytest targets, Temporal time-skipping integration tests where CI-safe, replay tests for representative histories, hermetic `integration_ci` only where the test taxonomy allows it  
 **Target Platform**: Docker/Compose-hosted MoonMind services and Temporal worker fleets running Codex task-scoped managed session containers  
 **Project Type**: Backend runtime/workflow reliability and observability hardening  
-**Performance Goals**: Operator metadata and reconcile outcomes remain bounded and reference-sized; recurring reconcile stays compact under many stale records; workflow history growth remains bounded by Continue-As-New  
-**Constraints**: Runtime mode only; implement only missing behavior; no prompts, transcripts, scrollback, raw logs, credentials, or secrets in indexed visibility, workflow metadata, schedule metadata, activity summaries, or replay fixtures; runtime/container side effects stay on the runtime activity boundary; provider verification remains outside required CI unless explicitly enabled  
+**Performance Goals**: Operator metadata, telemetry dimensions, and reconcile outcomes remain bounded and reference-sized; recurring reconcile stays compact under many stale records; workflow history growth remains bounded by Continue-As-New  
+**Constraints**: Runtime mode only; implement only missing behavior; no prompts, transcripts, scrollback, raw logs, credentials, or secrets in indexed visibility, workflow metadata, schedule metadata, activity summaries, telemetry correlation fields, or replay fixtures; runtime/container side effects stay on the runtime activity boundary; provider verification remains outside required CI unless explicitly enabled  
 **Scale/Scope**: One Codex task-scoped managed session per task; no standalone image path; no multi-runtime managed session expansion; no frontend redesign unless required to validate bounded operator presentation
 
 ## Constitution Check
@@ -94,7 +94,7 @@ Research decisions are captured in [research.md](./research.md).
 
 Key decisions:
 
-1. Preserve bounded visibility as the operator surface and keep secrets/unbounded content out of indexed metadata, summaries, schedules, and replay fixtures.
+1. Preserve bounded visibility as the operator surface and keep secrets/unbounded content out of indexed metadata, summaries, schedules, telemetry correlation fields, and replay fixtures.
 2. Route runtime/container side effects through the existing runtime activity boundary.
 3. Use recurring scheduled reconciliation for durable recovery and bounded sweeper outcomes.
 4. Treat lifecycle integration and replay validation as required deployment-safety evidence for workflow-shape changes.
@@ -113,10 +113,11 @@ Implementation surfaces:
 1. Audit existing Phase 4/5 behavior and mark already-complete behavior as verification-only.
 2. Add or correct runtime workflow visibility updates where major transitions are missing or unsafe.
 3. Add or correct bounded control summaries for launch, send, interrupt, clear, cancel, steer, and terminate operations.
-4. Preserve runtime/container activity routing on the runtime worker fleet.
-5. Add or complete scheduled reconcile workflow/client wiring and bounded reconcile outcome normalization.
-6. Add integration tests for lifecycle, clear invariants, interrupt, cancel, terminate cleanup, restart/reconcile, race/idempotency, and Continue-As-New carry-forward.
-7. Add replay tests or replay-fixture gates for representative managed session histories affected by workflow-shape changes.
+4. Add or correct metrics/tracing/log correlation for managed session workflow and runtime operations using bounded identifiers only.
+5. Preserve runtime/container activity routing on the runtime worker fleet.
+6. Add or complete scheduled reconcile workflow/client wiring and bounded reconcile outcome normalization.
+7. Add integration tests for lifecycle, clear invariants, interrupt, cancel, terminate cleanup, restart/reconcile, race/idempotency, and Continue-As-New carry-forward.
+8. Add replay tests or replay-fixture gates for representative managed session histories affected by workflow-shape changes.
 
 ## Post-Design Constitution Check
 

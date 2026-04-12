@@ -20,6 +20,7 @@ An operator monitoring a Codex managed session needs to identify the session, cu
 1. **Given** a managed session starts, **When** an operator inspects workflow-visible metadata, **Then** the metadata identifies the task run, runtime, session, epoch, status, and degradation state.
 2. **Given** a session changes phase, **When** it starts a turn, is interrupted, clears to a new epoch, degrades, terminates, or finishes termination, **Then** the current operator details reflect that latest phase and compact continuity references.
 3. **Given** prompts, transcripts, scrollback, raw logs, credentials, or secret-like values exist elsewhere in the system, **When** operational metadata is produced, **Then** none of those values appear in indexed visibility, workflow metadata, schedule metadata, activity summaries, or replay fixtures.
+4. **Given** runtime workers emit metrics, traces, or logs for managed session operations, **When** those telemetry records are correlated with a session, **Then** they use bounded task/session/runtime identifiers and exclude prompts, transcripts, raw logs, credentials, and secrets.
 
 ---
 
@@ -109,6 +110,7 @@ A maintainer changing the managed session workflow needs integration and replay 
 - **FR-018**: System MUST validate Continue-As-New carry-forward for locator, epoch, continuity references, and dedupe or request-tracking state.
 - **FR-019**: System MUST include replay validation for representative managed session histories as a required gate for workflow-shape changes.
 - **FR-020**: Tests for this feature MUST be created before or alongside the runtime behavior they validate, so missing behavior is observable as a failing test during development.
+- **FR-021**: System MUST provide metrics, tracing, and log correlation for managed session workflow/runtime operations using bounded task, runtime, session, epoch, status, and degradation identifiers without exposing prompts, transcripts, scrollback, raw logs, credentials, or secrets.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -117,6 +119,7 @@ A maintainer changing the managed session workflow needs integration and replay 
 - **Managed Session Reconcile Outcome**: A compact recovery result that records counts, bounded identifiers, and safe reasons for reattached, degraded, terminated, or orphaned sessions.
 - **Lifecycle Test Fixture**: A deterministic validation scenario or replay fixture that proves managed session behavior without exposing prompts, transcripts, raw logs, credentials, or secrets.
 - **Continue-As-New Carry-Forward State**: The compact session state that must survive long-lived workflow handoff, including locator, epoch, continuity refs, and dedupe/request-tracking data.
+- **Managed Session Telemetry Context**: Bounded correlation identifiers and dimensions used by metrics, traces, and structured logs for managed session workflow and runtime operations.
 
 ## Success Criteria *(mandatory)*
 
@@ -130,6 +133,7 @@ A maintainer changing the managed session workflow needs integration and replay 
 - **SC-006**: Lifecycle integration tests cover create, attach handles, send follow-up, clear invariants, interrupt, cancel, terminate cleanup, restart/reconcile, races/idempotency, and Continue-As-New carry-forward.
 - **SC-007**: Replay validation covers representative managed session histories and is required for workflow-shape changes.
 - **SC-008**: The required runtime verification suite passes with no credentials or external provider access.
+- **SC-009**: Metrics, traces, and structured logs for managed session operations can be correlated by bounded task/session/runtime identifiers and pass the same forbidden-value safety review as workflow metadata.
 
 ## Assumptions
 

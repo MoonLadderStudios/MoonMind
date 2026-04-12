@@ -162,12 +162,14 @@
 
 **Purpose**: Run final verification, update task artifacts, and remove obsolete internal paths uncovered by implementation.
 
-- [ ] T052 [P] Update focused verification commands if target names changed in `specs/162-session-phase45-hardening/quickstart.md`
-- [ ] T053 [P] Remove obsolete internal compatibility shims or superseded managed-session paths found during implementation in `moonmind/workflows/temporal/workflows/agent_session.py`, `moonmind/workflows/temporal/runtime/managed_session_controller.py`, and adjacent tests
-- [ ] T054 Run focused verification from `specs/162-session-phase45-hardening/quickstart.md`
-- [ ] T055 Run required full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [ ] T056 Run hermetic integration verification with `./tools/test_integration.sh` if changed files touch required `integration_ci` seams
-- [ ] T057 Record any intentionally deferred provider-verification coverage in `specs/162-session-phase45-hardening/quickstart.md`
+- [ ] T052 [P] Add managed-session telemetry/log-correlation safety tests for bounded dimensions and forbidden-value exclusion in `tests/unit/workflows/temporal/workflows/test_agent_session.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, and `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [ ] T053 Add or correct managed-session metrics, tracing, and structured log correlation using bounded identifiers in `moonmind/workflows/temporal/workflows/agent_session.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `moonmind/workflows/temporal/worker_runtime.py`
+- [ ] T054 [P] Update focused verification commands if target names changed in `specs/162-session-phase45-hardening/quickstart.md`
+- [ ] T055 [P] Remove obsolete internal compatibility shims or superseded managed-session paths found during implementation in `moonmind/workflows/temporal/workflows/agent_session.py`, `moonmind/workflows/temporal/runtime/managed_session_controller.py`, and adjacent tests
+- [ ] T056 Run focused verification from `specs/162-session-phase45-hardening/quickstart.md`
+- [ ] T057 Run required full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [ ] T058 Run hermetic integration verification with `./tools/test_integration.sh` if changed files touch required `integration_ci` seams
+- [ ] T059 Record any intentionally deferred provider-verification coverage in `specs/162-session-phase45-hardening/quickstart.md`
 
 ---
 
@@ -209,6 +211,7 @@
 - T025, T026, T027, T028, and T029 can run in parallel.
 - T038 through T044 can run in parallel if each worker owns disjoint test files or coordinates shared test file edits.
 - T030 through T036 can be split by module after the US3 tests define the expected contract.
+- T052 can run after story tests exist and before T053 implements telemetry/log-correlation changes.
 
 ---
 
@@ -245,6 +248,7 @@ This task set is incomplete unless it includes:
 
 - production runtime code changes when missing behavior is found,
 - automated validation tests for each runtime story,
+- metrics/tracing/log correlation tasks when that Phase 4 behavior is missing,
 - focused verification,
 - required full unit verification,
 - no docs-only completion.

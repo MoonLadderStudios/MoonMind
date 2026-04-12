@@ -10,10 +10,11 @@ This feature is runtime implementation work. Required deliverables include produ
 2. Add failing or regression tests for each missing behavior before or alongside code changes.
 3. Verify bounded workflow visibility and Search Attribute behavior.
 4. Verify activity summaries for launch, send, interrupt, clear, cancel, steer, and terminate.
-5. Verify runtime/container activity routing stays on the runtime worker boundary.
-6. Verify scheduled reconcile and bounded reconcile outcomes.
-7. Verify lifecycle integration behavior for send, clear, interrupt, cancel, and terminate.
-8. Verify restart/reconcile, race/idempotency, Continue-As-New carry-forward, and replay safety.
+5. Verify metrics, tracing, and structured log correlation uses bounded identifiers only.
+6. Verify runtime/container activity routing stays on the runtime worker boundary.
+7. Verify scheduled reconcile and bounded reconcile outcomes.
+8. Verify lifecycle integration behavior for send, clear, interrupt, cancel, and terminate.
+9. Verify restart/reconcile, race/idempotency, Continue-As-New carry-forward, and replay safety.
 
 ## Focused Verification
 
@@ -49,7 +50,7 @@ Provider verification remains optional and must not be required for this feature
 
 ## Safety Review
 
-Before completion, scan metadata, summaries, schedules, reconcile outcomes, and replay fixtures for forbidden values:
+Before completion, scan metadata, summaries, schedules, telemetry correlation fields, reconcile outcomes, and replay fixtures for forbidden values:
 
 - prompts
 - transcripts
