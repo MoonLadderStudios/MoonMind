@@ -835,8 +835,9 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.interrupt_turn",
@@ -844,8 +845,9 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.clear_session",
@@ -853,8 +855,9 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.terminate_session",
@@ -862,8 +865,9 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180),
+            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="agent_runtime.fetch_session_summary",
