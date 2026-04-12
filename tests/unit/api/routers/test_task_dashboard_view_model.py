@@ -148,6 +148,19 @@ def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
     assert "jiraIntegration" not in config["system"]
 
 
+def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
+    monkeypatch.setattr(settings.atlassian.jira, "jira_enabled", True)
+    monkeypatch.setattr(settings.atlassian.jira, "jira_tool_enabled", True)
+
+    config = build_runtime_config("/tasks/new")
+
+    assert "jira" not in config["sources"]
+    assert "jiraIntegration" not in config["system"]
+
+
 def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
     monkeypatch.setattr(
