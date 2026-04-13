@@ -2579,6 +2579,19 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const sourceTemporal = search.get('source') === 'temporal';
 
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(() => {
+    try {
+      const message = window.sessionStorage.getItem(
+        'moonmind.temporalTaskEditing.notice',
+      );
+      if (message) {
+        window.sessionStorage.removeItem('moonmind.temporalTaskEditing.notice');
+      }
+      return message;
+    } catch {
+      return null;
+    }
+  });
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
 
@@ -2880,6 +2893,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       </div>
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
+      {actionNotice ? (
+        <div className="notice" role="status">
+          {actionNotice}
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setActionNotice(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {detailQuery.isLoading ? (
         <p className="loading">Loading task...</p>

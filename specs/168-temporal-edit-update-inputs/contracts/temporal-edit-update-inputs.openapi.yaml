@@ -1,0 +1,241 @@
+openapi: 3.1.0
+info:
+  title: Temporal Edit UpdateInputs Contract
+  version: 0.1.0
+  description: Runtime contract for active MoonMind.Run task edit submission.
+paths:
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Submit active task input edits to an existing Temporal execution
+      operationId: updateExecutionInputs
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemporalEditUpdateRequest"
+            examples:
+              inlineEdit:
+                summary: Inline edited input patch
+                value:
+                  updateName: UpdateInputs
+                  parametersPatch:
+                    repository: MoonLadderStudios/MoonMind
+                    targetRuntime: codex_cli
+                    task:
+                      instructions: Save edited Temporal inputs.
+                      runtime:
+                        mode: codex_cli
+                        model: gpt-5.4
+                        effort: medium
+                      publish:
+                        mode: pr
+              artifactBackedEdit:
+                summary: Edited input externalized to a new artifact
+                value:
+                  updateName: UpdateInputs
+                  inputArtifactRef: art-edited-input-001
+                  parametersPatch:
+                    repository: MoonLadderStudios/MoonMind
+                    targetRuntime: codex_cli
+                    inputArtifactRef: art-edited-input-001
+                    task:
+                      instructions: Edited artifact-backed instructions.
+      responses:
+        "200":
+          description: Update accepted, deferred, or rejected by workflow state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalEditUpdateResponse"
+              examples:
+                applied:
+                  value:
+                    accepted: true
+                    applied: immediate
+                    message: Inputs updated.
+                    execution:
+                      workflowId: mm:edit-123
+                    refresh:
+                      patchedExecution: true
+                      listStale: true
+                      refetchSuggested: true
+                safePoint:
+                  value:
+                    accepted: true
+                    applied: safe_point
+                    message: Inputs scheduled for the next safe point.
+                    execution:
+                      workflowId: mm:edit-123
+                    refresh:
+                      patchedExecution: true
+                      listStale: true
+                      refetchSuggested: true
+                terminalReject:
+                  value:
+                    accepted: false
+                    applied: immediate
+                    message: Workflow is in a terminal state and no longer accepts updates.
+        "422":
+          description: Invalid update request or validation failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/artifacts:
+    post:
+      summary: Create a new input artifact for edited task input content
+      operationId: createTaskInputArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactCreateRequest"
+      responses:
+        "200":
+          description: Artifact creation response with upload details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactCreateResponse"
+        "422":
+          description: Artifact creation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    TemporalEditUpdateRequest:
+      type: object
+      required:
+        - updateName
+        - parametersPatch
+      additionalProperties: false
+      properties:
+        updateName:
+          type: string
+          const: UpdateInputs
+        inputArtifactRef:
+          type: string
+          description: New artifact reference for edited input content when externalized.
+        parametersPatch:
+          type: object
+          additionalProperties: true
+          description: Edited task input state from the shared form.
+        idempotencyKey:
+          type: string
+
+    TemporalEditUpdateResponse:
+      type: object
+      required:
+        - accepted
+      additionalProperties: true
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum:
+            - immediate
+            - safe_point
+            - async
+            - continue_as_new
+        message:
+          type: string
+        execution:
+          type: object
+          additionalProperties: true
+          properties:
+            workflowId:
+              type: string
+        refresh:
+          type: object
+          additionalProperties: true
+          properties:
+            patchedExecution:
+              type: boolean
+            listStale:
+              type: boolean
+            refetchSuggested:
+              type: boolean
+
+    ArtifactCreateRequest:
+      type: object
+      required:
+        - content_type
+        - size_bytes
+        - metadata
+      additionalProperties: true
+      properties:
+        content_type:
+          type: string
+          examples:
+            - application/json; charset=utf-8
+        size_bytes:
+          type: integer
+          minimum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+          properties:
+            label:
+              type: string
+            repository:
+              type:
+                - string
+                - "null"
+            source:
+              type: string
+
+    ArtifactCreateResponse:
+      type: object
+      required:
+        - artifact_ref
+        - upload
+      additionalProperties: true
+      properties:
+        artifact_ref:
+          type: object
+          required:
+            - artifact_id
+          additionalProperties: true
+          properties:
+            artifact_id:
+              type: string
+        upload:
+          type: object
+          additionalProperties: true
+          properties:
+            mode:
+              type: string
+            upload_url:
+              type: string
+            required_headers:
+              type: object
+              additionalProperties:
+                type: string
+
+    ErrorResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+              properties:
+                code:
+                  type: string
+                message:
+                  type: string
