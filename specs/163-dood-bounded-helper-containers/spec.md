@@ -2,7 +2,7 @@
 
 **Feature Branch**: `163-dood-bounded-helper-containers`  
 **Created**: 2026-04-12  
-**Status**: Draft  
+**Status**: Implemented
 **Input**: User description: "Implement Phase 7 using test-driven development of the MoonMind Docker-out-of-Docker strategy: optional bounded helper containers. Support short-lived helper services without collapsing them into the managed session model. Deliver a separate bounded-helper contract for owned, TTL-bound helper containers, health/readiness checks, explicit ownership and teardown semantics, a separate workload kind such as helper or bounded_service, required owner step, TTL, readiness contract, stop/kill policy, artifact behavior, and end-to-end tests for helpers that survive across multiple sub-steps within one bounded execution window. Guardrails: do not silently permit indefinite helper lifetimes, and do not treat helper containers as session_id carriers or substitutes for MoonMind.AgentRun. Exit criteria: a temporary service workload can be launched, used, observed, and torn down without confusing the task/session model. Preserve the Docker-out-of-Docker architecture boundaries: Codex session containers and specialized workload containers are different roles; specialized workload containers enter through the executable tool path first; Docker authority stays on control-plane-owned workers; runner profiles replace arbitrary image strings; artifacts and bounded workflow metadata remain authoritative. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 
 ## User Scenarios & Testing *(mandatory)*

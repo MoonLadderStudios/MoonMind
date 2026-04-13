@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import posixpath
@@ -782,6 +783,7 @@ class DockerWorkloadLauncher:
     ) -> WorkloadResult:
         started_at = datetime.now(UTC)
         lease = await self._concurrency_limiter.acquire(request)
+        helper_started = False
         try:
             process = await asyncio.create_subprocess_exec(
                 *self.build_helper_run_args(request),
@@ -806,7 +808,20 @@ class DockerWorkloadLauncher:
                 )
             self._helper_leases[request.container_name] = lease
             lease = None
+            helper_started = True
             readiness = await self._wait_for_helper_readiness(request)
+        except asyncio.CancelledError:
+            await self._cleanup_started_helper_after_start_failure(
+                request,
+                helper_started=helper_started,
+            )
+            raise
+        except Exception:
+            await self._cleanup_started_helper_after_start_failure(
+                request,
+                helper_started=helper_started,
+            )
+            raise
         finally:
             if lease is not None:
                 await lease.release()
@@ -822,6 +837,23 @@ class DockerWorkloadLauncher:
             stderr=_decode_stream(stderr),
             readiness=readiness,
         )
+
+    async def _cleanup_started_helper_after_start_failure(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        helper_started: bool,
+    ) -> None:
+        if not helper_started:
+            return
+        with contextlib.suppress(Exception):
+            await self._terminate_container(request)
+        if request.profile.cleanup.remove_container_on_exit:
+            with contextlib.suppress(Exception):
+                await self._janitor.remove(request.container_name)
+        helper_lease = self._helper_leases.pop(request.container_name, None)
+        if helper_lease is not None:
+            await helper_lease.release()
 
     async def stop_helper(
         self,

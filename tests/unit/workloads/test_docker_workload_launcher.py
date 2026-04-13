@@ -1140,6 +1140,64 @@ async def test_launcher_kills_timed_out_readiness_probe_process(
 
 
 @pytest.mark.asyncio
+async def test_launcher_cancel_during_helper_readiness_tears_down_and_releases_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+    readiness_started = asyncio.Event()
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            if readiness_started.is_set():
+                return _Process(returncode=0, stdout=b"PONG\n")
+            readiness_started.set()
+            return _Process(never_complete=True)
+        if args[1] == "logs":
+            return _Process(returncode=0, stdout=b"service log\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=4)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    first = _validated_helper_request(tmp_path)
+    second = _validated_helper_request(
+        tmp_path,
+        taskRunId="task-helper-b",
+        repoDir="/work/agent_jobs/task-helper-b/repo",
+        artifactsDir="/work/agent_jobs/task-helper-b/artifacts/step-service",
+    )
+
+    task = asyncio.create_task(launcher.start_helper(first))
+    await readiness_started.wait()
+
+    task.cancel()
+    done, pending = await asyncio.wait({task})
+
+    assert done == {task}
+    assert pending == set()
+    assert task.cancelled()
+    assert [
+        "docker",
+        "stop",
+        "-t",
+        "3",
+        "mm-helper-task-helper-step-service-1",
+    ] in created
+    assert ["docker", "kill", "mm-helper-task-helper-step-service-1"] in created
+    assert ["docker", "rm", "-f", "mm-helper-task-helper-step-service-1"] in created
+
+    second_result = await launcher.start_helper(second)
+    assert second_result.status == "ready"
+
+
+@pytest.mark.asyncio
 async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
