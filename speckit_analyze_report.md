@@ -2,8 +2,8 @@
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| I1 | Inconsistency | MEDIUM | `tasks.md`:46-49, 73-74, 96-99, 163-173 | Several tasks marked `[P]` modify the same file (`frontend/src/entrypoints/task-create.test.tsx`). The task notes say `[P]` means different files or no conflicts, while the parallel opportunities section partially walks this back by requiring coordination. | Remove `[P]` from same-file test tasks or split them so only one owner edits `task-create.test.tsx` at a time. |
-| C1 | Coverage Gap | MEDIUM | `spec.md`:59, 98; `tasks.md`:116-124 | The spec includes Jira browser failure fallback and manual task creation availability (`SC-005`), but the tasks do not include a dedicated regression task for that behavior. Full-suite validation may cover existing tests, but the feature task list does not make the coverage explicit. | Add a story or polish task that explicitly verifies Jira browser failure remains local and manual creation remains available in `frontend/src/entrypoints/task-create.test.tsx`. |
+| I1 | Inconsistency | MEDIUM | `tasks.md`:46-49, 73-74, 96-99, 163-173 | REMEDIATED: Same-file test tasks no longer carry `[P]`; parallel examples now avoid concurrent edits to `frontend/src/entrypoints/task-create.test.tsx`. | No further action. |
+| C1 | Coverage Gap | MEDIUM | `spec.md`:59, 98; `tasks.md`:116-124 | REMEDIATED: Added explicit cross-cutting validation task for Jira browser failure remaining local and manual task creation remaining available. | No further action. |
 
 ## Coverage Summary
 
@@ -35,15 +35,15 @@ No problematic unmapped tasks detected. Setup tasks T001-T005 and polish tasks T
 ## Metrics
 
 - Total Requirements: 14
-- Total Tasks: 33
+- Total Tasks: 34
 - Coverage: 100% of functional requirements have at least one task
 - Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
-- Medium Issues Count: 2
+- Medium Issues Count: 0 open, 2 remediated
 
 ## Next Actions
 
 - No CRITICAL issues block `speckit-implement`.
-- Before implementation, consider remediating I1 by removing `[P]` from same-file test tasks to avoid merge conflicts.
-- Before implementation or during task execution, remediate C1 by adding an explicit Jira failure fallback regression task for `frontend/src/entrypoints/task-create.test.tsx`.
+- Prompt B remediations have been applied for I1 and C1.
+- Proceed to implementation when ready.
