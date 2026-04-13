@@ -1,0 +1,108 @@
+openapi: 3.1.0
+info:
+  title: Create Page Jira Import Action Contract
+  version: 0.1.0
+  description: >
+    This feature does not add a new backend endpoint. The contract documents
+    the Create page state/action contract layered on top of existing MoonMind
+    Jira browser issue-detail data.
+paths: {}
+components:
+  schemas:
+    JiraImportTarget:
+      oneOf:
+        - type: object
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              const: preset
+        - type: object
+          required: [kind, localId]
+          properties:
+            kind:
+              type: string
+              const: step
+            localId:
+              type: string
+              minLength: 1
+    JiraImportMode:
+      type: string
+      enum:
+        - preset-brief
+        - execution-brief
+        - description-only
+        - acceptance-only
+    JiraWriteAction:
+      type: string
+      enum:
+        - replace
+        - append
+    JiraImportAction:
+      type: object
+      required:
+        - target
+        - mode
+        - action
+        - issueKey
+      properties:
+        target:
+          $ref: "#/components/schemas/JiraImportTarget"
+        mode:
+          $ref: "#/components/schemas/JiraImportMode"
+        action:
+          $ref: "#/components/schemas/JiraWriteAction"
+        issueKey:
+          type: string
+          minLength: 1
+    JiraImportResult:
+      type: object
+      required:
+        - changed
+        - target
+      properties:
+        changed:
+          type: boolean
+          description: Whether the import action changed a draft field.
+        target:
+          $ref: "#/components/schemas/JiraImportTarget"
+        reapplyPresetRequired:
+          type: boolean
+          description: True when an applied preset exists and the preset objective was changed.
+        templateIdentityDetached:
+          type: boolean
+          description: True when a template-bound step was customized by imported instructions.
+x-ui-actions:
+  - name: replace-target-text
+    inputSchema:
+      $ref: "#/components/schemas/JiraImportAction"
+    requirements:
+      - FR-001
+      - FR-002
+      - FR-003
+      - FR-006
+      - FR-009
+      - FR-012
+  - name: append-to-target-text
+    inputSchema:
+      $ref: "#/components/schemas/JiraImportAction"
+    requirements:
+      - FR-001
+      - FR-002
+      - FR-003
+      - FR-006
+      - FR-009
+      - FR-011
+  - name: import-into-applied-preset-objective
+    inputSchema:
+      $ref: "#/components/schemas/JiraImportAction"
+    requirements:
+      - FR-007
+      - FR-008
+      - FR-015
+  - name: import-into-template-bound-step
+    inputSchema:
+      $ref: "#/components/schemas/JiraImportAction"
+    requirements:
+      - FR-010
+      - FR-015
