@@ -212,6 +212,26 @@ def test_validate_jira_source_templates_rejects_non_moonmind_paths() -> None:
         dashboard_view_model._validate_jira_source_templates(sources)
 
 
+def test_validate_jira_source_templates_rejects_blank_paths() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "issues": " ",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
+
+
+def test_validate_jira_source_templates_rejects_trailing_whitespace() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "projects": "/api/jira/projects ",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
+
+
 def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
     monkeypatch,
 ) -> None:

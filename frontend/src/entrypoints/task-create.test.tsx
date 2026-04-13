@@ -67,6 +67,44 @@ const mockPayload: BootPayload = {
   },
 };
 
+function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      sources?: Record<string, unknown>;
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        sources: {
+          ...initialData.dashboardConfig.sources,
+          jira: {
+            connections: "/api/jira/connections/verify",
+            projects: "/api/jira/projects",
+            boards: "/api/jira/projects/{projectKey}/boards",
+            columns: "/api/jira/boards/{boardId}/columns",
+            issues: "/api/jira/boards/{boardId}/issues",
+            issue: "/api/jira/issues/{issueKey}",
+          },
+        },
+        system: {
+          ...initialData.dashboardConfig.system,
+          jiraIntegration: {
+            enabled: true,
+            defaultProjectKey: "ENG",
+            defaultBoardId: "42",
+            rememberLastBoardInSession: true,
+          },
+        },
+      },
+    },
+  };
+}
+
 describe("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
   let executionResponseOverride: Response | null;
@@ -342,6 +380,96 @@ describe("Task Create Entrypoint", () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({ artifact_id: "art-001" }),
+          } as Response);
+        }
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { key: "OPS", name: "Operations" },
+                { key: "ENG", name: "Engineering" },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/projects/ENG/boards") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { id: "7", name: "Backlog", projectKey: "ENG" },
+                { id: "42", name: "Delivery", projectKey: "ENG" },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/boards/42/columns") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              board: { id: "42", name: "Delivery", projectKey: "ENG" },
+              columns: [
+                { id: "todo", name: "To Do", count: 1 },
+                { id: "doing", name: "Doing", count: 1 },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/boards/42/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "42",
+              columns: [
+                { id: "todo", name: "To Do" },
+                { id: "doing", name: "Doing" },
+              ],
+              itemsByColumn: {
+                todo: [
+                  {
+                    issueKey: "ENG-101",
+                    summary: "Plan queue controls",
+                    issueType: "Story",
+                    statusName: "Selected",
+                    assignee: "Ada",
+                    updatedAt: "2026-04-10T19:30:00Z",
+                  },
+                ],
+                doing: [
+                  {
+                    issueKey: "ENG-202",
+                    summary: "Build browser shell",
+                    issueType: "Story",
+                    statusName: "In Progress",
+                    assignee: "Grace",
+                    updatedAt: "2026-04-11T19:30:00Z",
+                  },
+                ],
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              acceptanceCriteriaText:
+                "Given a board, users can select a story preview.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira story ENG-202: Build browser shell",
+              },
+            }),
           } as Response);
         }
         return Promise.resolve({
@@ -1282,6 +1410,294 @@ describe("Task Create Entrypoint", () => {
       expect(
         screen.getByText(/Choose a prerequisite run before adding/),
       ).toBeTruthy();
+    });
+  });
+
+  it("hides Jira browser controls when the runtime config does not enable Jira", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
+  it("opens the Jira browser from the preset target", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Browse Jira story" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Target: Feature Request / Initial Instructions"))
+      .toBeTruthy();
+  });
+
+  it("opens the Jira browser from a step target", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Browse Jira story" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Target: Step 1 Instructions")).toBeTruthy();
+  });
+
+  it("loads board columns in order and switches visible Jira issues by column", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "To Do 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Doing 1" })).toBeTruthy();
+    });
+
+    expect(screen.getByText("ENG-101")).toBeTruthy();
+    expect(screen.queryByText("ENG-202")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Doing 1" }));
+
+    expect(await screen.findByText("ENG-202")).toBeTruthy();
+    expect(screen.queryByText("ENG-101")).toBeNull();
+  });
+
+  it("keeps the Jira browser disabled when endpoint templates are incomplete", async () => {
+    const payload = withJiraIntegration();
+    const initialData = payload.initialData as {
+      dashboardConfig: {
+        sources?: Record<string, unknown>;
+      };
+    };
+    renderWithClient(
+      <TaskCreatePage
+        payload={{
+          ...payload,
+          initialData: {
+            ...initialData,
+            dashboardConfig: {
+              ...initialData.dashboardConfig,
+              sources: {
+                ...initialData.dashboardConfig.sources,
+                jira: {
+                  projects: "/api/jira/projects",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
+  it("does not restore Jira project or board defaults after a manual clear", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+    });
+    fireEvent.change(projectSelect, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("");
+    });
+    expect(
+      (screen.getByLabelText("Board") as HTMLSelectElement).value,
+    ).toBe("");
+
+    fireEvent.change(projectSelect, { target: { value: "ENG" } });
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((boardSelect as HTMLSelectElement).value).toBe("42");
+    });
+    fireEvent.change(boardSelect, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect((boardSelect as HTMLSelectElement).value).toBe("");
+    });
+  });
+
+  it("loads Jira issue preview when an issue is selected", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Build browser shell")).toBeTruthy();
+    expect(
+      await screen.findByText("Let operators browse Jira stories."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Given a board, users can select a story preview."),
+    ).toBeTruthy();
+  });
+
+  it("does not import Jira preview text into draft fields in this phase", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Build browser shell")).toBeTruthy();
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.",
+    );
+  });
+
+  it("shows Jira browser failures locally", async () => {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            statusText: "Service Unavailable",
+            text: async () => "Jira unavailable",
+          } as Response);
+        }
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
+          text: async () => "Unhandled fetch",
+        } as Response);
+      },
+    );
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(await screen.findByText("Failed to load Jira projects.")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Browse Jira story" }))
+      .toBeTruthy();
+    expect(screen.getByLabelText("Instructions")).toBeTruthy();
+  });
+
+  it("keeps manual task creation available after Jira browser failure", async () => {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            statusText: "Service Unavailable",
+            text: async () => "Jira unavailable",
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "mm:workflow-123" }),
+          } as Response);
+        }
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
+          text: async () => "Unhandled fetch",
+        } as Response);
+      },
+    );
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    expect(await screen.findByText("Failed to load Jira projects.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Create this task manually." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
     });
   });
 });
