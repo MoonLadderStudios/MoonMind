@@ -1,71 +1,60 @@
 # Specification Analysis Report
 
-**Feature**: Agent Session Deployment Safety
-**Artifacts**: `spec.md`, `plan.md`, `tasks.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
-**Generated**: 2026-04-13
-
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| None | None | None | `spec.md`, `plan.md`, `tasks.md` | No blocking inconsistencies, duplications, ambiguities, underspecification, constitution conflicts, or task coverage gaps were found. | Proceed to implementation when ready. |
+| None | None | None | N/A | No blocking or advisory consistency issues remain after Prompt B remediation. | Proceed to implementation once normal repository validation gates pass. |
 
-## Coverage Summary
+## Coverage Summary Table
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --- | --- | --- | --- |
-| FR-001 runtime deliverables required | Yes | T004-T009, T016-T024, T025, T031-T037, T045-T053, T059-T065, T069-T071 | Runtime implementation and validation tasks are explicit. |
-| FR-002 standalone image out of scope | Yes | T001, T071 | Scope is guarded during audit and final validation. |
-| FR-003 canonical control vocabulary | Yes | T010, T016, T017, T018 | Typed workflow update surface is covered. |
-| FR-004 deterministic mutation rejection | Yes | T011, T016 | Validator and rejection tests precede implementation. |
-| FR-005 separate signals from mutating controls | Yes | T010, T017 | Signal/update boundary is covered. |
-| FR-006 real interruption and steering | Yes | T012, T018, T021, T022 | Workflow, runtime, and controller coverage are present. |
-| FR-007 cleanup-complete termination | Yes | T013, T014, T020, T022, T023, T025 | Cleanup, supervision, workflow completion, and validation are covered. |
-| FR-008 cancel distinct from terminate | Yes | T012, T019, T021, T025 | Distinct cancel semantics are covered. |
-| FR-009 retry-safe controls | Yes | T004, T013, T021, T022 | Idempotency is covered at schema, runtime, and controller boundaries. |
-| FR-010 non-retryable permanent failures | Yes | T015, T024 | Activity-wrapper tests and implementation cover failure classification. |
-| FR-011 cancellation delivery for blocking activities | Yes | T006, T007, T015, T024 | Heartbeat and timeout coverage is included. |
-| FR-012 serialized async mutators | Yes | T026, T031 | Concurrency test and lock implementation are covered. |
-| FR-013 runtime-handle readiness gates | Yes | T027, T032 | Early update behavior is covered. |
-| FR-014 handler drain before complete/handoff | Yes | T028, T033 | Handler drain tests and workflow implementation are covered. |
-| FR-015 Continue-As-New from run path | Yes | T029, T034 | Main-path Continue-As-New behavior is covered. |
-| FR-016 Continue-As-New carry-forward state | Yes | T004, T029, T034, T036 | Schema, replay, implementation, and validation tasks are present. |
-| FR-017 bounded operator metadata | Yes | T038, T045, T046, T047 | Workflow, client, and activity metadata surfaces are covered. |
-| FR-018 no sensitive/unbounded content in bounded surfaces | Yes | T044, T047, T054 | Forbidden-content test and scan are included. |
-| FR-019 controller/supervisor artifact publication | Yes | T040, T048, T049 | Durable publication path is covered. |
-| FR-020 truth/recovery/cache separation | Yes | T040, T048, T049 | Operator/audit and recovery boundaries are covered. |
-| FR-021 recurring reconciliation | Yes | T042, T043, T050, T051, T052, T053 | Controller, workflow, client, worker, and tests are covered. |
-| FR-022 heavy runtime side-effect separation | Yes | T008, T009, T052 | Worker/task-queue separation and registration are covered. |
-| FR-023 lifecycle validation | Yes | T010-T015, T025, T026-T030, T036, T037, T038-T044, T053 | Lifecycle, race, idempotency, integration, and reconcile validation are covered. |
-| FR-024 replay validation | Yes | T029, T056, T061, T064 | Continue-As-New and representative replay coverage are included. |
-| FR-025 versioning, patching, or cutover for incompatible evolution | Yes | T055, T059, T060, T065 | Worker Versioning and patch/cutover gates are covered. |
-| FR-026 cutover playbooks | Yes | T058, T062, T063, T064 | Playbook creation and validation are covered. |
-| FR-027 replay and fault-injected rollout gates | Yes | T056, T061, T064, T065, T069-T071 | Replay, scope, diff, and full validation gates are present. |
+| FR-001 runtime deliverables | Yes | T001, T011, T018-T026, T033-T037, T047-T054, T061-T065, T073-T075 | Runtime code and validation tasks are present. |
+| FR-002 standalone image out of scope | Yes | T001, T072 | Scope remains guarded; no standalone-image implementation tasks are present. |
+| FR-003 canonical control vocabulary | Yes | T012, T018-T022, T027 | Start/resume binding and carry-forward handling are now explicit alongside send, steer, interrupt, clear, cancel, and terminate. |
+| FR-004 invalid mutation rejection | Yes | T013, T018, T027 | Rejection tests and validators are covered. |
+| FR-005 signals vs mutating controls | Yes | T018, T019, T027 | Production update behavior and scoped bridge behavior are covered. |
+| FR-006 interruption and steering | Yes | T012, T014, T020, T023, T027 | Workflow and runtime behavior are covered. |
+| FR-007 cleanup-complete termination | Yes | T016, T022, T024, T025, T027 | Runtime cleanup and supervision finalization are covered. |
+| FR-008 distinct cancellation | Yes | T012, T014, T021, T023, T027 | Cancel remains distinct from terminate. |
+| FR-009 idempotent controls | Yes | T005, T013-T015, T023, T024, T027 | Request identity and retry-safe side effects are covered. |
+| FR-010 permanent failure classification | Yes | T007, T017, T026, T027 | Non-retryable activity behavior is covered. |
+| FR-011 heartbeat/cancellation | Yes | T007, T017, T026, T027 | Blocking activity cancellation delivery is covered. |
+| FR-012 serialized async mutators | Yes | T028, T033, T038 | Locking and ordering are covered. |
+| FR-013 runtime-handle readiness | Yes | T029, T034, T038 | Accepted-before-handles behavior is covered. |
+| FR-014 handler drain | Yes | T030, T035, T038 | Handler drain before completion and handoff is covered. |
+| FR-015 Continue-As-New from run | Yes | T031, T036, T038 | Main-path Continue-As-New is covered. |
+| FR-016 carry-forward state | Yes | T005, T031, T036, T038 | Schema and replay coverage are present. |
+| FR-017 bounded metadata | Yes | T040, T047-T049, T055 | Visibility, summaries, and telemetry are covered. |
+| FR-018 forbidden sensitive content | Yes | T046, T049, T056 | Forbidden-content validation is covered. |
+| FR-019 controller/supervisor publication | Yes | T042, T043, T050, T051, T055 | Durable publication paths are covered. |
+| FR-020 truth/recovery/cache separation | Yes | T042, T050, T052, T055 | Durable records and controller paths are covered. |
+| FR-021 recurring reconciliation | Yes | T044, T045, T052-T054, T055 | Reconcile workflow, client, and controller behavior are covered. |
+| FR-022 side-effect separation | Yes | T009, T010, T054, T055 | Worker routing and task queue separation are covered. |
+| FR-023 lifecycle validation | Yes | T012-T017, T027, T032, T039, T055 | Lifecycle validation is broad and includes start/resume, controls, cleanup, and handoff. |
+| FR-024 replay validation | Yes | T031, T058, T068 | Replay coverage is present. |
+| FR-025 versioning/patch/cutover | Yes | T057, T059, T061-T065, T068, T069 | Worker Versioning, patch/cutover checks, base-ref handling, and CI wiring are covered. |
+| FR-026 cutover playbooks | Yes | T066, T067, T070 | Cutover documentation and quickstart guidance are covered. |
+| FR-027 rollout gates | Yes | T068, T069, T073-T075 | Replay, unit, deployment-safety, diff, and runtime-scope gates are covered. |
+| FR-028 TDD sequencing | Yes | T003, T011-T017, T028-T032, T040-T046, T057-T060, T073 | Tests precede implementation in each story phase. |
 
 ## Constitution Alignment Issues
 
-None found. The artifacts preserve Temporal-first orchestration, runtime boundary separation, retry-safe side effects, credential-free required validation, bounded operator visibility, and explicit deployment safety for durable workflow changes.
+None. `plan.md` includes PASS coverage for all current constitution principles I-XIII in both the initial and post-design checks.
 
 ## Unmapped Tasks
 
-None found. All 71 tasks map to at least one user story, functional requirement, validation gate, setup prerequisite, or cross-cutting release-readiness concern.
-
-## DOC-REQ Coverage
-
-No `DOC-REQ-*` identifiers were found in `spec.md`, `plan.md`, or `tasks.md`. No requirements traceability remediation is required.
+No task appears unrelated to the feature scope. Setup and polish tasks that primarily maintain traceability or documentation hygiene are still tied to FR-001, FR-002, FR-026, FR-027, or FR-028.
 
 ## Metrics
 
-- Total Requirements: 27
-- Total Tasks: 71
-- Coverage: 100%
+- Total Requirements: 28
+- Total Tasks: 75
+- Coverage %: 100%
 - Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
-- High Issues Count: 0
-- Medium Issues Count: 0
-- Low Issues Count: 0
 
 ## Next Actions
 
-- Proceed to `speckit-implement` when ready.
-- Keep User Story 1 as the MVP implementation slice because it proves canonical controls and leak-proof termination first.
-- Treat replay, versioning/cutover, and fault-injected lifecycle validation as rollout gates, not optional follow-up work.
+- Proceed to runtime implementation with TDD sequencing.
+- Keep `SPECIFY_FEATURE=165-agent-session-deployment-safety` when running Spec Kit scripts from the current non-numbered branch.

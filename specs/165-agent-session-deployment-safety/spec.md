@@ -3,7 +3,7 @@
 **Feature Branch**: `165-agent-session-deployment-safety`  
 **Created**: 2026-04-13  
 **Status**: Draft  
-**Input**: User description: "Finish implementing Phase 6 and any remaining work from the Codex managed session plane rollout, excluding the delayed standalone-image path. Runtime mode is required. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+**Input**: User description: "Implement Phase 6 using test-driven development for the Codex managed session plane rollout, excluding the delayed standalone-image path. Runtime mode is required. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests. Preserve all user-provided constraints."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -120,6 +120,7 @@ A maintainer deploying managed session workflow changes needs versioning, patchi
 - **FR-025**: The system MUST require worker versioning, workflow patching, or an explicit versioned cutover for incompatible managed session workflow evolution.
 - **FR-026**: The system MUST document and validate cutover playbooks for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing new visibility fields.
 - **FR-027**: The system MUST treat replay results and fault-injected lifecycle tests as rollout gates for broad deployment.
+- **FR-028**: The implementation process MUST be test-driven for this feature: add or update validation coverage before relying on production runtime changes as complete.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -140,6 +141,7 @@ A maintainer deploying managed session workflow changes needs versioning, patchi
 - Provider verification with live external credentials is outside the required validation path unless separately enabled by an operator.
 - Bounded artifact references are safe to expose in workflow metadata; artifact contents remain outside indexed visibility and summaries.
 - Runtime-mode implementation is the default; docs-only work is insufficient.
+- Test-driven development is required for this feature; existing compliant behavior may be preserved only when covered by validation evidence.
 
 ## Success Criteria *(mandatory)*
 

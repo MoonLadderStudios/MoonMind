@@ -869,6 +869,14 @@ def _worker_versioning_behavior() -> VersioningBehavior | None:
     }[behavior]
 
 
+def _disabled_worker_versioning_allowed() -> bool:
+    import os
+
+    return os.environ.get(
+        "MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", ""
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _resolve_worker_build_id(*, versioning_enabled: bool) -> str:
     build_id = resolve_moonmind_build_id()
     if build_id:
@@ -906,6 +914,14 @@ def _resolve_worker_build_id(*, versioning_enabled: bool) -> str:
 def _worker_deployment_kwargs(topology) -> dict[str, object]:
     behavior = _worker_versioning_behavior()
     if behavior is None:
+        if not _disabled_worker_versioning_allowed():
+            raise RuntimeError(
+                "Temporal worker versioning is disabled. Set "
+                "TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR to Auto-Upgrade or "
+                "Pinned before deploying durable workflow changes. For local-only "
+                "debugging, also set "
+                "MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING=1."
+            )
         return {"build_id": _resolve_worker_build_id(versioning_enabled=False)}
     build_id = _resolve_worker_build_id(versioning_enabled=True)
     return {

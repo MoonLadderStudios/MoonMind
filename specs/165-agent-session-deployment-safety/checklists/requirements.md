@@ -32,5 +32,6 @@
 ## Notes
 
 - Runtime intent is explicit in FR-001 and the feature input.
+- Test-driven development is explicit in FR-028 and the feature input.
 - The delayed standalone-image path is explicitly out of scope in FR-002 and Edge Cases.
 - The spec intentionally names existing product concepts such as managed sessions, workflow handoff, worker versioning, replay gates, artifacts, and bounded metadata because they are user-provided domain constraints and acceptance surfaces, not implementation instructions for a specific file or library.

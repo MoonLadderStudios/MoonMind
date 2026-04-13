@@ -24,7 +24,7 @@ jobs:
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 1
+        fetch-depth: 0
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
@@ -59,6 +59,16 @@ jobs:
       run: |
         set -euo pipefail
         ./tools/test_unit.sh --python-only
+    - name: Validate AgentSession deployment safety
+      run: |
+        set -euo pipefail
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.pull_request.base.sha }}"
+        elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+          ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.before }}"
+        else
+          ./tools/validate_agent_session_deployment_safety.py --base-ref "HEAD~1"
+        fi
 
   test-frontend:
     runs-on: ubuntu-latest

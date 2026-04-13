@@ -4,6 +4,8 @@
 
 This is runtime-mode work. A valid implementation includes production runtime code changes plus validation tests. Documentation, specifications, and checklists are supporting artifacts only.
 
+Use test-driven sequencing: add or update the focused validation that proves a runtime gap before treating the production runtime change as complete.
+
 The delayed standalone-image path is out of scope.
 
 ## 1. Audit Current Runtime Surfaces
@@ -92,6 +94,8 @@ For workflow-shape changes, also run the managed-session replay validation and c
 For deployment-safety review, validate the cutover playbook and replay gates together:
 
 ```bash
+SPECIFY_FEATURE=165-agent-session-deployment-safety \
+  ./tools/validate_agent_session_deployment_safety.py --base-ref origin/main
 rg -n "SteerTurn|Continue-As-New|CancelSession|TerminateSession|Search Attribute|Worker Versioning|replay" \
   docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md \
   specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md \
