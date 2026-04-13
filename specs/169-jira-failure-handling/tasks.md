@@ -69,27 +69,27 @@
 
 ## Phase 4: User Story 2 - Keep Jira UI Failures Local (Priority: P1)
 
-**Goal**: Jira project, board, column, issue-list, and issue-detail failures render only inside the Jira browser panel and do not mutate the draft.
-**Independent Test**: Simulate failed Jira browser endpoints in the Create page and verify inline browser-panel errors plus editable step and preset fields.
+**Goal**: Jira project, board, column, issue-list, and issue-detail failures or empty states render only inside the Jira browser panel and do not mutate the draft.
+**Independent Test**: Simulate failed and empty Jira browser endpoints in the Create page and verify inline browser-panel messages plus editable step and preset fields.
 
 ### Tests for User Story 2
 
 - [ ] T018 [P] [US2] Add failing Create page test for project load failure rendering local manual-continuation copy for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T019 [P] [US2] Add failing Create page test for board, column, or issue-list failure staying local to the browser panel for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T019 [P] [US2] Add failing Create page test for board, column, or issue-list failure and empty project, board, column, or issue-list states staying local to the browser panel for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.test.tsx`
 - [ ] T020 [P] [US2] Add failing Create page test for issue-detail failure not importing or mutating preset/step draft content for DOC-REQ-001 and DOC-REQ-003 in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Implement shared local Jira error message formatting with manual-continuation guidance for DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T022 [US2] Render project and board query failures inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T023 [US2] Render column, issue-list, and issue-detail query failures inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T021 [US2] Implement shared local Jira error and empty-state message formatting with manual-continuation guidance for DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T022 [US2] Render project and board query failures and empty states inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T023 [US2] Render column, issue-list, and issue-detail query failures and empty issue-list states inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T024 [US2] Ensure issue-detail failure leaves import preview/actions unavailable without mutating draft fields for DOC-REQ-001 and DOC-REQ-003 in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2
 
-- [ ] T025 [US2] Run focused Create page Jira failure tests for DOC-REQ-001, DOC-REQ-002, and DOC-REQ-003 with `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T025 [US2] Run focused Create page Jira failure and empty-state tests for DOC-REQ-001, DOC-REQ-002, and DOC-REQ-003 with `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
 
-**Checkpoint**: Jira UI failures are local to the browser panel and independently verified.
+**Checkpoint**: Jira UI failures and empty states are local to the browser panel and independently verified.
 
 ---
 
@@ -160,7 +160,7 @@
 - T002, T003, and T004 can run in parallel during setup.
 - T006 and T007 can run in parallel during foundational analysis.
 - T008, T009, T010, and T011 can be authored in parallel because they target independent backend cases.
-- T018, T019, and T020 can be authored in parallel because they target separate frontend failure cases.
+- T018, T019, and T020 can be authored in parallel because they target separate frontend failure and empty-state cases.
 - T026, T027, and T028 can be authored in parallel because they target separate manual-creation assertions.
 - T033, T034, and T035 can run in parallel during polish.
 
