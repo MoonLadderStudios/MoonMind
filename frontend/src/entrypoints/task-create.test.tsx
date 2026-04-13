@@ -1463,17 +1463,84 @@ describe("Task Create Entrypoint", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "To Do 1" })).toBeTruthy();
-      expect(screen.getByRole("tab", { name: "Doing 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "To Do 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Doing 1" })).toBeTruthy();
     });
 
     expect(screen.getByText("ENG-101")).toBeTruthy();
     expect(screen.queryByText("ENG-202")).toBeNull();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Doing 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Doing 1" }));
 
     expect(await screen.findByText("ENG-202")).toBeTruthy();
     expect(screen.queryByText("ENG-101")).toBeNull();
+  });
+
+  it("keeps the Jira browser disabled when endpoint templates are incomplete", async () => {
+    const payload = withJiraIntegration();
+    const initialData = payload.initialData as {
+      dashboardConfig: {
+        sources?: Record<string, unknown>;
+      };
+    };
+    renderWithClient(
+      <TaskCreatePage
+        payload={{
+          ...payload,
+          initialData: {
+            ...initialData,
+            dashboardConfig: {
+              ...initialData.dashboardConfig,
+              sources: {
+                ...initialData.dashboardConfig.sources,
+                jira: {
+                  projects: "/api/jira/projects",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
+  it("does not restore Jira project or board defaults after a manual clear", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+    });
+    fireEvent.change(projectSelect, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("");
+    });
+    expect(
+      (screen.getByLabelText("Board") as HTMLSelectElement).value,
+    ).toBe("");
+
+    fireEvent.change(projectSelect, { target: { value: "ENG" } });
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((boardSelect as HTMLSelectElement).value).toBe("42");
+    });
+    fireEvent.change(boardSelect, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect((boardSelect as HTMLSelectElement).value).toBe("");
+    });
   });
 
   it("loads Jira issue preview when an issue is selected", async () => {
@@ -1484,7 +1551,7 @@ describe("Task Create Entrypoint", () => {
         name: "Browse Jira story for preset instructions",
       }),
     );
-    fireEvent.click(await screen.findByRole("tab", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
     expect(await screen.findByText("Build browser shell")).toBeTruthy();
@@ -1515,7 +1582,7 @@ describe("Task Create Entrypoint", () => {
         name: "Browse Jira story for preset instructions",
       }),
     );
-    fireEvent.click(await screen.findByRole("tab", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
     expect(await screen.findByText("Build browser shell")).toBeTruthy();
