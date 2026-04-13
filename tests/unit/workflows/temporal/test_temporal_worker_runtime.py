@@ -750,14 +750,60 @@ def test_worker_deployment_kwargs_fail_fast_without_build_id(monkeypatch) -> Non
             _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
 
 
+def test_worker_deployment_kwargs_disabled_supplies_explicit_build_id(monkeypatch) -> None:
+    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
+        update={"worker_versioning_default_behavior": "Disabled"}
+    )
+    app_settings = worker_runtime_module.settings.model_copy(
+        update={"temporal": temporal_settings}
+    )
+    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
+    monkeypatch.setattr(
+        worker_runtime_module,
+        "resolve_moonmind_build_id",
+        lambda: "disabled-mode-build",
+    )
+
+    kwargs = _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
+
+    assert kwargs == {"build_id": "disabled-mode-build"}
+
+
+def test_worker_deployment_kwargs_disabled_falls_back_to_unknown(monkeypatch) -> None:
+    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
+        update={"worker_versioning_default_behavior": "Disabled"}
+    )
+    app_settings = worker_runtime_module.settings.model_copy(
+        update={"temporal": temporal_settings}
+    )
+    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
+    monkeypatch.setattr(worker_runtime_module, "resolve_moonmind_build_id", lambda: None)
+    with patch("subprocess.check_output", side_effect=RuntimeError("git unavailable")):
+        kwargs = _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
+
+    assert kwargs == {"build_id": "unknown"}
+
+
 @pytest.mark.asyncio
+@patch(
+    "moonmind.workflows.temporal.worker_runtime.resolve_moonmind_build_id",
+    return_value="test-workflow-build",
+)
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
-async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_describe, mock_healthcheck):
+async def test_main_async_workflow_fleet(
+    mock_worker_cls,
+    mock_connect,
+    mock_describe,
+    mock_healthcheck,
+    mock_resolve_build_id,
+):
     # Setup mocks
-    mock_healthcheck.return_value = AsyncMock()
+    mock_healthcheck_server = MagicMock()
+    mock_healthcheck_server.wait_closed = AsyncMock()
+    mock_healthcheck.return_value = mock_healthcheck_server
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
     mock_topology.task_queues = ["mm.workflow"]
@@ -806,6 +852,7 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
         kwargs["deployment_config"].default_versioning_behavior
         == VersioningBehavior.AUTO_UPGRADE
     )
+    assert kwargs["deployment_config"].version.build_id == "test-workflow-build"
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
     assert kwargs["max_concurrent_workflow_tasks"] == 7
@@ -816,16 +863,27 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
 
 
 @pytest.mark.asyncio
+@patch(
+    "moonmind.workflows.temporal.worker_runtime.resolve_moonmind_build_id",
+    return_value="test-activity-build",
+)
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
 async def test_main_async_activity_fleet(
-    mock_worker_cls, mock_connect, mock_describe, mock_runtime_activities, mock_healthcheck
+    mock_worker_cls,
+    mock_connect,
+    mock_describe,
+    mock_runtime_activities,
+    mock_healthcheck,
+    mock_resolve_build_id,
 ):
     # Setup mocks
-    mock_healthcheck.return_value = AsyncMock()
+    mock_healthcheck_server = MagicMock()
+    mock_healthcheck_server.wait_closed = AsyncMock()
+    mock_healthcheck.return_value = mock_healthcheck_server
     mock_topology = MagicMock()
     mock_topology.fleet = "artifacts"
     mock_topology.task_queues = ["mm.activity.artifacts"]
@@ -853,6 +911,7 @@ async def test_main_async_activity_fleet(
     assert kwargs["activities"] == ["test_handler"]
     assert kwargs["deployment_config"].use_worker_versioning is True
     assert kwargs["deployment_config"].version.deployment_name == "moonmind-artifacts"
+    assert kwargs["deployment_config"].version.build_id == "test-activity-build"
     assert kwargs["max_concurrent_activities"] == 3
     assert "max_concurrent_workflow_tasks" not in kwargs
 

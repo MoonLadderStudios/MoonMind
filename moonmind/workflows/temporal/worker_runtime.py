@@ -852,19 +852,27 @@ def _worker_versioning_behavior() -> VersioningBehavior | None:
     }[behavior]
 
 
-def _resolve_worker_build_id(*, versioning_enabled: bool) -> str | None:
+def _resolve_worker_build_id(*, versioning_enabled: bool) -> str:
     build_id = resolve_moonmind_build_id()
     if build_id:
         return build_id
-    if not versioning_enabled:
-        return None
     import subprocess
 
     try:
-        return subprocess.check_output(
+        git_build_id = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
         ).strip()
+        if git_build_id:
+            return git_build_id
+        raise RuntimeError("git returned an empty build ID")
     except Exception as exc:
+        if not versioning_enabled:
+            logger.warning(
+                "Failed to determine Temporal worker build ID from "
+                "MOONMIND_BUILD_ID, baked image metadata, or git; using "
+                "fallback build_id=unknown with worker versioning disabled."
+            )
+            return "unknown"
         logger.error(
             "Failed to determine Temporal worker build ID from "
             "MOONMIND_BUILD_ID, baked image metadata, or git. Set "
@@ -881,12 +889,8 @@ def _resolve_worker_build_id(*, versioning_enabled: bool) -> str | None:
 def _worker_deployment_kwargs(topology) -> dict[str, object]:
     behavior = _worker_versioning_behavior()
     if behavior is None:
-        return {}
+        return {"build_id": _resolve_worker_build_id(versioning_enabled=False)}
     build_id = _resolve_worker_build_id(versioning_enabled=True)
-    if not build_id:
-        raise RuntimeError(
-            "Temporal worker versioning is enabled but no build ID was resolved"
-        )
     return {
         "deployment_config": WorkerDeploymentConfig(
             version=WorkerDeploymentVersion(

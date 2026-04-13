@@ -13,6 +13,10 @@ When worker versioning is enabled, a worker registers a deployment version using
 - default behavior: `TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR`
 
 If no build ID can be resolved while worker versioning is enabled, worker startup fails fast. Minimal images should set `MOONMIND_BUILD_ID` explicitly.
+When worker versioning is disabled, MoonMind still passes an explicit `build_id`
+to the Temporal worker to avoid the SDK's default module-hash build ID fallback.
+If no configured or Git-derived build ID is available in disabled mode, the worker
+uses `unknown`.
 
 ```bash
 # Example deployment

@@ -167,10 +167,6 @@ class TemporalSettings(BaseSettings):
         "Auto-Upgrade",
         validation_alias="TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR",
     )
-    worker_versioning_pinned_types: Annotated[tuple[str, ...], NoDecode] = Field(
-        default=(),
-        validation_alias="TEMPORAL_WORKER_VERSIONING_PINNED_TYPES",
-    )
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
@@ -220,24 +216,6 @@ class TemporalSettings(BaseSettings):
                 "Auto-Upgrade, Pinned, or Disabled"
             )
         return aliases[normalized]
-
-    @field_validator("worker_versioning_pinned_types", mode="before")
-    @classmethod
-    def _split_worker_versioning_pinned_types(
-        cls, value: Optional[str | Sequence[str]]
-    ) -> tuple[str, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            raw_items: Sequence[object] = value.split(",")
-        elif isinstance(value, Sequence) and not isinstance(
-            value, (bytes, bytearray, str)
-        ):
-            raw_items = value
-        else:
-            raw_items = (value,)
-        items = [str(item).strip() for item in raw_items if str(item).strip()]
-        return tuple(dict.fromkeys(items))
 
 
 class TemporalDashboardSettings(BaseSettings):
