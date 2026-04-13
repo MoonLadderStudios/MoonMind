@@ -2,8 +2,7 @@
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| I1 | Inconsistency | MEDIUM | `tasks.md`:46-49, 73-74, 96-99, 163-173 | REMEDIATED: Same-file test tasks no longer carry `[P]`; parallel examples now avoid concurrent edits to `frontend/src/entrypoints/task-create.test.tsx`. | No further action. |
-| C1 | Coverage Gap | MEDIUM | `spec.md`:59, 98; `tasks.md`:116-124 | REMEDIATED: Added explicit cross-cutting validation task for Jira browser failure remaining local and manual task creation remaining available. | No further action. |
+| None | None | None | None | No open inconsistencies, ambiguities, duplication issues, constitution conflicts, or coverage gaps were detected in the rerun after Prompt B remediation. | Proceed to implementation. |
 
 ## Coverage Summary
 
@@ -21,8 +20,9 @@
 | FR-010 allow-template-bound-import | Yes | T021, T027, T028 | Covered by import after warning. |
 | FR-011 update-only-targeted-step | Yes | T022, T027, T028 | Covered by targeted-step assertion. |
 | FR-012 detach-template-identity | Yes | T021, T023, T027, T028 | Covered by warning disappearance and submit assertion. |
-| FR-013 production-runtime-delivery | Yes | T010-T013, T017-T018, T024-T027, T029-T031 | Production code and validation tasks are explicit. |
-| FR-014 validation-tests | Yes | T006-T009, T014-T016, T019-T023, T028-T031 | Automated validation tasks exist for each runtime story. |
+| FR-013 production-runtime-delivery | Yes | T010-T013, T017-T018, T024-T027, T030-T032 | Production code and validation tasks are explicit. |
+| FR-014 validation-tests | Yes | T006-T009, T014-T016, T019-T023, T028-T032 | Automated validation tasks exist for each runtime story. |
+| SC-005 jira-failure-manual-creation | Yes | T029, T031, T032 | Jira failure fallback has an explicit validation task plus targeted/full suite validation. |
 
 ## Constitution Alignment Issues
 
@@ -30,7 +30,7 @@ None detected. The plan includes a Constitution Check and post-design recheck, r
 
 ## Unmapped Tasks
 
-No problematic unmapped tasks detected. Setup tasks T001-T005 and polish tasks T029-T033 are cross-cutting support/validation tasks rather than single-requirement implementation tasks.
+No problematic unmapped tasks detected. Setup tasks T001-T005 and polish tasks T030-T034 are cross-cutting support/validation tasks rather than single-requirement implementation tasks.
 
 ## Metrics
 
@@ -40,10 +40,12 @@ No problematic unmapped tasks detected. Setup tasks T001-T005 and polish tasks T
 - Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
-- Medium Issues Count: 0 open, 2 remediated
+- High Issues Count: 0
+- Medium Issues Count: 0
+- Low Issues Count: 0
 
 ## Next Actions
 
-- No CRITICAL issues block `speckit-implement`.
-- Prompt B remediations have been applied for I1 and C1.
+- No CRITICAL or HIGH issues block `speckit-implement`.
+- No Prompt B remediation is currently required.
 - Proceed to implementation when ready.
