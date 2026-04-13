@@ -29,7 +29,7 @@
 - [ ] T005 Add shared Jira import mode and write-action types in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T006 Add shared import text derivation helpers for preset brief, execution brief, description only, and acceptance criteria only in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T007 Add shared append/replace text write helper with empty-target handling in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T008 Preserve or adjust Jira Create page runtime config gating so Jira import controls remain disabled unless configured in `api_service/api/routers/task_dashboard_view_model.py`
+- [ ] T008 Verify existing Jira Create page runtime config gating and update only if incomplete so Jira import controls remain disabled unless configured in `api_service/api/routers/task_dashboard_view_model.py`
 - [ ] T009 [P] Add or update runtime config regression coverage for Jira UI gating if T008 changes behavior in `tests/unit/api/routers/test_task_dashboard_view_model.py`
 
 **Checkpoint**: Import helpers and runtime-config gating are ready. User story implementation can proceed.
@@ -45,17 +45,18 @@
 - [ ] T011 [P] [US1] Add a failing test for appending Jira issue text to existing preset instructions with a clear separator in `frontend/src/entrypoints/task-create.test.tsx`
 - [ ] T012 [P] [US1] Add a failing test that changing import mode changes copied preset text in `frontend/src/entrypoints/task-create.test.tsx`
 - [ ] T013 [P] [US1] Add a failing test that selecting an issue preview without pressing Replace or Append does not mutate preset or step fields in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T014 [P] [US1] Add a failing test that an empty selected import-mode text preserves existing preset and step target text in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 1
 
-- [ ] T014 [US1] Add target-aware default import mode state when opening Jira browser from the preset target in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T015 [US1] Replace the Phase 4 placeholder import copy with Import mode, Import preview, Replace target text, and Append to target text controls in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T016 [US1] Implement preset-target Replace behavior that writes selected import text only to `templateFeatureRequest` in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T017 [US1] Implement preset-target Append behavior that preserves existing `templateFeatureRequest` text and adds imported Jira text after a separator in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T015 [US1] Add target-aware default import mode state when opening Jira browser from the preset target in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T016 [US1] Replace the Phase 4 placeholder import copy with Import mode, Import preview, Replace target text, and Append to target text controls in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T017 [US1] Implement preset-target Replace behavior that writes selected import text only to `templateFeatureRequest` in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T018 [US1] Implement preset-target Append behavior that preserves existing `templateFeatureRequest` text and adds imported Jira text after a separator in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 1
 
-- [ ] T018 [US1] Verify preset import tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T019 [US1] Verify preset import tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Story 1 is independently functional and verifiable.
 
@@ -66,19 +67,19 @@
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Add a failing test for replacing only the selected secondary step instructions from Jira import in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T020 [P] [US2] Add a failing test that step-target Jira import leaves the preset objective and non-target steps unchanged in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T021 [P] [US2] Add a failing test that opening Jira from a step defaults to Execution brief mode in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T020 [P] [US2] Add a failing test for replacing only the selected secondary step instructions from Jira import in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T021 [P] [US2] Add a failing test that step-target Jira import leaves the preset objective and non-target steps unchanged in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T022 [P] [US2] Add a failing test that opening Jira from a step defaults to Execution brief mode in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T022 [US2] Add step-target import handling that finds the selected step by local step identity in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T023 [US2] Route step-target Replace and Append writes through the existing `updateStep()` path in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T024 [US2] Guard step-target import so a missing target step does not mutate any other step in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T023 [US2] Add step-target import handling that finds the selected step by local step identity and sets Execution brief as the default step import mode when opening Jira from step instructions in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T024 [US2] Route step-target Replace and Append writes through the existing `updateStep()` path in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T025 [US2] Guard step-target import so a missing target step does not mutate any other step in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2
 
-- [ ] T025 [US2] Verify step import tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T026 [US2] Verify step import tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Stories 1 and 2 both work independently.
 
@@ -89,17 +90,17 @@
 
 ### Tests for User Story 3
 
-- [ ] T026 [P] [US3] Add a failing test for reapply-needed message after Jira import changes an already-applied preset objective in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T027 [P] [US3] Add a failing test that expanded preset-derived steps are not rewritten by preset-target Jira import in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T027 [P] [US3] Add a failing test for reapply-needed message after Jira import changes an already-applied preset objective in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T028 [P] [US3] Add a failing test that expanded preset-derived steps are not rewritten by preset-target Jira import in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T028 [US3] Set the non-blocking preset reapply-needed message when preset-target Jira import occurs after a preset has been applied in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T029 [US3] Ensure preset-target Jira import updates only preset objective state and does not call preset expansion or mutate expanded step state in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T029 [US3] Set the non-blocking preset reapply-needed message when preset-target Jira import occurs after a preset has been applied in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T030 [US3] Ensure preset-target Jira import updates only preset objective state and does not call preset expansion or mutate expanded step state in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 3
 
-- [ ] T030 [US3] Verify preset reapply tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T031 [US3] Verify preset reapply tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Preset reapply semantics remain explicit and visible.
 
@@ -110,17 +111,17 @@
 
 ### Tests for User Story 4
 
-- [ ] T031 [P] [US4] Add a failing test that Jira import into a template-bound step detaches template-step identity before submission in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T032 [P] [US4] Add or update a submission regression assertion that unchanged template-bound steps keep identity while the customized imported step does not in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T032 [P] [US4] Add a failing test that Jira import into a template-bound step detaches template-step identity before submission in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T033 [P] [US4] Add or update a submission regression assertion that unchanged template-bound steps keep identity while the customized imported step does not in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 4
 
-- [ ] T033 [US4] Confirm Jira step import reuses `updateStep()` instruction editing semantics for template identity detachment in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T034 [US4] Remove any direct Jira step-state mutation that bypasses template-detachment behavior in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T034 [US4] Confirm Jira step import reuses `updateStep()` instruction editing semantics for template identity detachment in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T035 [US4] Remove any direct Jira step-state mutation that bypasses template-detachment behavior in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 4
 
-- [ ] T035 [US4] Verify template-detachment tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T036 [US4] Verify template-detachment tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Template-bound step identity remains accurate after Jira import.
 
@@ -128,12 +129,13 @@
 
 **Purpose**: Final safety checks across all user stories.
 
-- [ ] T036 [P] Format and lint changed frontend files with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T037 [P] Typecheck the frontend with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T038 Run the focused Create page UI suite with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T039 Run repo unit validation with local test mode via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T040 Run runtime scope validation for completed work with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime`
-- [ ] T041 Update quickstart validation notes if final commands or manual smoke steps change in `specs/164-jira-import-actions/quickstart.md`
+- [ ] T037 Add or update a Jira fetch failure regression test proving browser errors remain local and manual Create still works in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T038 [P] Format and lint changed frontend files with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T039 [P] Typecheck the frontend with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [ ] T040 Run the focused Create page UI suite with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T041 Run repo unit validation with local test mode via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T042 Run runtime scope validation for completed work with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime`
+- [ ] T043 Update quickstart validation notes if final commands or manual smoke steps change in `specs/164-jira-import-actions/quickstart.md`
 
 ## Dependencies & Execution Order
 
@@ -158,11 +160,11 @@
 
 - T002, T003, and T004 can run in parallel after T001 starts.
 - T009 can run in parallel with frontend foundational helper tasks if T008 changes runtime config behavior.
-- T010, T011, T012, and T013 can be written in parallel in `frontend/src/entrypoints/task-create.test.tsx` only if coordinated to avoid same-file conflicts.
-- T019, T020, and T021 can be written in parallel in `frontend/src/entrypoints/task-create.test.tsx` only if coordinated to avoid same-file conflicts.
-- T026 and T027 can be drafted together because they cover distinct assertions for preset reapply behavior.
-- T031 and T032 can be drafted together because they cover related submission assertions.
-- T036 and T037 can run in parallel after implementation is complete.
+- T010, T011, T012, T013, and T014 can be written in parallel in `frontend/src/entrypoints/task-create.test.tsx` only if coordinated to avoid same-file conflicts.
+- T020, T021, and T022 can be written in parallel in `frontend/src/entrypoints/task-create.test.tsx` only if coordinated to avoid same-file conflicts.
+- T027 and T028 can be drafted together because they cover distinct assertions for preset reapply behavior.
+- T032 and T033 can be drafted together because they cover related submission assertions.
+- T038 and T039 can run in parallel after implementation is complete.
 
 ## Parallel Example: User Story 1
 
@@ -171,6 +173,7 @@ Task: "Add failing preset replace import test in frontend/src/entrypoints/task-c
 Task: "Add failing preset append import test in frontend/src/entrypoints/task-create.test.tsx"
 Task: "Add failing import mode selection test in frontend/src/entrypoints/task-create.test.tsx"
 Task: "Add failing no-mutation-on-preview test in frontend/src/entrypoints/task-create.test.tsx"
+Task: "Add failing empty import text preserves existing target test in frontend/src/entrypoints/task-create.test.tsx"
 ```
 
 ## Parallel Example: User Story 2
@@ -186,9 +189,9 @@ Task: "Add failing step default import mode test in frontend/src/entrypoints/tas
 ### MVP First (User Story 1 Only)
 
 1. Complete Setup and Foundational tasks T001-T009.
-2. Add US1 failing tests T010-T013.
-3. Implement US1 production behavior T014-T017.
-4. Validate with T018.
+2. Add US1 failing tests T010-T014.
+3. Implement US1 production behavior T015-T018.
+4. Validate with T019.
 5. Stop and demo explicit preset objective Replace/Append before adding step import behavior.
 
 ### Incremental Delivery
@@ -197,7 +200,7 @@ Task: "Add failing step default import mode test in frontend/src/entrypoints/tas
 2. Deliver US2 step import.
 3. Deliver US3 preset reapply messaging.
 4. Deliver US4 template-step detachment.
-5. Run final polish and validation tasks T036-T041.
+5. Run final polish and validation tasks T037-T043.
 
 ### TDD Strategy
 
