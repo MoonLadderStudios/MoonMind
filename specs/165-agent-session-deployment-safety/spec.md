@@ -64,11 +64,11 @@ A maintainer deploying managed session workflow changes needs versioning, patchi
 
 **Why this priority**: The session workflow is durable code; deployment safety matters whenever workflow shape or persisted state changes.
 
-**Independent Test**: Run representative replay and deployment-safety validation for a workflow-shape change, then verify rollout is blocked unless versioning or patching and replay coverage are present.
+**Independent Test**: Run representative replay and deployment-safety validation for a workflow-shape change, then verify rollout is blocked unless patching or an explicit cutover and replay coverage are present.
 
 **Acceptance Scenarios**:
 
-1. **Given** an incompatible managed session workflow evolution is prepared, **When** deployment checks run, **Then** worker versioning or an explicit versioned cutover is required before rollout.
+1. **Given** an incompatible managed session workflow evolution is prepared, **When** deployment checks run, **Then** replay-safe patching or an explicit cutover is required before rollout.
 2. **Given** an intermediate replay bridge is needed, **When** the change is deployed, **Then** patching is scoped to replay-sensitive behavior and has an explicit removal condition.
 3. **Given** representative open or closed managed session histories exist, **When** replay validation runs, **Then** replay success is treated as a deployment gate, not optional evidence.
 4. **Given** steering, Continue-As-New, cancel/terminate semantics, or new visibility metadata is enabled, **When** operators follow the cutover playbook, **Then** the rollout path states prerequisites, validation gates, and rollback or removal conditions.
@@ -117,7 +117,7 @@ A maintainer deploying managed session workflow changes needs versioning, patchi
 - **FR-022**: The system MUST keep heavy runtime/container side effects separated from workflow-processing work through the runtime boundary.
 - **FR-023**: The system MUST include lifecycle validation for session creation, runtime handle attachment, follow-up turns, clear/reset invariants, interruption, cancellation, steering, termination cleanup, restart/reconcile, races, idempotency, and Continue-As-New carry-forward.
 - **FR-024**: The system MUST include replay validation for representative managed session histories whenever workflow definition shape, handler shape, payload shape, or persisted carry-forward state changes.
-- **FR-025**: The system MUST require worker versioning, workflow patching, or an explicit versioned cutover for incompatible managed session workflow evolution.
+- **FR-025**: The system MUST require workflow patching or an explicit cutover for incompatible managed session workflow evolution.
 - **FR-026**: The system MUST document and validate cutover playbooks for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing new visibility fields.
 - **FR-027**: The system MUST treat replay results and fault-injected lifecycle tests as rollout gates for broad deployment.
 - **FR-028**: The implementation process MUST be test-driven for this feature: add or update validation coverage before relying on production runtime changes as complete.

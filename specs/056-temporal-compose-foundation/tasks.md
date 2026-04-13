@@ -24,7 +24,7 @@
 **Purpose**: Prepare compose and runtime scaffolding for Temporal foundation work.
 
 - [X] T001 Update Temporal service topology and private-network exposure in `docker-compose.yaml` for self-hosted compose foundation and PostgreSQL-backed runtime (DOC-REQ-001, DOC-REQ-002, DOC-REQ-010).
-- [X] T002 Add Temporal foundation defaults (`TEMPORAL_NAMESPACE`, `TEMPORAL_RETENTION_MAX_STORAGE_GB`, `TEMPORAL_NUM_HISTORY_SHARDS`, worker versioning knobs) in `.env-template` (DOC-REQ-004, DOC-REQ-007, DOC-REQ-008).
+- [X] T002 Add Temporal foundation defaults (`TEMPORAL_NAMESPACE`, `TEMPORAL_RETENTION_MAX_STORAGE_GB`, `TEMPORAL_NUM_HISTORY_SHARDS`) in `.env-template` (DOC-REQ-004, DOC-REQ-007, DOC-REQ-008).
 - [X] T003 [P] Align SQL visibility and persistence dynamic config in `services/temporal/dynamicconfig/development-sql.yaml` (DOC-REQ-002).
 - [X] T004 [P] Create visibility schema rehearsal automation in `services/temporal/scripts/rehearse-visibility-schema-upgrade.sh` (DOC-REQ-003).
 - [X] T005 [P] Harden idempotent namespace reconciliation behavior in `services/temporal/scripts/bootstrap-namespace.sh` for `moonmind` retention governance (DOC-REQ-004).
@@ -38,10 +38,10 @@
 **⚠️ CRITICAL**: No user story work should begin until this phase is complete.
 
 - [ ] T006 Create Temporal runtime package scaffold in `moonmind/workflows/temporal/__init__.py` for client/service/schedule/worker modules shared by all stories (DOC-REQ-011).
-- [ ] T007 Implement Temporal configuration parsing and policy guards in `moonmind/config/settings.py` (address, namespace, shard decision, Auto-Upgrade defaults) (DOC-REQ-007, DOC-REQ-008, DOC-REQ-010).
+- [ ] T007 Implement Temporal configuration parsing and policy guards in `moonmind/config/settings.py` (address, namespace, shard decision) (DOC-REQ-007, DOC-REQ-008, DOC-REQ-010).
 - [ ] T008 [P] Define API/runtime schema models in `moonmind/schemas/temporal_models.py` and export them in `moonmind/schemas/__init__.py` (DOC-REQ-012).
 - [ ] T009 Implement Temporal connectivity and visibility query adapter in `moonmind/workflows/temporal/client.py` (DOC-REQ-005, DOC-REQ-011).
-- [ ] T010 Implement task-queue taxonomy and worker-versioning policy module in `moonmind/workflows/temporal/workers.py` (DOC-REQ-006, DOC-REQ-007).
+- [ ] T010 Implement task-queue taxonomy module in `moonmind/workflows/temporal/workers.py` (DOC-REQ-006, DOC-REQ-007).
 - [ ] T011 Implement core execution orchestration service in `moonmind/workflows/temporal/service.py` for lifecycle commands, artifact references, manifest policy, and callback/polling patterns (DOC-REQ-011, DOC-REQ-013, DOC-REQ-014, DOC-REQ-015).
 - [ ] T012 Implement Temporal schedules service in `moonmind/workflows/temporal/schedules.py` and migration hook in `moonmind/workflows/recurring_tasks/scheduler.py` (DOC-REQ-009).
 - [ ] T013 Add Temporal execution projection and upgrade readiness persistence models in `api_service/db/models.py` and migration `api_service/migrations/versions/044_temporal_compose_foundation.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-008).
@@ -104,20 +104,20 @@
 
 ## Phase 5: User Story 3 - Operate safely and upgrade predictably (Priority: P3)
 
-**Goal**: Enforce operational guardrails for queue semantics, worker versioning defaults, shard decision gates, and observability signals.
+**Goal**: Enforce operational guardrails for queue semantics, direct worker polling, shard decision gates, and observability signals.
 
-**Independent Test**: Execute unit/integration guardrail tests covering Auto-Upgrade defaults, routing-only queues, shard-ack gating, and observability behavior under failure conditions.
+**Independent Test**: Execute unit/integration guardrail tests covering direct worker polling, routing-only queues, shard-ack gating, and observability behavior under failure conditions.
 
 ### Tests for User Story 3
 
-- [ ] T034 [P] [US3] Add worker versioning default tests in `tests/unit/workflows/temporal/test_workers.py` validating Auto-Upgrade baseline and explicit exception governance (DOC-REQ-007).
+- [ ] T034 [P] [US3] Add worker startup tests validating direct task-queue polling without deployment-version routing (DOC-REQ-007).
 - [ ] T035 [P] [US3] Add settings/queue semantics tests in `tests/unit/workflows/temporal/test_settings_and_queue_semantics.py` for routing-only queue behavior and shard decision gating (DOC-REQ-006, DOC-REQ-008).
 - [ ] T036 [P] [US3] Add observability integration tests in `tests/integration/temporal/test_observability_guardrails.py` for no-poller, retry-storm, and visibility-failure signals (DOC-REQ-010).
 
 ### Implementation for User Story 3
 
 - [ ] T037 [US3] Enforce routing-only queue semantics in `moonmind/workflows/temporal/workers.py` and `api_service/api/routers/executions.py` without exposing queue-order product guarantees (DOC-REQ-006).
-- [ ] T038 [US3] Enforce worker versioning Auto-Upgrade defaults and exception policy validation in `moonmind/workflows/temporal/workers.py` and `moonmind/config/settings.py` (DOC-REQ-007).
+- [ ] T038 [US3] Enforce direct worker task-queue polling in `moonmind/workflows/temporal/workers.py` and `moonmind/config/settings.py` (DOC-REQ-007).
 - [ ] T039 [US3] Implement shard decision acknowledgment gate and upgrade readiness persistence enforcement in `moonmind/workflows/temporal/service.py` and `api_service/db/models.py` (DOC-REQ-008).
 - [ ] T040 [US3] Implement observability counters/log hooks for key Temporal failure modes in `moonmind/workflows/temporal/service.py` and `moonmind/workflows/temporal/workers.py` (DOC-REQ-010).
 

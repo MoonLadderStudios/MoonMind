@@ -161,13 +161,6 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
         ge=1,
     )
-    worker_versioning_default_behavior: Literal[
-        "Auto-Upgrade", "Pinned", "Disabled"
-    ] = Field(
-        "Auto-Upgrade",
-        validation_alias="TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR",
-    )
-
     model_config = SettingsConfigDict(
         populate_by_name=True,
         env_prefix="",
@@ -194,29 +187,6 @@ class TemporalSettings(BaseSettings):
                 "workflow, artifacts, llm, sandbox, integrations, agent_runtime"
             )
         return normalized
-
-    @field_validator("worker_versioning_default_behavior", mode="before")
-    @classmethod
-    def _normalize_worker_versioning_default_behavior(cls, value: Any) -> str:
-        normalized = str(value or "Auto-Upgrade").strip().lower().replace("_", "-")
-        aliases = {
-            "auto-upgrade": "Auto-Upgrade",
-            "autoupgrade": "Auto-Upgrade",
-            "auto": "Auto-Upgrade",
-            "pinned": "Pinned",
-            "pin": "Pinned",
-            "disabled": "Disabled",
-            "disable": "Disabled",
-            "off": "Disabled",
-            "false": "Disabled",
-        }
-        if normalized not in aliases:
-            raise ValueError(
-                "TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR must be one of "
-                "Auto-Upgrade, Pinned, or Disabled"
-            )
-        return aliases[normalized]
-
 
 class TemporalDashboardSettings(BaseSettings):
     """Task-dashboard Temporal source contract and rollout flags."""

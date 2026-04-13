@@ -40,13 +40,13 @@
   - Expose queue names/order semantics to end users: rejected as architectural drift.
   - Single queue for all workloads: rejected due to isolation/secrets/scaling needs.
 
-## Decision 6: Default worker versioning to Auto-Upgrade with explicit exception governance
+## Decision 6: Use direct task-queue polling without Worker Deployment routing
 
-- **Decision**: Set Auto-Upgrade as the default worker versioning behavior and permit pinned behavior only through explicit workflow-type exception policy.
-- **Rationale**: Meets `DOC-REQ-007` and reduces rollout friction while preserving controlled exceptions.
+- **Decision**: Workers poll their configured workflow and activity task queues directly and do not require Temporal Worker Deployment current-version state.
+- **Rationale**: Meets `DOC-REQ-007` while preserving one-click local operation and avoiding deployment-version routing drift.
 - **Alternatives considered**:
-  - Default pinned behavior: rejected because it increases operational burden and contradicts foundation default.
-  - Implicit per-worker version behavior: rejected because governance must be explicit.
+  - Worker Deployment routing: rejected because it adds an operator-controlled current-version state that can strand new tasks on unpolled queues.
+  - Implicit per-worker version behavior: rejected because worker routing must be observable and task-queue based.
 
 ## Decision 7: Keep shard-count choice as a pre-rollout gate, not an implicit default
 

@@ -5,9 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
-from temporalio.common import VersioningBehavior
 
-from moonmind.workflows.temporal import worker_runtime as worker_runtime_module
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
@@ -19,7 +17,6 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_runtime_planner,
     _build_runtime_activities,
     _configure_worker_logging,
-    _worker_deployment_kwargs,
     main_async,
     resolve_adapter_metadata,
     get_activity_route,
@@ -708,134 +705,7 @@ def test_enforce_codex_config_runs_for_managed_fleets(fleet: str) -> None:
     mock_ensure.assert_called_once_with()
 
 
-def test_worker_deployment_kwargs_enable_auto_upgrade_versioning(monkeypatch) -> None:
-    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
-        update={"worker_versioning_default_behavior": "Auto-Upgrade"}
-    )
-    app_settings = worker_runtime_module.settings.model_copy(
-        update={"temporal": temporal_settings}
-    )
-    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
-    monkeypatch.setattr(
-        worker_runtime_module,
-        "resolve_moonmind_build_id",
-        lambda: "build-agent-session-v1",
-    )
-    topology = SimpleNamespace(fleet=WORKFLOW_FLEET)
-
-    kwargs = _worker_deployment_kwargs(topology)
-
-    assert set(kwargs) == {"deployment_config"}
-    deployment_config = kwargs["deployment_config"]
-    assert deployment_config.version.deployment_name == "moonmind-workflow"
-    assert deployment_config.version.build_id == "build-agent-session-v1"
-    assert deployment_config.use_worker_versioning is True
-    assert (
-        deployment_config.default_versioning_behavior
-        == VersioningBehavior.AUTO_UPGRADE
-    )
-
-
-def test_worker_deployment_kwargs_can_use_pinned_versioning(monkeypatch) -> None:
-    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
-        update={"worker_versioning_default_behavior": "Pinned"}
-    )
-    app_settings = worker_runtime_module.settings.model_copy(
-        update={"temporal": temporal_settings}
-    )
-    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
-    monkeypatch.setattr(
-        worker_runtime_module,
-        "resolve_moonmind_build_id",
-        lambda: "build-agent-session-v1",
-    )
-    topology = SimpleNamespace(fleet=WORKFLOW_FLEET)
-
-    deployment_config = _worker_deployment_kwargs(topology)["deployment_config"]
-
-    assert deployment_config.use_worker_versioning is True
-    assert deployment_config.default_versioning_behavior == VersioningBehavior.PINNED
-
-
-def test_worker_deployment_kwargs_fail_fast_without_build_id(monkeypatch) -> None:
-    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
-        update={"worker_versioning_default_behavior": "Auto-Upgrade"}
-    )
-    app_settings = worker_runtime_module.settings.model_copy(
-        update={"temporal": temporal_settings}
-    )
-    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
-    monkeypatch.setattr(
-        worker_runtime_module,
-        "resolve_moonmind_build_id",
-        lambda: None,
-    )
-    with patch("subprocess.check_output", side_effect=RuntimeError("git unavailable")):
-        with pytest.raises(
-            RuntimeError, match="Unable to determine Temporal worker build ID"
-        ):
-            _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
-
-
-def test_worker_deployment_kwargs_disabled_requires_explicit_local_escape_hatch(
-    monkeypatch,
-) -> None:
-    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
-        update={"worker_versioning_default_behavior": "Disabled"}
-    )
-    app_settings = worker_runtime_module.settings.model_copy(
-        update={"temporal": temporal_settings}
-    )
-    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
-    monkeypatch.delenv(
-        "MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", raising=False
-    )
-
-    with pytest.raises(RuntimeError, match="Temporal worker versioning is disabled"):
-        _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
-
-
-def test_worker_deployment_kwargs_disabled_supplies_explicit_build_id(monkeypatch) -> None:
-    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
-        update={"worker_versioning_default_behavior": "Disabled"}
-    )
-    app_settings = worker_runtime_module.settings.model_copy(
-        update={"temporal": temporal_settings}
-    )
-    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
-    monkeypatch.setenv("MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", "1")
-    monkeypatch.setattr(
-        worker_runtime_module,
-        "resolve_moonmind_build_id",
-        lambda: "disabled-mode-build",
-    )
-
-    kwargs = _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
-
-    assert kwargs == {"build_id": "disabled-mode-build"}
-
-
-def test_worker_deployment_kwargs_disabled_falls_back_to_unknown(monkeypatch) -> None:
-    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
-        update={"worker_versioning_default_behavior": "Disabled"}
-    )
-    app_settings = worker_runtime_module.settings.model_copy(
-        update={"temporal": temporal_settings}
-    )
-    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
-    monkeypatch.setenv("MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", "1")
-    monkeypatch.setattr(worker_runtime_module, "resolve_moonmind_build_id", lambda: None)
-    with patch("subprocess.check_output", side_effect=RuntimeError("git unavailable")):
-        kwargs = _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
-
-    assert kwargs == {"build_id": "unknown"}
-
-
 @pytest.mark.asyncio
-@patch(
-    "moonmind.workflows.temporal.worker_runtime.resolve_moonmind_build_id",
-    return_value="test-workflow-build",
-)
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
@@ -845,7 +715,6 @@ async def test_main_async_workflow_fleet(
     mock_connect,
     mock_describe,
     mock_healthcheck,
-    mock_resolve_build_id,
 ):
     # Setup mocks
     mock_healthcheck_server = MagicMock()
@@ -894,12 +763,7 @@ async def test_main_async_workflow_fleet(
         resolve_external_adapter,
         external_adapter_execution_style,
     ]
-    assert kwargs["deployment_config"].use_worker_versioning is True
-    assert (
-        kwargs["deployment_config"].default_versioning_behavior
-        == VersioningBehavior.AUTO_UPGRADE
-    )
-    assert kwargs["deployment_config"].version.build_id == "test-workflow-build"
+    assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
     assert kwargs["max_concurrent_workflow_tasks"] == 7
@@ -910,10 +774,6 @@ async def test_main_async_workflow_fleet(
 
 
 @pytest.mark.asyncio
-@patch(
-    "moonmind.workflows.temporal.worker_runtime.resolve_moonmind_build_id",
-    return_value="test-activity-build",
-)
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
@@ -925,7 +785,6 @@ async def test_main_async_activity_fleet(
     mock_describe,
     mock_runtime_activities,
     mock_healthcheck,
-    mock_resolve_build_id,
 ):
     # Setup mocks
     mock_healthcheck_server = MagicMock()
@@ -956,9 +815,9 @@ async def test_main_async_activity_fleet(
     assert kwargs["task_queue"] == "mm.activity.artifacts"
     assert kwargs["workflows"] == []
     assert kwargs["activities"] == ["test_handler"]
-    assert kwargs["deployment_config"].use_worker_versioning is True
-    assert kwargs["deployment_config"].version.deployment_name == "moonmind-artifacts"
-    assert kwargs["deployment_config"].version.build_id == "test-activity-build"
+    assert "deployment_config" not in kwargs
+    assert "build_id" not in kwargs
+    assert "use_worker_versioning" not in kwargs
     assert kwargs["max_concurrent_activities"] == 3
     assert "max_concurrent_workflow_tasks" not in kwargs
 

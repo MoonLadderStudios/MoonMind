@@ -167,7 +167,7 @@ The following changes are workflow-shape or deployment-sensitive:
 
 Required gates:
 
-- Worker Versioning, workflow patching, or explicit versioned cutover before incompatible rollout.
+- Workflow patching or an explicit cutover before incompatible rollout.
 - Replay validation for representative open and closed managed-session histories.
 - Fault-injected lifecycle validation for termination cleanup, cancel semantics, race/idempotency, and reconcile.
 - Cutover playbooks for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing new visibility metadata.
@@ -184,7 +184,7 @@ Required gates:
 | Continue-As-New | Shortened-history carry-forward tests |
 | Observability safety | Bounded metadata/search attribute/summary assertions and forbidden-content scan |
 | Reconcile | Scheduled/client and controller reconcile tests |
-| Deployment safety | Replay tests plus Worker Versioning or cutover assertions |
+| Deployment safety | Replay tests plus patch or cutover assertions |
 | TDD sequencing | Failing or updated regression coverage before production runtime completion |
 
 ## Contract Coverage Checklist
@@ -200,5 +200,5 @@ Required gates:
 - [x] Operator/audit truth, recovery index, and disposable cache are separate.
 - [x] Search Attributes, summaries, schedule metadata, telemetry, and replay fixtures exclude sensitive or unbounded content.
 - [x] Recurring reconcile returns bounded outcomes for stale, degraded, missing-container, and orphan cases.
-- [x] Worker Versioning, scoped patching, or explicit cutover gates incompatible workflow-shape rollout.
+- [x] Scoped patching or explicit cutover gates incompatible workflow-shape rollout.
 - [x] Runtime behavior changes are backed by test-first validation evidence.

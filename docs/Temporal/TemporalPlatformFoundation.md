@@ -46,7 +46,7 @@ These docs define the normative contracts that build on this platform foundation
 * **Deployment runtime:** **Docker Compose** (required for MoonMind deployments).
 * **Visibility store:** **PostgreSQL** (SQL-based advanced visibility).
 * **Retention intent:** not compliance-driven; keep records indefinitely until Temporal storage usage reaches a configured cap.
-* **Worker versioning policy:** **Auto-Upgrade** is the default behavior.
+* **Worker routing:** workers poll their configured task queues directly; Temporal Worker Deployment routing is not part of the MoonMind runtime contract.
 * **History shards:** target **1 shard by default** if feasible to keep things simple, with explicit acknowledgment of the immutability tradeoff.
 
 ---
@@ -192,7 +192,7 @@ Optional lanes (only if needed): `:high`, `:normal`, `:low`
 
 ---
 
-## 10. Worker fleet strategy and versioning (Auto-Upgrade default)
+## 10. Worker fleet strategy
 
 ### 10.1 Worker segmentation
 
@@ -206,14 +206,18 @@ Workers are separated by:
 
 The workflow fleet primarily runs deterministic workflow code. However, it may contain a narrow set of helper activities such as lightweight memo updates or search-attribute maintenance that do not justify a separate fleet. This is an acknowledged exception to pure workflow-only fleet posture.
 
-### 10.3 Auto-Upgrade default
+### 10.3 Replay-safe workflow rollout
 
-We will use **Auto-Upgrade** as the default versioning behavior.
+MoonMind does not use Temporal Worker Deployment routing. Workers poll the
+workflow and activity task queues listed in this document directly.
 
 **Foundation contract**
 
-* Default: **Auto-Upgrade**
-* Exception: workflow types that must never change mid-flight can opt into pinned behavior (rare; separate workflow doc defines when).
+* Worker startup must not depend on a Temporal deployment current-version step.
+* Replay-sensitive workflow changes must use replay-safe patch gates, replay
+  tests, or an explicit cutover plan.
+* Activity signature changes require a new activity name or a controlled
+  cutover that preserves in-flight worker-bound invocation shapes.
 
 ---
 
@@ -340,7 +344,7 @@ The Temporal Platform Foundation is "done" when:
 
    * custom namespaces (e.g. `moonmind`) are managed with a storage-cap policy (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`) and idempotent retention automation.
 4. Worker fleets deployed (workflow + activity fleets including `agent_runtime`) with clear task queue routing.
-5. Worker versioning policy set: **Auto-Upgrade default**.
+5. Worker fleets are polling their configured workflow and activity task queues directly.
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged.
 7. SQL visibility schema upgrade path rehearsed in pre-rollout validation.
 8. Core workflow catalog (`MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.ManifestIngest`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable.

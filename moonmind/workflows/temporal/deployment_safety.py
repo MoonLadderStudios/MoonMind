@@ -30,12 +30,10 @@ REQUIRED_AGENT_SESSION_CUTOVER_TOPICS = frozenset(
         "CancelSession",
         "TerminateSession",
         "Search Attributes",
-        "Worker Versioning",
+        "replay-safe rollout",
         "replay",
     }
 )
-
-SAFE_WORKER_VERSIONING_BEHAVIORS = frozenset({"Auto-Upgrade", "Pinned"})
 
 
 class AgentSessionDeploymentSafetyError(RuntimeError):
@@ -46,7 +44,6 @@ class AgentSessionDeploymentSafetyError(RuntimeError):
 class AgentSessionDeploymentSafetyReport:
     required: bool
     changed_sensitive_paths: tuple[str, ...]
-    worker_versioning_behavior: str
     replay_gate_path: str
     cutover_playbook_path: str
     active_feature_dir: str | None = None
@@ -121,22 +118,15 @@ def resolve_active_feature_dir(
 def validate_agent_session_deployment_safety(
     *,
     changed_paths: Iterable[str | Path],
-    worker_versioning_behavior: str,
     repo_paths: Iterable[str | Path],
     cutover_playbook_text: str,
     active_feature_dir: str | Path | None = None,
 ) -> AgentSessionDeploymentSafetyReport:
     changed_sensitive_paths = changed_agent_session_sensitive_paths(changed_paths)
-    behavior = str(worker_versioning_behavior or "").strip()
     repo_path_set = {normalize_repo_path(path) for path in repo_paths if str(path).strip()}
     missing: list[str] = []
 
     if changed_sensitive_paths:
-        if behavior not in SAFE_WORKER_VERSIONING_BEHAVIORS:
-            missing.append(
-                "TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR must be Auto-Upgrade "
-                "or Pinned for AgentSession workflow-shape deployments"
-            )
         if AGENT_SESSION_REPLAYER_TEST_PATH not in repo_path_set:
             missing.append(
                 f"missing managed-session replay gate: {AGENT_SESSION_REPLAYER_TEST_PATH}"
@@ -166,7 +156,6 @@ def validate_agent_session_deployment_safety(
     return AgentSessionDeploymentSafetyReport(
         required=bool(changed_sensitive_paths),
         changed_sensitive_paths=changed_sensitive_paths,
-        worker_versioning_behavior=behavior,
         replay_gate_path=AGENT_SESSION_REPLAYER_TEST_PATH,
         cutover_playbook_path=AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
         active_feature_dir=(

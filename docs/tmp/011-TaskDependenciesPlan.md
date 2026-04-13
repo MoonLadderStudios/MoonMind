@@ -115,7 +115,7 @@ Bounded indexed dependency metadata is allowed. Full dependency ID lists and ric
 
 Changes to dependency workflow logic must be replay-safe.
 
-For the current rollout, patching is the required minimum. The implementation should also be compatible with later migration to Worker Versioning as the preferred production deployment model.
+For the current rollout, patching is the required minimum. MoonMind does not use Temporal Worker Deployment routing, so future changes must remain safe through patch gates, replay coverage, or an explicit cutover plan.
 
 ---
 
@@ -590,7 +590,7 @@ Recommended approach:
 * introduce the new signal-driven dependency gate under a new workflow version branch,
 * keep pre-change histories replay-safe,
 * use patching as the minimum requirement for rollout,
-* prepare the workflow type and deployment posture for later Worker Versioning adoption.
+* document any future cutover before changing durable workflow behavior.
 
 ### Required observability
 

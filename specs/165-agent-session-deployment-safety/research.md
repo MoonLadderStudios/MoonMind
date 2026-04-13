@@ -79,7 +79,7 @@
 
 ## Decision 8: Deployment safety is a rollout gate, not a best-effort checklist
 
-**Decision**: Incompatible changes to workflow definition shape, handler names/signatures, persisted payloads, Continue-As-New state, or visibility fields require Worker Versioning, patching, or an explicit versioned cutover. Representative replay success and fault-injected lifecycle tests are deployment gates.
+**Decision**: Incompatible changes to workflow definition shape, handler names/signatures, persisted payloads, Continue-As-New state, or visibility fields require patching or an explicit cutover. Representative replay success and fault-injected lifecycle tests are deployment gates.
 
 **Rationale**: Managed sessions are durable workflows. A code change that passes unit tests can still break open histories.
 

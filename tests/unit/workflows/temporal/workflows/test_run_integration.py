@@ -110,7 +110,7 @@ async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Compatibility: polling completion must use the replay-stable patch id (see WorkerDeployment)."""
+    """Compatibility: polling completion must use the replay-stable patch id."""
     patch_calls: list[str] = []
 
     def fake_patched(patch_id: str) -> bool:

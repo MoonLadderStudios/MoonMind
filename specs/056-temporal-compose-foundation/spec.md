@@ -71,7 +71,7 @@ As an operator, I can validate observability, upgrade readiness, and scaling gua
 **Acceptance Scenarios**:
 
 1. **Given** runtime telemetry is configured, **When** failure conditions are simulated, **Then** required platform signals are observable and actionable.
-2. **Given** upgrade preparation is performed, **When** validation gates run, **Then** SQL visibility schema rehearsal and worker versioning defaults are verified.
+2. **Given** upgrade preparation is performed, **When** validation gates run, **Then** SQL visibility schema rehearsal and direct worker task-queue polling are verified.
 
 ### Edge Cases
 
@@ -90,7 +90,7 @@ As an operator, I can validate observability, upgrade readiness, and scaling gua
 - **FR-003**: The runtime foundation MUST provide execution of visibility/listing behavior using Temporal Visibility as the primary list-of-record surface for runtime execution views. (Maps: DOC-REQ-005)
 - **FR-004**: The runtime MUST define and enforce task-queue usage as routing boundaries only, without exposing queue-order guarantees as product semantics. (Maps: DOC-REQ-006)
 - **FR-005**: The runtime MUST establish and validate namespace `moonmind` retention controls that are explicit, idempotent, storage-cap based, and default `TEMPORAL_RETENTION_MAX_STORAGE_GB=100`. (Maps: DOC-REQ-004)
-- **FR-006**: The runtime MUST set worker versioning default behavior to Auto-Upgrade and include a documented enforcement point for exceptions. (Maps: DOC-REQ-007)
+- **FR-006**: The runtime MUST start workers without Temporal Worker Deployment routing and verify direct task-queue polling. (Maps: DOC-REQ-007)
 - **FR-007**: The runtime MUST capture a pre-rollout history shard decision gate and enforce acknowledgment of migration implications when using one shard. (Maps: DOC-REQ-008)
 - **FR-008**: The runtime MUST support Temporal-native scheduling for recurring automation and avoid introducing external cron-style schedulers for these workflows. (Maps: DOC-REQ-009)
 - **FR-009**: The runtime MUST include baseline private-network security posture and observability coverage for service health, worker polling state, retry storms, and visibility failures. (Maps: DOC-REQ-010)

@@ -127,7 +127,7 @@ The dependency gate is deployed under a Temporal patch:
 - **Patch ID**: `dependency-gate-v1`
 - Workflows started **before** the patch was deployed skip the dependency wait entirely (backward compatible).
 - Workflows started **after** the patch is deployed execute the full dependency gate.
-- The implementation is compatible with later migration to Worker Versioning.
+- Future dependency-gate changes must keep replay behavior explicit through patch gates, replay tests, or a documented cutover.
 
 ---
 

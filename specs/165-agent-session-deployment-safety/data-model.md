@@ -156,7 +156,7 @@ Validation evidence required before deploying workflow-shape changes.
 **Fields**:
 
 - `change_class`: Handler shape, payload shape, state structure, visibility/search attribute, or lifecycle semantic change.
-- `worker_versioning_required`: Boolean.
+- `replay_safe_rollout_required`: Boolean.
 - `patch_ids`: Scoped patch identifiers when a bridge is needed.
 - `history_set`: Representative histories used for replay.
 - `replay_result`: Pass/fail with bounded diagnostics.

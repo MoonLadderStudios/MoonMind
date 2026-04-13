@@ -20,7 +20,7 @@ Traceability status: this feature has no `DOC-REQ-*` identifiers. No `contracts/
 **Target Platform**: MoonMind backend/runtime workers in Docker Compose with Temporal service, managed Codex runtime containers, and separated workflow/activity task queues.
 **Project Type**: Backend/runtime workflow reliability and deployment-safety feature.
 **Performance Goals**: No leaked managed-session containers after terminate; no unbounded prompts/logs/transcripts in visibility or summaries; Continue-As-New prevents unbounded workflow history growth; reconcile remains bounded over stale/degraded records.
-**Constraints**: Runtime mode is mandatory; delayed standalone-image delivery is excluded; heavy side effects stay outside workflow code; secrets and unbounded provider output must not enter indexed visibility, summaries, telemetry dimensions, or replay fixtures; incompatible workflow evolution requires Worker Versioning, patching, or explicit cutover; docs-only completion is not acceptable.
+**Constraints**: Runtime mode is mandatory; delayed standalone-image delivery is excluded; heavy side effects stay outside workflow code; secrets and unbounded provider output must not enter indexed visibility, summaries, telemetry dimensions, or replay fixtures; incompatible workflow evolution requires patching or explicit cutover; docs-only completion is not acceptable.
 **Scale/Scope**: One task-scoped Codex managed session per task run; no cross-task session reuse, generic runtime marketplace, or Claude/Gemini managed session plane expansion.
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Traceability status: this feature has no `DOC-REQ-*` identifiers. No `contracts/
 - **IV. Own Your Data**: PASS. Artifacts, bounded workflow metadata, and managed-session recovery records remain operator-controlled data surfaces.
 - **V. Skills Are First-Class and Easy to Add**: PASS. This feature does not alter executable tool contracts or agent instruction bundles, and it preserves runtime-neutral workflow boundaries where applicable.
 - **VI. The Bittersweet Lesson**: PASS. Test-driven validation and replay gates keep the scaffolding replaceable while preserving objective evidence.
-- **VII. Powerful Runtime Configurability**: PASS. Worker Versioning, task queues, and runtime behavior remain controlled by explicit configuration and observable metadata.
+- **VII. Powerful Runtime Configurability**: PASS. Task queues and runtime behavior remain controlled by explicit configuration and observable metadata.
 - **VIII. Modular and Extensible Architecture**: PASS. Changes are scoped to workflow, activity, runtime/controller, worker, and validation modules with clear contracts.
 - **IX. Resilient by Default**: PASS. The plan requires idempotent side effects, deterministic workflow behavior, failure classification, replay coverage, and lifecycle cleanup.
 - **X. Facilitate Continuous Improvement**: PASS. The feature preserves structured terminal outcomes, diagnostics, artifact refs, and validation evidence for future improvement.
@@ -113,7 +113,7 @@ tests/integration/services/temporal/workflows/
 3. Confirm terminate/cancel/clear/interrupt/steer behavior is implemented at the workflow boundary and at the runtime/controller side-effect boundary.
 4. Confirm handler locking, readiness waits, handler drain, and Continue-As-New carry-forward happen in workflow-safe code paths.
 5. Confirm bounded metadata, Search Attributes, activity summaries, schedule metadata, telemetry dimensions, and replay fixtures exclude prompts, transcripts, scrollback, raw logs, credentials, and secrets.
-6. Confirm Worker Versioning, patching/cutover guidance, and replay tests are present for incompatible workflow-shape changes.
+6. Confirm patching/cutover guidance and replay tests are present for incompatible workflow-shape changes.
 7. Confirm validation is added or updated before production runtime changes are treated as complete.
 
 **Output**: [research.md](./research.md)
@@ -140,7 +140,7 @@ tests/integration/services/temporal/workflows/
 6. **Long-lived workflow hardening**: Preserve lock-protected mutators, readiness gates, handler drain, Continue-As-New from the main workflow path, and bounded carry-forward state.
 7. **Operational separation**: Keep artifact/controller/supervisor publication as the production operator/audit path; use the session store for recovery/reconcile; treat container-local helpers as fallback-only.
 8. **Observability/reconcile**: Maintain bounded UI/current details, Search Attributes, summaries, telemetry correlation, worker/task-queue separation, and scheduled reconcile.
-9. **Deployment safety**: Require Worker Versioning, patching or explicit versioned cutover, replay validation, and cutover playbooks before incompatible workflow-shape rollout.
+9. **Deployment safety**: Require patching or explicit cutover, replay validation, and cutover playbooks before incompatible workflow-shape rollout.
 10. **Validation**: Run credential-free validation for required gates and broaden to hermetic integration only when affected seams require it.
 
 ## Post-Design Constitution Check

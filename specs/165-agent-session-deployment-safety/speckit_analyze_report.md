@@ -32,7 +32,7 @@
 | FR-022 side-effect separation | Yes | T009, T010, T054, T055 | Worker routing and task queue separation are covered. |
 | FR-023 lifecycle validation | Yes | T012-T017, T027, T032, T039, T055 | Lifecycle validation is broad and includes start/resume, controls, cleanup, and handoff. |
 | FR-024 replay validation | Yes | T031, T058, T068 | Replay coverage is present. |
-| FR-025 versioning/patch/cutover | Yes | T057, T059, T061-T065, T068, T069 | Worker Versioning, patch/cutover checks, base-ref handling, and CI wiring are covered. |
+| FR-025 patch/cutover | Yes | T057, T059, T061-T065, T068, T069 | Patch/cutover checks, base-ref handling, and CI wiring are covered. |
 | FR-026 cutover playbooks | Yes | T066, T067, T070 | Cutover documentation and quickstart guidance are covered. |
 | FR-027 rollout gates | Yes | T068, T069, T073-T075 | Replay, unit, deployment-safety, diff, and runtime-scope gates are covered. |
 | FR-028 TDD sequencing | Yes | T003, T011-T017, T028-T032, T040-T046, T057-T060, T073 | Tests precede implementation in each story phase. |

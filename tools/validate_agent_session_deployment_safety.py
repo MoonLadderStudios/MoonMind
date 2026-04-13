@@ -10,7 +10,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.deployment_safety import (
     AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
     AgentSessionDeploymentSafetyError,
@@ -72,9 +71,6 @@ def main() -> int:
         )
         report = validate_agent_session_deployment_safety(
             changed_paths=_changed_paths(args.base_ref),
-            worker_versioning_behavior=(
-                settings.temporal.worker_versioning_default_behavior
-            ),
             repo_paths=_repo_paths(),
             cutover_playbook_text=playbook_text,
             active_feature_dir=active_feature_dir,

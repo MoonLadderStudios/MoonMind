@@ -15,7 +15,7 @@ from tools import validate_agent_session_deployment_safety as cli
 
 PLAYBOOK_TEXT = """
 ## Shared Prerequisites
-- Worker Versioning is enabled.
+- replay-safe rollout gates are in place.
 - AgentSession histories replay before rollout.
 
 ## Enabling `SteerTurn`
@@ -174,28 +174,11 @@ def test_active_feature_override_requires_complete_artifact_set(tmp_path) -> Non
 def test_agent_session_deployment_safety_gate_passes_for_non_sensitive_changes() -> None:
     report = validate_agent_session_deployment_safety(
         changed_paths=["docs/ManagedAgents/CodexManagedSessionPlane.md"],
-        worker_versioning_behavior="Disabled",
         repo_paths=[],
         cutover_playbook_text="",
     )
 
     assert report.required is False
-
-
-def test_agent_session_deployment_safety_gate_requires_worker_versioning() -> None:
-    with pytest.raises(
-        AgentSessionDeploymentSafetyError,
-        match="TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR",
-    ):
-        validate_agent_session_deployment_safety(
-            changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],
-            worker_versioning_behavior="Disabled",
-            repo_paths=[
-                AGENT_SESSION_REPLAYER_TEST_PATH,
-                AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
-            ],
-            cutover_playbook_text=PLAYBOOK_TEXT,
-        )
 
 
 def test_agent_session_deployment_safety_gate_requires_replay_coverage() -> None:
@@ -205,7 +188,6 @@ def test_agent_session_deployment_safety_gate_requires_replay_coverage() -> None
     ):
         validate_agent_session_deployment_safety(
             changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],
-            worker_versioning_behavior="Auto-Upgrade",
             repo_paths=[AGENT_SESSION_CUTOVER_PLAYBOOK_PATH],
             cutover_playbook_text=PLAYBOOK_TEXT,
         )
@@ -218,19 +200,17 @@ def test_agent_session_deployment_safety_gate_requires_cutover_topics() -> None:
     ):
         validate_agent_session_deployment_safety(
             changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],
-            worker_versioning_behavior="Pinned",
             repo_paths=[
                 AGENT_SESSION_REPLAYER_TEST_PATH,
                 AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
             ],
-            cutover_playbook_text="Worker Versioning and replay only",
+            cutover_playbook_text="replay only",
         )
 
 
 def test_agent_session_deployment_safety_gate_accepts_full_gate_set() -> None:
     report = validate_agent_session_deployment_safety(
         changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],
-        worker_versioning_behavior="Auto-Upgrade",
         repo_paths=[
             AGENT_SESSION_REPLAYER_TEST_PATH,
             AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
@@ -239,14 +219,12 @@ def test_agent_session_deployment_safety_gate_accepts_full_gate_set() -> None:
     )
 
     assert report.required is True
-    assert report.worker_versioning_behavior == "Auto-Upgrade"
     assert report.replay_gate_path == AGENT_SESSION_REPLAYER_TEST_PATH
 
 
 def test_agent_session_deployment_safety_report_includes_active_feature() -> None:
     report = validate_agent_session_deployment_safety(
         changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],
-        worker_versioning_behavior="Auto-Upgrade",
         repo_paths=[
             AGENT_SESSION_REPLAYER_TEST_PATH,
             AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,

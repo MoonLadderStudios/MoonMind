@@ -16,7 +16,7 @@ Implement the Phase 0 and Phase 1 slice of the Codex managed-session rollout by:
 **Target Platform**: Docker/Compose-hosted MoonMind workers using Temporal-managed workflows  
 **Project Type**: backend workflow contract + docs alignment  
 **Performance Goals**: preserve current managed-session behavior while removing ambiguous mutation entrypoints and failing invalid requests before activity execution  
-**Constraints**: Phase 0 and Phase 1 only; no Phase 2 steer-runtime implementation, no Continue-As-New, no worker-versioning rollout in this slice  
+**Constraints**: Phase 0 and Phase 1 only; no Phase 2 steer-runtime implementation and no Continue-As-New in this slice
 **Scale/Scope**: one canonical doc update plus workflow/caller refactor across session workflow, run workflow, adapter wiring, and task-run router control calls
 
 ## Constitution Check

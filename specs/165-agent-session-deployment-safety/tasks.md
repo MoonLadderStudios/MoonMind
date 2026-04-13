@@ -18,7 +18,7 @@
 
 ## Phase 2: Foundational
 
-**Purpose**: Shared schemas, routing, retry, heartbeat, task-queue, and worker-versioning prerequisites used by every story.
+**Purpose**: Shared schemas, routing, retry, heartbeat, and task-queue prerequisites used by every story.
 
 **CRITICAL**: Complete this phase before story-specific implementation.
 
@@ -28,7 +28,7 @@
 - [X] T008 Add route policy regression tests for managed-session activities in `tests/unit/workflows/temporal/test_activity_catalog.py`
 - [X] T009 Update worker routing so workflow processing and heavy managed-runtime activities use separated task queues in `moonmind/workflows/temporal/worker_runtime.py`
 - [X] T010 Add worker task-queue separation tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
-- [X] T011 Add or update deployment-safety helper coverage for worker-versioning and replay/cutover gates in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
+- [X] T011 Add or update deployment-safety helper coverage for replay/cutover gates in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
 
 **Checkpoint**: Shared schemas, activity policies, worker routing, and deployment-safety gates are ready.
 
@@ -135,21 +135,21 @@
 
 ## Phase 6: User Story 4 - Gate Workflow Changes Before Rollout (Priority: P4)
 
-**Goal**: Incompatible managed-session workflow changes cannot roll out without Worker Versioning, scoped patching or explicit cutover, replay validation, and cutover guidance.
-**Independent Test**: Run representative replay and deployment-safety validation for workflow-shape changes and verify rollout is blocked when versioning or replay coverage is absent.
+**Goal**: Incompatible managed-session workflow changes cannot roll out without scoped patching or explicit cutover, replay validation, and cutover guidance.
+**Independent Test**: Run representative replay and deployment-safety validation for workflow-shape changes and verify rollout is blocked when patch/cutover or replay coverage is absent.
 
 ### Tests for User Story 4
 
-- [X] T057 [P] [US4] Add Worker Versioning configuration tests for managed-session workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [X] T057 [P] [US4] Add worker startup configuration tests for managed-session workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
 - [X] T058 [P] [US4] Add replay gate tests for representative open and closed `AgentSessionWorkflow` histories in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
 - [X] T059 [P] [US4] Add patch or versioned-cutover assertion tests for handler, payload, Continue-As-New, and visibility-shape changes in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T060 [P] [US4] Add deployment-safety helper tests for sensitive path detection, changed-path base-ref handling, active feature override behavior, worker-versioning enforcement, replay coverage, and cutover topics in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
+- [X] T060 [P] [US4] Add deployment-safety helper tests for sensitive path detection, changed-path base-ref handling, active feature override behavior, replay coverage, and cutover topics in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
 
 ### Implementation for User Story 4
 
-- [X] T061 [US4] Enforce managed-session Worker Versioning configuration and safe default behavior in `moonmind/workflows/temporal/worker_runtime.py`
+- [X] T061 [US4] Enforce managed-session worker startup configuration and safe default behavior in `moonmind/workflows/temporal/worker_runtime.py`
 - [X] T062 [US4] Add or harden explicit patch/version gates around replay-sensitive managed-session workflow-shape changes in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T063 [US4] Add deployment-safety helper logic for sensitive changed paths, explicit base-ref comparison, replay coverage, worker-versioning, active feature override, and cutover validation in `moonmind/workflows/temporal/deployment_safety.py`
+- [X] T063 [US4] Add deployment-safety helper logic for sensitive changed paths, explicit base-ref comparison, replay coverage, active feature override, and cutover validation in `moonmind/workflows/temporal/deployment_safety.py`
 - [X] T064 [US4] Add executable deployment-safety validation entrypoint with `--base-ref` and local `SPECIFY_FEATURE`/active-feature handling in `tools/validate_agent_session_deployment_safety.py`
 - [X] T065 [US4] Wire AgentSession deployment-safety validation into backend CI with full-history checkout and explicit pull-request base SHA handling in `.github/workflows/pytest-unit-tests.yml`
 - [X] T066 [US4] Add cutover playbook entries for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing visibility metadata in `docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md`
@@ -226,7 +226,7 @@ Task: "T017 Add activity-wrapper heartbeat and non-retryable tests in tests/unit
 ## Parallel Example: User Story 4
 
 ```text
-Task: "T057 Add Worker Versioning configuration tests in tests/unit/workflows/temporal/test_temporal_worker_runtime.py"
+Task: "T057 Add worker startup configuration tests in tests/unit/workflows/temporal/test_temporal_worker_runtime.py"
 Task: "T058 Add replay gate tests in tests/unit/workflows/temporal/test_agent_session_replayer.py"
 Task: "T060 Add deployment-safety helper tests in tests/unit/workflows/temporal/test_agent_session_deployment_safety.py"
 ```
@@ -246,7 +246,7 @@ Task: "T060 Add deployment-safety helper tests in tests/unit/workflows/temporal/
 1. Deliver US1 for canonical control and leak-proof lifecycle behavior.
 2. Deliver US2 for long-lived workflow safety and Continue-As-New.
 3. Deliver US3 for bounded observability, artifact/recovery separation, and scheduled reconcile.
-4. Deliver US4 for Worker Versioning, replay gates, and cutover controls.
+4. Deliver US4 for replay gates and cutover controls.
 5. Complete Phase 7 full validation and cleanup.
 
 ### Bug-Fix Strategy
@@ -260,5 +260,5 @@ Task: "T060 Add deployment-safety helper tests in tests/unit/workflows/temporal/
 
 1. Required story validation passes for every implemented story.
 2. Replay validation passes for workflow-shape changes.
-3. Worker Versioning, patching, or explicit cutover protects incompatible changes.
+3. Patching or explicit cutover protects incompatible changes.
 4. TDD evidence exists for every production runtime behavior changed or newly relied upon.

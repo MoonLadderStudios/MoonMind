@@ -16,7 +16,7 @@ Deliver a runtime-grade Temporal foundation that is Docker Compose managed, Post
 **Target Platform**: Linux Docker Compose MoonMind deployment with private-network Temporal gRPC (`temporal:7233`)  
 **Project Type**: Multi-service backend + worker runtime + infrastructure compose definitions  
 **Performance Goals**: Foundation startup + readiness checks under 15 minutes (SC-001); list/filter pagination sourced from Temporal Visibility with deterministic page token behavior  
-**Constraints**: Temporal-first semantics with no competing workflow engine behavior; task queues routing-only; worker versioning Auto-Upgrade default; shard-count decision gate enforced; runtime-vs-docs mode remains runtime-authoritative (implementation + tests required)  
+**Constraints**: Temporal-first semantics with no competing workflow engine behavior; task queues routing-only; workers poll task queues directly without Temporal Worker Deployment routing; shard-count decision gate enforced; runtime-vs-docs mode remains runtime-authoritative (implementation + tests required)
 **Scale/Scope**: Compose foundation hardening, execution lifecycle APIs, schedule orchestration, manifest failure policy semantics, observability/upgrade readiness guardrails, and end-to-end validation traceability for DOC-REQ-001 through DOC-REQ-015
 
 ## Constitution Check
@@ -115,7 +115,7 @@ Research outcomes in `specs/044-temporal-compose-foundation/research.md` establi
 1. Keep self-hosted Docker Compose Temporal topology as the baseline and harden it with explicit visibility upgrade rehearsal automation.
 2. Introduce a dedicated Temporal runtime service layer (client + schedule manager + namespace/health utilities) rather than embedding SDK calls in routers.
 3. Make Temporal Visibility the source of truth for execution listing/count/filter behavior and treat local DB as supplemental metadata only.
-4. Enforce queue semantics as routing-only with explicit task-queue taxonomy and worker versioning default Auto-Upgrade.
+4. Enforce queue semantics as routing-only with explicit task-queue taxonomy and direct worker polling.
 5. Replace recurring scheduler ownership with Temporal Schedules and make manifest failure policies explicit runtime parameters.
 6. Keep runtime-vs-docs orchestration mode aligned to runtime implementation intent.
 
@@ -162,10 +162,10 @@ Research outcomes in `specs/044-temporal-compose-foundation/research.md` establi
 - Add explicit failure-policy contract handling for manifest ingestion (`fail_fast`, `continue_and_report`, `best_effort`) in Temporal workflow inputs.
 - Support external monitoring interactions through signals/callback events with timer-based polling fallback.
 
-### 5. Worker topology, routing, and versioning defaults
+### 5. Worker topology and routing
 
 - Define stable routing queues (`mm.workflow`, `mm.activity.*`) and enforce queue routing-only semantics.
-- Set worker versioning behavior to Auto-Upgrade by default, with explicit configuration for rare pinned exceptions.
+- Start workers without Temporal Worker Deployment routing or current-version setup.
 - Add observability hooks for no-poller conditions, retry storms, and visibility query failures.
 
 ### 6. Upgrade readiness and operational guardrails

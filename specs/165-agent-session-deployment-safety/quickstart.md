@@ -15,7 +15,7 @@ Use targeted searches before editing so completed behavior is preserved rather t
 ```bash
 rg -n "@workflow.update|@workflow.signal|control_action|SteerTurn|InterruptTurn|TerminateSession|CancelSession|continue_as_new|all_handlers_finished" moonmind/workflows/temporal/workflows/agent_session.py
 rg -n "steer_turn|interrupt_turn|cancel_session|terminate_session|clear_session|reconcile" moonmind/workflows/temporal/runtime
-rg -n "WorkerDeploymentConfig|worker_versioning|worker_deployment|ManagedSessionReconcile|schedule" moonmind/workflows/temporal
+rg -n "ManagedSessionReconcile|schedule" moonmind/workflows/temporal
 rg -n "SearchAttribute|upsert|set_current_details|summary|heartbeat|ApplicationError" moonmind/workflows/temporal
 ```
 
@@ -89,14 +89,14 @@ Before completing implementation, run the full required unit suite from the repo
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ```
 
-For workflow-shape changes, also run the managed-session replay validation and confirm Worker Versioning, patching, or explicit versioned cutover is present before rollout.
+For workflow-shape changes, also run the managed-session replay validation and confirm patching or an explicit cutover is present before rollout.
 
 For deployment-safety review, validate the cutover playbook and replay gates together:
 
 ```bash
 SPECIFY_FEATURE=165-agent-session-deployment-safety \
   ./tools/validate_agent_session_deployment_safety.py --base-ref origin/main
-rg -n "SteerTurn|Continue-As-New|CancelSession|TerminateSession|Search Attribute|Worker Versioning|replay" \
+rg -n "SteerTurn|Continue-As-New|CancelSession|TerminateSession|Search Attribute|replay-safe rollout|replay" \
   docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md \
   specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md \
   specs/165-agent-session-deployment-safety/tasks.md
@@ -111,5 +111,5 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only \
 - Production runtime code was changed or verified as already compliant for each relevant requirement.
 - Tests cover workflow boundary, runtime/controller behavior, lifecycle cleanup, cancel/terminate distinction, steer/interrupt, idempotency/races, Continue-As-New, reconcile, and replay safety.
 - No prompts, transcripts, scrollback, raw logs, credentials, secrets, or unbounded provider output are introduced into bounded operational surfaces.
-- Worker Versioning, patching, or a versioned cutover plan protects incompatible durable workflow changes.
+- Patching or a cutover plan protects incompatible durable workflow changes.
 - The standalone-image path remains untouched.

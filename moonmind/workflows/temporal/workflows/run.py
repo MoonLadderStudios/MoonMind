@@ -137,7 +137,6 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 # Replay-stable `workflow.patched` id for integration status polling terminal handling.
-# Keep in sync with docs/Temporal/WorkerDeployment.md if renamed (only before first prod deploy).
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
