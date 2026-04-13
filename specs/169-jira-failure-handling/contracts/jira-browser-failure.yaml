@@ -1,0 +1,137 @@
+openapi: 3.1.0
+info:
+  title: Jira Browser Failure Handling Contract
+  version: 0.1.0
+  description: >
+    Failure-shape contract for MoonMind-owned Jira browser endpoints consumed by
+    the Create page. This contract describes failure and empty-state behavior for
+    existing browser endpoints; it does not introduce new endpoints.
+paths:
+  /api/jira/connections/verify:
+    get:
+      summary: Verify configured Jira browser connection
+      responses:
+        "200":
+          description: Connection verification succeeded.
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+  /api/jira/projects:
+    get:
+      summary: List Jira projects available to the browser
+      responses:
+        "200":
+          description: Project list loaded. Empty `items` is a valid empty state.
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+  /api/jira/projects/{projectKey}/boards:
+    get:
+      summary: List Jira boards for a project
+      parameters:
+        - name: projectKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Board list loaded. Empty `items` is a valid empty state.
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+  /api/jira/boards/{boardId}/columns:
+    get:
+      summary: List normalized board columns
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Board columns loaded. Empty `columns` is a valid empty state.
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+  /api/jira/boards/{boardId}/issues:
+    get:
+      summary: List normalized board issues grouped by column
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Board issues loaded. Empty groups are valid empty states.
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+  /api/jira/issues/{issueKey}:
+    get:
+      summary: Load normalized Jira issue detail
+      parameters:
+        - name: issueKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Issue detail loaded.
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserFailure"
+components:
+  responses:
+    JiraBrowserFailure:
+      description: Safe structured Jira browser failure.
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - detail
+            properties:
+              detail:
+                $ref: "#/components/schemas/JiraBrowserFailureDetail"
+  schemas:
+    JiraBrowserFailureDetail:
+      type: object
+      required:
+        - code
+        - message
+        - source
+      properties:
+        code:
+          type: string
+          description: Stable failure code.
+          examples:
+            - jira_policy_denied
+            - jira_request_failed
+            - jira_browser_request_failed
+        message:
+          type: string
+          description: Safe operator-facing message.
+          examples:
+            - Project is not allowed by Jira policy.
+            - Jira browser request failed.
+        source:
+          type: string
+          const: jira_browser
+        action:
+          type: string
+          description: Safe Jira browser action context when available.
+          examples:
+            - jira_browser.list_projects
+            - jira_browser.list_boards
+            - jira_browser.get_issue

@@ -24,6 +24,8 @@ const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
 const JIRA_LAST_BOARD_SESSION_KEY =
   "moonmind.task-create.jira.last-board-id";
+const JIRA_MANUAL_CONTINUATION_MESSAGE =
+  "You can continue creating the task manually.";
 const DEPENDENCY_LIMIT = 10;
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
@@ -1041,6 +1043,16 @@ async function responseErrorMessage(
   fallback: string,
 ): Promise<string> {
   return (await responseErrorDetail(response, fallback)).message;
+}
+
+function localJiraErrorMessage(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  const suffix = detail && detail !== fallback ? ` ${detail}` : "";
+  return `${fallback} ${JIRA_MANUAL_CONTINUATION_MESSAGE}${suffix}`;
+}
+
+function localJiraEmptyStateMessage(message: string): string {
+  return `${message} ${JIRA_MANUAL_CONTINUATION_MESSAGE}`;
 }
 
 async function readTemporalInputArtifact(
@@ -2189,13 +2201,63 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const activeJiraIssues =
     (activeJiraColumnId && jiraIssuesQuery.data?.[activeJiraColumnId]) || [];
-  const selectedJiraIssue = jiraIssueDetailQuery.data || null;
+  const selectedJiraIssue = jiraIssueDetailQuery.isError
+    ? null
+    : jiraIssueDetailQuery.data || null;
   const selectedJiraImportText = useMemo(() => {
     if (!selectedJiraIssue) {
       return "";
     }
     return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
   }, [jiraImportMode, selectedJiraIssue]);
+  const jiraProjectsError = jiraProjectsQuery.isError
+    ? localJiraErrorMessage(
+        jiraProjectsQuery.error,
+        "Failed to load Jira projects.",
+      )
+    : null;
+  const jiraBoardsError = jiraBoardsQuery.isError
+    ? localJiraErrorMessage(
+        jiraBoardsQuery.error,
+        "Failed to load Jira boards.",
+      )
+    : null;
+  const jiraBoardIssuesError =
+    jiraColumnsQuery.isError || jiraIssuesQuery.isError
+      ? localJiraErrorMessage(
+          jiraColumnsQuery.error || jiraIssuesQuery.error,
+          "Failed to load Jira stories.",
+        )
+      : null;
+  const jiraIssueError = jiraIssueDetailQuery.isError
+    ? localJiraErrorMessage(
+        jiraIssueDetailQuery.error,
+        "Failed to load Jira story.",
+      )
+    : null;
+  const jiraProjectsEmpty =
+    jiraProjectsQuery.isSuccess && (jiraProjectsQuery.data || []).length === 0
+      ? localJiraEmptyStateMessage("No Jira projects are available.")
+      : null;
+  const jiraBoardsEmpty =
+    selectedJiraProjectKey &&
+    jiraBoardsQuery.isSuccess &&
+    (jiraBoardsQuery.data || []).length === 0
+      ? localJiraEmptyStateMessage("No Jira boards are available for this project.")
+      : null;
+  const jiraColumnsEmpty =
+    selectedJiraBoardId &&
+    jiraColumnsQuery.isSuccess &&
+    (jiraColumnsQuery.data || []).length === 0
+      ? localJiraEmptyStateMessage("No Jira columns are available for this board.")
+      : null;
+  const jiraActiveColumnEmpty =
+    selectedJiraBoardId &&
+    activeJiraColumnId &&
+    jiraIssuesQuery.isSuccess &&
+    activeJiraIssues.length === 0
+      ? localJiraEmptyStateMessage("No Jira stories are available in this column.")
+      : null;
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
   const jiraTargetStep =
     jiraImportTarget?.kind === "step"
@@ -3594,14 +3656,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </label>
             </div>
 
-            {jiraProjectsQuery.isError ? (
-              <p className="notice small">Failed to load Jira projects.</p>
+            {jiraProjectsError ? (
+              <p className="notice small">{jiraProjectsError}</p>
             ) : null}
-            {jiraBoardsQuery.isError ? (
-              <p className="notice small">Failed to load Jira boards.</p>
+            {jiraProjectsEmpty ? (
+              <p className="notice small">{jiraProjectsEmpty}</p>
             ) : null}
-            {jiraColumnsQuery.isError || jiraIssuesQuery.isError ? (
-              <p className="notice small">Failed to load Jira board issues.</p>
+            {jiraBoardsError ? (
+              <p className="notice small">{jiraBoardsError}</p>
+            ) : null}
+            {jiraBoardsEmpty ? (
+              <p className="notice small">{jiraBoardsEmpty}</p>
+            ) : null}
+            {jiraBoardIssuesError ? (
+              <p className="notice small">{jiraBoardIssuesError}</p>
+            ) : null}
+            {jiraColumnsEmpty ? (
+              <p className="notice small">{jiraColumnsEmpty}</p>
             ) : null}
 
             <div className="jira-browser-layout">
@@ -3630,6 +3701,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 <div className="jira-issue-list" aria-live="polite">
                   {jiraColumnsQuery.isLoading || jiraIssuesQuery.isLoading ? (
                     <p className="small">Loading Jira issues...</p>
+                  ) : jiraBoardIssuesError ? (
+                    <p className="small">Jira stories are unavailable right now.</p>
                   ) : activeJiraIssues.length > 0 ? (
                     activeJiraIssues.map((issue) => (
                       <button
@@ -3651,15 +3724,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         </span>
                       </button>
                     ))
+                  ) : jiraActiveColumnEmpty ? (
+                    <p className="small">{jiraActiveColumnEmpty}</p>
                   ) : (
-                    <p className="small">No Jira issues in this column.</p>
+                    <p className="small">
+                      Select a Jira board column to view stories.
+                    </p>
                   )}
                 </div>
               </div>
 
               <aside className="jira-issue-preview stack">
-                {jiraIssueDetailQuery.isError ? (
-                  <p className="notice small">Failed to load Jira issue.</p>
+                {jiraIssueError ? (
+                  <p className="notice small">{jiraIssueError}</p>
                 ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
                   <p className="small">Loading Jira story...</p>
                 ) : selectedJiraIssue ? (
