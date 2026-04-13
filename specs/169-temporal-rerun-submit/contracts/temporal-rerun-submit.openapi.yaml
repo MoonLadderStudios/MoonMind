@@ -66,7 +66,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateInputArtifactRequest"
       responses:
-        "200":
+        "201":
           description: Artifact create response with upload information.
           content:
             application/json:
@@ -209,16 +209,40 @@ components:
     CreateInputArtifactRequest:
       type: object
       required:
-        - repository
-        - task
+        - content_type
+        - size_bytes
+        - metadata
       properties:
-        repository:
+        content_type:
           type: string
-        task:
+          examples:
+            - application/json; charset=utf-8
+        size_bytes:
+          type: integer
+          minimum: 0
+          description: Size in bytes of the artifact content that will be uploaded after creation.
+        metadata:
           type: object
+          required:
+            - label
+            - source
+          properties:
+            label:
+              type: string
+              examples:
+                - Submitted Task Input
+            repository:
+              type:
+                - string
+                - "null"
+            source:
+              type: string
+              examples:
+                - task-dashboard-submit
+            sourceWorkflowId:
+              type: string
+              description: Source execution id when the artifact replaces input for a rerun request.
           additionalProperties: true
-        sourceWorkflowId:
-          type: string
     CreateInputArtifactResponse:
       type: object
       required:
