@@ -830,6 +830,104 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
 
 
 @pytest.mark.asyncio
+async def test_controller_launch_normalizes_support_paths_before_git_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    task_root = workspace_root / "mm:task-1"
+    workspace_path = task_root / "repo"
+    session_path = task_root / "session"
+    artifacts_path = task_root / "artifacts"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    (workspace_path / ".git").mkdir()
+    session_path.mkdir()
+    artifacts_path.mkdir()
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(session_path),
+        artifactSpoolPath=str(artifacts_path),
+        codexHomePath=str(task_root / ".moonmind" / "codex-home"),
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "main",
+            "targetBranch": "codex/session-fix",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+    chown_calls: list[Path] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        assert uid == 1000
+        assert gid == 1000
+        assert follow_symlinks is False
+        chown_calls.append(Path(path))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        _fake_chown,
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[0] == "git":
+            assert session_path in chown_calls
+            assert artifacts_path in chown_calls
+            assert task_root / ".moonmind" in chown_calls
+            assert task_root / ".moonmind" / "codex-home" in chown_calls
+        if command == _workspace_git_command(
+            request.workspace_path,
+            "rev-parse",
+            "--is-inside-work-tree",
+        ):
+            return 0, "true\n", ""
+        if command == _workspace_git_command(
+            request.workspace_path,
+            "checkout",
+            "codex/session-fix",
+        ):
+            return 2, "", "fatal: checkout backend aborted"
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="checkout backend aborted"):
+        await controller.launch_session(request)
+
+    assert all(command[:2] != ("docker", "run") for command in commands)
+    assert session_path in chown_calls
+    assert artifacts_path in chown_calls
+
+
+@pytest.mark.asyncio
 async def test_controller_launch_reclones_invalid_workspace_before_target_checkout(
     tmp_path: Path,
 ) -> None:
@@ -2980,6 +3078,66 @@ async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> N
 
     assert handle.status == "ready"
     assert ready_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_controller_launch_reports_exited_container_logs_during_ready_probe(
+    tmp_path: Path,
+) -> None:
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath="/tmp/agent_jobs/task-1/repo",
+        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
+        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 0, "", ""
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return (
+                1,
+                "",
+                "Error response from daemon: container ctr-1 is not running",
+            )
+        if command[:3] == ("docker", "logs", "--tail"):
+            return (
+                0,
+                '{"error":"MOONMIND_SESSION_WORKSPACE_STATE_PATH must be writable",'
+                '"ready":false}\n',
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+        ready_poll_attempts=3,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await controller.launch_session(request)
+
+    message = str(exc_info.value)
+    assert "exited before ready" in message
+    assert "MOONMIND_SESSION_WORKSPACE_STATE_PATH must be writable" in message
+    assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
 
 
 @pytest.mark.asyncio

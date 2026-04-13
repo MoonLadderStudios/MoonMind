@@ -650,14 +650,18 @@ class DockerCodexManagedSessionController:
         workspace_path = Path(request.workspace_path)
         session_workspace_path = Path(request.session_workspace_path)
         artifact_spool_path = Path(request.artifact_spool_path)
-        created_paths: list[Path] = []
+        support_paths: list[Path] = [
+            session_workspace_path,
+            artifact_spool_path,
+        ]
 
-        if not session_workspace_path.exists():
-            session_workspace_path.mkdir(parents=True, exist_ok=True)
-            created_paths.append(session_workspace_path)
-        if not artifact_spool_path.exists():
-            artifact_spool_path.mkdir(parents=True, exist_ok=True)
-            created_paths.append(artifact_spool_path)
+        session_workspace_path.mkdir(parents=True, exist_ok=True)
+        artifact_spool_path.mkdir(parents=True, exist_ok=True)
+        self._collect_managed_support_paths(
+            request=request,
+            owned_paths=support_paths,
+        )
+        self._normalize_container_path_ownership(support_paths)
 
         repository = str(
             request.workspace_spec.get("repository")
@@ -665,10 +669,6 @@ class DockerCodexManagedSessionController:
             or ""
         ).strip()
         if workspace_path.exists():
-            self._collect_managed_support_paths(
-                request=request,
-                owned_paths=created_paths,
-            )
             self._normalize_container_path_ownership([workspace_path])
             if repository:
                 if not await self._workspace_is_git_repository(workspace_path=workspace_path):
@@ -681,18 +681,12 @@ class DockerCodexManagedSessionController:
                     workspace_path=workspace_path,
                     request=request,
                 )
-            self._normalize_container_path_ownership(created_paths)
             return
 
         if not repository:
             workspace_path.parent.mkdir(parents=True, exist_ok=True)
             workspace_path.mkdir(parents=True, exist_ok=True)
-            created_paths.append(workspace_path)
-            self._collect_managed_support_paths(
-                request=request,
-                owned_paths=created_paths,
-            )
-            self._normalize_container_path_ownership(created_paths)
+            self._normalize_container_path_ownership([workspace_path])
             return
 
         await self._clone_workspace(
@@ -704,11 +698,6 @@ class DockerCodexManagedSessionController:
             workspace_path=workspace_path,
             request=request,
         )
-        self._collect_managed_support_paths(
-            request=request,
-            owned_paths=created_paths,
-        )
-        self._normalize_container_path_ownership(created_paths)
 
     def _collect_managed_support_paths(
         self,
@@ -1102,6 +1091,13 @@ class DockerCodexManagedSessionController:
                 payload = json.loads(stdout.strip() or "{}")
             except (RuntimeError, json.JSONDecodeError) as exc:
                 last_error = exc
+                if self._ready_probe_suggests_container_exited(exc):
+                    logs = await self._container_logs_excerpt(container_id)
+                    log_detail = f"; logs: {logs}" if logs else ""
+                    raise RuntimeError(
+                        f"managed session container {container_id} exited before "
+                        f"ready: {exc}{log_detail}"
+                    ) from exc
             else:
                 if payload.get("ready") is True:
                     return
@@ -1111,6 +1107,44 @@ class DockerCodexManagedSessionController:
         raise RuntimeError(
             f"managed session container {container_id} did not become ready{details}"
         )
+
+    @staticmethod
+    def _ready_probe_suggests_container_exited(exc: Exception) -> bool:
+        detail = str(exc).lower()
+        return any(
+            marker in detail
+            for marker in (
+                "container is not running",
+                "is not running",
+                "not running",
+                "exited",
+                "is stopped",
+                "cannot exec in a stopped",
+            )
+        )
+
+    async def _container_logs_excerpt(self, container_id: str) -> str:
+        command = (
+            self._docker_binary,
+            "logs",
+            "--tail",
+            "40",
+            container_id,
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            command,
+            env=self._docker_env(),
+        )
+        if returncode != 0:
+            return ""
+        detail = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
+        if not detail:
+            return ""
+        _rendered_command, scrubbed_detail = self._scrub_command_failure(
+            command,
+            detail,
+        )
+        return scrubbed_detail[-2000:]
 
     async def _persist_handle_transition(
         self,
