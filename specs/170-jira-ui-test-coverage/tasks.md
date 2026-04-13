@@ -10,10 +10,10 @@
 
 **Purpose**: Prepare the active feature context and identify the existing runtime/test surfaces before story work begins.
 
-- [ ] T001 Confirm active branch and current feature artifacts in `specs/170-jira-ui-test-coverage/spec.md`, `specs/170-jira-ui-test-coverage/plan.md`, and `specs/170-jira-ui-test-coverage/contracts/requirements-traceability.md`
-- [ ] T002 [P] Review current frontend Jira fixtures and helper coverage in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T003 [P] Review current backend Jira browser fixtures in `tests/unit/api/routers/test_jira_browser.py` and `tests/unit/integrations/test_jira_browser_service.py`
-- [ ] T004 [P] Review current runtime config fixture coverage in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T001 Confirm active branch and current feature artifacts in `specs/170-jira-ui-test-coverage/spec.md`, `specs/170-jira-ui-test-coverage/plan.md`, and `specs/170-jira-ui-test-coverage/contracts/requirements-traceability.md`
+- [X] T002 [P] Review current frontend Jira fixtures and helper coverage in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T003 [P] Review current backend Jira browser fixtures in `tests/unit/api/routers/test_jira_browser.py` and `tests/unit/integrations/test_jira_browser_service.py`
+- [X] T004 [P] Review current runtime config fixture coverage in `tests/unit/api/routers/test_task_dashboard_view_model.py`
 
 ---
 
@@ -23,10 +23,10 @@
 
 **Critical**: No user story work should begin until these tasks are complete.
 
-- [ ] T005 Add or normalize shared Jira runtime config fixture helpers in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-001, DOC-REQ-005, DOC-REQ-011
-- [ ] T006 [P] Add or normalize reusable Jira service response fixtures in `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
-- [ ] T007 [P] Add or normalize reusable Jira router fake-service behavior in `tests/unit/api/routers/test_jira_browser.py` for DOC-REQ-001, DOC-REQ-004, DOC-REQ-010
-- [ ] T008 Verify each DOC-REQ row in `specs/170-jira-ui-test-coverage/contracts/requirements-traceability.md` has planned implementation and validation coverage before starting story tasks
+- [X] T005 Add or normalize shared Jira runtime config fixture helpers in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-001, DOC-REQ-005, DOC-REQ-011
+- [X] T006 [P] Add or normalize reusable Jira service response fixtures in `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
+- [X] T007 [P] Add or normalize reusable Jira router fake-service behavior in `tests/unit/api/routers/test_jira_browser.py` for DOC-REQ-001, DOC-REQ-004, DOC-REQ-010
+- [X] T008 Verify each DOC-REQ row in `specs/170-jira-ui-test-coverage/contracts/requirements-traceability.md` has planned implementation and validation coverage before starting story tasks
 
 **Checkpoint**: Shared fixtures and traceability are ready. User story work can proceed in priority order or in parallel where marked.
 
@@ -39,18 +39,18 @@
 
 ### Tests for User Story 1
 
-- [ ] T009 [P] [US1] Add or strengthen runtime config tests for disabled Jira UI, enabled Jira UI, trusted tooling separation, MoonMind-owned endpoints, and defaults in `tests/unit/api/routers/test_task_dashboard_view_model.py` for DOC-REQ-001
-- [ ] T010 [P] [US1] Add or strengthen Create page tests for hidden Jira controls when disabled and disabled browser when endpoint templates are incomplete in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-001, DOC-REQ-011
+- [X] T009 [P] [US1] Add or strengthen runtime config tests for disabled Jira UI, enabled Jira UI, trusted tooling separation, MoonMind-owned endpoints, and defaults in `tests/unit/api/routers/test_task_dashboard_view_model.py` for DOC-REQ-001
+- [X] T010 [P] [US1] Add or strengthen Create page tests for hidden Jira controls when disabled and disabled browser when endpoint templates are incomplete in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-001, DOC-REQ-011
 
 ### Implementation for User Story 1
 
-- [ ] T011 [US1] Patch Jira runtime config gating and endpoint template exposure in `api_service/api/routers/task_dashboard_view_model.py` if T009 exposes gaps for DOC-REQ-001
-- [ ] T012 [US1] Patch Create page Jira integration gating and endpoint-template validation in `frontend/src/entrypoints/task-create.tsx` if T010 exposes gaps for DOC-REQ-001, DOC-REQ-011
+- [X] T011 [US1] Patch Jira runtime config gating and endpoint template exposure in `api_service/api/routers/task_dashboard_view_model.py` if T009 exposes gaps for DOC-REQ-001
+- [X] T012 [US1] Patch Create page Jira integration gating and endpoint-template validation in `frontend/src/entrypoints/task-create.tsx` if T010 exposes gaps for DOC-REQ-001, DOC-REQ-011
 
 ### Validation for User Story 1
 
-- [ ] T013 [US1] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_task_dashboard_view_model.py -q` and confirm DOC-REQ-001 coverage
-- [ ] T014 [US1] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm Jira disabled-control assertions for DOC-REQ-001, DOC-REQ-011
+- [X] T013 [US1] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_task_dashboard_view_model.py -q` and confirm DOC-REQ-001 coverage
+- [X] T014 [US1] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm Jira disabled-control assertions for DOC-REQ-001, DOC-REQ-011
 
 **Checkpoint**: Jira rollout exposure is independently protected.
 
@@ -63,19 +63,19 @@
 
 ### Tests for User Story 2
 
-- [ ] T015 [P] [US2] Add or strengthen Create page tests for opening Jira browser from preset and step targets in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-005, DOC-REQ-011
-- [ ] T016 [P] [US2] Add or strengthen Create page tests for ordered columns, column switching, issue preview, and no mutation on issue selection in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-011
-- [ ] T017 [P] [US2] Add or strengthen service tests for board column ordering, empty columns, mapped issue buckets, unmapped statuses, and issue-detail normalized text in `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004
+- [X] T015 [P] [US2] Add or strengthen Create page tests for opening Jira browser from preset and step targets in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-005, DOC-REQ-011
+- [X] T016 [P] [US2] Add or strengthen Create page tests for ordered columns, column switching, issue preview, and no mutation on issue selection in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-011
+- [X] T017 [P] [US2] Add or strengthen service tests for board column ordering, empty columns, mapped issue buckets, unmapped statuses, and issue-detail normalized text in `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004
 
 ### Implementation for User Story 2
 
-- [ ] T018 [US2] Patch Jira browser state, target labeling, column selection, issue selection, or preview rendering in `frontend/src/entrypoints/task-create.tsx` if T015 or T016 exposes gaps for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-011
-- [ ] T019 [US2] Patch board column, issue grouping, empty-state, unmapped-status, or issue-detail normalization in `moonmind/integrations/jira/browser.py` if T017 exposes gaps for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004
+- [X] T018 [US2] Patch Jira browser state, target labeling, column selection, issue selection, or preview rendering in `frontend/src/entrypoints/task-create.tsx` if T015 or T016 exposes gaps for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-011
+- [X] T019 [US2] Patch board column, issue grouping, empty-state, unmapped-status, or issue-detail normalization in `moonmind/integrations/jira/browser.py` if T017 exposes gaps for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004
 
 ### Validation for User Story 2
 
-- [ ] T020 [US2] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/integrations/test_jira_browser_service.py -q` and confirm DOC-REQ-002, DOC-REQ-003, DOC-REQ-004 coverage
-- [ ] T021 [US2] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm browsing behavior for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-011
+- [X] T020 [US2] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/integrations/test_jira_browser_service.py -q` and confirm DOC-REQ-002, DOC-REQ-003, DOC-REQ-004 coverage
+- [X] T021 [US2] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm browsing behavior for DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-005, DOC-REQ-011
 
 **Checkpoint**: Jira browsing and issue preview are independently protected.
 
@@ -88,23 +88,23 @@
 
 ### Tests for User Story 3
 
-- [ ] T022 [P] [US3] Add or strengthen Create page tests for selecting an issue without import, preset replace import, preset append import, and import-mode text selection in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-006, DOC-REQ-011
-- [ ] T023 [P] [US3] Add or strengthen Create page tests for selected-step import isolation and missing or empty import target safety in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-005, DOC-REQ-006, DOC-REQ-011
-- [ ] T024 [P] [US3] Add or strengthen Create page tests for template-bound step detachment and warning behavior in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-007, DOC-REQ-011
-- [ ] T025 [P] [US3] Add or strengthen Create page tests for preset reapply-needed signaling after applied preset import in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-008, DOC-REQ-011
-- [ ] T026 [P] [US3] Add or strengthen Create page tests proving Jira provenance remains advisory and task submission payload shape remains unchanged in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-009, DOC-REQ-011
+- [X] T022 [P] [US3] Add or strengthen Create page tests for selecting an issue without import, preset replace import, preset append import, and import-mode text selection in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-006, DOC-REQ-011
+- [X] T023 [P] [US3] Add or strengthen Create page tests for selected-step import isolation and missing or empty import target safety in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-005, DOC-REQ-006, DOC-REQ-011
+- [X] T024 [P] [US3] Add or strengthen Create page tests for template-bound step detachment and warning behavior in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-007, DOC-REQ-011
+- [X] T025 [P] [US3] Add or strengthen Create page tests for preset reapply-needed signaling after applied preset import in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-008, DOC-REQ-011
+- [X] T026 [P] [US3] Add or strengthen Create page tests proving Jira provenance remains advisory and task submission payload shape remains unchanged in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-009, DOC-REQ-011
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Patch Jira import preview, import-mode, replace, and append behavior in `frontend/src/entrypoints/task-create.tsx` if T022 exposes gaps for DOC-REQ-006, DOC-REQ-011
-- [ ] T028 [US3] Patch selected step import targeting and target-missing safety in `frontend/src/entrypoints/task-create.tsx` if T023 exposes gaps for DOC-REQ-005, DOC-REQ-006, DOC-REQ-011
-- [ ] T029 [US3] Patch template-bound step manual customization and warning behavior in `frontend/src/entrypoints/task-create.tsx` if T024 exposes gaps for DOC-REQ-007, DOC-REQ-011
-- [ ] T030 [US3] Patch preset reapply-needed signaling and expanded-step preservation in `frontend/src/entrypoints/task-create.tsx` if T025 exposes gaps for DOC-REQ-008, DOC-REQ-011
-- [ ] T031 [US3] Patch Jira provenance handling or submission assembly in `frontend/src/entrypoints/task-create.tsx` if T026 exposes gaps for DOC-REQ-009, DOC-REQ-011
+- [X] T027 [US3] Patch Jira import preview, import-mode, replace, and append behavior in `frontend/src/entrypoints/task-create.tsx` if T022 exposes gaps for DOC-REQ-006, DOC-REQ-011
+- [X] T028 [US3] Patch selected step import targeting and target-missing safety in `frontend/src/entrypoints/task-create.tsx` if T023 exposes gaps for DOC-REQ-005, DOC-REQ-006, DOC-REQ-011
+- [X] T029 [US3] Patch template-bound step manual customization and warning behavior in `frontend/src/entrypoints/task-create.tsx` if T024 exposes gaps for DOC-REQ-007, DOC-REQ-011
+- [X] T030 [US3] Patch preset reapply-needed signaling and expanded-step preservation in `frontend/src/entrypoints/task-create.tsx` if T025 exposes gaps for DOC-REQ-008, DOC-REQ-011
+- [X] T031 [US3] Patch Jira provenance handling or submission assembly in `frontend/src/entrypoints/task-create.tsx` if T026 exposes gaps for DOC-REQ-009, DOC-REQ-011
 
 ### Validation for User Story 3
 
-- [ ] T032 [US3] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm import semantics for DOC-REQ-005, DOC-REQ-006, DOC-REQ-007, DOC-REQ-008, DOC-REQ-009, DOC-REQ-011
+- [X] T032 [US3] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm import semantics for DOC-REQ-005, DOC-REQ-006, DOC-REQ-007, DOC-REQ-008, DOC-REQ-009, DOC-REQ-011
 
 **Checkpoint**: Jira import behavior is independently protected.
 
@@ -117,18 +117,18 @@
 
 ### Tests for User Story 4
 
-- [ ] T033 [P] [US4] Add or strengthen router tests for connection verification, projects, boards, columns, board issues, and issue detail in `tests/unit/api/routers/test_jira_browser.py` for DOC-REQ-001, DOC-REQ-004, DOC-REQ-010
-- [ ] T034 [P] [US4] Add or strengthen router tests for structured known errors, unexpected errors, trace-like messages, and secret-like message sanitization in `tests/unit/api/routers/test_jira_browser.py` for DOC-REQ-010
-- [ ] T035 [P] [US4] Add or strengthen service tests for project allowlists, connection verification policy, invalid input rejection, allowed project fetching, board grouping, issue detail, and no secret leakage in `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
+- [X] T033 [P] [US4] Add or strengthen router tests for connection verification, projects, boards, columns, board issues, and issue detail in `tests/unit/api/routers/test_jira_browser.py` for DOC-REQ-001, DOC-REQ-004, DOC-REQ-010
+- [X] T034 [P] [US4] Add or strengthen router tests for structured known errors, unexpected errors, trace-like messages, and secret-like message sanitization in `tests/unit/api/routers/test_jira_browser.py` for DOC-REQ-010
+- [X] T035 [P] [US4] Add or strengthen service tests for project allowlists, connection verification policy, invalid input rejection, allowed project fetching, board grouping, issue detail, and no secret leakage in `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
 
 ### Implementation for User Story 4
 
-- [ ] T036 [US4] Patch browser endpoint routing, response models, error mapping, or sanitization in `api_service/api/routers/jira_browser.py` if T033 or T034 exposes gaps for DOC-REQ-001, DOC-REQ-004, DOC-REQ-010
-- [ ] T037 [US4] Patch Jira browser service policy checks, request validation, normalization, or error safety in `moonmind/integrations/jira/browser.py` if T035 exposes gaps for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
+- [X] T036 [US4] Patch browser endpoint routing, response models, error mapping, or sanitization in `api_service/api/routers/jira_browser.py` if T033 or T034 exposes gaps for DOC-REQ-001, DOC-REQ-004, DOC-REQ-010
+- [X] T037 [US4] Patch Jira browser service policy checks, request validation, normalization, or error safety in `moonmind/integrations/jira/browser.py` if T035 exposes gaps for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
 
 ### Validation for User Story 4
 
-- [ ] T038 [US4] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py -q` and confirm backend trusted-boundary coverage for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
+- [X] T038 [US4] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py -q` and confirm backend trusted-boundary coverage for DOC-REQ-001, DOC-REQ-002, DOC-REQ-003, DOC-REQ-004, DOC-REQ-010
 
 **Checkpoint**: Backend Jira browser trust boundary is independently protected.
 
@@ -141,19 +141,19 @@
 
 ### Tests for User Story 5
 
-- [ ] T039 [P] [US5] Add or strengthen Create page tests for project, board, column, issue-list, and issue-detail failures remaining inside the Jira browser in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-010, DOC-REQ-011
-- [ ] T040 [P] [US5] Add or strengthen Create page tests proving manual preset editing, step editing, and valid task creation still work after Jira failure in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-009, DOC-REQ-010, DOC-REQ-011
-- [ ] T041 [P] [US5] Add or strengthen router/service tests for empty browser models and safe structured failure responses in `tests/unit/api/routers/test_jira_browser.py` and `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-010
+- [X] T039 [P] [US5] Add or strengthen Create page tests for project, board, column, issue-list, and issue-detail failures remaining inside the Jira browser in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-010, DOC-REQ-011
+- [X] T040 [P] [US5] Add or strengthen Create page tests proving manual preset editing, step editing, and valid task creation still work after Jira failure in `frontend/src/entrypoints/task-create.test.tsx` for DOC-REQ-009, DOC-REQ-010, DOC-REQ-011
+- [X] T041 [P] [US5] Add or strengthen router/service tests for empty browser models and safe structured failure responses in `tests/unit/api/routers/test_jira_browser.py` and `tests/unit/integrations/test_jira_browser_service.py` for DOC-REQ-010
 
 ### Implementation for User Story 5
 
-- [ ] T042 [US5] Patch local Jira error and empty-state handling in `frontend/src/entrypoints/task-create.tsx` if T039 or T040 exposes gaps for DOC-REQ-010, DOC-REQ-011
-- [ ] T043 [US5] Patch browser API empty-state response handling or safe error shaping in `api_service/api/routers/jira_browser.py` and `moonmind/integrations/jira/browser.py` if T041 exposes gaps for DOC-REQ-010
+- [X] T042 [US5] Patch local Jira error and empty-state handling in `frontend/src/entrypoints/task-create.tsx` if T039 or T040 exposes gaps for DOC-REQ-010, DOC-REQ-011
+- [X] T043 [US5] Patch browser API empty-state response handling or safe error shaping in `api_service/api/routers/jira_browser.py` and `moonmind/integrations/jira/browser.py` if T041 exposes gaps for DOC-REQ-010
 
 ### Validation for User Story 5
 
-- [ ] T044 [US5] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm local failure behavior for DOC-REQ-009, DOC-REQ-010, DOC-REQ-011
-- [ ] T045 [US5] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py -q` and confirm backend failure safety for DOC-REQ-010
+- [X] T044 [US5] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm local failure behavior for DOC-REQ-009, DOC-REQ-010, DOC-REQ-011
+- [X] T045 [US5] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py -q` and confirm backend failure safety for DOC-REQ-010
 
 **Checkpoint**: Jira failure behavior is independently protected and additive.
 
@@ -163,11 +163,11 @@
 
 **Purpose**: Confirm all stories satisfy traceability, runtime scope, and final unit validation requirements.
 
-- [ ] T046 Verify every DOC-REQ ID appears in at least one implementation task and one validation task in `specs/170-jira-ui-test-coverage/tasks.md`
-- [ ] T047 Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py tests/unit/api/routers/test_task_dashboard_view_model.py -q` for focused backend Phase 9 validation
-- [ ] T048 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` for supported Create page validation
-- [ ] T049 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final full unit-suite verification
-- [ ] T050 Update verification notes in `specs/170-jira-ui-test-coverage/quickstart.md` if command names, expected outputs, or prerequisite behavior changed during implementation
+- [X] T046 Verify every DOC-REQ ID appears in at least one implementation task and one validation task in `specs/170-jira-ui-test-coverage/tasks.md`
+- [X] T047 Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py tests/unit/api/routers/test_task_dashboard_view_model.py -q` for focused backend Phase 9 validation
+- [X] T048 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` for supported Create page validation
+- [X] T049 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final full unit-suite verification
+- [X] T050 Update verification notes in `specs/170-jira-ui-test-coverage/quickstart.md` if command names, expected outputs, or prerequisite behavior changed during implementation
 
 ---
 
