@@ -749,6 +749,15 @@ form {
   padding-bottom: 0;
 }
 
+.queue-submit-form > fieldset {
+  display: grid;
+  gap: 0.9rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;
