@@ -97,11 +97,24 @@ samp {
 
 .masthead {
   position: relative;
+  isolation: isolate;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
   padding: 1.4rem 1rem;
+}
+
+.masthead::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -1.25rem;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgb(var(--mm-panel) / 0.74);
+  box-shadow: 0 14px 28px -24px rgb(var(--mm-ink) / 0.35);
 }
 
 .masthead::after {
@@ -114,6 +127,11 @@ samp {
 }
 
 @supports (width: 1cqw) {
+  .masthead::before {
+    left: calc(50% - 50cqw - 1rem);
+    right: calc(50% - 50cqw - 1rem);
+  }
+
   .masthead::after {
     left: calc(50% - 50cqw - 1rem);
     right: calc(50% - 50cqw - 1rem);
