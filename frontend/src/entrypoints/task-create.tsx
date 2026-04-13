@@ -58,6 +58,8 @@ interface DashboardConfig {
     temporal?: {
       create?: string;
       artifactCreate?: string;
+      artifactDownload?: string;
+      detail?: string;
       list?: string;
     };
   };
@@ -297,6 +299,40 @@ function withQueryParams(
     return baseUrl;
   }
   return `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${serialized}`;
+}
+
+function configuredTemporalDetailUrl(
+  detailTemplate: string,
+  workflowId: string,
+): string {
+  return withQueryParams(
+    interpolatePath(detailTemplate, { workflowId }),
+    { source: "temporal" },
+  );
+}
+
+function configuredArtifactDownloadUrl(
+  downloadTemplate: string,
+  artifactId: string,
+): string {
+  return interpolatePath(downloadTemplate, { artifactId });
+}
+
+function hasInlineTaskInstructions(task: unknown): boolean {
+  if (!task || typeof task !== "object" || Array.isArray(task)) {
+    return false;
+  }
+  const taskRecord = task as Record<string, unknown>;
+  if (String(taskRecord.instructions || "").trim()) {
+    return true;
+  }
+  const steps = Array.isArray(taskRecord.steps) ? taskRecord.steps : [];
+  return steps.some((step) => {
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      return false;
+    }
+    return String((step as Record<string, unknown>).instructions || "").trim();
+  });
 }
 
 function createStepStateEntry(
@@ -642,9 +678,12 @@ async function responseErrorMessage(
   return (await responseErrorDetail(response, fallback)).message;
 }
 
-async function readTemporalInputArtifact(artifactId: string): Promise<unknown> {
+async function readTemporalInputArtifact(
+  artifactDownloadEndpoint: string,
+  artifactId: string,
+): Promise<unknown> {
   const response = await fetch(
-    `/api/artifacts/${encodeURIComponent(artifactId)}/download`,
+    configuredArtifactDownloadUrl(artifactDownloadEndpoint, artifactId),
     { headers: { Accept: "application/json" } },
   );
   if (!response.ok) {
@@ -998,8 +1037,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const temporalListEndpoint = String(
     dashboardConfig.sources?.temporal?.list || "/api/executions",
   );
+  const temporalDetailEndpoint = String(
+    dashboardConfig.sources?.temporal?.detail || "/api/executions/{workflowId}",
+  );
   const artifactCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.artifactCreate || "/api/artifacts",
+  );
+  const artifactDownloadEndpoint = String(
+    dashboardConfig.sources?.temporal?.artifactDownload ||
+      "/api/artifacts/{artifactId}/download",
   );
   const providerProfilesEndpoint = String(
     dashboardConfig.system?.providerProfiles?.list ||
@@ -1126,7 +1172,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       "temporal-editing-draft",
       pageMode.mode,
       pageMode.executionId,
-      temporalListEndpoint,
+      temporalDetailEndpoint,
+      artifactDownloadEndpoint,
     ],
     enabled:
       pageMode.mode !== "create" &&
@@ -1134,9 +1181,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       temporalTaskEditingEnabled,
     queryFn: async (): Promise<TemporalSubmissionDraftLoadResult> => {
       const workflowId = String(pageMode.executionId || "");
-      const separator = temporalListEndpoint.includes("?") ? "&" : "?";
       const response = await fetch(
-        `${temporalListEndpoint}/${encodeURIComponent(workflowId)}${separator}source=temporal`,
+        configuredTemporalDetailUrl(temporalDetailEndpoint, workflowId),
         { headers: { Accept: "application/json" } },
       );
       if (!response.ok) {
@@ -1166,14 +1212,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       let artifactInput: unknown;
       const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
       const inlineTask = execution.inputParameters?.task;
-      const inlineInstructions =
-        inlineTask && typeof inlineTask === "object"
-          ? String(
-              (inlineTask as Record<string, unknown>).instructions || "",
-            ).trim()
-          : "";
-      if (inputArtifactRef && !inlineInstructions) {
-        artifactInput = await readTemporalInputArtifact(inputArtifactRef);
+      if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
+        artifactInput = await readTemporalInputArtifact(
+          artifactDownloadEndpoint,
+          inputArtifactRef,
+        );
       }
 
       return {
@@ -1211,6 +1254,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     const profiles = providerProfilesQuery.data || [];
+    if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
+      return;
+    }
+    if (pageMode.mode !== "create" && temporalDraftAppliedRef.current) {
+      return;
+    }
     if (profiles.length === 0) {
       if (providerProfile) {
         setProviderProfile("");
@@ -1229,7 +1278,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (defaultProfileId && providerProfile !== defaultProfileId) {
       setProviderProfile(defaultProfileId);
     }
-  }, [providerProfile, providerProfilesQuery.data]);
+  }, [
+    pageMode.mode,
+    providerProfile,
+    providerProfilesQuery.data,
+    providerProfilesQuery.isFetching,
+    providerProfilesQuery.isLoading,
+  ]);
 
   useEffect(() => {
     const runtimeChanged = prevRuntimeRef.current !== runtime;
@@ -1246,6 +1301,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     if (profileChanged) {
       prevProviderProfileRef.current = providerProfile;
+    }
+
+    if (
+      pageMode.mode !== "create" &&
+      temporalDraftAppliedRef.current &&
+      !runtimeChanged &&
+      !profileChanged
+    ) {
+      return;
     }
 
     setEffort(
@@ -1282,6 +1346,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
     modelManualOverride,
+    pageMode.mode,
     providerProfilesQuery.data,
     providerProfile,
     runtime,
@@ -1319,19 +1384,33 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       prevRuntimeRef.current = draft.runtime;
       setRuntime(draft.runtime);
     }
-    prevProviderProfileRef.current = draft.providerProfile;
-    setProviderProfile(draft.providerProfile);
-    setModel(draft.model);
-    setModelManualOverride(Boolean(draft.model));
-    setEffort(draft.effort);
-    setRepository(draft.repository);
-    setStartingBranch(draft.startingBranch);
-    setTargetBranch(draft.targetBranch);
-    setPublishMode(draft.publishMode || defaultPublishMode);
+    if (draft.providerProfile) {
+      prevProviderProfileRef.current = draft.providerProfile;
+      setProviderProfile(draft.providerProfile);
+    }
+    if (draft.model) {
+      setModel(draft.model);
+      setModelManualOverride(true);
+    }
+    if (draft.effort) {
+      setEffort(draft.effort);
+    }
+    if (draft.repository) {
+      setRepository(draft.repository);
+    }
+    if (draft.startingBranch) {
+      setStartingBranch(draft.startingBranch);
+    }
+    if (draft.targetBranch) {
+      setTargetBranch(draft.targetBranch);
+    }
+    if (draft.publishMode) {
+      setPublishMode(draft.publishMode);
+    }
     setSteps([
       createStepStateEntry(1, {
         instructions: draft.taskInstructions,
-        skillId: draft.primarySkill,
+        ...(draft.primarySkill ? { skillId: draft.primarySkill } : {}),
       }),
     ]);
     setNextStepNumber(2);
@@ -2505,6 +2584,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ? temporalDraftQuery.error.message
           : "Failed to reconstruct the task draft."
         : null;
+  const isTemporalFormBlocked =
+    pageMode.mode !== "create" &&
+    (temporalDraftQuery.isLoading || Boolean(modeLoadError));
 
   return (
     <div className="stack">
@@ -2528,8 +2610,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         id="queue-submit-form"
         className="queue-submit-form"
         onSubmit={handleSubmit}
-        aria-disabled={Boolean(modeLoadError)}
+        aria-disabled={isTemporalFormBlocked}
       >
+        <fieldset disabled={isTemporalFormBlocked} aria-busy={isTemporalFormBlocked}>
         <section className="queue-steps-section stack">
           <div id="queue-steps-list" className="stack">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
@@ -3134,13 +3217,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           <button
             type="submit"
             className="queue-submit-primary"
-            disabled={Boolean(modeLoadError)}
-            aria-disabled={isSubmitting || Boolean(modeLoadError)}
+            disabled={isTemporalFormBlocked}
+            aria-disabled={isSubmitting || isTemporalFormBlocked}
             aria-busy={isSubmitting}
           >
             {primaryCta}
           </button>
         </div>
+        </fieldset>
 
         <p
           id="queue-submit-message"

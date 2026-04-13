@@ -36,16 +36,16 @@ export type TemporalTaskEditingExecutionContract = {
 };
 
 export type TemporalSubmissionDraft = {
-  runtime: string;
-  providerProfile: string;
-  model: string;
-  effort: string;
-  repository: string;
-  startingBranch: string;
-  targetBranch: string;
-  publishMode: string;
+  runtime: string | null;
+  providerProfile: string | null;
+  model: string | null;
+  effort: string | null;
+  repository: string | null;
+  startingBranch: string | null;
+  targetBranch: string | null;
+  publishMode: string | null;
   taskInstructions: string;
-  primarySkill: string;
+  primarySkill: string | null;
   appliedTemplates: Array<{
     slug: string;
     version: string;
@@ -100,6 +100,33 @@ function stringValue(...values: unknown[]): string {
   return '';
 }
 
+function stepInstructions(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => objectValue(entry))
+    .map((entry) => stringValue(entry.instructions))
+    .filter(Boolean);
+}
+
+function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
+  for (const task of tasks) {
+    const instructions = [
+      stringValue(task.instructions),
+      ...stepInstructions(task.steps),
+    ].filter(Boolean);
+    if (instructions.length > 0) {
+      return instructions.join('\n\n');
+    }
+  }
+  return '';
+}
+
+function nullableStringValue(...values: unknown[]): string | null {
+  return stringValue(...values) || null;
+}
+
 function normalizeAppliedTemplates(
   value: unknown,
 ): TemporalSubmissionDraft['appliedTemplates'] {
@@ -151,20 +178,20 @@ export function buildTemporalSubmissionDraftFromExecution(
     : [];
 
   const draft: TemporalSubmissionDraft = {
-    runtime: stringValue(
+    runtime: nullableStringValue(
       execution.targetRuntime,
       params.targetRuntime,
       runtime.mode,
       artifactRuntime.mode,
       artifactParams.targetRuntime,
     ),
-    providerProfile: stringValue(
+    providerProfile: nullableStringValue(
       execution.profileId,
       params.profileId,
       runtime.profileId,
       artifactRuntime.profileId,
     ),
-    model: stringValue(
+    model: nullableStringValue(
       execution.model,
       execution.requestedModel,
       execution.resolvedModel,
@@ -172,13 +199,13 @@ export function buildTemporalSubmissionDraftFromExecution(
       runtime.model,
       artifactRuntime.model,
     ),
-    effort: stringValue(
+    effort: nullableStringValue(
       execution.effort,
       params.effort,
       runtime.effort,
       artifactRuntime.effort,
     ),
-    repository: stringValue(
+    repository: nullableStringValue(
       execution.repository,
       params.repository,
       task.repository,
@@ -187,7 +214,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactTask.repository,
       artifactGit.repository,
     ),
-    startingBranch: stringValue(
+    startingBranch: nullableStringValue(
       execution.startingBranch,
       task.startingBranch,
       git.startingBranch,
@@ -195,7 +222,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactTask.startingBranch,
       artifactGit.startingBranch,
     ),
-    targetBranch: stringValue(
+    targetBranch: nullableStringValue(
       execution.targetBranch,
       task.targetBranch,
       git.targetBranch,
@@ -203,14 +230,14 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactTask.targetBranch,
       artifactGit.targetBranch,
     ),
-    publishMode: stringValue(
+    publishMode: nullableStringValue(
       execution.publishMode,
       params.publishMode,
       publish.mode,
       artifactPublish.mode,
     ),
-    taskInstructions: stringValue(task.instructions, artifactTask.instructions),
-    primarySkill: stringValue(
+    taskInstructions: taskInstructionsFrom(task, artifactTask),
+    primarySkill: nullableStringValue(
       execution.targetSkill,
       tool.name,
       skill.id,

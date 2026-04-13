@@ -485,6 +485,41 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (
+          url ===
+          "/gateway/api/executions/mm%3Acustom-endpoints?view=detail&source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:custom-endpoints",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputArtifactRef: "custom-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -577,6 +612,18 @@ describe("Task Create Entrypoint", () => {
           return Promise.resolve({
             ok: true,
             text: async () => "not-json",
+          } as Response);
+        }
+        if (url === "/gateway/api/artifacts/custom-input/raw") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                task: {
+                  instructions: "Loaded through configured artifact route.",
+                  skill: { id: "speckit-orchestrate" },
+                },
+              }),
           } as Response);
         }
         return Promise.resolve({
@@ -732,6 +779,55 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("includes step-level instructions when reconstructing a draft", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:step-instructions",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Top-level objective.",
+          steps: [
+            { instructions: "First step instructions." },
+            { instructions: "Second step instructions." },
+          ],
+        },
+      },
+    });
+
+    expect(draft.taskInstructions).toBe(
+      [
+        "Top-level objective.",
+        "First step instructions.",
+        "Second step instructions.",
+      ].join("\n\n"),
+    );
+  });
+
+  it("uses null for optional draft fields that cannot be reconstructed", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:minimal",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Only instructions are available.",
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: null,
+      providerProfile: null,
+      model: null,
+      effort: null,
+      repository: null,
+      startingBranch: null,
+      targetBranch: null,
+      publishMode: null,
+      primarySkill: null,
+      taskInstructions: "Only instructions are available.",
+    });
+  });
+
   it("fails draft reconstruction when instructions are missing", () => {
     expect(() =>
       buildTemporalSubmissionDraftFromExecution({
@@ -825,6 +921,56 @@ describe("Task Create Entrypoint", () => {
     );
     expect(screen.queryByText("Schedule (optional)")).toBeNull();
     expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+  });
+
+  it("loads draft inputs through configured detail and artifact download routes", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Acustom-endpoints",
+    );
+    const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      customPayload.initialData as {
+        dashboardConfig: {
+          sources: {
+            temporal: {
+              detail: string;
+              artifactDownload: string;
+            };
+          };
+        };
+      }
+    ).dashboardConfig.sources.temporal = {
+      ...(
+        customPayload.initialData as {
+          dashboardConfig: { sources: { temporal: Record<string, string> } };
+        }
+      ).dashboardConfig.sources.temporal,
+      detail: "/gateway/api/executions/{workflowId}?view=detail",
+      artifactDownload: "/gateway/api/artifacts/{artifactId}/raw",
+    };
+
+    renderWithClient(<TaskCreatePage payload={customPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Loaded through configured artifact route.");
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/gateway/api/executions/mm%3Acustom-endpoints?view=detail&source=temporal",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/gateway/api/artifacts/custom-input/raw",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
   });
 
   it("shows a feature-disabled error without loading execution detail", async () => {
