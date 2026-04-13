@@ -175,7 +175,13 @@ type JiraImportTarget =
   | { kind: "preset" }
   | { kind: "step"; localId: string };
 
-type JiraReplaceAppendPreference = "replace" | "append";
+type JiraImportMode =
+  | "preset-brief"
+  | "execution-brief"
+  | "description-only"
+  | "acceptance-only";
+
+type JiraWriteMode = "replace" | "append";
 
 interface ProviderProfile {
   profile_id: string;
@@ -463,6 +469,70 @@ function jiraTargetLabel(
   }
   const index = steps.findIndex((step) => step.localId === target.localId);
   return index >= 0 ? `Step ${index + 1} Instructions` : "Step Instructions";
+}
+
+function defaultJiraImportMode(target: JiraImportTarget): JiraImportMode {
+  return target.kind === "preset" ? "preset-brief" : "execution-brief";
+}
+
+function joinJiraText(parts: Array<string | null | undefined>): string {
+  return parts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function jiraImportTextForMode(
+  issue: JiraIssueDetail,
+  mode: JiraImportMode,
+): string {
+  const issueKey = String(issue.issueKey || "").trim();
+  const summary = String(issue.summary || "").trim();
+  const description = String(issue.descriptionText || "").trim();
+  const acceptanceCriteria = String(issue.acceptanceCriteriaText || "").trim();
+
+  if (mode === "description-only") {
+    return description;
+  }
+  if (mode === "acceptance-only") {
+    return acceptanceCriteria;
+  }
+  if (mode === "preset-brief") {
+    const recommended = String(
+      issue.recommendedImports?.presetInstructions || "",
+    ).trim();
+    if (recommended) {
+      return recommended;
+    }
+    return joinJiraText([
+      [issueKey, summary].filter(Boolean).join(": "),
+      description,
+    ]);
+  }
+
+  const recommended = String(
+    issue.recommendedImports?.stepInstructions || "",
+  ).trim();
+  if (recommended) {
+    return recommended;
+  }
+  return joinJiraText([
+    `Complete Jira story ${[issueKey, summary].filter(Boolean).join(": ")}`,
+    description ? `Description\n${description}` : "",
+    acceptanceCriteria ? `Acceptance criteria\n${acceptanceCriteria}` : "",
+  ]);
+}
+
+function writeJiraImportedText(
+  currentText: string,
+  importedText: string,
+  writeMode: JiraWriteMode,
+): string {
+  const normalizedImport = importedText.trim();
+  if (writeMode === "replace" || !currentText.trim()) {
+    return normalizedImport;
+  }
+  return `${currentText.trimEnd()}\n\n---\n\n${normalizedImport}`;
 }
 
 function createStepStateEntry(
@@ -1315,8 +1385,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedJiraBoardId, setSelectedJiraBoardId] = useState("");
   const [activeJiraColumnId, setActiveJiraColumnId] = useState("");
   const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
-  const [jiraReplaceAppendPreference, setJiraReplaceAppendPreference] =
-    useState<JiraReplaceAppendPreference>("replace");
+  const [jiraImportMode, setJiraImportMode] =
+    useState<JiraImportMode>("preset-brief");
   const [selectedAttachmentFiles, setSelectedAttachmentFiles] = useState<
     File[]
   >([]);
@@ -1918,6 +1988,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     jiraProjectSelectionInitializedRef.current = Boolean(selectedJiraProjectKey);
     jiraBoardSelectionInitializedRef.current = Boolean(selectedJiraBoardId);
     setJiraImportTarget(target);
+    setJiraImportMode(defaultJiraImportMode(target));
     setJiraBrowserOpen(true);
     setSelectedJiraIssueKey("");
   }
@@ -1945,6 +2016,38 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function selectJiraColumn(columnId: string) {
     setActiveJiraColumnId(columnId);
     setSelectedJiraIssueKey("");
+  }
+
+  function importSelectedJiraIssue(writeMode: JiraWriteMode) {
+    if (!selectedJiraIssue || !jiraImportTarget) {
+      return;
+    }
+    const importedText = jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
+    if (!importedText.trim()) {
+      return;
+    }
+    if (jiraImportTarget.kind === "preset") {
+      setTemplateFeatureRequest((current) =>
+        writeJiraImportedText(current, importedText, writeMode),
+      );
+      if (appliedTemplates.length > 0) {
+        setTemplateMessage(
+          "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+        );
+      }
+      return;
+    }
+
+    const targetStep = steps.find(
+      (step) => step.localId === jiraImportTarget.localId,
+    );
+    updateStep(jiraImportTarget.localId, {
+      instructions: writeJiraImportedText(
+        targetStep?.instructions || "",
+        importedText,
+        writeMode,
+      ),
+    });
   }
 
   function addDependency(workflowId: string) {
@@ -3163,22 +3266,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       </section>
                     ) : null}
                     <label>
-                      Import behavior
+                      Import mode
                       <select
-                        value={jiraReplaceAppendPreference}
+                        value={jiraImportMode}
                         onChange={(event) =>
-                          setJiraReplaceAppendPreference(
-                            event.target.value as JiraReplaceAppendPreference,
-                          )
+                          setJiraImportMode(event.target.value as JiraImportMode)
                         }
                       >
-                        <option value="replace">Replace target text</option>
-                        <option value="append">Append to target text</option>
+                        <option value="preset-brief">Preset brief</option>
+                        <option value="execution-brief">Execution brief</option>
+                        <option value="description-only">Description only</option>
+                        <option value="acceptance-only">
+                          Acceptance criteria only
+                        </option>
                       </select>
                     </label>
-                    <p className="small">
-                      Import actions are added in the next phase.
-                    </p>
+                    <section>
+                      <strong>Import preview</strong>
+                      <p style={{ whiteSpace: "pre-wrap" }}>
+                        {jiraImportTextForMode(selectedJiraIssue, jiraImportMode)}
+                      </p>
+                    </section>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        onClick={() => importSelectedJiraIssue("replace")}
+                      >
+                        Replace target text
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => importSelectedJiraIssue("append")}
+                      >
+                        Append to target text
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <p className="small">Choose a Jira story to preview.</p>
