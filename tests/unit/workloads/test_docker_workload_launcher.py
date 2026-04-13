@@ -94,6 +94,7 @@ def _validated_request(
     tmp_path: Path,
     *,
     workspace_root: Path = WORKSPACE_ROOT,
+    profiles: list[dict[str, object]] | None = None,
     **overrides: object,
 ):
     payload: dict[str, object] = {
@@ -110,8 +111,76 @@ def _validated_request(
         "resources": {"cpu": "3", "memory": "3g", "shmSize": "768m"},
     }
     payload.update(overrides)
-    return _registry(tmp_path, workspace_root=workspace_root).validate_request(
-        WorkloadRequest.model_validate(payload)
+    if profiles is None:
+        registry = _registry(tmp_path, workspace_root=workspace_root)
+    else:
+        registry_path = tmp_path / "profiles.json"
+        registry_path.write_text(
+            json.dumps({"profiles": profiles}),
+            encoding="utf-8",
+        )
+        registry = RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=workspace_root,
+        )
+    return registry.validate_request(WorkloadRequest.model_validate(payload))
+
+
+def _helper_profile_payload(
+    *,
+    workspace_root: Path = WORKSPACE_ROOT,
+    **overrides: object,
+) -> dict[str, object]:
+    payload = _profile_payload(
+        workspace_root=workspace_root,
+        id="redis-helper",
+        kind="bounded_service",
+        image="redis:7.2-alpine",
+        entrypoint=["redis-server"],
+        command_wrapper=[],
+        env_allowlist=[],
+        timeout_seconds=60,
+        max_timeout_seconds=60,
+        helper_ttl_seconds=300,
+        max_helper_ttl_seconds=900,
+        readiness_probe={
+            "type": "exec",
+            "command": ["redis-cli", "ping"],
+            "interval_seconds": 1,
+            "timeout_seconds": 2,
+            "retries": 3,
+        },
+    )
+    payload.update(overrides)
+    return payload
+
+
+def _validated_helper_request(
+    tmp_path: Path,
+    *,
+    workspace_root: Path = WORKSPACE_ROOT,
+    **overrides: object,
+):
+    payload: dict[str, object] = {
+        "profileId": "redis-helper",
+        "taskRunId": "task-helper",
+        "stepId": "step-service",
+        "attempt": 1,
+        "toolName": "container.run_workload",
+        "repoDir": f"{workspace_root}/task-helper/repo",
+        "artifactsDir": f"{workspace_root}/task-helper/artifacts/step-service",
+        "command": ["--appendonly", "no"],
+        "envOverrides": {},
+        "timeoutSeconds": 60,
+        "resources": {"cpu": "2", "memory": "2g"},
+        "ttlSeconds": 300,
+    }
+    payload.update(overrides)
+    return _validated_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        profiles=[_helper_profile_payload(workspace_root=workspace_root)],
+        **payload,
     )
 
 
@@ -879,3 +948,362 @@ async def test_container_janitor_sweeps_expired_workload_orphans(
     assert ["docker", "rm", "-f", "expired123"] in created
     assert ["docker", "rm", "-f", "fresh456"] not in created
     assert ["docker", "rm", "-f", "missing789"] not in created
+
+
+@pytest.mark.asyncio
+async def test_launcher_starts_bounded_helper_detached_and_waits_for_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().start_helper(
+        _validated_helper_request(tmp_path)
+    )
+
+    run_args = created[0]
+    assert run_args[:4] == [
+        "docker",
+        "run",
+        "--detach",
+        "--name",
+    ]
+    assert run_args[4] == "mm-helper-task-helper-step-service-1"
+    assert "moonmind.kind=bounded_service" in run_args
+    assert "moonmind.helper_ttl_seconds=300" in run_args
+    assert any(label.startswith("moonmind.expires_at=") for label in run_args)
+    assert run_args[-3:] == ["redis:7.2-alpine", "--appendonly", "no"]
+    assert created[1] == [
+        "docker",
+        "exec",
+        "mm-helper-task-helper-step-service-1",
+        "redis-cli",
+        "ping",
+    ]
+    assert result.status == "ready"
+    assert result.exit_code is None
+    assert result.metadata["helper"]["containerName"] == (
+        "mm-helper-task-helper-step-service-1"
+    )
+    assert result.metadata["helper"]["readiness"]["status"] == "ready"
+    assert result.metadata["helper"]["ttlSeconds"] == 300
+    assert result.metadata["helper"]["sessionContext"] is None
+
+
+@pytest.mark.asyncio
+async def test_launcher_holds_helper_concurrency_lease_until_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        if args[1] == "logs":
+            return _Process(returncode=0, stdout=b"service log\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=4)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    first = _validated_helper_request(tmp_path)
+    second = _validated_helper_request(
+        tmp_path,
+        taskRunId="task-helper-b",
+        repoDir="/work/agent_jobs/task-helper-b/repo",
+        artifactsDir="/work/agent_jobs/task-helper-b/artifacts/step-service",
+    )
+
+    await launcher.start_helper(first)
+    with pytest.raises(DockerWorkloadLauncherError, match="concurrency limit"):
+        await launcher.start_helper(second)
+
+    stop_result = await launcher.stop_helper(first)
+    assert stop_result.metadata["stdout"] == "service log\n"
+
+    second_result = await launcher.start_helper(second)
+    assert second_result.status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_launcher_reports_unhealthy_helper_after_bounded_readiness_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=1, stderr=b"not ready\n")
+        return _Process(returncode=0)
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr("moonmind.workloads.docker_launcher.asyncio.sleep", _no_sleep)
+
+    result = await DockerWorkloadLauncher().start_helper(
+        _validated_helper_request(tmp_path)
+    )
+
+    exec_calls = [args for args in created if args[1] == "exec"]
+    assert len(exec_calls) == 3
+    assert result.status == "unhealthy"
+    assert result.metadata["helper"]["readiness"]["status"] == "unhealthy"
+    assert result.metadata["helper"]["readiness"]["attempts"] == 3
+
+
+@pytest.mark.asyncio
+async def test_launcher_kills_timed_out_readiness_probe_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timed_out_processes: list[_Process] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            process = _Process(never_complete=True)
+            timed_out_processes.append(process)
+            return process
+        return _Process(returncode=0)
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr("moonmind.workloads.docker_launcher.asyncio.sleep", _no_sleep)
+
+    request = _validated_request(
+        tmp_path,
+        profiles=[
+            _helper_profile_payload(
+                readiness_probe={
+                    "type": "exec",
+                    "command": ["redis-cli", "ping"],
+                    "interval_seconds": 0,
+                    "timeout_seconds": 1,
+                    "retries": 1,
+                },
+            )
+        ],
+        profileId="redis-helper",
+        taskRunId="task-helper",
+        stepId="step-service",
+        attempt=1,
+        toolName="container.run_workload",
+        repoDir="/work/agent_jobs/task-helper/repo",
+        artifactsDir="/work/agent_jobs/task-helper/artifacts/step-service",
+        command=["--appendonly", "no"],
+        envOverrides={},
+        timeoutSeconds=60,
+        resources={"cpu": "2", "memory": "2g"},
+        ttlSeconds=300,
+    )
+
+    result = await DockerWorkloadLauncher().start_helper(request)
+
+    assert result.status == "unhealthy"
+    assert len(timed_out_processes) == 1
+    assert all(process.killed for process in timed_out_processes)
+
+
+@pytest.mark.asyncio
+async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_value = "inline_secret_value_for_redaction_test"
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(
+                returncode=1,
+                stdout=secret_value.encode("utf-8"),
+                stderr=b"not ready\n",
+            )
+        return _Process(returncode=0)
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr("moonmind.workloads.docker_launcher.asyncio.sleep", _no_sleep)
+
+    result = await DockerWorkloadLauncher().start_helper(
+        _validated_helper_request(tmp_path)
+    )
+
+    readiness = result.metadata["helper"]["readiness"]
+    serialized = json.dumps(result.metadata, sort_keys=True)
+    assert "stdout" not in readiness
+    assert "stderr" not in readiness
+    assert readiness["stdoutBytes"] == len(secret_value)
+    assert secret_value not in serialized
+
+
+@pytest.mark.asyncio
+async def test_launcher_publishes_helper_declared_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifacts_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    declared_output = artifacts_dir / "ready.json"
+    declared_output.parent.mkdir(parents=True, exist_ok=True)
+    declared_output.write_text('{"ready":true}', encoding="utf-8")
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().start_helper(
+        _validated_helper_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            repoDir=str(workspace_root / "task-helper" / "repo"),
+            artifactsDir=str(artifacts_dir),
+            declaredOutputs={"ready": "ready.json"},
+        )
+    )
+
+    assert result.output_refs["ready"].endswith("/ready.json")
+    assert result.metadata["helper"]["artifactPublication"]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        if args[1] == "logs":
+            return _Process(returncode=0, stdout=b"helper stdout\n", stderr=b"warn\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    launcher = DockerWorkloadLauncher()
+    validated = _validated_helper_request(tmp_path)
+
+    start_result = await launcher.start_helper(validated)
+    sub_step_observations = [
+        start_result.metadata["helper"]["containerName"],
+        start_result.metadata["helper"]["containerName"],
+    ]
+    stop_result = await launcher.stop_helper(validated, reason="bounded_window_complete")
+
+    assert sub_step_observations == [
+        "mm-helper-task-helper-step-service-1",
+        "mm-helper-task-helper-step-service-1",
+    ]
+    assert [
+        "docker",
+        "stop",
+        "-t",
+        "3",
+        "mm-helper-task-helper-step-service-1",
+    ] in created
+    assert ["docker", "kill", "mm-helper-task-helper-step-service-1"] in created
+    assert ["docker", "rm", "-f", "mm-helper-task-helper-step-service-1"] in created
+    assert stop_result.status == "stopped"
+    assert stop_result.metadata["stdout"] == "helper stdout\n"
+    assert stop_result.metadata["stderr"] == "warn\n"
+    assert stop_result.metadata["helper"]["teardown"]["reason"] == (
+        "bounded_window_complete"
+    )
+
+
+@pytest.mark.asyncio
+async def test_container_janitor_sweeps_expired_bounded_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1:3] == ("ps", "-a"):
+            return _Process(
+                returncode=0,
+                stdout=(
+                    b"helper-expired\tmm-helper-expired\t2026-04-12T00:00:00Z\n"
+                    b"helper-fresh\tmm-helper-fresh\t2026-04-13T00:00:00Z\n"
+                ),
+            )
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    janitor = DockerContainerJanitor()
+    swept = await janitor.sweep_expired_helpers(
+        now_iso="2026-04-12T12:00:00Z",
+    )
+
+    assert swept == ("helper-expired",)
+    assert ["docker", "rm", "-f", "helper-expired"] in created
+    assert ["docker", "rm", "-f", "helper-fresh"] not in created
+    assert created[0] == [
+        "docker",
+        "ps",
+        "-a",
+        "--filter",
+        "label=moonmind.kind=bounded_service",
+        "--format",
+        '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
+    ]

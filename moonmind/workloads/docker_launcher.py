@@ -127,6 +127,12 @@ async def _wait_with_limited_output(
     return await process.wait()
 
 
+async def _kill_and_reap_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is None:
+        process.kill()
+    await process.wait()
+
+
 def _docker_env(*, docker_host: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
     if docker_host:
@@ -218,6 +224,18 @@ def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | N
 
 
 def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
+    if request.profile.kind == "bounded_service":
+        ttl_seconds = (
+            request.request.ttl_seconds
+            or request.profile.helper_ttl_seconds
+            or request.profile.timeout_seconds
+        )
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        return {
+            **request.ownership.labels,
+            "moonmind.expires_at": _isoformat(expires_at) or "",
+            "moonmind.helper_ttl_seconds": str(ttl_seconds),
+        }
     timeout_seconds = request.request.timeout_seconds or request.profile.timeout_seconds
     expires_at = datetime.now(UTC) + timedelta(
         seconds=timeout_seconds + request.profile.cleanup.kill_grace_seconds
@@ -255,6 +273,38 @@ def _workload_metadata(
         "labels": dict(request.ownership.labels),
         "artifactsDir": request.request.artifacts_dir,
         "sessionContext": _session_context(request),
+    }
+
+
+def _helper_metadata(
+    request: ValidatedWorkloadRequest,
+    *,
+    status: str,
+    started_at: datetime,
+    completed_at: datetime,
+    duration_seconds: float,
+    readiness: Mapping[str, object] | None = None,
+    teardown: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    ttl_seconds = request.request.ttl_seconds or request.profile.helper_ttl_seconds
+    return {
+        "taskRunId": request.request.task_run_id,
+        "stepId": request.request.step_id,
+        "attempt": request.request.attempt,
+        "toolName": request.request.tool_name,
+        "profileId": request.profile.id,
+        "imageRef": request.profile.image,
+        "containerName": request.container_name,
+        "status": status,
+        "startedAt": _isoformat(started_at),
+        "completedAt": _isoformat(completed_at),
+        "durationSeconds": duration_seconds,
+        "ttlSeconds": ttl_seconds,
+        "labels": dict(request.ownership.labels),
+        "artifactsDir": request.request.artifacts_dir,
+        "sessionContext": _session_context(request),
+        "readiness": dict(readiness or {}),
+        "teardown": dict(teardown or {}),
     }
 
 
@@ -397,6 +447,29 @@ class DockerContainerJanitor:
     ) -> tuple[str, ...]:
         """Remove orphaned workload containers whose TTL label has expired."""
 
+        return await self._sweep_expired_kind(
+            kind="workload",
+            now_iso=now_iso,
+        )
+
+    async def sweep_expired_helpers(
+        self,
+        *,
+        now_iso: str | None = None,
+    ) -> tuple[str, ...]:
+        """Remove orphaned bounded helper containers whose TTL label has expired."""
+
+        return await self._sweep_expired_kind(
+            kind="bounded_service",
+            now_iso=now_iso,
+        )
+
+    async def _sweep_expired_kind(
+        self,
+        *,
+        kind: str,
+        now_iso: str | None = None,
+    ) -> tuple[str, ...]:
         now = _parse_iso_datetime(now_iso or _isoformat(datetime.now(UTC)) or "")
         if now is None:
             now = datetime.now(UTC)
@@ -405,7 +478,7 @@ class DockerContainerJanitor:
                 "ps",
                 "-a",
                 "--filter",
-                "label=moonmind.kind=workload",
+                f"label=moonmind.kind={kind}",
                 "--format",
                 '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
             ]
@@ -454,6 +527,7 @@ class DockerWorkloadLauncher:
         self._concurrency_limiter = (
             concurrency_limiter or DockerWorkloadConcurrencyLimiter()
         )
+        self._helper_leases: dict[str, _ConcurrencyLease] = {}
 
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
         _ensure_paths_are_mounted(request)
@@ -489,6 +563,55 @@ class DockerWorkloadLauncher:
         if profile.entrypoint:
             args.extend(["--entrypoint", profile.entrypoint[0]])
 
+        args.append(profile.image)
+        if len(profile.entrypoint) > 1:
+            args.extend(profile.entrypoint[1:])
+        args.extend(profile.command_wrapper)
+        args.extend(
+            _workload_command_args(
+                command_wrapper=profile.command_wrapper,
+                workload_command=workload.command,
+            )
+        )
+        return args
+
+    def build_helper_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
+        if request.profile.kind != "bounded_service":
+            raise DockerWorkloadLauncherError(
+                "start_helper requires a bounded_service runner profile"
+            )
+        _ensure_paths_are_mounted(request)
+        profile = request.profile
+        workload = request.request
+        args = [
+            self._docker_binary,
+            "run",
+            "--detach",
+            "--name",
+            request.container_name,
+            "--workdir",
+            workload.repo_dir,
+            "--network",
+            profile.network_policy,
+            "--privileged=false",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+        ]
+        for key, value in _operational_labels(request).items():
+            args.extend(["--label", f"{key}={value}"])
+        for mount in (*profile.required_mounts, *profile.optional_mounts):
+            args.extend(["--mount", _mount_arg(mount)])
+        for key, value in workload.env_overrides.items():
+            args.extend(["--env", f"{key}={value}"])
+        for flag, value in _effective_resources(
+            profile=profile,
+            overrides=workload.resources,
+        ).items():
+            args.extend([flag, value])
+        if profile.entrypoint:
+            args.extend(["--entrypoint", profile.entrypoint[0]])
         args.append(profile.image)
         if len(profile.entrypoint) > 1:
             args.extend(profile.entrypoint[1:])
@@ -652,6 +775,242 @@ class DockerWorkloadLauncher:
             outputRefs=output_refs,
             metadata=metadata,
         )
+
+    async def start_helper(
+        self,
+        request: ValidatedWorkloadRequest,
+    ) -> WorkloadResult:
+        started_at = datetime.now(UTC)
+        lease = await self._concurrency_limiter.acquire(request)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self.build_helper_run_args(request),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_docker_env(docker_host=self._docker_host),
+            )
+            stdout, stderr = await process.communicate()
+            if int(process.returncode or 0) != 0:
+                completed_at = datetime.now(UTC)
+                return self._helper_result(
+                    request,
+                    status="failed",
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    stdout=_decode_stream(stdout),
+                    stderr=_decode_stream(stderr),
+                    readiness={
+                        "status": "not_started",
+                        "reason": "docker run failed",
+                    },
+                )
+            self._helper_leases[request.container_name] = lease
+            lease = None
+            readiness = await self._wait_for_helper_readiness(request)
+        finally:
+            if lease is not None:
+                await lease.release()
+
+        completed_at = datetime.now(UTC)
+        status = "ready" if readiness.get("status") == "ready" else "unhealthy"
+        return self._helper_result(
+            request,
+            status=status,
+            started_at=started_at,
+            completed_at=completed_at,
+            stdout=_decode_stream(stdout),
+            stderr=_decode_stream(stderr),
+            readiness=readiness,
+        )
+
+    async def stop_helper(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        reason: str = "bounded_window_complete",
+    ) -> WorkloadResult:
+        if request.profile.kind != "bounded_service":
+            raise DockerWorkloadLauncherError(
+                "stop_helper requires a bounded_service runner profile"
+            )
+        started_at = datetime.now(UTC)
+        stdout, stderr = await self._collect_container_logs(request.container_name)
+        try:
+            await self._terminate_container(request)
+            if request.profile.cleanup.remove_container_on_exit:
+                await self._janitor.remove(request.container_name)
+        finally:
+            lease = self._helper_leases.pop(request.container_name, None)
+            if lease is not None:
+                await lease.release()
+        completed_at = datetime.now(UTC)
+        return self._helper_result(
+            request,
+            status="stopped",
+            started_at=started_at,
+            completed_at=completed_at,
+            stdout=stdout,
+            stderr=stderr,
+            readiness={},
+            teardown={
+                "status": "complete",
+                "reason": reason,
+                "removeContainerOnExit": request.profile.cleanup.remove_container_on_exit,
+            },
+        )
+
+    async def _wait_for_helper_readiness(
+        self,
+        request: ValidatedWorkloadRequest,
+    ) -> dict[str, object]:
+        probe = request.profile.readiness_probe
+        if probe is None:
+            raise DockerWorkloadLauncherError(
+                "bounded_service profiles must define a readinessProbe"
+            )
+        last_stdout = ""
+        last_stderr = ""
+        for attempt in range(1, probe.retries + 1):
+            process = await asyncio.create_subprocess_exec(
+                self._docker_binary,
+                "exec",
+                request.container_name,
+                *probe.command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_docker_env(docker_host=self._docker_host),
+            )
+            try:
+                stdout_buffer = bytearray()
+                stderr_buffer = bytearray()
+                await asyncio.wait_for(
+                    _wait_with_limited_output(
+                        process,
+                        stdout_buffer=stdout_buffer,
+                        stderr_buffer=stderr_buffer,
+                    ),
+                    timeout=probe.timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                await _kill_and_reap_process(process)
+                last_stdout = ""
+                last_stderr = "readiness probe timed out"
+                if attempt < probe.retries and probe.interval_seconds:
+                    await asyncio.sleep(probe.interval_seconds)
+                continue
+            last_stdout = _decode_stream(bytes(stdout_buffer))
+            last_stderr = _decode_stream(bytes(stderr_buffer))
+            if int(process.returncode or 0) == 0:
+                return {
+                    "status": "ready",
+                    "attempts": attempt,
+                    "command": list(probe.command),
+                    "stdoutBytes": len(last_stdout.encode("utf-8")),
+                    "stderrBytes": len(last_stderr.encode("utf-8")),
+                }
+            if attempt < probe.retries and probe.interval_seconds:
+                await asyncio.sleep(probe.interval_seconds)
+        return {
+            "status": "unhealthy",
+            "attempts": probe.retries,
+            "command": list(probe.command),
+            "stdoutBytes": len(last_stdout.encode("utf-8")),
+            "stderrBytes": len(last_stderr.encode("utf-8")),
+        }
+
+    def _helper_result(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        status: str,
+        started_at: datetime,
+        completed_at: datetime,
+        stdout: str,
+        stderr: str,
+        readiness: Mapping[str, object],
+        teardown: Mapping[str, object] | None = None,
+    ) -> WorkloadResult:
+        duration_seconds = (completed_at - started_at).total_seconds()
+        helper_metadata = _helper_metadata(
+            request,
+            status=status,
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_seconds=duration_seconds,
+            readiness=readiness,
+            teardown=teardown,
+        )
+        diagnostics = {
+            **helper_metadata,
+            "command": list(request.request.command),
+            "envOverrideKeys": sorted(request.request.env_overrides),
+            "resourceOverrides": request.request.resources.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            ),
+            "cleanup": request.profile.cleanup.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+        }
+        declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        diagnostics["declaredOutputRefs"] = dict(declared_refs)
+        diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
+        stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
+            _publish_workload_artifacts(
+                request,
+                stdout=stdout,
+                stderr=stderr,
+                diagnostics=diagnostics,
+                declared_output_refs=declared_refs,
+            )
+        )
+        helper_metadata["artifactPublication"] = artifact_publication
+        metadata = {
+            "containerName": request.container_name,
+            "image": request.profile.image,
+            "imageRef": request.profile.image,
+            "dockerHost": self._docker_host or os.environ.get("DOCKER_HOST", ""),
+            "artifactsDir": request.request.artifacts_dir,
+            "stdout": stdout,
+            "stderr": stderr,
+            "helper": helper_metadata,
+            "artifactPublication": artifact_publication,
+        }
+        return WorkloadResult(
+            requestId=request.container_name,
+            profileId=request.profile.id,
+            status=status,
+            labels=request.ownership.labels,
+            exitCode=None,
+            startedAt=started_at,
+            completedAt=completed_at,
+            durationSeconds=duration_seconds,
+            stdoutRef=stdout_ref,
+            stderrRef=stderr_ref,
+            diagnosticsRef=diagnostics_ref,
+            outputRefs=output_refs,
+            metadata=metadata,
+        )
+
+    async def _collect_container_logs(self, container_name: str) -> tuple[str, str]:
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        process = await asyncio.create_subprocess_exec(
+            self._docker_binary,
+            "logs",
+            container_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_docker_env(docker_host=self._docker_host),
+        )
+        await _wait_with_limited_output(
+            process,
+            stdout_buffer=stdout_buffer,
+            stderr_buffer=stderr_buffer,
+        )
+        return _decode_stream(bytes(stdout_buffer)), _decode_stream(bytes(stderr_buffer))
 
     async def _terminate_container(self, request: ValidatedWorkloadRequest) -> None:
         await self._janitor.stop(

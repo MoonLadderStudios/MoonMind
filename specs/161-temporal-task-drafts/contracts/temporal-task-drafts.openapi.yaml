@@ -1,0 +1,225 @@
+openapi: 3.1.0
+info:
+  title: Temporal Task Draft Reconstruction Contract
+  version: 0.1.0
+  description: >
+    Read surfaces consumed by the Phase 2 shared task submit page when loading
+    edit or rerun draft state for supported Temporal executions.
+paths:
+  /api/executions/{workflowId}:
+    get:
+      summary: Read Temporal execution detail for draft reconstruction
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [temporal]
+      responses:
+        "200":
+          description: Execution detail containing draft reconstruction fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalExecutionDetail"
+        "404":
+          description: Execution was not found or is not visible to the operator.
+        "503":
+          description: Temporal read path is unavailable.
+  /api/artifacts/{artifactId}/download:
+    get:
+      summary: Read immutable input artifact content for draft reconstruction
+      parameters:
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Artifact content.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Artifact is not readable by the operator.
+        "404":
+          description: Artifact was not found.
+components:
+  schemas:
+    TaskSubmitPageMode:
+      type: string
+      enum:
+        - create
+        - edit
+        - rerun
+    TaskSubmitPageModeResolution:
+      type: object
+      required:
+        - mode
+      properties:
+        mode:
+          $ref: "#/components/schemas/TaskSubmitPageMode"
+        executionId:
+          type:
+            - string
+            - "null"
+    TemporalTaskEditingActions:
+      type: object
+      properties:
+        canUpdateInputs:
+          type: boolean
+        canRerun:
+          type: boolean
+        disabledReasons:
+          type: object
+          additionalProperties:
+            type: string
+    TemporalExecutionDetail:
+      type: object
+      required:
+        - workflowId
+        - workflowType
+        - actions
+      properties:
+        workflowId:
+          type: string
+        workflowType:
+          type: string
+          enum:
+            - MoonMind.Run
+        state:
+          type:
+            - string
+            - "null"
+        rawState:
+          type:
+            - string
+            - "null"
+        temporalStatus:
+          type:
+            - string
+            - "null"
+        inputParameters:
+          type: object
+          additionalProperties: true
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        targetRuntime:
+          type:
+            - string
+            - "null"
+        profileId:
+          type:
+            - string
+            - "null"
+        model:
+          type:
+            - string
+            - "null"
+        requestedModel:
+          type:
+            - string
+            - "null"
+        resolvedModel:
+          type:
+            - string
+            - "null"
+        effort:
+          type:
+            - string
+            - "null"
+        repository:
+          type:
+            - string
+            - "null"
+        startingBranch:
+          type:
+            - string
+            - "null"
+        targetBranch:
+          type:
+            - string
+            - "null"
+        publishMode:
+          type:
+            - string
+            - "null"
+        targetSkill:
+          type:
+            - string
+            - "null"
+        taskSkills:
+          type:
+            - array
+            - "null"
+          items:
+            type: string
+        actions:
+          $ref: "#/components/schemas/TemporalTaskEditingActions"
+    TemporalSubmissionDraft:
+      type: object
+      required:
+        - taskInstructions
+      properties:
+        runtime:
+          type: string
+        providerProfile:
+          type: string
+        model:
+          type: string
+        effort:
+          type: string
+        repository:
+          type: string
+        startingBranch:
+          type: string
+        targetBranch:
+          type: string
+        publishMode:
+          type: string
+        taskInstructions:
+          type: string
+          minLength: 1
+        primarySkill:
+          type: string
+        appliedTemplates:
+          type: array
+          items:
+            $ref: "#/components/schemas/AppliedTemplateState"
+    AppliedTemplateState:
+      type: object
+      properties:
+        slug:
+          type: string
+        version:
+          type: string
+        inputs:
+          type: object
+          additionalProperties: true
+        stepIds:
+          type: array
+          items:
+            type: string
+        appliedAt:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string

@@ -13,6 +13,8 @@ from moonmind.schemas.workload_models import (
     RunnerProfile,
     ValidatedWorkloadRequest,
     WorkloadRequest,
+    WorkloadOwnershipMetadata,
+    helper_container_name,
     parse_cpu_units,
     parse_size_bytes,
 )
@@ -144,13 +146,32 @@ class RunnerProfileRegistry:
         )
         self._validate_env_overrides(parsed_request, profile)
         self._validate_timeout(parsed_request, profile)
+        self._validate_helper_ttl(parsed_request, profile)
         self._validate_resources(parsed_request, profile)
+        container_name = parsed_request.container_name
+        ownership = parsed_request.ownership_metadata()
+        if profile.kind == "bounded_service":
+            container_name = helper_container_name(
+                task_run_id=parsed_request.task_run_id,
+                step_id=parsed_request.step_id,
+                attempt=parsed_request.attempt,
+            )
+            ownership = WorkloadOwnershipMetadata(
+                kind="bounded_service",
+                taskRunId=parsed_request.task_run_id,
+                stepId=parsed_request.step_id,
+                attempt=parsed_request.attempt,
+                toolName=parsed_request.tool_name,
+                workloadProfile=parsed_request.profile_id,
+                sessionId=parsed_request.session_id,
+                sessionEpoch=parsed_request.session_epoch,
+            )
 
         return ValidatedWorkloadRequest(
             request=parsed_request,
             profile=profile,
-            ownership=parsed_request.ownership_metadata(),
-            containerName=parsed_request.container_name,
+            ownership=ownership,
+            containerName=container_name,
         )
 
     def _validate_workspace_path(self, value: str, *, field_name: str) -> None:
@@ -200,6 +221,35 @@ class RunnerProfileRegistry:
                 "timeoutSeconds exceeds profile maxTimeoutSeconds",
                 reason="resource_request_too_large",
                 details={"resource": "timeoutSeconds", "profileId": profile.id},
+            )
+
+    @staticmethod
+    def _validate_helper_ttl(
+        request: WorkloadRequest,
+        profile: RunnerProfile,
+    ) -> None:
+        if profile.kind != "bounded_service":
+            if request.ttl_seconds is not None:
+                raise WorkloadPolicyError(
+                    "ttlSeconds is only valid for bounded_service profiles",
+                    reason="unsupported_helper_ttl",
+                    details={"profileId": profile.id},
+                )
+            return
+        if request.ttl_seconds is None:
+            raise WorkloadPolicyError(
+                "ttlSeconds is required for bounded_service profiles",
+                reason="missing_helper_ttl",
+                details={"profileId": profile.id},
+            )
+        if (
+            profile.max_helper_ttl_seconds is not None
+            and request.ttl_seconds > profile.max_helper_ttl_seconds
+        ):
+            raise WorkloadPolicyError(
+                "ttlSeconds exceeds profile maxHelperTtlSeconds",
+                reason="resource_request_too_large",
+                details={"resource": "ttlSeconds", "profileId": profile.id},
             )
 
     @staticmethod

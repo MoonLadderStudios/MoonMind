@@ -20,6 +20,7 @@ def _build_proposal_service_factory():
 import asyncio
 import json
 import logging
+import os
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Any, Mapping
@@ -29,9 +30,10 @@ import temporalio.activity
 import temporalio.workflow
 from opentelemetry import trace as otel_trace
 from temporalio.client import Client
+from temporalio.common import VersioningBehavior, WorkerDeploymentVersion
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker, WorkerDeploymentConfig
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
@@ -858,6 +860,66 @@ def _worker_concurrency_kwargs(topology) -> dict[str, int]:
     return {"max_concurrent_activities": topology.concurrency_limit}
 
 
+def _worker_versioning_behavior() -> VersioningBehavior | None:
+    behavior = settings.temporal.worker_versioning_default_behavior
+    return {
+        "Auto-Upgrade": VersioningBehavior.AUTO_UPGRADE,
+        "Pinned": VersioningBehavior.PINNED,
+        "Disabled": None,
+    }[behavior]
+
+
+def _resolve_worker_build_id(*, versioning_enabled: bool) -> str:
+    build_id = resolve_moonmind_build_id()
+    if build_id:
+        return build_id
+    import subprocess
+
+    try:
+        git_build_id = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if git_build_id:
+            return git_build_id
+        raise RuntimeError("git returned an empty build ID")
+    except Exception as exc:
+        if not versioning_enabled:
+            logger.warning(
+                "Failed to determine Temporal worker build ID from "
+                "MOONMIND_BUILD_ID, baked image metadata, or git; using "
+                "fallback build_id=unknown with worker versioning disabled."
+            )
+            return "unknown"
+        logger.error(
+            "Failed to determine Temporal worker build ID from "
+            "MOONMIND_BUILD_ID, baked image metadata, or git. Set "
+            "MOONMIND_BUILD_ID to a stable, unique identifier when worker "
+            "versioning is enabled.",
+            exc_info=exc,
+        )
+        raise RuntimeError(
+            "Unable to determine Temporal worker build ID. Set MOONMIND_BUILD_ID "
+            "to a unique identifier for this build."
+        ) from exc
+
+
+def _worker_deployment_kwargs(topology) -> dict[str, object]:
+    behavior = _worker_versioning_behavior()
+    if behavior is None:
+        return {"build_id": _resolve_worker_build_id(versioning_enabled=False)}
+    build_id = _resolve_worker_build_id(versioning_enabled=True)
+    return {
+        "deployment_config": WorkerDeploymentConfig(
+            version=WorkerDeploymentVersion(
+                deployment_name=f"moonmind-{topology.fleet}",
+                build_id=build_id,
+            ),
+            use_worker_versioning=True,
+            default_versioning_behavior=behavior,
+        )
+    }
+
+
 def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
     """Apply Codex managed-runtime defaults for fleets that launch CLI tasks."""
 
@@ -974,42 +1036,28 @@ async def main_async() -> None:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
     try:
-        use_versioning = os.environ.get("MOONMIND_ENABLE_WORKER_VERSIONING", "false").lower() in ("true", "1", "yes")
-        build_id = resolve_moonmind_build_id()
-        if not build_id:
-            import subprocess
-            try:
-                build_id = subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
-                ).strip()
-            except Exception as e:
-                if use_versioning:
-                    logger.error(
-                        "Failed to determine Temporal worker build ID from "
-                        "MOONMIND_BUILD_ID, baked image metadata, or git. "
-                        "Set the MOONMIND_BUILD_ID environment variable to a "
-                        "stable, unique identifier for this build when "
-                        "use_worker_versioning is enabled.",
-                        exc_info=e,
-                    )
-                    raise RuntimeError(
-                        "Unable to determine Temporal worker build ID. "
-                        "Set MOONMIND_BUILD_ID to a unique identifier for this build."
-                    ) from e
-                build_id = "unknown"
-
+        deployment_kwargs = _worker_deployment_kwargs(topology)
         worker = Worker(
             client,
             task_queue=topology.task_queues[0],
             workflows=workflows,
             activities=activities,
             workflow_runner=UnsandboxedWorkflowRunner(),
-            build_id=build_id,
-            use_worker_versioning=use_versioning,
             **_worker_concurrency_kwargs(topology),
+            **deployment_kwargs,
         )
 
-        logger.info(f"Worker started with build_id={build_id}, polling task queues...")
+        if deployment_kwargs:
+            deployment_config = deployment_kwargs["deployment_config"]
+            logger.info(
+                "Worker started with deployment=%s build_id=%s "
+                "versioning_behavior=%s, polling task queues...",
+                deployment_config.version.deployment_name,
+                deployment_config.version.build_id,
+                deployment_config.default_versioning_behavior.name,
+            )
+        else:
+            logger.info("Worker started without worker versioning, polling task queues...")
         await worker.run()
     finally:
         if runtime_resources is not None:

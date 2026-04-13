@@ -1474,6 +1474,104 @@ button.secondary:hover {
   gap: 0.5rem;
 }
 
+.queue-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.jira-browse-button {
+  border-radius: 8px;
+}
+
+.jira-browser-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 0.5);
+}
+
+.jira-browser-panel {
+  width: min(1040px, 100%);
+  max-height: min(760px, calc(100vh - 2rem));
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-bg));
+  box-shadow: 0 24px 70px -32px rgb(0 0 0 / 0.55);
+}
+
+.jira-browser-panel h3,
+.jira-browser-panel h4 {
+  margin: 0;
+}
+
+.jira-browser-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  gap: 1rem;
+  min-height: 360px;
+}
+
+.jira-column-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.jira-column-tab {
+  border-radius: 8px;
+}
+
+.jira-column-tab.active,
+.jira-issue-button.active {
+  border-color: rgb(var(--mm-accent));
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.28);
+}
+
+.jira-issue-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.jira-issue-button {
+  width: 100%;
+  display: grid;
+  justify-items: start;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border-color: rgb(var(--mm-border));
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  text-align: left;
+  box-shadow: none;
+}
+
+.jira-issue-preview {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel) / 0.6);
+}
+
+@media (max-width: 820px) {
+  .queue-field-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .jira-browser-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .queue-step-controls {
   display: inline-flex;
   align-items: center;

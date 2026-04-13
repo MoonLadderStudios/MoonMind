@@ -149,6 +149,14 @@ def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
     assert "jiraIntegration" not in config["system"]
 
 
+def test_jira_create_page_enabled_reads_feature_flag(monkeypatch) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
+    assert dashboard_view_model._jira_create_page_enabled() is False
+
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
+    assert dashboard_view_model._jira_create_page_enabled() is True
+
+
 def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
     monkeypatch,
 ) -> None:
@@ -206,6 +214,26 @@ def test_validate_jira_source_templates_rejects_non_moonmind_paths() -> None:
     sources = {
         **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
         "projects": "https://jira.example.test/rest/api/3/project",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
+
+
+def test_validate_jira_source_templates_rejects_blank_paths() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "issues": " ",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
+
+
+def test_validate_jira_source_templates_rejects_trailing_whitespace() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "projects": "/api/jira/projects ",
     }
 
     with pytest.raises(ValueError, match="MoonMind API path"):

@@ -3,6 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
+import {
+  buildTemporalSubmissionDraftFromExecution,
+  resolveTaskSubmitPageMode,
+  type TemporalTaskEditingExecutionContract,
+} from "../lib/temporalTaskEditing";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -15,6 +20,8 @@ const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const DEPENDENCY_LIMIT = 10;
+const PRESET_REAPPLY_REQUIRED_MESSAGE =
+  "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
   try {
@@ -53,7 +60,22 @@ interface DashboardConfig {
     temporal?: {
       create?: string;
       artifactCreate?: string;
+      artifactDownload?: string;
+      detail?: string;
       list?: string;
+    };
+    jira?: {
+      connections?: string;
+      projects?: string;
+      boards?: string;
+      columns?: string;
+      issues?: string;
+      issue?: string;
+    };
+  };
+  features?: {
+    temporalDashboard?: {
+      temporalTaskEditing?: boolean;
     };
   };
   system?: {
@@ -84,8 +106,84 @@ interface DashboardConfig {
       totalBytes?: number;
       allowedContentTypes?: string[];
     };
+    jiraIntegration?: {
+      enabled?: boolean;
+      defaultProjectKey?: string;
+      defaultBoardId?: string;
+      rememberLastBoardInSession?: boolean;
+    };
   };
 }
+
+interface JiraIntegrationConfig {
+  enabled: boolean;
+  defaultProjectKey: string;
+  defaultBoardId: string;
+  rememberLastBoardInSession: boolean;
+  endpoints: {
+    connections: string;
+    projects: string;
+    boards: string;
+    columns: string;
+    issues: string;
+    issue: string;
+  };
+}
+
+type JiraEndpointTemplates = JiraIntegrationConfig["endpoints"];
+
+interface JiraProject {
+  key: string;
+  name: string;
+}
+
+interface JiraBoard {
+  id: string;
+  name: string;
+  projectKey?: string | null;
+}
+
+interface JiraColumn {
+  id: string;
+  name: string;
+  count?: number | null;
+}
+
+interface JiraIssueSummary {
+  issueKey: string;
+  summary: string;
+  issueType?: string | null;
+  statusName?: string | null;
+  assignee?: string | null;
+  updatedAt?: string | null;
+}
+
+interface JiraIssueDetail extends JiraIssueSummary {
+  url?: string | null;
+  column?: JiraColumn | null;
+  status?: {
+    id?: string | null;
+    name?: string | null;
+  } | null;
+  descriptionText?: string | null;
+  acceptanceCriteriaText?: string | null;
+  recommendedImports?: {
+    presetInstructions?: string | null;
+    stepInstructions?: string | null;
+  } | null;
+}
+
+type JiraImportTarget =
+  | { kind: "preset" }
+  | { kind: "step"; localId: string };
+
+type JiraImportMode =
+  | "preset-brief"
+  | "execution-brief"
+  | "description-only"
+  | "acceptance-only";
+
+type JiraWriteMode = "replace" | "append";
 
 interface ProviderProfile {
   profile_id: string;
@@ -133,6 +231,11 @@ interface ExecutionCreateResponse {
   namespace?: string;
   redirectPath?: string;
   definitionId?: string;
+}
+
+interface TemporalSubmissionDraftLoadResult {
+  execution: TemporalTaskEditingExecutionContract;
+  draft: ReturnType<typeof buildTemporalSubmissionDraftFromExecution>;
 }
 
 interface ResponseErrorDetail {
@@ -282,6 +385,158 @@ function withQueryParams(
     return baseUrl;
   }
   return `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${serialized}`;
+}
+
+function configuredTemporalDetailUrl(
+  detailTemplate: string,
+  workflowId: string,
+): string {
+  return withQueryParams(
+    interpolatePath(detailTemplate, { workflowId }),
+    { source: "temporal" },
+  );
+}
+
+function configuredArtifactDownloadUrl(
+  downloadTemplate: string,
+  artifactId: string,
+): string {
+  return interpolatePath(downloadTemplate, { artifactId });
+}
+
+function hasInlineTaskInstructions(task: unknown): boolean {
+  if (!task || typeof task !== "object" || Array.isArray(task)) {
+    return false;
+  }
+  const taskRecord = task as Record<string, unknown>;
+  if (String(taskRecord.instructions || "").trim()) {
+    return true;
+  }
+  const steps = Array.isArray(taskRecord.steps) ? taskRecord.steps : [];
+  return steps.some((step) => {
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      return false;
+    }
+    return String((step as Record<string, unknown>).instructions || "").trim();
+  });
+}
+
+function readJiraItems<T>(data: unknown): T[] {
+  if (Array.isArray(data)) {
+    return data as T[];
+  }
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+  const items = (data as { items?: unknown }).items;
+  return Array.isArray(items) ? (items as T[]) : [];
+}
+
+function normalizeMoonMindApiPath(value: unknown): string | null {
+  const normalized = String(value || "").trim();
+  if (
+    !normalized ||
+    !normalized.startsWith("/api/") ||
+    normalized.includes("://")
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function readJiraEndpointTemplates(sourceConfig: {
+  [key: string]: unknown;
+}): JiraEndpointTemplates | null {
+  const connections = normalizeMoonMindApiPath(sourceConfig.connections);
+  const projects = normalizeMoonMindApiPath(sourceConfig.projects);
+  const boards = normalizeMoonMindApiPath(sourceConfig.boards);
+  const columns = normalizeMoonMindApiPath(sourceConfig.columns);
+  const issues = normalizeMoonMindApiPath(sourceConfig.issues);
+  const issue = normalizeMoonMindApiPath(sourceConfig.issue);
+  if (!connections || !projects || !boards || !columns || !issues || !issue) {
+    return null;
+  }
+  return { connections, projects, boards, columns, issues, issue };
+}
+
+function jiraTargetLabel(
+  target: JiraImportTarget | null,
+  steps: StepState[],
+): string {
+  if (!target) {
+    return "No target selected";
+  }
+  if (target.kind === "preset") {
+    return "Feature Request / Initial Instructions";
+  }
+  const index = steps.findIndex((step) => step.localId === target.localId);
+  return index >= 0 ? `Step ${index + 1} Instructions` : "Step Instructions";
+}
+
+function defaultJiraImportMode(target: JiraImportTarget): JiraImportMode {
+  return target.kind === "preset" ? "preset-brief" : "execution-brief";
+}
+
+function joinJiraText(parts: Array<string | null | undefined>): string {
+  return parts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function jiraImportTextForMode(
+  issue: JiraIssueDetail,
+  mode: JiraImportMode,
+): string {
+  const issueKey = String(issue.issueKey || "").trim();
+  const summary = String(issue.summary || "").trim();
+  const description = String(issue.descriptionText || "").trim();
+  const acceptanceCriteria = String(issue.acceptanceCriteriaText || "").trim();
+
+  if (mode === "description-only") {
+    return description;
+  }
+  if (mode === "acceptance-only") {
+    return acceptanceCriteria;
+  }
+  if (mode === "preset-brief") {
+    const recommended = String(
+      issue.recommendedImports?.presetInstructions || "",
+    ).trim();
+    if (recommended) {
+      return recommended;
+    }
+    return joinJiraText([
+      [issueKey, summary].filter(Boolean).join(": "),
+      description,
+    ]);
+  }
+
+  const recommended = String(
+    issue.recommendedImports?.stepInstructions || "",
+  ).trim();
+  if (recommended) {
+    return recommended;
+  }
+  const issueTitle =
+    [issueKey, summary].filter(Boolean).join(": ") || "(unnamed)";
+  return joinJiraText([
+    `Complete Jira story ${issueTitle}`,
+    description ? `Description\n${description}` : "",
+    acceptanceCriteria ? `Acceptance criteria\n${acceptanceCriteria}` : "",
+  ]);
+}
+
+function writeJiraImportedText(
+  currentText: string,
+  importedText: string,
+  writeMode: JiraWriteMode,
+): string {
+  const normalizedImport = importedText.trim();
+  if (writeMode === "replace" || !currentText.trim()) {
+    return normalizedImport;
+  }
+  return `${currentText.trimEnd()}\n\n---\n\n${normalizedImport}`;
 }
 
 function createStepStateEntry(
@@ -627,6 +882,30 @@ async function responseErrorMessage(
   return (await responseErrorDetail(response, fallback)).message;
 }
 
+async function readTemporalInputArtifact(
+  artifactDownloadEndpoint: string,
+  artifactId: string,
+): Promise<unknown> {
+  const response = await fetch(
+    configuredArtifactDownloadUrl(artifactDownloadEndpoint, artifactId),
+    { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await responseErrorMessage(
+        response,
+        "Task instructions could not be loaded from the input artifact.",
+      ),
+    );
+  }
+  const rawText = await response.text();
+  try {
+    return JSON.parse(rawText) as unknown;
+  } catch {
+    throw new Error("Task input artifact did not contain valid JSON.");
+  }
+}
+
 async function createInputArtifact(
   createEndpoint: string,
   body: string,
@@ -949,14 +1228,28 @@ function CloseIcon() {
 
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const dashboardConfig = readDashboardConfig(payload);
+  const pageMode = useMemo(
+    () => resolveTaskSubmitPageMode(window.location.search),
+    [],
+  );
+  const temporalTaskEditingEnabled = Boolean(
+    dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
+  );
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
   );
   const temporalListEndpoint = String(
     dashboardConfig.sources?.temporal?.list || "/api/executions",
   );
+  const temporalDetailEndpoint = String(
+    dashboardConfig.sources?.temporal?.detail || "/api/executions/{workflowId}",
+  );
   const artifactCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.artifactCreate || "/api/artifacts",
+  );
+  const artifactDownloadEndpoint = String(
+    dashboardConfig.sources?.temporal?.artifactDownload ||
+      "/api/artifacts/{artifactId}/download",
   );
   const providerProfilesEndpoint = String(
     dashboardConfig.system?.providerProfiles?.list ||
@@ -980,6 +1273,29 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     taskTemplateCatalog?.saveFromTask ||
       "/api/task-step-templates/save-from-task",
   );
+  const jiraIntegration = useMemo<JiraIntegrationConfig | null>(() => {
+    const systemConfig = dashboardConfig.system?.jiraIntegration;
+    const sourceConfig = dashboardConfig.sources?.jira;
+    if (!systemConfig?.enabled || !sourceConfig) {
+      return null;
+    }
+    const endpoints = readJiraEndpointTemplates(sourceConfig);
+    if (!endpoints) {
+      return null;
+    }
+    return {
+      enabled: true,
+      defaultProjectKey: String(systemConfig.defaultProjectKey || "").trim(),
+      defaultBoardId: String(systemConfig.defaultBoardId || "").trim(),
+      rememberLastBoardInSession: Boolean(
+        systemConfig.rememberLastBoardInSession,
+      ),
+      endpoints,
+    };
+  }, [
+    dashboardConfig.sources?.jira,
+    dashboardConfig.system?.jiraIntegration,
+  ]);
 
   const attachmentPolicy = useMemo<AttachmentPolicy>(() => {
     const config = dashboardConfig.system?.attachmentPolicy;
@@ -1063,9 +1379,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
+  const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
+    useState("");
   const [appliedTemplates, setAppliedTemplates] = useState<
     AppliedTemplateState[]
   >([]);
+  const [jiraBrowserOpen, setJiraBrowserOpen] = useState(false);
+  const [jiraImportTarget, setJiraImportTarget] =
+    useState<JiraImportTarget | null>(null);
+  const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
+  const [selectedJiraBoardId, setSelectedJiraBoardId] = useState("");
+  const [activeJiraColumnId, setActiveJiraColumnId] = useState("");
+  const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
+  const [jiraImportMode, setJiraImportMode] =
+    useState<JiraImportMode>("preset-brief");
   const [selectedAttachmentFiles, setSelectedAttachmentFiles] = useState<
     File[]
   >([]);
@@ -1075,6 +1402,72 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
+  const temporalDraftAppliedRef = useRef<string | null>(null);
+  const jiraProjectSelectionInitializedRef = useRef(false);
+  const jiraBoardSelectionInitializedRef = useRef(false);
+
+  const temporalDraftQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "temporal-editing-draft",
+      pageMode.mode,
+      pageMode.executionId,
+      temporalDetailEndpoint,
+      artifactDownloadEndpoint,
+    ],
+    enabled:
+      pageMode.mode !== "create" &&
+      Boolean(pageMode.executionId) &&
+      temporalTaskEditingEnabled,
+    queryFn: async (): Promise<TemporalSubmissionDraftLoadResult> => {
+      const workflowId = String(pageMode.executionId || "");
+      const response = await fetch(
+        configuredTemporalDetailUrl(temporalDetailEndpoint, workflowId),
+        { headers: { Accept: "application/json" } },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load the Temporal execution.",
+          ),
+        );
+      }
+      const execution =
+        (await response.json()) as TemporalTaskEditingExecutionContract;
+      if (String(execution.workflowType || "") !== "MoonMind.Run") {
+        throw new Error(
+          "This execution cannot be edited here because only MoonMind.Run is supported.",
+        );
+      }
+      if (pageMode.mode === "edit" && execution.actions?.canUpdateInputs !== true) {
+        throw new Error(
+          "This execution does not currently allow editing its inputs.",
+        );
+      }
+      if (pageMode.mode === "rerun" && execution.actions?.canRerun !== true) {
+        throw new Error("This execution does not currently allow rerun.");
+      }
+
+      let artifactInput: unknown;
+      const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
+      const inlineTask = execution.inputParameters?.task;
+      if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
+        artifactInput = await readTemporalInputArtifact(
+          artifactDownloadEndpoint,
+          inputArtifactRef,
+        );
+      }
+
+      return {
+        execution,
+        draft: buildTemporalSubmissionDraftFromExecution(
+          execution,
+          artifactInput,
+        ),
+      };
+    },
+  });
 
   const providerProfilesQuery = useQuery({
     queryKey: ["task-create", "provider-profiles", runtime],
@@ -1101,6 +1494,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     const profiles = providerProfilesQuery.data || [];
+    if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
+      return;
+    }
+    if (pageMode.mode !== "create" && temporalDraftAppliedRef.current) {
+      return;
+    }
     if (profiles.length === 0) {
       if (providerProfile) {
         setProviderProfile("");
@@ -1119,7 +1518,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (defaultProfileId && providerProfile !== defaultProfileId) {
       setProviderProfile(defaultProfileId);
     }
-  }, [providerProfile, providerProfilesQuery.data]);
+  }, [
+    pageMode.mode,
+    providerProfile,
+    providerProfilesQuery.data,
+    providerProfilesQuery.isFetching,
+    providerProfilesQuery.isLoading,
+  ]);
 
   useEffect(() => {
     const runtimeChanged = prevRuntimeRef.current !== runtime;
@@ -1136,6 +1541,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     if (profileChanged) {
       prevProviderProfileRef.current = providerProfile;
+    }
+
+    if (
+      pageMode.mode !== "create" &&
+      temporalDraftAppliedRef.current &&
+      !runtimeChanged &&
+      !profileChanged
+    ) {
+      return;
     }
 
     setEffort(
@@ -1172,6 +1586,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
     modelManualOverride,
+    pageMode.mode,
     providerProfilesQuery.data,
     providerProfile,
     runtime,
@@ -1193,6 +1608,64 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     writeProposeTasksPreference(proposeTasks);
   }, [proposeTasks]);
+
+  useEffect(() => {
+    if (pageMode.mode === "create" || !temporalDraftQuery.data) {
+      return;
+    }
+    const applyKey = `${pageMode.mode}:${temporalDraftQuery.data.execution.workflowId}`;
+    if (temporalDraftAppliedRef.current === applyKey) {
+      return;
+    }
+    const draft = temporalDraftQuery.data.draft;
+    temporalDraftAppliedRef.current = applyKey;
+
+    if (draft.runtime) {
+      prevRuntimeRef.current = draft.runtime;
+      setRuntime(draft.runtime);
+    }
+    if (draft.providerProfile) {
+      prevProviderProfileRef.current = draft.providerProfile;
+      setProviderProfile(draft.providerProfile);
+    }
+    if (draft.model) {
+      setModel(draft.model);
+      setModelManualOverride(true);
+    }
+    if (draft.effort) {
+      setEffort(draft.effort);
+    }
+    if (draft.repository) {
+      setRepository(draft.repository);
+    }
+    if (draft.startingBranch) {
+      setStartingBranch(draft.startingBranch);
+    }
+    if (draft.targetBranch) {
+      setTargetBranch(draft.targetBranch);
+    }
+    if (draft.publishMode) {
+      setPublishMode(draft.publishMode);
+    }
+    setSteps([
+      createStepStateEntry(1, {
+        instructions: draft.taskInstructions,
+        ...(draft.primarySkill ? { skillId: draft.primarySkill } : {}),
+      }),
+    ]);
+    setNextStepNumber(2);
+    setAppliedTemplates(draft.appliedTemplates);
+    setAppliedTemplateFeatureRequest("");
+    setScheduleMode("immediate");
+    setScheduledFor("");
+    setScheduleDeferredMinutes("");
+    setScheduleCron("");
+    setScheduleName("");
+  }, [
+    defaultPublishMode,
+    pageMode.mode,
+    temporalDraftQuery.data,
+  ]);
 
   const dependencyOptionsQuery = useQuery({
     queryKey: ["task-create", "dependency-options", temporalListEndpoint],
@@ -1286,7 +1759,205 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const jiraProjectsQuery = useQuery({
+    queryKey: ["task-create", "jira", "projects", jiraIntegration?.endpoints.projects],
+    enabled: Boolean(jiraIntegration?.enabled && jiraBrowserOpen),
+    queryFn: async (): Promise<JiraProject[]> => {
+      const endpoint = jiraIntegration?.endpoints.projects || "";
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira projects."),
+        );
+      }
+      return readJiraItems<JiraProject>(await response.json());
+    },
+  });
+
+  const jiraBoardsQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "boards",
+      jiraIntegration?.endpoints.boards,
+      selectedJiraProjectKey,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraProjectKey,
+    ),
+    queryFn: async (): Promise<JiraBoard[]> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.boards || "",
+        { projectKey: selectedJiraProjectKey },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira boards."),
+        );
+      }
+      return readJiraItems<JiraBoard>(await response.json());
+    },
+  });
+
+  const jiraColumnsQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "columns",
+      jiraIntegration?.endpoints.columns,
+      selectedJiraBoardId,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
+    ),
+    queryFn: async (): Promise<JiraColumn[]> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.columns || "",
+        { boardId: selectedJiraBoardId },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira columns."),
+        );
+      }
+      const data = (await response.json()) as { columns?: unknown } | null;
+      return Array.isArray(data?.columns) ? (data.columns as JiraColumn[]) : [];
+    },
+  });
+
+  const jiraIssuesQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "issues",
+      jiraIntegration?.endpoints.issues,
+      selectedJiraBoardId,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
+    ),
+    queryFn: async (): Promise<Record<string, JiraIssueSummary[]>> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.issues || "",
+        { boardId: selectedJiraBoardId },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira issues."),
+        );
+      }
+      const data = (await response.json()) as {
+        itemsByColumn?: Record<string, JiraIssueSummary[]>;
+      } | null;
+      return data?.itemsByColumn || {};
+    },
+  });
+
+  const jiraIssueDetailQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "issue",
+      jiraIntegration?.endpoints.issue,
+      selectedJiraIssueKey,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled &&
+        jiraBrowserOpen &&
+        selectedJiraIssueKey,
+    ),
+    queryFn: async (): Promise<JiraIssueDetail> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.issue || "",
+        { issueKey: selectedJiraIssueKey },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira issue."),
+        );
+      }
+      return (await response.json()) as JiraIssueDetail;
+    },
+  });
+
   const templateItems = templateOptionsQuery.data?.items || [];
+
+  useEffect(() => {
+    if (!jiraBrowserOpen || !jiraIntegration) {
+      return;
+    }
+    const projects = jiraProjectsQuery.data || [];
+    if (selectedJiraProjectKey) {
+      jiraProjectSelectionInitializedRef.current = true;
+      return;
+    }
+    if (projects.length === 0 || jiraProjectSelectionInitializedRef.current) {
+      return;
+    }
+    const configured = projects.find(
+      (project) => project.key === jiraIntegration.defaultProjectKey,
+    );
+    setSelectedJiraProjectKey((configured || projects[0])?.key || "");
+    jiraProjectSelectionInitializedRef.current = true;
+    jiraBoardSelectionInitializedRef.current = false;
+  }, [
+    jiraBrowserOpen,
+    jiraIntegration,
+    jiraProjectsQuery.data,
+    selectedJiraProjectKey,
+  ]);
+
+  useEffect(() => {
+    if (!jiraBrowserOpen || !jiraIntegration) {
+      return;
+    }
+    const boards = jiraBoardsQuery.data || [];
+    if (selectedJiraBoardId) {
+      jiraBoardSelectionInitializedRef.current = true;
+      return;
+    }
+    if (boards.length === 0 || jiraBoardSelectionInitializedRef.current) {
+      return;
+    }
+    const configured = boards.find(
+      (board) => board.id === jiraIntegration.defaultBoardId,
+    );
+    setSelectedJiraBoardId((configured || boards[0])?.id || "");
+    jiraBoardSelectionInitializedRef.current = true;
+  }, [
+    jiraBoardsQuery.data,
+    jiraBrowserOpen,
+    jiraIntegration,
+    selectedJiraBoardId,
+  ]);
+
+  useEffect(() => {
+    if (!jiraBrowserOpen) {
+      return;
+    }
+    const columns = jiraColumnsQuery.data || [];
+    const activeStillExists = columns.some(
+      (column) => column.id === activeJiraColumnId,
+    );
+    if (activeStillExists) {
+      return;
+    }
+    setActiveJiraColumnId(columns[0]?.id || "");
+  }, [activeJiraColumnId, jiraBrowserOpen, jiraColumnsQuery.data]);
 
   useEffect(() => {
     if (!taskTemplateCatalogEnabled || templateItems.length === 0) {
@@ -1314,6 +1985,100 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ),
     [dependencyOptionsQuery.data, selectedDependencies],
   );
+
+  const activeJiraIssues =
+    (activeJiraColumnId && jiraIssuesQuery.data?.[activeJiraColumnId]) || [];
+  const selectedJiraIssue = jiraIssueDetailQuery.data || null;
+  const selectedJiraImportText = useMemo(() => {
+    if (!selectedJiraIssue) {
+      return "";
+    }
+    return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
+  }, [jiraImportMode, selectedJiraIssue]);
+  const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
+
+  function openJiraBrowser(target: JiraImportTarget) {
+    jiraProjectSelectionInitializedRef.current = Boolean(selectedJiraProjectKey);
+    jiraBoardSelectionInitializedRef.current = Boolean(selectedJiraBoardId);
+    setJiraImportTarget(target);
+    setJiraImportMode(defaultJiraImportMode(target));
+    setJiraBrowserOpen(true);
+    setSelectedJiraIssueKey("");
+  }
+
+  function closeJiraBrowser() {
+    setJiraBrowserOpen(false);
+  }
+
+  function selectJiraProject(projectKey: string) {
+    jiraProjectSelectionInitializedRef.current = true;
+    jiraBoardSelectionInitializedRef.current = false;
+    setSelectedJiraProjectKey(projectKey);
+    setSelectedJiraBoardId("");
+    setActiveJiraColumnId("");
+    setSelectedJiraIssueKey("");
+  }
+
+  function selectJiraBoard(boardId: string) {
+    jiraBoardSelectionInitializedRef.current = true;
+    setSelectedJiraBoardId(boardId);
+    setActiveJiraColumnId("");
+    setSelectedJiraIssueKey("");
+  }
+
+  function selectJiraColumn(columnId: string) {
+    setActiveJiraColumnId(columnId);
+    setSelectedJiraIssueKey("");
+  }
+
+  function importSelectedJiraIssue(writeMode: JiraWriteMode) {
+    if (!selectedJiraIssue || !jiraImportTarget) {
+      return;
+    }
+    if (!selectedJiraImportText.trim()) {
+      return;
+    }
+    if (jiraImportTarget.kind === "preset") {
+      const nextText = writeJiraImportedText(
+        templateFeatureRequest,
+        selectedJiraImportText,
+        writeMode,
+      );
+      if (nextText.trim() === templateFeatureRequest.trim()) {
+        return;
+      }
+      setTemplateFeatureRequest(nextText);
+      if (appliedTemplates.length > 0) {
+        setTemplateMessage(PRESET_REAPPLY_REQUIRED_MESSAGE);
+      }
+      return;
+    }
+
+    const targetStep = steps.find(
+      (step) => step.localId === jiraImportTarget.localId,
+    );
+    if (!targetStep) {
+      return;
+    }
+    updateStep(jiraImportTarget.localId, {
+      instructions: writeJiraImportedText(
+        targetStep.instructions,
+        selectedJiraImportText,
+        writeMode,
+      ),
+    });
+  }
+
+  function handleTemplateFeatureRequestChange(value: string) {
+    setTemplateFeatureRequest(value);
+    if (
+      templateMessage === PRESET_REAPPLY_REQUIRED_MESSAGE &&
+      (!value.trim() ||
+        value.trim() === appliedTemplateFeatureRequest.trim())
+    ) {
+      setTemplateMessage(null);
+    }
+  }
 
   function addDependency(workflowId: string) {
     const normalizedId = workflowId.trim();
@@ -1682,6 +2447,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setNextStepNumber(
         (current) => current + Math.max(expandedSteps.length, 1),
       );
+      setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
       if (expandedSteps.length > 0) {
         const appliedTemplate = expanded.appliedTemplate || {};
         setAppliedTemplates((current) => [
@@ -1838,6 +2604,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setSubmitMessage(null);
+    if (pageMode.mode === "edit") {
+      setSubmitMessage("Saving edits is not available in this milestone.");
+      return;
+    }
+    if (pageMode.mode === "rerun") {
+      setSubmitMessage("Rerun submission is not available in this milestone.");
+      return;
+    }
 
     const primaryStep = steps[0] || null;
     const primaryValidation = validatePrimaryStepSubmission(primaryStep);
@@ -2324,17 +3098,258 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
+  const pageTitle =
+    pageMode.mode === "edit"
+      ? "Edit Task"
+      : pageMode.mode === "rerun"
+        ? "Rerun Task"
+        : "Create Task";
+  const primaryCta =
+    pageMode.mode === "edit"
+      ? "Save Changes"
+      : pageMode.mode === "rerun"
+        ? "Rerun Task"
+        : "Create";
+  const modeLoadError =
+    pageMode.mode !== "create" && !temporalTaskEditingEnabled
+      ? "Temporal task editing is not enabled."
+      : temporalDraftQuery.isError
+        ? temporalDraftQuery.error instanceof Error
+          ? temporalDraftQuery.error.message
+          : "Failed to reconstruct the task draft."
+        : null;
+  const isTemporalFormBlocked =
+    pageMode.mode !== "create" &&
+    (temporalDraftQuery.isLoading || Boolean(modeLoadError));
+
   return (
     <div className="stack">
       <div>
-        <h2 className="page-title">Create Task</h2>
+        <h2 className="page-title">{pageTitle}</h2>
       </div>
+
+      {pageMode.mode !== "create" && temporalDraftQuery.isLoading ? (
+        <p className="notice" role="status">
+          Loading Temporal execution draft...
+        </p>
+      ) : null}
+
+      {modeLoadError ? (
+        <p className="notice error" role="alert">
+          {modeLoadError}
+        </p>
+      ) : null}
+
+      {jiraIntegration?.enabled && jiraBrowserOpen ? (
+        <div className="jira-browser-backdrop">
+          <section
+            className="jira-browser-panel stack"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="jira-browser-title"
+          >
+            <div className="queue-step-header">
+              <div>
+                <h3 id="jira-browser-title">Browse Jira story</h3>
+                <p className="small">{`Target: ${jiraTargetText}`}</p>
+              </div>
+              <button
+                type="button"
+                className="queue-step-icon-button"
+                aria-label="Close Jira browser"
+                onClick={closeJiraBrowser}
+              >
+                <CloseIcon />
+                <span className="sr-only">Close Jira browser</span>
+              </button>
+            </div>
+
+            <div className="grid-2">
+              <label>
+                Project
+                <select
+                  value={selectedJiraProjectKey}
+                  disabled={
+                    jiraProjectsQuery.isLoading || jiraProjectsQuery.isError
+                  }
+                  onChange={(event) => selectJiraProject(event.target.value)}
+                >
+                  <option value="">Select project...</option>
+                  {(jiraProjectsQuery.data || []).map((project) => (
+                    <option key={project.key} value={project.key}>
+                      {project.name
+                        ? `${project.name} (${project.key})`
+                        : project.key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Board
+                <select
+                  value={selectedJiraBoardId}
+                  disabled={
+                    !selectedJiraProjectKey ||
+                    jiraBoardsQuery.isLoading ||
+                    jiraBoardsQuery.isError
+                  }
+                  onChange={(event) => selectJiraBoard(event.target.value)}
+                >
+                  <option value="">Select board...</option>
+                  {(jiraBoardsQuery.data || []).map((board) => (
+                    <option key={board.id} value={board.id}>
+                      {board.name || board.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {jiraProjectsQuery.isError ? (
+              <p className="notice small">Failed to load Jira projects.</p>
+            ) : null}
+            {jiraBoardsQuery.isError ? (
+              <p className="notice small">Failed to load Jira boards.</p>
+            ) : null}
+            {jiraColumnsQuery.isError || jiraIssuesQuery.isError ? (
+              <p className="notice small">Failed to load Jira board issues.</p>
+            ) : null}
+
+            <div className="jira-browser-layout">
+              <div className="stack">
+                <div
+                  className="jira-column-tabs"
+                  aria-label="Jira board columns"
+                >
+                  {(jiraColumnsQuery.data || []).map((column) => (
+                    <button
+                      key={column.id}
+                      type="button"
+                      className={
+                        column.id === activeJiraColumnId
+                          ? "secondary jira-column-tab active"
+                          : "secondary jira-column-tab"
+                      }
+                      aria-pressed={column.id === activeJiraColumnId}
+                      onClick={() => selectJiraColumn(column.id)}
+                    >
+                      {`${column.name} ${Number(column.count || 0)}`}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="jira-issue-list" aria-live="polite">
+                  {jiraColumnsQuery.isLoading || jiraIssuesQuery.isLoading ? (
+                    <p className="small">Loading Jira issues...</p>
+                  ) : activeJiraIssues.length > 0 ? (
+                    activeJiraIssues.map((issue) => (
+                      <button
+                        key={issue.issueKey}
+                        type="button"
+                        className={
+                          issue.issueKey === selectedJiraIssueKey
+                            ? "jira-issue-button active"
+                            : "jira-issue-button"
+                        }
+                        onClick={() => setSelectedJiraIssueKey(issue.issueKey)}
+                      >
+                        <strong>{issue.issueKey}</strong>
+                        <span>{issue.summary}</span>
+                        <span className="small">
+                          {[issue.issueType, issue.statusName, issue.assignee]
+                            .filter(Boolean)
+                            .join(" / ")}
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="small">No Jira issues in this column.</p>
+                  )}
+                </div>
+              </div>
+
+              <aside className="jira-issue-preview stack">
+                {jiraIssueDetailQuery.isError ? (
+                  <p className="notice small">Failed to load Jira issue.</p>
+                ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
+                  <p className="small">Loading Jira story...</p>
+                ) : selectedJiraIssue ? (
+                  <>
+                    <div>
+                      <p className="small">{selectedJiraIssue.issueKey}</p>
+                      <h4>{selectedJiraIssue.summary}</h4>
+                    </div>
+                    {selectedJiraIssue.descriptionText ? (
+                      <section>
+                        <strong>Description</strong>
+                        <p style={{ whiteSpace: "pre-wrap" }}>
+                          {selectedJiraIssue.descriptionText}
+                        </p>
+                      </section>
+                    ) : null}
+                    {selectedJiraIssue.acceptanceCriteriaText ? (
+                      <section>
+                        <strong>Acceptance criteria</strong>
+                        <p style={{ whiteSpace: "pre-wrap" }}>
+                          {selectedJiraIssue.acceptanceCriteriaText}
+                        </p>
+                      </section>
+                    ) : null}
+                    <label>
+                      Import mode
+                      <select
+                        value={jiraImportMode}
+                        onChange={(event) =>
+                          setJiraImportMode(event.target.value as JiraImportMode)
+                        }
+                      >
+                        <option value="preset-brief">Preset brief</option>
+                        <option value="execution-brief">Execution brief</option>
+                        <option value="description-only">Description only</option>
+                        <option value="acceptance-only">
+                          Acceptance criteria only
+                        </option>
+                      </select>
+                    </label>
+                    <section>
+                      <strong>Import preview</strong>
+                      <p style={{ whiteSpace: "pre-wrap" }}>
+                        {selectedJiraImportText}
+                      </p>
+                    </section>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        onClick={() => importSelectedJiraIssue("replace")}
+                      >
+                        Replace target text
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => importSelectedJiraIssue("append")}
+                      >
+                        Append to target text
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="small">Choose a Jira story to preview.</p>
+                )}
+              </aside>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <form
         id="queue-submit-form"
         className="queue-submit-form"
         onSubmit={handleSubmit}
+        aria-disabled={isTemporalFormBlocked}
       >
+        <fieldset disabled={isTemporalFormBlocked} aria-busy={isTemporalFormBlocked}>
         <section className="queue-steps-section stack">
           <div id="queue-steps-list" className="stack">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
@@ -2412,9 +3427,29 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
-                  <label>
-                    Instructions
+                  <div className="stack">
+                    <div className="queue-field-heading">
+                      <label htmlFor={`queue-step-instructions-${step.localId}`}>
+                        Instructions
+                      </label>
+                      {jiraIntegration?.enabled ? (
+                        <button
+                          type="button"
+                          className="secondary jira-browse-button"
+                          aria-label={`Browse Jira story for Step ${index + 1} instructions`}
+                          onClick={() =>
+                            openJiraBrowser({
+                              kind: "step",
+                              localId: step.localId,
+                            })
+                          }
+                        >
+                          Browse Jira story
+                        </button>
+                      ) : null}
+                    </div>
                     <textarea
+                      id={`queue-step-instructions-${step.localId}`}
                       className="queue-step-instructions"
                       data-step-field="instructions"
                       data-step-index={String(index)}
@@ -2430,7 +3465,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         })
                       }
                     />
-                  </label>
+                  </div>
 
                   <div className="grid-2">
                     <label>
@@ -2531,17 +3566,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 ))}
               </select>
             </label>
-            <label>
-              Feature Request / Initial Instructions
+            <div className="stack">
+              <div className="queue-field-heading">
+                <label htmlFor="queue-template-feature-request">
+                  Feature Request / Initial Instructions
+                </label>
+                {jiraIntegration?.enabled ? (
+                  <button
+                    type="button"
+                    className="secondary jira-browse-button"
+                    aria-label="Browse Jira story for preset instructions"
+                    onClick={() => openJiraBrowser({ kind: "preset" })}
+                  >
+                    Browse Jira story
+                  </button>
+                ) : null}
+              </div>
               <textarea
                 id="queue-template-feature-request"
                 placeholder="Describe the feature request this preset should execute."
                 value={templateFeatureRequest}
                 onChange={(event) =>
-                  setTemplateFeatureRequest(event.target.value)
+                  handleTemplateFeatureRequestChange(event.target.value)
                 }
               />
-            </label>
+            </div>
             <div className="actions">
               <button
                 type="button"
@@ -2833,6 +3882,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           Propose Tasks
         </label>
 
+        {pageMode.mode === "create" ? (
         <details className="card" id="schedule-panel">
           <summary>
             <strong>Schedule (optional)</strong>
@@ -2932,17 +3982,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         </details>
+        ) : null}
 
         <div className="actions">
           <button
             type="submit"
             className="queue-submit-primary"
-            aria-disabled={isSubmitting}
+            disabled={isTemporalFormBlocked}
+            aria-disabled={isSubmitting || isTemporalFormBlocked}
             aria-busy={isSubmitting}
           >
-            Create
+            {primaryCta}
           </button>
         </div>
+        </fieldset>
 
         <p
           id="queue-submit-message"

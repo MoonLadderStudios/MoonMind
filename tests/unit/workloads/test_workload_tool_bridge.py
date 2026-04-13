@@ -45,6 +45,39 @@ def _profile_payload(profile_id: str = "local-python") -> dict[str, object]:
     }
 
 
+def _helper_profile_payload(profile_id: str = "redis-helper") -> dict[str, object]:
+    return {
+        "id": profile_id,
+        "kind": "bounded_service",
+        "image": "redis:7.2-alpine",
+        "workdirTemplate": "/work/agent_jobs/${task_run_id}/repo",
+        "requiredMounts": [
+            {
+                "type": "volume",
+                "source": "agent_workspaces",
+                "target": "/work/agent_jobs",
+            }
+        ],
+        "envAllowlist": ["CI"],
+        "networkPolicy": "bridge",
+        "timeoutSeconds": 60,
+        "maxTimeoutSeconds": 120,
+        "helperTtlSeconds": 300,
+        "maxHelperTtlSeconds": 900,
+        "readinessProbe": {
+            "type": "exec",
+            "command": ["redis-cli", "ping"],
+            "intervalSeconds": 0,
+            "timeoutSeconds": 1,
+            "retries": 3,
+        },
+        "cleanup": {
+            "removeContainerOnExit": True,
+            "killGraceSeconds": 3,
+        },
+    }
+
+
 class _FakeLauncher:
     def __init__(self, *, status: str = "succeeded") -> None:
         self.validated: Any | None = None
@@ -93,6 +126,53 @@ class _FakeLauncher:
                         if validated.request.session_id is not None
                         else None
                     ),
+                },
+                "artifactPublication": {"status": "complete"},
+            },
+        )
+
+    async def start_helper(self, validated: Any) -> WorkloadResult:
+        self.validated = validated
+        return WorkloadResult(
+            requestId=validated.container_name,
+            profileId=validated.profile.id,
+            status="ready",
+            labels=validated.ownership.labels,
+            exitCode=None,
+            metadata={
+                "helper": {
+                    "containerName": validated.container_name,
+                    "status": "ready",
+                    "ttlSeconds": validated.request.ttl_seconds,
+                    "readiness": {"status": "ready", "attempts": 1},
+                    "sessionContext": None,
+                },
+                "artifactPublication": {"status": "complete"},
+            },
+        )
+
+    async def stop_helper(
+        self,
+        validated: Any,
+        *,
+        reason: str = "bounded_window_complete",
+    ) -> WorkloadResult:
+        self.validated = validated
+        return WorkloadResult(
+            requestId=validated.container_name,
+            profileId=validated.profile.id,
+            status="stopped",
+            labels=validated.ownership.labels,
+            exitCode=None,
+            metadata={
+                "helper": {
+                    "containerName": validated.container_name,
+                    "status": "stopped",
+                    "teardown": {
+                        "status": "complete",
+                        "reason": reason,
+                        "removeContainerOnExit": True,
+                    },
                 },
                 "artifactPublication": {"status": "complete"},
             },
@@ -153,6 +233,38 @@ def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
         },
         "additionalProperties": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "required"),
+    [
+        (
+            "container.start_helper",
+            ["profileId", "repoDir", "artifactsDir", "command", "ttlSeconds"],
+        ),
+        (
+            "container.stop_helper",
+            ["profileId", "repoDir", "artifactsDir", "ttlSeconds"],
+        ),
+    ],
+)
+def test_helper_tool_definitions_route_to_docker_workload(
+    tool_name: str,
+    required: list[str],
+) -> None:
+    definition = build_dood_tool_definition_payload(
+        name=tool_name,
+        version="1.0",
+    )
+
+    assert definition["type"] == "skill"
+    assert definition["executor"]["activity_type"] == "mm.tool.execute"
+    assert definition["requirements"]["capabilities"] == ["docker_workload"]
+    assert definition["inputs"]["schema"]["required"] == required
+    assert "image" not in definition["inputs"]["schema"]["properties"]
+    assert "mounts" not in definition["inputs"]["schema"]["properties"]
+    assert "devices" not in definition["inputs"]["schema"]["properties"]
+    assert "ttlSeconds" in definition["inputs"]["schema"]["properties"]
 
 
 @pytest.mark.asyncio
@@ -344,6 +456,75 @@ async def test_container_run_workload_handler_maps_failed_result_to_tool_failure
     assert result.status == "FAILED"
     assert result.outputs["workloadStatus"] == "failed"
     assert result.outputs["exitCode"] == 1
+
+
+@pytest.mark.asyncio
+async def test_container_start_helper_handler_uses_bounded_helper_lifecycle() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_helper_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.start_helper",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "profileId": "redis-helper",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-service",
+            "command": ["--appendonly", "no"],
+            "ttlSeconds": 300,
+            "envOverrides": {"CI": "1"},
+        },
+        {"workflow_id": "task-1", "node_id": "step-service"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert launcher.validated is not None
+    assert launcher.validated.request.tool_name == "container.start_helper"
+    assert launcher.validated.request.ttl_seconds == 300
+    assert launcher.validated.container_name == "mm-helper-task-1-step-service-1"
+    assert result.outputs["workloadStatus"] == "ready"
+    helper_metadata = result.outputs["workloadMetadata"]["helper"]
+    assert helper_metadata["status"] == "ready"
+    assert helper_metadata["readiness"] == {"status": "ready", "attempts": 1}
+
+
+@pytest.mark.asyncio
+async def test_container_stop_helper_handler_maps_reason_and_default_command() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_helper_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.stop_helper",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "profileId": "redis-helper",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-service",
+            "ttlSeconds": 300,
+            "reason": "owner_task_canceled",
+        },
+        {"workflow_id": "task-1", "node_id": "step-service"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert launcher.validated is not None
+    assert launcher.validated.request.tool_name == "container.stop_helper"
+    assert launcher.validated.request.command == ("stop",)
+    assert result.outputs["workloadStatus"] == "stopped"
+    helper_metadata = result.outputs["workloadMetadata"]["helper"]
+    assert helper_metadata["teardown"]["reason"] == "owner_task_canceled"
 
 
 @pytest.mark.asyncio

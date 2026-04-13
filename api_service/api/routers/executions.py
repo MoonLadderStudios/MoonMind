@@ -430,6 +430,25 @@ def _serialize_execution(
     task_payload = params.get("task")
     if not isinstance(task_payload, dict):
         task_payload = {}
+
+    task_runtime_payload = task_payload.get("runtime")
+    if not isinstance(task_runtime_payload, dict):
+        task_runtime_payload = {}
+    if not target_runtime:
+        target_runtime = (
+            _coerce_temporal_scalar(task_runtime_payload.get("mode"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("runtime"))
+        ) or None
+    if not param_model:
+        param_model = _coerce_temporal_scalar(task_runtime_payload.get("model")) or None
+    if not param_effort:
+        param_effort = _coerce_temporal_scalar(task_runtime_payload.get("effort")) or None
+    if not param_profile_id:
+        param_profile_id = (
+            _coerce_temporal_scalar(task_runtime_payload.get("profileId"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("profile_id"))
+        ) or None
+
     dependencies_block = (
         memo.get("dependencies") if isinstance(memo.get("dependencies"), dict) else {}
     )

@@ -11,6 +11,10 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
+import {
+  buildTemporalSubmissionDraftFromExecution,
+  resolveTaskSubmitPageMode,
+} from "../lib/temporalTaskEditing";
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
@@ -63,9 +67,52 @@ const mockPayload: BootPayload = {
           saveFromTask: "/api/task-step-templates/save-from-task",
         },
       },
+      features: {
+        temporalDashboard: {
+          temporalTaskEditing: true,
+        },
+      },
     },
   },
 };
+
+function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      sources?: Record<string, unknown>;
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        sources: {
+          ...initialData.dashboardConfig.sources,
+          jira: {
+            connections: "/api/jira/connections/verify",
+            projects: "/api/jira/projects",
+            boards: "/api/jira/projects/{projectKey}/boards",
+            columns: "/api/jira/boards/{boardId}/columns",
+            issues: "/api/jira/boards/{boardId}/issues",
+            issue: "/api/jira/issues/{issueKey}",
+          },
+        },
+        system: {
+          ...initialData.dashboardConfig.system,
+          jiraIntegration: {
+            enabled: true,
+            defaultProjectKey: "ENG",
+            defaultBoardId: "42",
+            rememberLastBoardInSession: true,
+          },
+        },
+      },
+    },
+  };
+}
 
 describe("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
@@ -284,6 +331,233 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aedit-123?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:edit-123",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "gemini_cli",
+              profileId: "profile:gemini-default",
+              model: "gemini-2.5-pro",
+              effort: "high",
+              repository: "MoonLadderStudios/MoonMind",
+              startingBranch: "main",
+              targetBranch: "task-editing-phase-2",
+              publishMode: "branch",
+              targetSkill: "speckit-implement",
+              inputParameters: {
+                targetRuntime: "gemini_cli",
+                task: {
+                  instructions: "Rebuild the Temporal task draft.",
+                  runtime: {
+                    mode: "gemini_cli",
+                    model: "gemini-2.5-pro",
+                    effort: "high",
+                    profileId: "profile:gemini-default",
+                  },
+                  git: {
+                    startingBranch: "main",
+                    targetBranch: "task-editing-phase-2",
+                  },
+                  publish: { mode: "branch" },
+                  tool: { type: "skill", name: "speckit-implement" },
+                  appliedStepTemplates: [
+                    {
+                      slug: "speckit-demo",
+                      version: "1.2.3",
+                      inputs: { feature_name: "Task Editing" },
+                      stepIds: ["tpl:speckit-demo:1.2.3:01"],
+                      appliedAt: "2026-04-12T00:00:00Z",
+                      capabilities: ["git"],
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Arerun-123?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:rerun-123",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputArtifactRef: "historical-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aunsupported?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:unsupported",
+              workflowType: "MoonMind.ManifestIngest",
+              state: "completed",
+              inputParameters: {},
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Ano-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:no-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              inputParameters: {
+                task: { instructions: "Existing task instructions." },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Ano-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:no-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputParameters: {
+                task: { instructions: "Terminal task instructions." },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Amissing-artifact?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:missing-artifact",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputArtifactRef: "missing-input",
+              inputParameters: { task: {} },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (
+          url === "/api/executions/mm%3Amalformed-artifact?source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:malformed-artifact",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputArtifactRef: "malformed-input",
+              inputParameters: { task: {} },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aincomplete?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:incomplete",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (
+          url ===
+          "/gateway/api/executions/mm%3Acustom-endpoints?view=detail&source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:custom-endpoints",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputArtifactRef: "custom-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -344,6 +618,142 @@ describe("Task Create Entrypoint", () => {
             json: async () => ({ artifact_id: "art-001" }),
           } as Response);
         }
+        if (url === "/api/artifacts/historical-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/MoonMind",
+                task: {
+                  instructions: "Rerun from artifact-backed instructions.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/missing-input/download") {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            text: async () => "",
+          } as Response);
+        }
+        if (url === "/api/artifacts/malformed-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () => "not-json",
+          } as Response);
+        }
+        if (url === "/gateway/api/artifacts/custom-input/raw") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                task: {
+                  instructions: "Loaded through configured artifact route.",
+                  skill: { id: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { key: "OPS", name: "Operations" },
+                { key: "ENG", name: "Engineering" },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/projects/ENG/boards") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { id: "7", name: "Backlog", projectKey: "ENG" },
+                { id: "42", name: "Delivery", projectKey: "ENG" },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/boards/42/columns") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              board: { id: "42", name: "Delivery", projectKey: "ENG" },
+              columns: [
+                { id: "todo", name: "To Do", count: 1 },
+                { id: "doing", name: "Doing", count: 1 },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/boards/42/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "42",
+              columns: [
+                { id: "todo", name: "To Do" },
+                { id: "doing", name: "Doing" },
+              ],
+              itemsByColumn: {
+                todo: [
+                  {
+                    issueKey: "ENG-101",
+                    summary: "Plan queue controls",
+                    issueType: "Story",
+                    statusName: "Selected",
+                    assignee: "Ada",
+                    updatedAt: "2026-04-10T19:30:00Z",
+                  },
+                ],
+                doing: [
+                  {
+                    issueKey: "ENG-202",
+                    summary: "Build browser shell",
+                    issueType: "Story",
+                    statusName: "In Progress",
+                    assignee: "Grace",
+                    updatedAt: "2026-04-11T19:30:00Z",
+                  },
+                ],
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              acceptanceCriteriaText:
+                "Given a board, users can select a story preview.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira story ENG-202: Build browser shell",
+              },
+            }),
+          } as Response);
+        }
         return Promise.resolve({
           ok: false,
           status: 404,
@@ -355,6 +765,486 @@ describe("Task Create Entrypoint", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("resolves task submit mode with rerun taking precedence over edit", () => {
+    expect(resolveTaskSubmitPageMode("")).toEqual({
+      mode: "create",
+      executionId: null,
+    });
+    expect(resolveTaskSubmitPageMode("?editExecutionId=mm%3Aedit")).toEqual({
+      mode: "edit",
+      executionId: "mm:edit",
+    });
+    expect(
+      resolveTaskSubmitPageMode(
+        "?editExecutionId=mm%3Aedit&rerunExecutionId=mm%3Arerun",
+      ),
+    ).toEqual({
+      mode: "rerun",
+      executionId: "mm:rerun",
+    });
+  });
+
+  it("does not load an execution detail draft in create mode", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Create Task" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/tasks/skills",
+        expect.objectContaining({
+          headers: { Accept: "application/json" },
+        }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        /^\/api\/executions\/[^?]+\?source=temporal$/.test(String(url)),
+      ),
+    ).toBe(false);
+  });
+
+  it("reconstructs a create-form draft from Temporal execution fields", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:edit-123",
+      workflowType: "MoonMind.Run",
+      targetRuntime: "gemini_cli",
+      profileId: "profile:gemini-default",
+      model: "gemini-2.5-pro",
+      effort: "high",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "task-editing-phase-2",
+      publishMode: "branch",
+      targetSkill: "speckit-implement",
+      inputParameters: {
+        task: {
+          instructions: "Rebuild the Temporal task draft.",
+          appliedStepTemplates: [
+            {
+              slug: "speckit-demo",
+              version: "1.2.3",
+              inputs: { feature_name: "Task Editing" },
+              stepIds: ["tpl:speckit-demo:1.2.3:01"],
+              appliedAt: "2026-04-12T00:00:00Z",
+              capabilities: ["git"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: "gemini_cli",
+      providerProfile: "profile:gemini-default",
+      model: "gemini-2.5-pro",
+      effort: "high",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "task-editing-phase-2",
+      publishMode: "branch",
+      taskInstructions: "Rebuild the Temporal task draft.",
+      primarySkill: "speckit-implement",
+    });
+    expect(draft.appliedTemplates).toEqual([
+      expect.objectContaining({
+        slug: "speckit-demo",
+        version: "1.2.3",
+        inputs: { feature_name: "Task Editing" },
+      }),
+    ]);
+  });
+
+  it("reconstructs a draft from an artifact-backed execution contract", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:rerun-123",
+        workflowType: "MoonMind.Run",
+        inputArtifactRef: "historical-input",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              profileId: "profile:codex-secondary",
+            },
+          },
+        },
+        actions: {
+          canUpdateInputs: false,
+          canRerun: true,
+        },
+      },
+      {
+        repository: "MoonLadderStudios/MoonMind",
+        task: {
+          instructions: "Rerun from immutable artifact input.",
+          git: {
+            startingBranch: "main",
+            targetBranch: "rerun-target",
+          },
+          publish: { mode: "pr" },
+          skill: { id: "speckit-orchestrate" },
+        },
+      },
+    );
+
+    expect(draft).toMatchObject({
+      runtime: "codex_cli",
+      providerProfile: "profile:codex-secondary",
+      model: "gpt-5.4",
+      effort: "medium",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "rerun-target",
+      publishMode: "pr",
+      taskInstructions: "Rerun from immutable artifact input.",
+      primarySkill: "speckit-orchestrate",
+    });
+  });
+
+  it("includes step-level instructions when reconstructing a draft", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:step-instructions",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Top-level objective.",
+          steps: [
+            { instructions: "First step instructions." },
+            { instructions: "Second step instructions." },
+          ],
+        },
+      },
+    });
+
+    expect(draft.taskInstructions).toBe(
+      [
+        "Top-level objective.",
+        "First step instructions.",
+        "Second step instructions.",
+      ].join("\n\n"),
+    );
+  });
+
+  it("uses null for optional draft fields that cannot be reconstructed", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:minimal",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Only instructions are available.",
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: null,
+      providerProfile: null,
+      model: null,
+      effort: null,
+      repository: null,
+      startingBranch: null,
+      targetBranch: null,
+      publishMode: null,
+      primarySkill: null,
+      taskInstructions: "Only instructions are available.",
+    });
+  });
+
+  it("fails draft reconstruction when instructions are missing", () => {
+    expect(() =>
+      buildTemporalSubmissionDraftFromExecution({
+        workflowId: "mm:incomplete",
+        workflowType: "MoonMind.Run",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+            },
+          },
+        },
+      }),
+    ).toThrow("Task instructions could not be reconstructed from this execution.");
+  });
+
+  it("loads edit mode from an active Temporal execution and prefills the shared form", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Rebuild the Temporal task draft.");
+      expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(
+        "gemini_cli",
+      );
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:gemini-default");
+      expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
+        "gemini-2.5-pro",
+      );
+      expect((screen.getByLabelText("Effort") as HTMLInputElement).value).toBe(
+        "high",
+      );
+      expect(
+        (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
+      ).toBe("MoonLadderStudios/MoonMind");
+      expect(
+        (screen.getByLabelText("Starting Branch (optional)") as HTMLInputElement)
+          .value,
+      ).toBe("main");
+      expect(
+        (screen.getByLabelText("Target Branch (optional)") as HTMLInputElement)
+          .value,
+      ).toBe("task-editing-phase-2");
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("branch");
+      expect(
+        (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
+      ).toBe("speckit-implement");
+    });
+    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
+  });
+
+  it("loads rerun mode instructions from an input artifact when inline instructions are absent", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Rerun from artifact-backed instructions.");
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-secondary");
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/artifacts/historical-input/download",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+  });
+
+  it("loads draft inputs through configured detail and artifact download routes", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Acustom-endpoints",
+    );
+    const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      customPayload.initialData as {
+        dashboardConfig: {
+          sources: {
+            temporal: {
+              detail: string;
+              artifactDownload: string;
+            };
+          };
+        };
+      }
+    ).dashboardConfig.sources.temporal = {
+      ...(
+        customPayload.initialData as {
+          dashboardConfig: { sources: { temporal: Record<string, string> } };
+        }
+      ).dashboardConfig.sources.temporal,
+      detail: "/gateway/api/executions/{workflowId}?view=detail",
+      artifactDownload: "/gateway/api/artifacts/{artifactId}/raw",
+    };
+
+    renderWithClient(<TaskCreatePage payload={customPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Loaded through configured artifact route.");
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/gateway/api/executions/mm%3Acustom-endpoints?view=detail&source=temporal",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/gateway/api/artifacts/custom-input/raw",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+  });
+
+  it("shows a feature-disabled error without loading execution detail", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+    const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      disabledPayload.initialData as {
+        dashboardConfig: {
+          features: { temporalDashboard: { temporalTaskEditing: boolean } };
+        };
+      }
+    ).dashboardConfig.features.temporalDashboard.temporalTaskEditing = false;
+
+    renderWithClient(<TaskCreatePage payload={disabledPayload} />);
+
+    expect(
+      await screen.findByText("Temporal task editing is not enabled."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/executions/mm%3Aedit-123?source=temporal",
+      ),
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error for unsupported Temporal workflow types", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aunsupported",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "This execution cannot be edited here because only MoonMind.Run is supported.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when edit capability is missing", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Ano-edit",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "This execution does not currently allow editing its inputs.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when rerun capability is missing", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Ano-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText("This execution does not currently allow rerun."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when the input artifact cannot be read", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Amissing-artifact",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "Task instructions could not be loaded from the input artifact.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows explicit errors for malformed artifacts and incomplete drafts", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Amalformed-artifact",
+    );
+
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText("Task input artifact did not contain valid JSON."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    unmount();
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aincomplete",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "Task instructions could not be reconstructed from this execution.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it("submits the queue-shaped Temporal task payload and redirects on success", async () => {
@@ -1282,6 +2172,752 @@ describe("Task Create Entrypoint", () => {
       expect(
         screen.getByText(/Choose a prerequisite run before adding/),
       ).toBeTruthy();
+    });
+  });
+
+  it("hides Jira browser controls when the runtime config does not enable Jira", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
+  it("opens the Jira browser from the preset target", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Browse Jira story" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Target: Feature Request / Initial Instructions"))
+      .toBeTruthy();
+  });
+
+  it("opens the Jira browser from a step target", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Browse Jira story" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Target: Step 1 Instructions")).toBeTruthy();
+  });
+
+  it("loads board columns in order and switches visible Jira issues by column", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "To Do 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Doing 1" })).toBeTruthy();
+    });
+
+    expect(screen.getByText("ENG-101")).toBeTruthy();
+    expect(screen.queryByText("ENG-202")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Doing 1" }));
+
+    expect(await screen.findByText("ENG-202")).toBeTruthy();
+    expect(screen.queryByText("ENG-101")).toBeNull();
+  });
+
+  it("keeps the Jira browser disabled when endpoint templates are incomplete", async () => {
+    const payload = withJiraIntegration();
+    const initialData = payload.initialData as {
+      dashboardConfig: {
+        sources?: Record<string, unknown>;
+      };
+    };
+    renderWithClient(
+      <TaskCreatePage
+        payload={{
+          ...payload,
+          initialData: {
+            ...initialData,
+            dashboardConfig: {
+              ...initialData.dashboardConfig,
+              sources: {
+                ...initialData.dashboardConfig.sources,
+                jira: {
+                  projects: "/api/jira/projects",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
+  it("does not restore Jira project or board defaults after a manual clear", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+    });
+    fireEvent.change(projectSelect, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("");
+    });
+    expect(
+      (screen.getByLabelText("Board") as HTMLSelectElement).value,
+    ).toBe("");
+
+    fireEvent.change(projectSelect, { target: { value: "ENG" } });
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((boardSelect as HTMLSelectElement).value).toBe("42");
+    });
+    fireEvent.change(boardSelect, { target: { value: "" } });
+
+    await waitFor(() => {
+      expect((boardSelect as HTMLSelectElement).value).toBe("");
+    });
+  });
+
+  it("loads Jira issue preview when an issue is selected", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(
+      await screen.findByText("Let operators browse Jira stories."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Given a board, users can select a story preview."),
+    ).toBeTruthy();
+  });
+
+  it("does not mutate draft fields when selecting a Jira issue preview", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.",
+    );
+  });
+
+  it("replaces preset instructions with selected Jira import text", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+    );
+  });
+
+  it("appends Jira import text to preset instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
+
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+    );
+  });
+
+  it("replaces only the selected step instructions with Jira import text", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const primaryStep = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(primaryStep, {
+      target: { value: "Keep primary instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep preset instructions." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const stepInstructions = screen.getAllByLabelText("Instructions");
+    const secondStep = stepInstructions[1] as HTMLTextAreaElement;
+    const thirdStep = stepInstructions[2] as HTMLTextAreaElement;
+    fireEvent.change(secondStep, {
+      target: { value: "Replace this secondary step." },
+    });
+    fireEvent.change(thirdStep, {
+      target: { value: "Keep tertiary instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 2 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((primaryStep as HTMLTextAreaElement).value).toBe(
+      "Keep primary instructions.",
+    );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep preset instructions.",
+    );
+    expect(secondStep.value).toBe("Complete Jira story ENG-202: Build browser shell");
+    expect(thirdStep.value).toBe("Keep tertiary instructions.");
+  });
+
+  it("defaults step-target Jira imports to execution brief mode", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    expect((screen.getByLabelText("Import mode") as HTMLSelectElement).value)
+      .toBe("execution-brief");
+    expect(
+      screen.getByText("Complete Jira story ENG-202: Build browser shell"),
+    ).toBeTruthy();
+  });
+
+  it("uses an unnamed Jira story fallback when issue title metadata is empty", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "",
+            url: "https://jira.example.test/browse/ENG-202",
+            summary: "",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "",
+            acceptanceCriteriaText: "",
+            recommendedImports: {
+              presetInstructions: "",
+              stepInstructions: "",
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Complete Jira story (unnamed)")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Complete Jira story (unnamed)",
+    );
+  });
+
+  it("preserves existing target text when selected Jira import mode is empty", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            url: "https://jira.example.test/browse/ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "",
+            acceptanceCriteriaText: "",
+            recommendedImports: {
+              presetInstructions: "",
+              stepInstructions: "",
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Import mode")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Import mode"), {
+      target: { value: "acceptance-only" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Import mode")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Import mode"), {
+      target: { value: "description-only" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
+  });
+
+  it("imports selected Jira text by mode", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Import mode"), {
+      target: { value: "acceptance-only" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Given a board, users can select a story preview.",
+    );
+  });
+
+  it("marks preset instructions as needing reapply after Jira import changes an applied preset", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.getByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeTruthy();
+
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    expect(
+      screen.queryByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not mark preset instructions as needing reapply when Jira import leaves text unchanged", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    const importedText =
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.";
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: importedText },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.queryByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeNull();
+  });
+
+  it("detaches template step identity when Jira import edits a template-bound step", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 2 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.steps).toEqual([
+      expect.objectContaining({
+        id: "tpl:speckit-demo:1.2.3:01",
+        instructions: "Clarify the {{ inputs.feature_name }} scope.",
+      }),
+      expect.objectContaining({
+        instructions: "Complete Jira story ENG-202: Build browser shell",
+      }),
+    ]);
+    expect([undefined, null, ""]).toContain(
+      request.payload.task.steps[1]?.id,
+    );
+  });
+
+  it("shows Jira browser failures locally", async () => {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            statusText: "Service Unavailable",
+            text: async () => "Jira unavailable",
+          } as Response);
+        }
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
+          text: async () => "Unhandled fetch",
+        } as Response);
+      },
+    );
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(await screen.findByText("Failed to load Jira projects.")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Browse Jira story" }))
+      .toBeTruthy();
+    expect(screen.getByLabelText("Instructions")).toBeTruthy();
+  });
+
+  it("keeps manual task creation available after Jira browser failure", async () => {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            statusText: "Service Unavailable",
+            text: async () => "Jira unavailable",
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "mm:workflow-123" }),
+          } as Response);
+        }
+        if (url.startsWith("/api/tasks/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
+          text: async () => "Unhandled fetch",
+        } as Response);
+      },
+    );
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    expect(await screen.findByText("Failed to load Jira projects.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Create this task manually." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
     });
   });
 });
