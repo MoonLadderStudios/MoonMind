@@ -4,17 +4,34 @@ This document outlines the operational procedures for deploying updates to MoonM
 
 ## Version Registration
 
-MoonMind uses the Temporal Python SDK's worker versioning APIs (`build_id` on the worker). Your **Temporal Server must support worker versioning** for the namespace where MoonMind runs; if the cluster is too old or the feature is disabled for that namespace, workers may fail to start—check server release notes and namespace settings before rolling this out.
+MoonMind uses the Temporal Python SDK's worker versioning APIs through `WorkerDeploymentConfig`. Your **Temporal Server must support worker versioning** for the namespace where MoonMind runs; if the cluster is too old or the feature is disabled for that namespace, workers may fail to start, so check server release notes and namespace settings before rolling this out.
 
-When a worker starts, it registers a unique `build_id` from the `MOONMIND_BUILD_ID` environment variable. If that is unset, it falls back to the build id baked into the Docker image at image build time. If neither source exists, it falls back to the current Git SHA (or `"unknown"` if Git metadata is unavailable, e.g. in minimal images).
+When worker versioning is enabled, a worker registers a deployment version using:
+
+- deployment name: `moonmind-<worker-fleet>`
+- build ID: `MOONMIND_BUILD_ID`, then the baked image metadata file, then the current Git SHA
+- default behavior: `TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR`
+
+If no build ID can be resolved while worker versioning is enabled, worker startup fails fast. Minimal images should set `MOONMIND_BUILD_ID` explicitly.
+When worker versioning is disabled, MoonMind still passes an explicit `build_id`
+to the Temporal worker to avoid the SDK's default module-hash build ID fallback.
+If no configured or Git-derived build ID is available in disabled mode, the worker
+uses `unknown`.
 
 ```bash
 # Example deployment
 export MOONMIND_BUILD_ID="v1.2.0-$(git rev-parse --short HEAD)"
+export TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR="Auto-Upgrade"
 docker compose up -d temporal-worker
 ```
 
 Workers report their build ID to the Temporal cluster, allowing the system to route tasks to compatible workers.
+
+`TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR` accepts:
+
+- `Auto-Upgrade`: default for normal deployments and new executions.
+- `Pinned`: use only for an explicit cutover window where started workflows must remain bound to a deployment version.
+- `Disabled`: local escape hatch only; do not deploy incompatible `MoonMind.AgentSession` workflow-shape changes with versioning disabled.
 
 ## Compatibility Matrix
 
@@ -45,6 +62,15 @@ if workflow.patched("refactor-loop-1.2"):
 else:
     self._resume_requested = True  # replay path for histories without the patch; cleared after the loop
 ```
+
+## Agent Session Cutovers
+
+`MoonMind.AgentSession` owns long-lived Codex managed-session state, so changes to handler names, update payloads, Continue-As-New payloads, search attributes, or cancel/terminate semantics require all of the following before rollout:
+
+1. Keep worker versioning enabled on the workflow fleet.
+2. Add or update a replay test for a representative `MoonMind.AgentSession` history.
+3. Use `workflow.patched(...)` only for replay-sensitive command-shape transitions that must coexist with older histories.
+4. For `SteerTurn`, Continue-As-New activation, cancel/terminate semantic changes, or new visibility metadata, deploy with `Auto-Upgrade` for normal rollout or `Pinned` for a bounded migration window, then remove any patch gate only after the oldest affected histories have completed or aged out.
 
 ## Rollback Procedure
 
