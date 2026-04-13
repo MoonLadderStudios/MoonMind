@@ -27,6 +27,9 @@ jobs/
 .codex/auth.json
 # Note: .codex/config.toml and .codex/prompts/ should be committed (project config)
 
+# Qwen user-specific data
+.qwen/
+
 # Build artifacts
 build/
 dist/
