@@ -628,6 +628,16 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
   );
 }
 
+function isTemplateBoundStepForInstructions(
+  step: StepState | null | undefined,
+): boolean {
+  return Boolean(
+    step?.templateStepId &&
+      step.id === step.templateStepId &&
+      step.instructions === step.templateInstructions,
+  );
+}
+
 function validatePrimaryStepSubmission(
   primaryStep: StepState | null,
   options: { additionalStepsCount?: number } = {},
@@ -1996,6 +2006,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
   }, [jiraImportMode, selectedJiraIssue]);
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
+  const jiraTargetStep =
+    jiraImportTarget?.kind === "step"
+      ? steps.find((step) => step.localId === jiraImportTarget.localId) || null
+      : null;
+  const jiraImportWillCustomizeTemplateStep =
+    isTemplateBoundStepForInstructions(jiraTargetStep);
 
   function openJiraBrowser(target: JiraImportTarget) {
     jiraProjectSelectionInitializedRef.current = Boolean(selectedJiraProjectKey);
@@ -3152,6 +3168,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               <div>
                 <h3 id="jira-browser-title">Browse Jira story</h3>
                 <p className="small">{`Target: ${jiraTargetText}`}</p>
+                {jiraImportWillCustomizeTemplateStep ? (
+                  <p className="notice small">
+                    Importing into this template-bound step will make it manually
+                    customized.
+                  </p>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -3599,7 +3621,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 aria-disabled={isApplyingPreset}
                 aria-busy={isApplyingPreset}
               >
-                Apply
+                {templateMessage === PRESET_REAPPLY_REQUIRED_MESSAGE
+                  ? "Reapply preset"
+                  : "Apply"}
               </button>
               {taskTemplateSaveEnabled ? (
                 <button
