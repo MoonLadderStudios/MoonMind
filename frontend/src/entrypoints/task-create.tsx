@@ -3834,7 +3834,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         onSubmit={handleSubmit}
         aria-disabled={isTemporalFormBlocked}
       >
-        <fieldset disabled={isTemporalFormBlocked} aria-busy={isTemporalFormBlocked}>
+        <fieldset
+          className="stack"
+          disabled={isTemporalFormBlocked}
+          aria-busy={isTemporalFormBlocked}
+        >
         <section className="queue-steps-section stack">
           <div id="queue-steps-list" className="stack">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
