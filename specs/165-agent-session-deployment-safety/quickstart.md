@@ -4,6 +4,8 @@
 
 This is runtime-mode work. A valid implementation includes production runtime code changes plus validation tests. Documentation, specifications, and checklists are supporting artifacts only.
 
+Use test-driven sequencing: add or update the focused validation that proves a runtime gap before treating the production runtime change as complete.
+
 The delayed standalone-image path is out of scope.
 
 ## 1. Audit Current Runtime Surfaces

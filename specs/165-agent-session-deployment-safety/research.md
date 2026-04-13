@@ -97,3 +97,14 @@
 **Alternatives considered**:
 
 - Use live provider sessions as required validation: rejected because credentials are not always available and would make merge safety non-deterministic.
+
+## Decision 10: Runtime changes are completed test-first
+
+**Decision**: Treat test-driven development as a planning constraint. For every missing or changed runtime behavior, add or update the smallest workflow, runtime, controller, replay, or integration regression before considering the production code path complete.
+
+**Rationale**: This feature exists to make durable session workflow changes safe. Tests written after broad runtime edits would weaken the replay, lifecycle, and deployment-safety guarantees that the rollout is meant to enforce.
+
+**Alternatives considered**:
+
+- Rely on final full-suite validation only: rejected because final validation may prove the end state but does not protect against under-specified runtime changes during implementation.
+- Accept docs/spec-only evidence for completed behavior: rejected by runtime mode and FR-001.

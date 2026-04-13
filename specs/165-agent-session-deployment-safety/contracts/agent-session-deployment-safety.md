@@ -185,6 +185,7 @@ Required gates:
 | Observability safety | Bounded metadata/search attribute/summary assertions and forbidden-content scan |
 | Reconcile | Scheduled/client and controller reconcile tests |
 | Deployment safety | Replay tests plus Worker Versioning or cutover assertions |
+| TDD sequencing | Failing or updated regression coverage before production runtime completion |
 
 ## Contract Coverage Checklist
 
@@ -200,3 +201,4 @@ Required gates:
 - [x] Search Attributes, summaries, schedule metadata, telemetry, and replay fixtures exclude sensitive or unbounded content.
 - [x] Recurring reconcile returns bounded outcomes for stale, degraded, missing-container, and orphan cases.
 - [x] Worker Versioning, scoped patching, or explicit cutover gates incompatible workflow-shape rollout.
+- [x] Runtime behavior changes are backed by test-first validation evidence.
