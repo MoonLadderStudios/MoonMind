@@ -41,13 +41,13 @@
 
 **Goal**: Operators can edit supported fields for an active `MoonMind.Run` execution and save changes back to the same Temporal execution with `UpdateInputs`.
 
-**Independent Test**: Open `/tasks/new?editExecutionId=<workflowId>`, change a supported field, submit, assert the request uses `UpdateInputs` for the same workflow, and assert navigation returns to the Temporal detail route.
+**Independent Test**: Open `/tasks/new?editExecutionId=<workflowId>`, change supported fields, submit, assert the request preserves those edits with `UpdateInputs` for the same workflow, assert immediate/safe-point/continue-as-new accepted outcomes produce distinct success messaging, and assert navigation returns to the Temporal detail route with refreshed execution data.
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Add failing active edit submit test for `UpdateInputs` request shape in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T009 [P] [US1] Add failing active edit redirect and one-time success notice test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T010 [P] [US1] Add failing Temporal detail success notice display/removal coverage in `frontend/src/entrypoints/task-detail.test.tsx`
+- [ ] T008 [P] [US1] Add failing active edit submit test for full supported-field preservation and `UpdateInputs` request shape, covering runtime, model, effort, repository, starting branch, target branch, publish mode, task instructions, primary skill, and template state when present in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T009 [P] [US1] Add failing active edit redirect and one-time success notice tests for immediate, safe-point, and continue-as-new accepted outcome messages in `frontend/src/entrypoints/task-create.test.tsx`
+- [ ] T010 [P] [US1] Add failing Temporal detail success notice display/removal and execution refetch/refresh coverage in `frontend/src/entrypoints/task-detail.test.tsx`
 
 ### Implementation for User Story 1
 
@@ -59,7 +59,7 @@
 
 ### Validation for User Story 1
 
-- [ ] T016 [US1] Verify User Story 1 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
+- [ ] T016 [US1] Verify User Story 1, including supported-field preservation, all three accepted outcome messages, redirect, and detail refetch/refresh, with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
 
 **Checkpoint**: Active edit submit is functional end-to-end for inline edited input.
 
