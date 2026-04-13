@@ -138,7 +138,7 @@
 - [ ] T045 [US3] Remove queue-era route, `editJobId`, and resubmit copy from primary detail-page task editing navigation in `frontend/src/entrypoints/task-detail.tsx`
 - [ ] T046 [US3] Remove queue-era submit, redirect, and resubmit copy from shared edit/rerun form behavior in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T047 [US3] Remove or replace queue-era helper exports from primary Temporal task editing helpers in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T048 [US3] Inspect and update current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/PlansOverview.md`
+- [ ] T048 [US3] Inspect and update current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/101-PlansOverview.md`
 
 ### Validation for User Story 3
 

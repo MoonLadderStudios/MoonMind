@@ -4,7 +4,7 @@ Prompt B remediation has been applied. No open CRITICAL, HIGH, MEDIUM, or LOW fi
 
 | ID | Category | Original Severity | Location(s) | Status | Remediation Applied |
 | --- | --- | --- | --- | --- | --- |
-| C1 | Coverage | MEDIUM | `specs/170-temporal-editing-hardening/spec.md`: FR-014; `specs/170-temporal-editing-hardening/tasks.md`: T048, T050 | Remediated | T048 now explicitly inspects and updates current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/PlansOverview.md`. T050 now searches those current docs/internal references along with runtime source surfaces. |
+| C1 | Coverage | MEDIUM | `specs/170-temporal-editing-hardening/spec.md`: FR-014; `specs/170-temporal-editing-hardening/tasks.md`: T048, T050 | Remediated | T048 now explicitly inspects and updates current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/101-PlansOverview.md`. T050 now searches those current docs/internal references along with runtime source surfaces. |
 | I1 | Inconsistency | LOW | `specs/170-temporal-editing-hardening/plan.md`: Source Code section; `specs/170-temporal-editing-hardening/tasks.md`: all phases | Remediated | Removed `moonmind/workflows/temporal/service.py` from the planned source surface list because implementation is intentionally scoped to the API/router, dashboard config, schema, frontend helper, and Mission Control entrypoints. |
 
 ## Coverage Summary
