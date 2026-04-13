@@ -115,6 +115,23 @@ _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
     ("threadId", "managed_session_thread_id"),
     ("turnId", "managed_session_turn_id"),
 )
+_OPENTELEMETRY_LOG_FORMAT = (
+    "%(asctime)s %(levelname)s [%(name)s] "
+    "[trace_id=%(trace_id)s span_id=%(span_id)s] "
+    "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
+    "activity_id=%(temporal_activity_id)s] "
+    "[managed_session_id=%(managed_session_id)s "
+    "task_run_id=%(managed_session_task_run_id)s "
+    "runtime_id=%(managed_session_runtime_id)s "
+    "epoch=%(managed_session_epoch)s "
+    "status=%(managed_session_status)s "
+    "degraded=%(managed_session_is_degraded)s "
+    "activity=%(managed_session_activity_type)s "
+    "transition=%(managed_session_transition)s "
+    "container_id=%(managed_session_container_id)s "
+    "thread_id=%(managed_session_thread_id)s "
+    "turn_id=%(managed_session_turn_id)s] %(message)s"
+)
 
 _SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
@@ -1061,26 +1078,26 @@ class OpenTelemetryLoggingFilter(logging.Filter):
         return True
 
 
+def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
+    if not enable_opentelemetry:
+        logging.basicConfig(level=logging.INFO)
+        return
+
+    logging.basicConfig(level=logging.INFO, format=_OPENTELEMETRY_LOG_FORMAT)
+    formatter = logging.Formatter(_OPENTELEMETRY_LOG_FORMAT)
+    for handler in logging.root.handlers:
+        handler.setFormatter(formatter)
+        if not any(
+            isinstance(existing_filter, OpenTelemetryLoggingFilter)
+            for existing_filter in handler.filters
+        ):
+            handler.addFilter(OpenTelemetryLoggingFilter())
+
+
 if __name__ == "__main__":
     import os
-    if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
-        log_format = (
-            "%(asctime)s %(levelname)s [%(name)s] "
-            "[trace_id=%(trace_id)s span_id=%(span_id)s] "
-            "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
-            "activity_id=%(temporal_activity_id)s] "
-            "[managed_session_id=%(managed_session_id)s "
-            "task_run_id=%(managed_session_task_run_id)s "
-            "runtime_id=%(managed_session_runtime_id)s "
-            "epoch=%(managed_session_epoch)s "
-            "status=%(managed_session_status)s "
-            "degraded=%(managed_session_is_degraded)s "
-            "activity=%(managed_session_activity_type)s "
-            "transition=%(managed_session_transition)s] %(message)s"
-        )
-        logging.basicConfig(level=logging.INFO, format=log_format)
-        for handler in logging.root.handlers:
-            handler.addFilter(OpenTelemetryLoggingFilter())
-    else:
-        logging.basicConfig(level=logging.INFO)
+
+    _configure_worker_logging(
+        enable_opentelemetry=os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1"
+    )
     asyncio.run(main_async())

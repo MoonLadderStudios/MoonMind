@@ -11,10 +11,12 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindManifestIngest,
     MoonMindRun,
     OpenTelemetryLoggingFilter,
+    _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
     _enforce_codex_config_for_managed_fleet,
     _build_runtime_planner,
     _build_runtime_activities,
+    _configure_worker_logging,
     main_async,
     resolve_adapter_metadata,
     get_activity_route,
@@ -88,6 +90,31 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
     assert "instructions" not in record.managed_session
     assert "rawLog" not in record.managed_session
     assert "token" not in record.managed_session
+
+
+def test_opentelemetry_log_format_includes_session_locator_fields() -> None:
+    assert "container_id=%(managed_session_container_id)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "thread_id=%(managed_session_thread_id)s" in _OPENTELEMETRY_LOG_FORMAT
+    assert "turn_id=%(managed_session_turn_id)s" in _OPENTELEMETRY_LOG_FORMAT
+
+
+def test_configure_worker_logging_applies_otel_formatter_to_existing_handlers() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    original_handlers = list(logging.root.handlers)
+    logging.root.handlers = [handler]
+
+    try:
+        _configure_worker_logging(enable_opentelemetry=True)
+    finally:
+        logging.root.handlers = original_handlers
+
+    assert handler.formatter is not None
+    assert handler.formatter._fmt == _OPENTELEMETRY_LOG_FORMAT
+    assert any(
+        isinstance(existing_filter, OpenTelemetryLoggingFilter)
+        for existing_filter in handler.filters
+    )
 
 
 def test_runtime_planner_preserves_execution_profile_ref():
