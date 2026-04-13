@@ -17,9 +17,9 @@
 
 **Purpose**: Confirm the existing Create page surfaces and test fixture before adding story-specific tests.
 
-- [ ] T001 Review current Jira import, preset message, applied template, and step update state in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T002 Review existing Create page Jira and preset regression fixtures in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T003 [P] Review UI action expectations in `specs/166-jira-preset-reapply/contracts/create-page-jira-preset-reapply.yaml`
+- [X] T001 Review current Jira import, preset message, applied template, and step update state in `frontend/src/entrypoints/task-create.tsx`
+- [X] T002 Review existing Create page Jira and preset regression fixtures in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T003 [P] Review UI action expectations in `specs/166-jira-preset-reapply/contracts/create-page-jira-preset-reapply.yaml`
 
 ---
 
@@ -29,8 +29,8 @@
 
 **Critical**: Complete this phase before story implementation so all stories share the same reapply and template-bound definitions.
 
-- [ ] T004 Define the exact reapply-needed message constant location and reuse strategy in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T005 Define the template-bound instruction identity predicate contract near existing step helpers in `frontend/src/entrypoints/task-create.tsx`
+- [X] T004 Define the exact reapply-needed message constant location and reuse strategy in `frontend/src/entrypoints/task-create.tsx`
+- [X] T005 Define the template-bound instruction identity predicate contract near existing step helpers in `frontend/src/entrypoints/task-create.tsx`
 
 **Checkpoint**: Shared behavior definitions are ready. User story tests can be written in priority order.
 
@@ -43,21 +43,21 @@
 
 ### Tests for User Story 1 (write first)
 
-- [ ] T006 [US1] Add a failing regression test for applied preset Jira import showing the exact reapply-needed message in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T007 [US1] Add a failing regression assertion that already-expanded preset steps remain unchanged after Jira preset import in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T008 [US1] Add a failing regression assertion that restoring preset instructions to the last applied value clears the reapply-needed message in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T009 [US1] Add a failing regression test that Jira import producing unchanged preset instructions does not show reapply-needed state in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T006 [US1] Add a failing regression test for applied preset Jira import showing the exact reapply-needed message in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T007 [US1] Add a failing regression assertion that already-expanded preset steps remain unchanged after Jira preset import in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T008 [US1] Add a failing regression assertion that restoring preset instructions to the last applied value clears the reapply-needed message in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T009 [US1] Add a failing regression test that Jira import producing unchanged preset instructions does not show reapply-needed state in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Update Jira preset import handling to set reapply-needed state only when applied templates exist and imported text changes the field in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T011 [US1] Preserve current expanded step state during Jira preset import by avoiding preset expansion calls in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T012 [US1] Update preset instructions change handling to clear reapply-needed state when text matches the last applied preset instructions in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T013 [US1] Keep unchanged Jira preset imports as no-ops for reapply-needed state in `frontend/src/entrypoints/task-create.tsx`
+- [X] T010 [US1] Update Jira preset import handling to set reapply-needed state only when applied templates exist and imported text changes the field in `frontend/src/entrypoints/task-create.tsx`
+- [X] T011 [US1] Preserve current expanded step state during Jira preset import by avoiding preset expansion calls in `frontend/src/entrypoints/task-create.tsx`
+- [X] T012 [US1] Update preset instructions change handling to clear reapply-needed state when text matches the last applied preset instructions in `frontend/src/entrypoints/task-create.tsx`
+- [X] T013 [US1] Keep unchanged Jira preset imports as no-ops for reapply-needed state in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 1
 
-- [ ] T014 [US1] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm User Story 1 assertions pass for `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T014 [US1] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm User Story 1 assertions pass for `frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Story 1 is independently functional and verifiable.
 
@@ -70,17 +70,17 @@
 
 ### Tests for User Story 2 (write first)
 
-- [ ] T015 [US2] Add a failing regression assertion that the preset action is labeled `Reapply preset` while reapply-needed state is visible in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T016 [US2] Add a failing regression assertion that the preset action returns to `Apply` after reapply-needed state clears in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T015 [US2] Add a failing regression assertion that the preset action is labeled `Reapply preset` while reapply-needed state is visible in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T016 [US2] Add a failing regression assertion that the preset action returns to `Apply` after reapply-needed state clears in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T017 [US2] Update the preset action label to render `Reapply preset` only while the reapply-needed message is active in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T018 [US2] Preserve the existing preset application handler so the explicit reapply action uses the same validated Apply flow in `frontend/src/entrypoints/task-create.tsx`
+- [X] T017 [US2] Update the preset action label to render `Reapply preset` only while the reapply-needed message is active in `frontend/src/entrypoints/task-create.tsx`
+- [X] T018 [US2] Preserve the existing preset application handler so the explicit reapply action uses the same validated Apply flow in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2
 
-- [ ] T019 [US2] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm User Story 1 and User Story 2 assertions pass for `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T019 [US2] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm User Story 1 and User Story 2 assertions pass for `frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Stories 1 and 2 are independently functional and verifiable.
 
@@ -93,21 +93,21 @@
 
 ### Tests for User Story 3 (write first)
 
-- [ ] T020 [US3] Add a failing regression test that opening Jira browser from a template-bound step shows the customization warning in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T021 [US3] Add a failing regression assertion that the customization warning disappears after Jira import detaches the step from template-bound instruction identity in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T022 [US3] Add or extend a regression assertion that Jira import into a template-bound step updates only the targeted step in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T023 [US3] Add or extend a regression assertion that submitting after Jira import omits template-bound step id for the customized step in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T020 [US3] Add a failing regression test that opening Jira browser from a template-bound step shows the customization warning in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T021 [US3] Add a failing regression assertion that the customization warning disappears after Jira import detaches the step from template-bound instruction identity in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T022 [US3] Add or extend a regression assertion that Jira import into a template-bound step updates only the targeted step in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T023 [US3] Add or extend a regression assertion that submitting after Jira import omits template-bound step id for the customized step in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T024 [US3] Implement a reusable template-bound instruction identity predicate for step drafts in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T025 [US3] Derive the current Jira step target and template-bound warning state from the active import target in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T026 [US3] Render the exact customization warning inside the Jira browser header when the active step target is still template-bound in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T027 [US3] Route Jira step imports through the existing step update path so instruction divergence detaches template identity in `frontend/src/entrypoints/task-create.tsx`
+- [X] T024 [US3] Implement a reusable template-bound instruction identity predicate for step drafts in `frontend/src/entrypoints/task-create.tsx`
+- [X] T025 [US3] Derive the current Jira step target and template-bound warning state from the active import target in `frontend/src/entrypoints/task-create.tsx`
+- [X] T026 [US3] Render the exact customization warning inside the Jira browser header when the active step target is still template-bound in `frontend/src/entrypoints/task-create.tsx`
+- [X] T027 [US3] Route Jira step imports through the existing step update path so instruction divergence detaches template identity in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 3
 
-- [ ] T028 [US3] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm all User Story 3 assertions pass for `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T028 [US3] Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and confirm all User Story 3 assertions pass for `frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: All user stories are independently functional and verifiable.
 
@@ -117,12 +117,12 @@
 
 **Purpose**: Verify runtime scope, type safety, and full unit-suite compatibility after all stories pass.
 
-- [ ] T029 Verify Jira browser failure remains local and manual task creation remains available in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T030 [P] Run `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` and address any type errors in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T031 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm targeted dashboard validation passes for `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --no-xdist` and confirm the full unit suite passes from repository root `tools/test_unit.sh`
-- [ ] T033 Confirm no task submission payload schema changes were introduced by inspecting Create page submission assembly in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T034 Confirm quickstart validation steps still match the delivered runtime behavior in `specs/166-jira-preset-reapply/quickstart.md`
+- [X] T029 Verify Jira browser failure remains local and manual task creation remains available in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T030 [P] Run `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` and address any type errors in `frontend/src/entrypoints/task-create.tsx`
+- [X] T031 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm targeted dashboard validation passes for `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --no-xdist` and confirm the full unit suite passes from repository root `tools/test_unit.sh`
+- [X] T033 Confirm no task submission payload schema changes were introduced by inspecting Create page submission assembly in `frontend/src/entrypoints/task-create.tsx`
+- [X] T034 Confirm quickstart validation steps still match the delivered runtime behavior in `specs/166-jira-preset-reapply/quickstart.md`
 
 ---
 
