@@ -11,9 +11,9 @@
 
 **Purpose**: Establish shared validation targets and confirm the existing contract artifacts are ready for implementation.
 
-- [ ] T001 [P] Verify the edit update OpenAPI contract parses and contains `/api/executions/{workflowId}/update` in `specs/168-temporal-edit-update-inputs/contracts/temporal-edit-update-inputs.openapi.yaml`
-- [ ] T002 [P] Review focused validation commands for frontend tests, typecheck, and unit wrapper in `specs/168-temporal-edit-update-inputs/quickstart.md`
-- [ ] T003 [P] Confirm no `DOC-REQ-*` coverage gate is required for this feature in `specs/168-temporal-edit-update-inputs/spec.md`
+- [X] T001 [P] Verify the edit update OpenAPI contract parses and contains `/api/executions/{workflowId}/update` in `specs/168-temporal-edit-update-inputs/contracts/temporal-edit-update-inputs.openapi.yaml`
+- [X] T002 [P] Review focused validation commands for frontend tests, typecheck, and unit wrapper in `specs/168-temporal-edit-update-inputs/quickstart.md`
+- [X] T003 [P] Confirm no `DOC-REQ-*` coverage gate is required for this feature in `specs/168-temporal-edit-update-inputs/spec.md`
 
 ---
 
@@ -25,13 +25,13 @@
 
 ### Tests for Foundational Helpers
 
-- [ ] T004 [P] Add failing payload-builder coverage for `UpdateInputs`, `parametersPatch`, and optional `inputArtifactRef` in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T005 [P] Add failing configured-update-endpoint coverage using `sources.temporal.update` defaults and workflow ID encoding in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T004 [P] Add failing payload-builder coverage for `UpdateInputs`, `parametersPatch`, and optional `inputArtifactRef` in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T005 [P] Add failing configured-update-endpoint coverage using `sources.temporal.update` defaults and workflow ID encoding in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for Foundational Helpers
 
-- [ ] T006 Implement `TemporalTaskEditUpdateName`, `TemporalArtifactEditUpdatePayload`, and `buildTemporalArtifactEditUpdatePayload` in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T007 Add `sources.temporal.update` typing and configured update URL interpolation support in `frontend/src/entrypoints/task-create.tsx`
+- [X] T006 Implement `TemporalTaskEditUpdateName`, `TemporalArtifactEditUpdatePayload`, and `buildTemporalArtifactEditUpdatePayload` in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T007 Add `sources.temporal.update` typing and configured update URL interpolation support in `frontend/src/entrypoints/task-create.tsx`
 
 **Checkpoint**: Shared payload and endpoint helpers exist; user story implementation can begin.
 
@@ -45,21 +45,21 @@
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Add failing active edit submit test for full supported-field preservation and `UpdateInputs` request shape, covering runtime, model, effort, repository, starting branch, target branch, publish mode, task instructions, primary skill, and template state when present in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T009 [P] [US1] Add failing active edit redirect and one-time success notice tests for immediate, safe-point, and continue-as-new accepted outcome messages in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T010 [P] [US1] Add failing Temporal detail success notice display/removal and execution refetch/refresh coverage in `frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T008 [P] [US1] Add failing active edit submit test for full supported-field preservation and `UpdateInputs` request shape, covering runtime, model, effort, repository, starting branch, target branch, publish mode, task instructions, primary skill, and template state when present in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T009 [P] [US1] Add failing active edit redirect and one-time success notice tests for immediate, safe-point, and continue-as-new accepted outcome messages in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T010 [P] [US1] Add failing Temporal detail success notice display/removal and execution refetch/refresh coverage in `frontend/src/entrypoints/task-detail.test.tsx`
 
 ### Implementation for User Story 1
 
-- [ ] T011 [US1] Remove the Phase 2 edit-mode non-submitting guard while keeping rerun blocked in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T012 [US1] Submit edit mode through `POST /api/executions/{workflowId}/update` with `updateName: "UpdateInputs"` and `parametersPatch` in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T013 [US1] Interpret immediate, safe-point, and continue-as-new accepted outcomes into operator-readable success copy in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T014 [US1] Redirect successful edits to the Temporal detail route for the relevant workflow in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T015 [US1] Display and clear a one-time Temporal task editing success notice after detail navigation in `frontend/src/entrypoints/task-detail.tsx`
+- [X] T011 [US1] Remove the Phase 2 edit-mode non-submitting guard while keeping rerun blocked in `frontend/src/entrypoints/task-create.tsx`
+- [X] T012 [US1] Submit edit mode through `POST /api/executions/{workflowId}/update` with `updateName: "UpdateInputs"` and `parametersPatch` in `frontend/src/entrypoints/task-create.tsx`
+- [X] T013 [US1] Interpret immediate, safe-point, and continue-as-new accepted outcomes into operator-readable success copy in `frontend/src/entrypoints/task-create.tsx`
+- [X] T014 [US1] Redirect successful edits to the Temporal detail route for the relevant workflow in `frontend/src/entrypoints/task-create.tsx`
+- [X] T015 [US1] Display and clear a one-time Temporal task editing success notice after detail navigation in `frontend/src/entrypoints/task-detail.tsx`
 
 ### Validation for User Story 1
 
-- [ ] T016 [US1] Verify User Story 1, including supported-field preservation, all three accepted outcome messages, redirect, and detail refetch/refresh, with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T016 [US1] Verify User Story 1, including supported-field preservation, all three accepted outcome messages, redirect, and detail refetch/refresh, with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
 
 **Checkpoint**: Active edit submit is functional end-to-end for inline edited input.
 
@@ -73,19 +73,19 @@
 
 ### Tests for User Story 2
 
-- [ ] T017 [P] [US2] Add failing artifact-backed edit submit test that asserts new artifact creation and upload content in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T018 [P] [US2] Add failing oversized edited input externalization coverage in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T019 [P] [US2] Add failing assertion that historical `inputArtifactRef` is not reused as the edited input reference in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T017 [P] [US2] Add failing artifact-backed edit submit test that asserts new artifact creation and upload content in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T018 [P] [US2] Add failing oversized edited input externalization coverage in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T019 [P] [US2] Add failing assertion that historical `inputArtifactRef` is not reused as the edited input reference in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Detect historical artifact-backed edit drafts and force creation of a fresh edited input artifact in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T021 [US2] Reuse existing artifact creation/upload/completion helpers for edited input externalization in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T022 [US2] Include the new `inputArtifactRef` in the `UpdateInputs` payload and edited `parametersPatch` when externalized in `frontend/src/entrypoints/task-create.tsx`
+- [X] T020 [US2] Detect historical artifact-backed edit drafts and force creation of a fresh edited input artifact in `frontend/src/entrypoints/task-create.tsx`
+- [X] T021 [US2] Reuse existing artifact creation/upload/completion helpers for edited input externalization in `frontend/src/entrypoints/task-create.tsx`
+- [X] T022 [US2] Include the new `inputArtifactRef` in the `UpdateInputs` payload and edited `parametersPatch` when externalized in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2
 
-- [ ] T023 [US2] Verify User Story 2 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T023 [US2] Verify User Story 2 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Artifact-backed and oversized edits preserve artifact immutability.
 
@@ -99,19 +99,19 @@
 
 ### Tests for User Story 3
 
-- [ ] T024 [P] [US3] Add failing stale terminal-state rejection test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T025 [P] [US3] Add failing backend validation/capability rejection message test in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T026 [P] [US3] Add failing artifact creation/upload/completion failure test for edit submit in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T024 [P] [US3] Add failing stale terminal-state rejection test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T025 [P] [US3] Add failing backend validation/capability rejection message test in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T026 [P] [US3] Add failing artifact creation/upload/completion failure test for edit submit in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Surface backend update rejection messages without success redirect in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T028 [US3] Surface artifact preparation failures before submitting `UpdateInputs` in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T029 [US3] Ensure failed edit saves keep the operator in edit mode and do not set a success notice in `frontend/src/entrypoints/task-create.tsx`
+- [X] T027 [US3] Surface backend update rejection messages without success redirect in `frontend/src/entrypoints/task-create.tsx`
+- [X] T028 [US3] Surface artifact preparation failures before submitting `UpdateInputs` in `frontend/src/entrypoints/task-create.tsx`
+- [X] T029 [US3] Ensure failed edit saves keep the operator in edit mode and do not set a success notice in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 3
 
-- [ ] T030 [US3] Verify User Story 3 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T030 [US3] Verify User Story 3 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Rejected edit outcomes are explicit and never masquerade as successful updates.
 
@@ -121,11 +121,11 @@
 
 **Purpose**: Final regression coverage and runtime scope validation.
 
-- [ ] T031 [P] Run TypeScript typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T032 [P] Run focused frontend regression tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
-- [ ] T033 [P] Verify no queue-era fallback appears in primary edit surfaces with `rg -n "editJobId|/tasks/queue/new|queue resubmit|queue update" frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-detail.tsx frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T034 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [ ] T035 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T031 [P] Run TypeScript typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T032 [P] Run focused frontend regression tests with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T033 [P] Verify no queue-era fallback appears in primary edit surfaces with `rg -n "editJobId|/tasks/queue/new|queue resubmit|queue update" frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-detail.tsx frontend/src/lib/temporalTaskEditing.ts`
+- [X] T034 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [X] T035 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
 
 ---
 

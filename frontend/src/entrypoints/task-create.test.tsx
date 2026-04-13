@@ -118,12 +118,14 @@ function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
 describe("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
   let executionResponseOverride: Response | null;
+  let artifactCreateResponseOverride: Response | null;
 
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
     vi.mocked(navigateTo).mockReset();
     executionResponseOverride = null;
+    artifactCreateResponseOverride = null;
     fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -611,6 +613,40 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (
+          url ===
+          "/gateway/api/executions/mm%3Acustom-edit?view=detail&source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:custom-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-default",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Save through configured endpoint.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-default",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -644,6 +680,138 @@ describe("Task Create Entrypoint", () => {
               applied: "safe_point",
               message: "Inputs scheduled.",
               execution: { workflowId: "mm:artifact-edit" },
+            }),
+          } as Response);
+        }
+        if (url === "/gateway/api/executions/mm%3Acustom-edit/updates") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              execution: { workflowId: "mm:custom-edit" },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Acontinue-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:continue-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Continue-as-new editable input.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Acontinue-edit/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              message: "Inputs accepted for a refreshed run.",
+              execution: { workflowId: "mm:continue-edit-next" },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Avalidation-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:validation-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Editable input with backend validation.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Avalidation-edit/update") {
+          return Promise.resolve({
+            ok: false,
+            status: 422,
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  code: "invalid_update_request",
+                  message: "Task input validation failed: target branch is invalid.",
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aartifact-failure?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:artifact-failure",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputArtifactRef: "historical-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Artifact-backed editable input.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aartifact-failure/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              execution: { workflowId: "mm:artifact-failure" },
             }),
           } as Response);
         }
@@ -687,6 +855,9 @@ describe("Task Create Entrypoint", () => {
           } as Response);
         }
         if (url === "/api/artifacts") {
+          if (artifactCreateResponseOverride) {
+            return Promise.resolve(artifactCreateResponseOverride);
+          }
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1224,6 +1395,69 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
+  it("submits edit updates through the configured Temporal update route", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Acustom-edit",
+    );
+    const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      customPayload.initialData as {
+        dashboardConfig: {
+          sources: {
+            temporal: {
+              detail: string;
+              update: string;
+            };
+          };
+        };
+      }
+    ).dashboardConfig.sources.temporal = {
+      ...(
+        customPayload.initialData as {
+          dashboardConfig: { sources: { temporal: Record<string, string> } };
+        }
+      ).dashboardConfig.sources.temporal,
+      detail: "/gateway/api/executions/{workflowId}?view=detail",
+      update: "/gateway/api/executions/{workflowId}/updates",
+    };
+
+    renderWithClient(<TaskCreatePage payload={customPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Save through configured endpoint.");
+    });
+    fireEvent.change(instructions, {
+      target: { value: "Edited through configured update endpoint." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/gateway/api/executions/mm%3Acustom-edit/updates",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === "/gateway/api/executions/mm%3Acustom-edit/updates",
+    );
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "UpdateInputs",
+      parametersPatch: {
+        repository: "MoonLadderStudios/MoonMind",
+        targetRuntime: "codex_cli",
+        task: {
+          instructions: "Edited through configured update endpoint.",
+        },
+      },
+    });
+  });
+
   it("shows a feature-disabled error without loading execution detail", async () => {
     window.history.pushState(
       {},
@@ -1407,12 +1641,36 @@ describe("Task Create Entrypoint", () => {
         targetRuntime: "gemini_cli",
         task: {
           instructions: "Save edited Temporal inputs.",
+          tool: {
+            type: "skill",
+            name: "speckit-implement",
+          },
+          skill: {
+            id: "speckit-implement",
+          },
+          skills: ["speckit-implement"],
           runtime: {
             mode: "gemini_cli",
             model: "gemini-2.5-pro",
             effort: "high",
             profileId: "profile:gemini-default",
           },
+          git: {
+            startingBranch: "main",
+            targetBranch: "task-editing-phase-2",
+          },
+          publish: {
+            mode: "branch",
+          },
+          appliedStepTemplates: [
+            expect.objectContaining({
+              slug: "speckit-demo",
+              version: "1.2.3",
+              inputs: { feature_name: "Task Editing" },
+              stepIds: ["tpl:speckit-demo:1.2.3:01"],
+              capabilities: ["git"],
+            }),
+          ],
         },
       },
     });
@@ -1425,6 +1683,33 @@ describe("Task Create Entrypoint", () => {
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Changes were saved to this execution.");
+  });
+
+  it("shows continue-as-new success copy and redirects to the returned execution context", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Acontinue-edit",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(instructions, {
+      target: { value: "Accept these inputs for the refreshed run." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/tasks/mm%3Acontinue-edit-next?source=temporal",
+      );
+    });
+    expect(
+      window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
+    ).toBe("Changes were accepted and will continue in a refreshed run.");
   });
 
   it("creates a fresh input artifact when editing an artifact-backed execution", async () => {
@@ -1488,6 +1773,59 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Changes were scheduled for the next safe point.");
   });
 
+  it("externalizes oversized edited input before sending UpdateInputs", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Rebuild the Temporal task draft.");
+    });
+    const oversizedInstructions = `Edited oversized instructions. ${"x".repeat(9000)}`;
+    fireEvent.change(instructions, {
+      target: { value: oversizedInstructions },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aedit-123/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
+    );
+    expect(artifactCreateCall).toBeTruthy();
+    const artifactUploadCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/artifacts/art-001/content" &&
+        init?.method === "PUT",
+    );
+    expect(String(artifactUploadCall?.[1]?.body)).toContain(
+      oversizedInstructions,
+    );
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Aedit-123/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "UpdateInputs",
+      inputArtifactRef: "art-001",
+      parametersPatch: {
+        inputArtifactRef: "art-001",
+      },
+    });
+    expect(request.parametersPatch.task.instructions).toBeUndefined();
+  });
+
   it("shows backend stale-state failures without redirecting from edit mode", async () => {
     window.history.pushState(
       {},
@@ -1512,6 +1850,71 @@ describe("Task Create Entrypoint", () => {
         "Workflow is in a terminal state and no longer accepts updates.",
       ),
     ).toBeTruthy();
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it("shows backend validation failures without redirecting from edit mode", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Avalidation-edit",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(instructions, {
+      target: { value: "Submit invalid target branch." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(
+      await screen.findByText(
+        "Task input validation failed: target branch is invalid.",
+      ),
+    ).toBeTruthy();
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(
+      window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
+    ).toBeNull();
+  });
+
+  it("shows artifact preparation failures without submitting UpdateInputs", async () => {
+    artifactCreateResponseOverride = {
+      ok: false,
+      status: 422,
+      text: async () =>
+        JSON.stringify({
+          detail: {
+            code: "artifact_create_failed",
+            message: "Artifact storage is unavailable.",
+          },
+        }),
+    } as Response;
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aartifact-failure",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(instructions, {
+      target: { value: "Attempt artifact-backed edit." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(await screen.findByText("Artifact storage is unavailable.")).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/executions/mm%3Aartifact-failure/update",
+      ),
+    ).toBe(false);
     expect(navigateTo).not.toHaveBeenCalled();
   });
 

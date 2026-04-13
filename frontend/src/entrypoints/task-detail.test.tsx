@@ -1101,6 +1101,11 @@ describe('Task Detail Entrypoint', () => {
 
     expect(await screen.findByText('Changes were saved to this execution.')).toBeTruthy();
     expect(screen.getByRole('status')).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123?source=temporal',
+      );
+    });
     expect(
       window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
     ).toBeNull();
