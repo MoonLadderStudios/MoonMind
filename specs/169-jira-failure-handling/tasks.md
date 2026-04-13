@@ -82,7 +82,7 @@
 
 - [ ] T021 [US2] Implement shared local Jira error and empty-state message formatting with manual-continuation guidance for DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T022 [US2] Render project and board query failures and empty states inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T023 [US2] Render column, issue-list, and issue-detail query failures and empty issue-list states inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T023 [US2] Render column, issue-list, and issue-detail query failures and empty column or issue-list states inside the Jira browser panel only for DOC-REQ-001 and DOC-REQ-002 in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T024 [US2] Ensure issue-detail failure leaves import preview/actions unavailable without mutating draft fields for DOC-REQ-001 and DOC-REQ-003 in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2

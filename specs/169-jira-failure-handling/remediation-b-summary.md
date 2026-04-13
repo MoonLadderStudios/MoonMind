@@ -18,7 +18,7 @@ None.
 - Validation tasks remain present in `tasks.md`.
 - Runtime scope validation passed after remediation with `runtime tasks=17` and `validation tasks=16`.
 - `DOC-REQ-*` identifiers remain mapped to functional requirements, implementation surfaces, and validation strategy.
-- The latest `speckit_analyze_report.md` remains the pre-Prompt-B analysis snapshot; the Prompt A medium finding has been remediated in `tasks.md` and traceability artifacts.
+- `speckit_analyze_report.md` was refreshed after Prompt B and now reports zero remaining findings.
 
 ## Residual Risks
 
