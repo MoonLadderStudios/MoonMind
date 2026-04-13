@@ -1,9 +1,11 @@
 # Specification Analysis Report
 
-| ID | Category | Severity | Location(s) | Summary | Recommendation |
+Prompt B remediation has been applied. No open CRITICAL, HIGH, MEDIUM, or LOW findings remain.
+
+| ID | Category | Original Severity | Location(s) | Status | Remediation Applied |
 | --- | --- | --- | --- | --- | --- |
-| C1 | Coverage | MEDIUM | `specs/170-temporal-editing-hardening/spec.md`: FR-014; `specs/170-temporal-editing-hardening/tasks.md`: T048, T050 | FR-014 requires runtime-visible documentation or internal references that describe active primary Temporal task editing behavior to reflect the Temporal-native model. Tasks currently update only the feature quickstart and search primary runtime source surfaces, not current docs/internal references outside the feature folder. | Add a task to inspect current runtime-visible docs/internal references such as `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and relevant `docs/tmp/` trackers, updating only non-historical current guidance if needed. |
-| I1 | Inconsistency | LOW | `specs/170-temporal-editing-hardening/plan.md`: Source Code section; `specs/170-temporal-editing-hardening/tasks.md`: all phases | The plan lists `moonmind/workflows/temporal/service.py` as a target source surface, but no task references that file. The spec can still be satisfied at the API/router boundary, so this is likely an over-broad planned surface rather than a missing implementation task. | Either add a targeted task if service-layer telemetry or rejection semantics must change, or remove `moonmind/workflows/temporal/service.py` from the plan's source surface list during remediation. |
+| C1 | Coverage | MEDIUM | `specs/170-temporal-editing-hardening/spec.md`: FR-014; `specs/170-temporal-editing-hardening/tasks.md`: T048, T050 | Remediated | T048 now explicitly inspects and updates current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/PlansOverview.md`. T050 now searches those current docs/internal references along with runtime source surfaces. |
+| I1 | Inconsistency | LOW | `specs/170-temporal-editing-hardening/plan.md`: Source Code section; `specs/170-temporal-editing-hardening/tasks.md`: all phases | Remediated | Removed `moonmind/workflows/temporal/service.py` from the planned source surface list because implementation is intentionally scoped to the API/router, dashboard config, schema, frontend helper, and Mission Control entrypoints. |
 
 ## Coverage Summary
 
@@ -22,7 +24,7 @@
 | FR-011 no queue-era primary flow usage | Yes | T042, T045, T046, T047, T050 | Covered in primary source surfaces; docs/internal-reference scan gap captured separately as C1. |
 | FR-012 success returns to Temporal detail context | Yes | T028, T029, T036, T037, T043, T049 | Covered in happy-path and cleanup tests. |
 | FR-013 copy distinguishes active edit and terminal rerun without queue language | Yes | T044, T046, T049 | Covered by operator-facing copy tests and implementation. |
-| FR-014 current runtime docs/internal references reflect Temporal-native model | Partial | T048 | Feature quickstart is covered, but current runtime-visible docs/internal references are not explicitly inspected. See C1. |
+| FR-014 current runtime docs/internal references reflect Temporal-native model | Yes | T048, T050 | Current runtime-visible docs/internal references are explicitly inspected, updated where needed, and searched for queue-era leakage. |
 | FR-015 rollout control supports local/staging/dogfood/limited/all-operator exposure | Yes | T008, T011, T051, T054, T055, T057, T058 | Covered by backend config and rollout-gate tasks. |
 | FR-016 rollout readiness health signals | Yes | T057 | Covered in quickstart rollout gates. |
 | FR-017 runtime code changes plus validation tests | Yes | T009-T011, T018-T023, T033-T039, T045-T047, T054-T056, T060-T065 | Runtime scope validation already passes. |
@@ -32,7 +34,7 @@
 No CRITICAL constitution conflicts found.
 
 - Principle XI is satisfied: `spec.md`, `plan.md`, and `tasks.md` exist and the plan includes initial and post-design constitution checks.
-- Principle XII is mostly satisfied: rollout sequencing remains in feature artifacts rather than canonical docs. Finding C1 asks only for inspection/update of current guidance where needed, not migration-plan duplication.
+- Principle XII is satisfied: rollout sequencing remains in feature artifacts, while T048/T050 only inspect or update current guidance where needed.
 - Principle XIII is supported by queue-era cleanup tasks that remove current primary flow leakage rather than preserving fallback aliases.
 - Principle IX is supported by stale-state, validation-failure, artifact-failure, and non-blocking telemetry tasks.
 
@@ -46,18 +48,17 @@ No CRITICAL constitution conflicts found.
 
 - Total Requirements: 17
 - Total Tasks: 66
-- Requirements with full task coverage: 16
-- Requirements with partial task coverage: 1
-- Coverage: 94%
+- Requirements with full task coverage: 17
+- Requirements with partial task coverage: 0
+- Coverage: 100%
 - Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
 - High Issues Count: 0
-- Medium Issues Count: 1
-- Low Issues Count: 1
+- Medium Issues Count: 0
+- Low Issues Count: 0
 
 ## Next Actions
 
-- No CRITICAL or HIGH issues block implementation.
-- Before `speckit-implement`, consider remediating C1 by adding one explicit task for current docs/internal-reference inspection and any needed update.
-- Consider remediating I1 by either adding a service-layer task for `moonmind/workflows/temporal/service.py` or removing that file from the plan's source surface list if it is not part of the intended implementation.
+- No CRITICAL, HIGH, MEDIUM, or LOW issues block implementation.
+- Proceed to `speckit-implement` when ready.

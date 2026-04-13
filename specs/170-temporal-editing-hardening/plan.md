@@ -68,11 +68,8 @@ api_service/
 moonmind/
 ├── config/
 │   └── settings.py
-├── schemas/
-│   └── temporal_models.py
-└── workflows/
-    └── temporal/
-        └── service.py
+└── schemas/
+    └── temporal_models.py
 
 frontend/
 └── src/
@@ -92,7 +89,7 @@ tests/
             └── test_task_dashboard_view_model.py
 ```
 
-**Structure Decision**: Use existing API, Temporal service, dashboard config, frontend helper, and Mission Control entrypoint boundaries. This avoids a separate telemetry service or task-editing subsystem and keeps the feature close to the contracts it hardens.
+**Structure Decision**: Use existing API, dashboard config, frontend helper, and Mission Control entrypoint boundaries. This avoids a separate telemetry service or task-editing subsystem and keeps the feature close to the contracts it hardens.
 
 ## Phase 0: Research Summary
 
