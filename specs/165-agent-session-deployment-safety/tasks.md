@@ -1,66 +1,68 @@
 # Tasks: Agent Session Deployment Safety
 
 **Input**: Design documents from `/specs/165-agent-session-deployment-safety/`
-**Prerequisites**: `plan.md` (required), `spec.md` (required for user stories), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
-**Tests**: Automated tests are required for each runtime story. Write or update the listed tests before production edits and confirm they fail for the expected missing or incorrect behavior when the behavior is not already present.
-**Organization**: Tasks are grouped by user story so each story can be implemented, validated, and demonstrated independently.
+**Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/agent-session-deployment-safety.md`, `quickstart.md`
+**Tests**: Required. This feature explicitly requires test-driven development, so add or update targeted validation before treating production runtime changes as complete.
+**Organization**: Tasks are grouped by user story to keep each story independently implementable and testable.
 
-## Phase 1: Setup (Shared Infrastructure)
+## Phase 1: Setup
 
-**Purpose**: Establish the feature-specific audit and validation scaffolding before story work.
+**Purpose**: Establish feature scope, traceability status, and current implementation inventory before changing runtime code.
 
-- [X] T001 Verify the current managed-session runtime surfaces against FR-001 through FR-027 and record any discovered implementation gaps in `specs/165-agent-session-deployment-safety/quickstart.md`
-- [X] T002 [P] Add a focused managed-session contract coverage checklist to `specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md`
-- [X] T003 [P] Confirm no `DOC-REQ-*` identifiers exist for this feature and leave traceability status documented in `specs/165-agent-session-deployment-safety/plan.md`
+- [ ] T001 Verify current managed-session workflow, runtime, controller, worker, reconcile, and tests against FR-001 through FR-028 in `specs/165-agent-session-deployment-safety/quickstart.md`
+- [ ] T002 [P] Confirm no `DOC-REQ-*` identifiers exist and no requirements traceability artifact is required in `specs/165-agent-session-deployment-safety/plan.md`
+- [ ] T003 [P] Record TDD sequencing and runtime-mode scope guard in `specs/165-agent-session-deployment-safety/research.md`
+- [ ] T004 [P] Ensure the production/session-plane contract includes validation mapping for TDD, replay gates, and runtime deliverables in `specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md`
 
 ---
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 2: Foundational
 
-**Purpose**: Shared runtime contracts and activity semantics that every story depends on.
+**Purpose**: Shared schemas, routing, retry, heartbeat, task-queue, and worker-versioning prerequisites used by every story.
 
-**CRITICAL**: No user story work can begin until this phase is complete.
+**CRITICAL**: Complete this phase before story-specific implementation.
 
-- [X] T004 [P] Add or update managed-session payload fields for control request idempotency, epoch validation, bounded refs, and Continue-As-New carry-forward in `moonmind/schemas/managed_session_models.py`
-- [X] T005 [P] Add schema regression coverage for managed-session control, snapshot, and carry-forward payloads in `tests/unit/schemas/test_managed_session_models.py`
-- [X] T006 Update managed-session activity routes with heartbeat and retry policy expectations for send, steer, interrupt, clear, cancel, terminate, publish, and reconcile in `moonmind/workflows/temporal/activity_catalog.py`
-- [X] T007 Add activity route timeout, retry, and heartbeat regression coverage for managed-session activities in `tests/unit/workflows/temporal/test_activity_catalog.py`
-- [X] T008 Update managed-session worker/runtime configuration plumbing for separated workflow and heavy runtime activity task queues in `moonmind/workflows/temporal/worker_runtime.py`
-- [X] T009 Add worker task-queue separation regression coverage for managed-session workflow and runtime activities in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [ ] T005 [P] Add or update managed-session request idempotency, epoch, continuity ref, and Continue-As-New carry-forward schemas in `moonmind/schemas/managed_session_models.py`
+- [ ] T006 [P] Add schema regression tests for managed-session control and carry-forward payloads in `tests/unit/schemas/test_managed_session_models.py`
+- [ ] T007 Add heartbeat, retry, timeout, and non-retryable expectations for managed-session activities in `moonmind/workflows/temporal/activity_catalog.py`
+- [ ] T008 Add route policy regression tests for managed-session activities in `tests/unit/workflows/temporal/test_activity_catalog.py`
+- [ ] T009 Update worker routing so workflow processing and heavy managed-runtime activities use separated task queues in `moonmind/workflows/temporal/worker_runtime.py`
+- [ ] T010 Add worker task-queue separation tests in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [ ] T011 Add or update deployment-safety helper coverage for worker-versioning and replay/cutover gates in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
 
-**Checkpoint**: Shared schemas, activity routing, and worker routing are ready for story implementation.
+**Checkpoint**: Shared schemas, activity policies, worker routing, and deployment-safety gates are ready.
 
 ---
 
 ## Phase 3: User Story 1 - Control Sessions Without Leaks (Priority: P1)
 
-**Goal**: Production managed-session controls use the canonical vocabulary, reject invalid mutations deterministically, and make terminate/cancel/steer/interrupt real end-to-end runtime behaviors.
+**Goal**: Production controls use the canonical vocabulary, reject invalid mutations deterministically, and make terminate/cancel/steer/interrupt real runtime behaviors.
 **Independent Test**: Exercise each control through the workflow boundary and verify state, artifacts, recovery records, and runtime cleanup without treating container-local cache as durable truth.
 
 ### Tests for User Story 1
 
-- [X] T010 [P] [US1] Add workflow-boundary tests for `SendFollowUp`, `SteerTurn`, `InterruptTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` accepted paths in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T011 [P] [US1] Add workflow-boundary rejection tests for stale epoch, missing runtime handles, missing active turn, clear while clearing, and mutator after termination in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T012 [P] [US1] Add runtime-level steering, interruption, cancellation, clear, and termination behavior tests in `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`
-- [X] T013 [P] [US1] Add controller-level idempotent clear, interrupt, steer, cancel, and terminate cleanup tests in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
-- [X] T014 [P] [US1] Add parent/session termination race coverage proving no orphaned session remains in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
-- [X] T015 [P] [US1] Add activity-wrapper tests for non-retryable permanent failures and heartbeat-wrapped managed-session controls in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [ ] T012 [P] [US1] Add accepted-path workflow tests for `SendFollowUp`, `SteerTurn`, `InterruptTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T013 [P] [US1] Add workflow rejection tests for stale epoch, missing handles, missing active turn, duplicate request, clear while clearing, and mutator after termination in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T014 [P] [US1] Add runtime-level steer, interrupt, cancel, clear, and terminate behavior tests in `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`
+- [ ] T015 [P] [US1] Add controller idempotency and finalization tests for clear, interrupt, steer, cancel, and terminate in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [ ] T016 [P] [US1] Add parent/session termination race coverage proving no orphaned session remains in `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`
+- [ ] T017 [P] [US1] Add activity-wrapper tests for heartbeat delivery and non-retryable permanent failures in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
 
 ### Implementation for User Story 1
 
-- [X] T016 [US1] Enforce typed workflow Update validators and deterministic pre-mutation rejection for managed-session controls in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T017 [US1] Restrict generic `control_action` handling to replay or explicit bridge behavior and keep production mutation outcomes on typed Updates in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T018 [US1] Wire workflow `InterruptTurn` and `SteerTurn` through runtime activities and update active-turn state, control refs, and bounded status in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T019 [US1] Implement distinct workflow `CancelSession` semantics that stop active work without marking runtime container teardown complete in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T020 [US1] Implement cleanup-complete workflow `TerminateSession` semantics that wait for runtime termination and supervision finalization before workflow completion in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T021 [US1] Make managed-session runtime send, steer, interrupt, clear, cancel, and terminate operations state-aware and idempotent in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
-- [X] T022 [US1] Make controller clear, interrupt, steer, cancel, and terminate operations retry-safe and finalization-aware in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [X] T023 [US1] Ensure supervisor finalization records terminal cleanup and bounded terminal artifact refs in `moonmind/workflows/temporal/runtime/managed_session_supervisor.py`
-- [X] T024 [US1] Surface permanent invalid-state or unsupported-runtime failures as non-retryable activity errors and heartbeat blocking control calls in `moonmind/workflows/temporal/activity_runtime.py`
+- [ ] T018 [US1] Enforce typed workflow Update validators and deterministic pre-mutation rejection in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T019 [US1] Restrict generic `control_action` handling to replay or explicit bridge behavior in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T020 [US1] Wire workflow `InterruptTurn` and `SteerTurn` through runtime activities and bounded state updates in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T021 [US1] Implement distinct workflow `CancelSession` semantics that stop active work without marking runtime teardown complete in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T022 [US1] Implement cleanup-complete workflow `TerminateSession` semantics that wait for runtime termination and supervision finalization in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T023 [US1] Make managed-session runtime send, steer, interrupt, clear, cancel, and terminate operations state-aware and idempotent in `moonmind/workflows/temporal/runtime/codex_session_runtime.py`
+- [ ] T024 [US1] Make controller clear, interrupt, steer, cancel, and terminate operations retry-safe and finalization-aware in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [ ] T025 [US1] Ensure supervisor finalization records terminal cleanup and bounded terminal artifact refs in `moonmind/workflows/temporal/runtime/managed_session_supervisor.py`
+- [ ] T026 [US1] Surface permanent invalid-state or unsupported-runtime failures as non-retryable activity errors and heartbeat blocking control calls in `moonmind/workflows/temporal/activity_runtime.py`
 
 ### Validation for User Story 1
 
-- [X] T025 [US1] Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [ ] T027 [US1] Run focused US1 validation with `./tools/test_unit.sh` for `tests/unit/workflows/temporal/workflows/test_agent_session.py`, `tests/unit/workflows/temporal/workflows/test_run_codex_sessions.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`, and `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 
 **Checkpoint**: User Story 1 is independently functional and leak-focused controls are verifiable.
 
@@ -68,29 +70,29 @@
 
 ## Phase 4: User Story 2 - Keep Long-Lived Sessions Safe (Priority: P2)
 
-**Goal**: Long-lived message-heavy session workflows serialize mutators, wait for runtime readiness, drain accepted handlers, and Continue-As-New with compact carry-forward state.
+**Goal**: Long-lived, message-heavy session workflows serialize mutators, wait for runtime readiness, drain accepted handlers, and Continue-As-New with compact carry-forward state.
 **Independent Test**: Drive concurrent controls, early runtime-bound updates, handler handoff, and forced shortened-history rollover.
 
 ### Tests for User Story 2
 
-- [X] T026 [P] [US2] Add concurrent mutator ordering and shared-state serialization tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T027 [P] [US2] Add accepted-before-handles readiness tests for runtime-bound controls in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T028 [P] [US2] Add handler-drain-before-complete and handler-drain-before-Continue-As-New tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T029 [P] [US2] Add shortened-history Continue-As-New carry-forward tests for locator, epoch, refs, and request tracking in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
-- [X] T030 [P] [US2] Add local workflow lifecycle coverage for early updates and Continue-As-New handoff in `tests/integration/services/temporal/workflows/test_agent_session_lifecycle.py`
+- [ ] T028 [P] [US2] Add concurrent mutator ordering and shared-state serialization tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T029 [P] [US2] Add accepted-before-handles readiness tests for runtime-bound controls in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T030 [P] [US2] Add handler-drain-before-complete and handler-drain-before-Continue-As-New tests in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T031 [P] [US2] Add shortened-history Continue-As-New carry-forward tests for locator, epoch, refs, degradation, and request tracking in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
+- [ ] T032 [P] [US2] Add local workflow lifecycle coverage for early updates and Continue-As-New handoff in `tests/integration/services/temporal/workflows/test_agent_session_lifecycle.py`
 
 ### Implementation for User Story 2
 
-- [X] T031 [US2] Ensure all async mutators touching locator, thread, active turn, status, control metadata, refs, and degradation state share one workflow-safe lock in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T032 [US2] Gate accepted runtime-bound controls on runtime-handle readiness with deterministic wait conditions in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T033 [US2] Wait for `workflow.all_handlers_finished` before workflow completion and before Continue-As-New handoff in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T034 [US2] Keep Continue-As-New initiation in the workflow main run path and carry forward binding, epoch, locator, control metadata, refs, degradation, and request-tracking state in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T035 [US2] Preserve parent workflow session handoff behavior and child workflow invocation payload shape in `moonmind/workflows/temporal/workflows/run.py`
+- [ ] T033 [US2] Ensure all async mutators touching locator, thread, active turn, status, control metadata, refs, and degradation state share one workflow-safe lock in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T034 [US2] Gate accepted runtime-bound controls on runtime-handle readiness with deterministic wait conditions in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T035 [US2] Wait for `workflow.all_handlers_finished` before workflow completion and Continue-As-New handoff in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T036 [US2] Keep Continue-As-New initiation in the workflow main run path and carry forward binding, epoch, locator, control metadata, refs, degradation, and request-tracking state in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T037 [US2] Preserve parent workflow child-session invocation and handoff payload shape in `moonmind/workflows/temporal/workflows/run.py`
 
 ### Validation for User Story 2
 
-- [X] T036 [US2] Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/workflows/temporal/test_agent_session_replayer.py`
-- [X] T037 [US2] Run `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/integration/services/temporal/workflows/test_agent_session_lifecycle.py -q`
+- [ ] T038 [US2] Run focused US2 unit validation with `./tools/test_unit.sh` for `tests/unit/workflows/temporal/workflows/test_agent_session.py` and `tests/unit/workflows/temporal/test_agent_session_replayer.py`
+- [ ] T039 [US2] Run local Temporal lifecycle validation with `pytest tests/integration/services/temporal/workflows/test_agent_session_lifecycle.py -q`
 
 **Checkpoint**: User Story 2 is independently functional and long-lived workflow hazards are covered.
 
@@ -103,29 +105,29 @@
 
 ### Tests for User Story 3
 
-- [X] T038 [P] [US3] Add bounded current-details and Search Attribute tests for managed session identity, epoch, status, and degradation state in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T039 [P] [US3] Add activity summary tests for launch, send, steer, interrupt, clear, cancel, terminate, publish, and reconcile in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
-- [X] T040 [P] [US3] Add controller publication tests proving summary/checkpoint/control/reset refs come from durable managed-session records in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
-- [X] T041 [P] [US3] Add supervisor artifact publication and terminal summary tests in `tests/unit/services/temporal/runtime/test_managed_session_supervisor.py`
-- [X] T042 [P] [US3] Add managed-session reconcile workflow tests for missing containers, stale degraded sessions, orphaned runtime state, and bounded outcomes in `tests/unit/workflows/temporal/workflows/test_managed_session_reconcile.py`
-- [X] T043 [P] [US3] Add client schedule tests for recurring managed-session reconcile creation, identifiers, and bounded metadata in `tests/unit/workflows/temporal/test_client_schedules.py`
-- [X] T044 [P] [US3] Add forbidden-content regression tests for workflow metadata, activity summaries, schedule metadata, and replay fixtures in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T040 [P] [US3] Add bounded current-details and Search Attribute tests for managed-session identity, epoch, status, and degradation state in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T041 [P] [US3] Add activity summary tests for launch, send, steer, interrupt, clear, cancel, terminate, publish, and reconcile in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [ ] T042 [P] [US3] Add controller publication tests proving summary/checkpoint/control/reset refs come from durable managed-session records in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
+- [ ] T043 [P] [US3] Add supervisor artifact publication and terminal summary tests in `tests/unit/services/temporal/runtime/test_managed_session_supervisor.py`
+- [ ] T044 [P] [US3] Add reconcile workflow tests for missing containers, stale degraded sessions, orphaned runtime state, and bounded outcomes in `tests/unit/workflows/temporal/workflows/test_managed_session_reconcile.py`
+- [ ] T045 [P] [US3] Add client schedule tests for recurring managed-session reconcile creation, identifiers, and bounded metadata in `tests/unit/workflows/temporal/test_client_schedules.py`
+- [ ] T046 [P] [US3] Add forbidden-content regression tests for workflow metadata, activity summaries, schedule metadata, and replay fixtures in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
 
 ### Implementation for User Story 3
 
-- [X] T045 [US3] Update workflow static summary, static details, current details, Search Attributes, and query state to bounded managed-session fields only in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T046 [US3] Update Temporal client Search Attribute construction and managed-session schedule metadata to use only bounded identifiers in `moonmind/workflows/temporal/client.py`
-- [X] T047 [US3] Update managed-session activity summaries and telemetry correlation fields to avoid prompts, transcripts, scrollback, raw logs, credentials, secrets, and unbounded output in `moonmind/workflows/temporal/activity_runtime.py`
-- [X] T048 [US3] Ensure production summary and artifact publication reads from controller/supervisor durable records rather than container-local fallback helpers in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [X] T049 [US3] Ensure supervisor summary, checkpoint, control, and reset artifacts are bounded and finalization-safe in `moonmind/workflows/temporal/runtime/managed_session_supervisor.py`
-- [X] T050 [US3] Implement or harden recurring reconcile outcomes for stale degraded records, missing containers, orphaned runtime state, and supervision drift in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
-- [X] T051 [US3] Update `MoonMindManagedSessionReconcileWorkflow` to return bounded reconcile summaries and avoid sensitive payloads in `moonmind/workflows/temporal/workflows/managed_session_reconcile.py`
-- [X] T052 [US3] Register and route managed-session reconcile workflow and runtime activities onto the intended task queues in `moonmind/workflows/temporal/workers.py`
+- [ ] T047 [US3] Update workflow static summary, static details, current details, Search Attributes, and query state to bounded managed-session fields only in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T048 [US3] Update Temporal client Search Attribute construction and managed-session schedule metadata to use only bounded identifiers in `moonmind/workflows/temporal/client.py`
+- [ ] T049 [US3] Update managed-session activity summaries and telemetry correlation fields to avoid prompts, transcripts, scrollback, raw logs, credentials, secrets, and unbounded output in `moonmind/workflows/temporal/activity_runtime.py`
+- [ ] T050 [US3] Ensure production summary and artifact publication reads from controller/supervisor durable records rather than container-local fallback helpers in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [ ] T051 [US3] Ensure supervisor summary, checkpoint, control, and reset artifacts are bounded and finalization-safe in `moonmind/workflows/temporal/runtime/managed_session_supervisor.py`
+- [ ] T052 [US3] Implement or harden recurring reconcile outcomes for stale degraded records, missing containers, orphaned runtime state, and supervision drift in `moonmind/workflows/temporal/runtime/managed_session_controller.py`
+- [ ] T053 [US3] Update `MoonMindManagedSessionReconcileWorkflow` to return bounded reconcile summaries and avoid sensitive payloads in `moonmind/workflows/temporal/workflows/managed_session_reconcile.py`
+- [ ] T054 [US3] Register and route managed-session reconcile workflow and runtime activities onto intended task queues in `moonmind/workflows/temporal/workers.py`
 
 ### Validation for User Story 3
 
-- [X] T053 [US3] Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/workflows/temporal/workflows/test_agent_session.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/workflows/temporal/workflows/test_managed_session_reconcile.py tests/unit/workflows/temporal/test_client_schedules.py tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/services/temporal/runtime/test_managed_session_supervisor.py`
-- [X] T054 [US3] Run the forbidden-content scan from `specs/165-agent-session-deployment-safety/quickstart.md` against `moonmind/workflows/temporal`, `tests/unit/workflows/temporal`, and `tests/integration/services/temporal/workflows`
+- [ ] T055 [US3] Run focused US3 validation with `./tools/test_unit.sh` for `tests/unit/workflows/temporal/workflows/test_agent_session.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, `tests/unit/workflows/temporal/workflows/test_managed_session_reconcile.py`, `tests/unit/workflows/temporal/test_client_schedules.py`, `tests/unit/services/temporal/runtime/test_managed_session_controller.py`, and `tests/unit/services/temporal/runtime/test_managed_session_supervisor.py`
+- [ ] T056 [US3] Run the forbidden-content scan from `specs/165-agent-session-deployment-safety/quickstart.md` against `moonmind/workflows/temporal`, `tests/unit/workflows/temporal`, and `tests/integration/services/temporal/workflows`
 
 **Checkpoint**: User Story 3 is independently functional and bounded recovery/observability behavior is covered.
 
@@ -138,23 +140,25 @@
 
 ### Tests for User Story 4
 
-- [X] T055 [P] [US4] Add Worker Versioning configuration tests for managed-session workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
-- [X] T056 [P] [US4] Add replay gate tests for representative open and closed `AgentSessionWorkflow` histories in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
-- [X] T057 [P] [US4] Add patch or versioned-cutover assertion tests for handler, payload, Continue-As-New, and visibility-shape changes in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T058 [P] [US4] Add cutover playbook validation tests for steering, Continue-As-New, cancel/terminate semantics, and visibility metadata in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
+- [ ] T057 [P] [US4] Add Worker Versioning configuration tests for managed-session workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
+- [ ] T058 [P] [US4] Add replay gate tests for representative open and closed `AgentSessionWorkflow` histories in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
+- [ ] T059 [P] [US4] Add patch or versioned-cutover assertion tests for handler, payload, Continue-As-New, and visibility-shape changes in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T060 [P] [US4] Add deployment-safety helper tests for sensitive path detection, worker-versioning enforcement, replay coverage, and cutover topics in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
 
 ### Implementation for User Story 4
 
-- [X] T059 [US4] Enforce managed-session Worker Versioning configuration and safe default behavior in `moonmind/workflows/temporal/worker_runtime.py`
-- [X] T060 [US4] Add or harden explicit patch/version gates around replay-sensitive managed-session workflow-shape changes in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T061 [US4] Add replay gate helpers or fixtures for representative managed-session histories in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
-- [X] T062 [US4] Add cutover playbook entries for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing visibility metadata in `docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md`
-- [X] T063 [US4] Wire deployment-safety validation guidance into the feature quickstart without making docs a substitute for runtime changes in `specs/165-agent-session-deployment-safety/quickstart.md`
+- [ ] T061 [US4] Enforce managed-session Worker Versioning configuration and safe default behavior in `moonmind/workflows/temporal/worker_runtime.py`
+- [ ] T062 [US4] Add or harden explicit patch/version gates around replay-sensitive managed-session workflow-shape changes in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T063 [US4] Add deployment-safety helper logic for sensitive path, replay, worker-versioning, and cutover validation in `moonmind/workflows/temporal/deployment_safety.py`
+- [ ] T064 [US4] Add executable deployment-safety validation entrypoint in `tools/validate_agent_session_deployment_safety.py`
+- [ ] T065 [US4] Wire AgentSession deployment-safety validation into backend CI in `.github/workflows/pytest-unit-tests.yml`
+- [ ] T066 [US4] Add cutover playbook entries for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing visibility metadata in `docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md`
+- [ ] T067 [US4] Wire deployment-safety validation guidance into the feature quickstart in `specs/165-agent-session-deployment-safety/quickstart.md`
 
 ### Validation for User Story 4
 
-- [X] T064 [US4] Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_agent_session_replayer.py tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [X] T065 [US4] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime`
+- [ ] T068 [US4] Run focused US4 validation with `./tools/test_unit.sh` for `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, `tests/unit/workflows/temporal/test_agent_session_replayer.py`, `tests/unit/workflows/temporal/workflows/test_agent_session.py`, and `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
+- [ ] T069 [US4] Run AgentSession deployment-safety validation with `tools/validate_agent_session_deployment_safety.py`
 
 **Checkpoint**: User Story 4 is independently functional and deployment gates are enforceable.
 
@@ -162,14 +166,14 @@
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-**Purpose**: Final verification, cleanup, and release readiness across all stories.
+**Purpose**: Final validation, cleanup, and release readiness across all stories.
 
-- [X] T066 [P] Update cross-story managed-session lifecycle validation commands in `specs/165-agent-session-deployment-safety/quickstart.md`
-- [X] T067 [P] Remove obsolete or indefinite legacy managed-session bridge paths after replay/cutover conditions are satisfied in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T068 [P] Update any affected managed-session architecture notes to keep desired-state docs separate from migration backlog in `docs/ManagedAgents/CodexManagedSessionPlane.md`
-- [X] T069 Run full required unit validation with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [X] T070 Run hermetic integration validation with `./tools/test_integration.sh` if implementation changed an `integration_ci` seam
-- [X] T071 Run `git diff --check` and `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime`
+- [ ] T070 [P] Update cross-story managed-session lifecycle validation commands in `specs/165-agent-session-deployment-safety/quickstart.md`
+- [ ] T071 [P] Remove obsolete or indefinite legacy managed-session bridge paths after replay/cutover conditions are satisfied in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T072 [P] Update affected managed-session architecture notes while keeping desired-state docs separate from migration backlog in `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- [ ] T073 Run full required unit validation with `./tools/test_unit.sh`
+- [ ] T074 Run hermetic integration validation with `./tools/test_integration.sh` if implementation changed an `integration_ci` seam
+- [ ] T075 Run `git diff --check` and `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime`
 
 ---
 
@@ -178,23 +182,23 @@
 ### Phase Dependencies
 
 - **Setup (Phase 1)**: No dependencies.
-- **Foundational (Phase 2)**: Depends on Setup completion and blocks all user stories.
+- **Foundational (Phase 2)**: Depends on Setup and blocks all user stories.
 - **User Story 1 (Phase 3)**: Depends on Foundational and is the MVP.
-- **User Story 2 (Phase 4)**: Depends on Foundational; may run after or alongside User Story 1 if same-file workflow edits are coordinated.
-- **User Story 3 (Phase 5)**: Depends on Foundational; can run after User Story 1 for clearer lifecycle semantics.
-- **User Story 4 (Phase 6)**: Depends on Foundational and should run after any workflow-shape edits it gates.
-- **Polish (Phase 7)**: Depends on the desired story set being complete.
+- **User Story 2 (Phase 4)**: Depends on Foundational; can follow or run alongside User Story 1 if `agent_session.py` edits are coordinated.
+- **User Story 3 (Phase 5)**: Depends on Foundational; should reflect final cancel/terminate outcomes from User Story 1.
+- **User Story 4 (Phase 6)**: Depends on Foundational and should cover workflow-shape changes introduced by User Stories 1-3.
+- **Polish (Phase 7)**: Depends on completed story scope.
 
 ### User Story Dependencies
 
-- **US1 Control Sessions Without Leaks**: MVP. No dependency on US2-US4 after Foundational.
-- **US2 Keep Long-Lived Sessions Safe**: Independent behavior after Foundational, but same-file edits in `agent_session.py` must be coordinated with US1.
-- **US3 Recover and Observe Sessions Safely**: Independent behavior after Foundational, but final observability semantics should reflect US1 cancel/terminate outcomes.
-- **US4 Gate Workflow Changes Before Rollout**: Can start after Foundational, but final replay/version gates must cover the workflow-shape changes introduced by US1-US3.
+- **US1 Control Sessions Without Leaks**: MVP; no dependency on US2-US4 after Foundational.
+- **US2 Keep Long-Lived Sessions Safe**: Independent after Foundational, but shares `agent_session.py` with US1.
+- **US3 Recover and Observe Sessions Safely**: Independent after Foundational, but final observability semantics should reflect US1 lifecycle behavior.
+- **US4 Gate Workflow Changes Before Rollout**: Can start after Foundational, but final gates must cover workflow-shape changes from US1-US3.
 
 ### Within Each User Story
 
-- Tests are listed before implementation and should be written first.
+- Tests are listed before implementation and should be added or updated first.
 - Runtime schema/activity/worker tasks in Phase 2 must land before story-specific code depends on them.
 - Workflow tests precede workflow edits.
 - Runtime/controller tests precede runtime/controller edits.
@@ -202,30 +206,29 @@
 
 ## Parallel Opportunities
 
-- T002 and T003 can run in parallel with T001.
-- T004 and T005 can run in parallel with T006 and T007.
-- T008 and T009 can run in parallel with schema and activity route work.
-- US1 test tasks T010 through T015 can run in parallel because they target distinct behavior and files.
-- US2 test tasks T026 through T030 can run in parallel, but implementation tasks T031 through T035 should be serialized around `agent_session.py`.
-- US3 test tasks T038 through T044 can run in parallel across workflow, activity, controller, supervisor, reconcile, and client tests.
-- US4 test tasks T055 through T058 can run in parallel; implementation tasks T059 through T063 should follow the workflow-shape decisions from US1-US3.
+- T002, T003, and T004 can run in parallel with T001.
+- T005 and T006 can run in parallel with T007 and T008.
+- T009, T010, and T011 can run in parallel with schema and activity route work.
+- US1 test tasks T012 through T017 can run in parallel because they target distinct files or behavior.
+- US2 test tasks T028 through T032 can run in parallel, while implementation tasks T033 through T037 should be serialized around `agent_session.py`.
+- US3 test tasks T040 through T046 can run in parallel across workflow, activity, controller, supervisor, reconcile, and client tests.
+- US4 test tasks T057 through T060 can run in parallel; implementation tasks T061 through T067 should follow the workflow-shape decisions from US1-US3.
 
 ## Parallel Example: User Story 1
 
 ```text
-Task: "T010 Add workflow-boundary accepted-path tests in tests/unit/workflows/temporal/workflows/test_agent_session.py"
-Task: "T012 Add runtime-level control behavior tests in tests/unit/services/temporal/runtime/test_codex_session_runtime.py"
-Task: "T013 Add controller-level idempotency and cleanup tests in tests/unit/services/temporal/runtime/test_managed_session_controller.py"
-Task: "T015 Add activity-wrapper non-retryable and heartbeat tests in tests/unit/workflows/temporal/test_agent_runtime_activities.py"
+Task: "T012 Add accepted-path workflow tests in tests/unit/workflows/temporal/workflows/test_agent_session.py"
+Task: "T014 Add runtime-level control behavior tests in tests/unit/services/temporal/runtime/test_codex_session_runtime.py"
+Task: "T015 Add controller-level idempotency and finalization tests in tests/unit/services/temporal/runtime/test_managed_session_controller.py"
+Task: "T017 Add activity-wrapper heartbeat and non-retryable tests in tests/unit/workflows/temporal/test_agent_runtime_activities.py"
 ```
 
-## Parallel Example: User Story 3
+## Parallel Example: User Story 4
 
 ```text
-Task: "T038 Add bounded workflow metadata tests in tests/unit/workflows/temporal/workflows/test_agent_session.py"
-Task: "T040 Add durable publication tests in tests/unit/services/temporal/runtime/test_managed_session_controller.py"
-Task: "T042 Add reconcile workflow tests in tests/unit/workflows/temporal/workflows/test_managed_session_reconcile.py"
-Task: "T043 Add reconcile schedule tests in tests/unit/workflows/temporal/test_client_schedules.py"
+Task: "T057 Add Worker Versioning configuration tests in tests/unit/workflows/temporal/test_temporal_worker_runtime.py"
+Task: "T058 Add replay gate tests in tests/unit/workflows/temporal/test_agent_session_replayer.py"
+Task: "T060 Add deployment-safety helper tests in tests/unit/workflows/temporal/test_agent_session_deployment_safety.py"
 ```
 
 ## Implementation Strategy
@@ -233,9 +236,9 @@ Task: "T043 Add reconcile schedule tests in tests/unit/workflows/temporal/test_c
 ### MVP First (User Story 1 Only)
 
 1. Complete Phase 1 and Phase 2.
-2. Write US1 tests T010 through T015.
-3. Implement US1 runtime changes T016 through T024.
-4. Run US1 validation T025.
+2. Write or update US1 tests T012 through T017.
+3. Implement US1 runtime changes T018 through T026.
+4. Run US1 validation T027.
 5. Stop and confirm terminate cannot leak containers and cancel remains distinct from terminate before broadening scope.
 
 ### Incremental Delivery
@@ -258,5 +261,4 @@ Task: "T043 Add reconcile schedule tests in tests/unit/workflows/temporal/test_c
 1. Required story validation passes for every implemented story.
 2. Replay validation passes for workflow-shape changes.
 3. Worker Versioning, patching, or explicit cutover protects incompatible changes.
-4. `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` passes.
-5. `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passes, with any skipped integration-ci work explicitly justified.
+4. TDD evidence exists for every production runtime behavior changed or newly relied upon.
