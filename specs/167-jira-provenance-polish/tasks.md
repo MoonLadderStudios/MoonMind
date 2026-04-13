@@ -46,8 +46,8 @@
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Store preset-target Jira import provenance after successful preset import in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T014 [US1] Store step-target Jira import provenance by step local id after successful step import in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T013 [US1] Store preset-target Jira import provenance after successful preset import only when the selected issue has a non-empty issue key in `frontend/src/entrypoints/task-create.tsx`
+- [ ] T014 [US1] Store step-target Jira import provenance by step local id after successful step import only when the selected issue has a non-empty issue key in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T015 [US1] Render the preset provenance chip near Feature Request / Initial Instructions when preset provenance exists in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T016 [US1] Render step provenance chips near each affected step Instructions field when step provenance exists in `frontend/src/entrypoints/task-create.tsx`
 - [ ] T017 [US1] Clear preset provenance when the preset instructions field is manually edited in `frontend/src/entrypoints/task-create.tsx`

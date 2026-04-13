@@ -2,14 +2,14 @@
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| U1 | Underspecification | MEDIUM | spec.md Edge Cases; tasks.md T012-T014 | The spec requires no empty or misleading provenance chip when a Jira issue lacks an issue key. Tasks include a failing validation task for this case, but the implementation tasks only say to store provenance after successful imports and do not explicitly require the empty-key guard. | Add explicit wording to T013/T014 or a new implementation task requiring provenance creation to skip empty issue keys before rendering chips. |
+| U1 | Underspecification | MEDIUM | spec.md Edge Cases; tasks.md T012-T014 | Remediated by Prompt B: T013 and T014 now explicitly require storing provenance only when the selected issue has a non-empty issue key. | No further remediation needed unless implementation reveals an additional empty-key path. |
 
 **Coverage Summary Table:**
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --- | --- | --- | --- |
 | FR-001 track local Jira import provenance | Yes | T005, T013, T014 | Covered by shared types and preset/step write paths. |
-| FR-002 record issue key, board id, import mode, target type | Yes | T005, T013, T014 | Covered, but the empty issue-key guard should be made explicit per U1. |
+| FR-002 record issue key, board id, import mode, target type | Yes | T005, T013, T014 | Covered; T013 and T014 explicitly guard empty issue keys. |
 | FR-003 show compact provenance indicator | Yes | T007, T008, T015, T016 | Covered by component/helper, CSS, and target rendering tasks. |
 | FR-004 scope indicators to exact target | Yes | T010, T014, T016 | Covered by step-specific test and local-id implementation. |
 | FR-005 remove stale provenance on manual edit | Yes | T011, T017, T018 | Covered by tests and preset/step clearing tasks. |
@@ -38,5 +38,5 @@
 **Next Actions:**
 
 - No CRITICAL issues were found; implementation may proceed.
-- Recommended before implementation: tighten `tasks.md` so the empty issue-key guard is explicit in implementation, not only in tests.
-- Suggested next command after optional task remediation: run `speckit-implement`.
+- Prompt B remediation has made the empty issue-key guard explicit in `tasks.md`.
+- Suggested next command: run `speckit-implement`.
