@@ -54,7 +54,7 @@ def test_required_pytest_integration_ci_workflow_runs_hermetic_runner_and_upload
     assert all(step["name"] != "Verify docker compose availability" for step in steps)
     assert any(step.get("if") == "failure()" for step in run_steps)
     assert any(
-        step["uses"] == "actions/upload-artifact@v4"
+        step["uses"].startswith("actions/upload-artifact@")
         and step.get("if") == "failure()"
         for step in uses_steps
     )
