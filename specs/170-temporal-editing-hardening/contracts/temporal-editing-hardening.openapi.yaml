@@ -1,0 +1,234 @@
+openapi: 3.1.0
+info:
+  title: Temporal Editing Hardening Contract
+  version: 0.1.0
+  description: Runtime contract surfaces relevant to Phase 5 Temporal task editing hardening.
+paths:
+  /api/executions/{workflowId}:
+    get:
+      summary: Read Temporal execution detail for edit/rerun gating and draft reconstruction
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [temporal]
+      responses:
+        "200":
+          description: Execution detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalEditingExecution"
+        "404":
+          description: Execution not found
+        "503":
+          description: Temporal read unavailable
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Submit Temporal task edit or rerun update
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemporalTaskEditingUpdateRequest"
+      responses:
+        "200":
+          description: Update accepted or rejected with explicit outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalTaskEditingUpdateResponse"
+        "403":
+          description: Actions disabled
+        "409":
+          description: State conflict
+        "422":
+          description: Validation failure or stale-state rejection
+  /api/task-dashboard/config:
+    get:
+      summary: Runtime-visible dashboard configuration
+      responses:
+        "200":
+          description: Dashboard runtime configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardRuntimeConfig"
+components:
+  schemas:
+    TemporalEditingExecution:
+      type: object
+      required:
+        - workflowId
+        - workflowType
+        - actions
+      properties:
+        workflowId:
+          type: string
+        workflowType:
+          type: string
+          enum:
+            - MoonMind.Run
+            - MoonMind.ManifestIngest
+        state:
+          type: string
+        rawState:
+          type: string
+        temporalStatus:
+          type: string
+        inputParameters:
+          type: object
+          additionalProperties: true
+        inputArtifactRef:
+          type: string
+          nullable: true
+        planArtifactRef:
+          type: string
+          nullable: true
+        targetRuntime:
+          type: string
+          nullable: true
+        profileId:
+          type: string
+          nullable: true
+        model:
+          type: string
+          nullable: true
+        effort:
+          type: string
+          nullable: true
+        repository:
+          type: string
+          nullable: true
+        startingBranch:
+          type: string
+          nullable: true
+        targetBranch:
+          type: string
+          nullable: true
+        publishMode:
+          type: string
+          nullable: true
+        actions:
+          $ref: "#/components/schemas/TemporalEditingActions"
+    TemporalEditingActions:
+      type: object
+      required:
+        - canUpdateInputs
+        - canRerun
+      properties:
+        canUpdateInputs:
+          type: boolean
+        canRerun:
+          type: boolean
+        disabledReasons:
+          type: object
+          additionalProperties:
+            type: string
+    TemporalTaskEditingUpdateRequest:
+      type: object
+      required:
+        - updateName
+      properties:
+        updateName:
+          type: string
+          enum:
+            - UpdateInputs
+            - RequestRerun
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        parametersPatch:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+    TemporalTaskEditingUpdateResponse:
+      type: object
+      required:
+        - accepted
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        continueAsNewCause:
+          type: string
+          nullable: true
+        execution:
+          $ref: "#/components/schemas/TemporalEditingExecution"
+        refresh:
+          type: object
+          additionalProperties: true
+    DashboardRuntimeConfig:
+      type: object
+      properties:
+        features:
+          type: object
+          properties:
+            temporalDashboard:
+              type: object
+              properties:
+                temporalTaskEditing:
+                  type: boolean
+                actionsEnabled:
+                  type: boolean
+                submitEnabled:
+                  type: boolean
+    TemporalTaskEditingTelemetryEvent:
+      type: object
+      required:
+        - event
+      properties:
+        event:
+          type: string
+          enum:
+            - detail_edit_click
+            - detail_rerun_click
+            - draft_reconstruction_success
+            - draft_reconstruction_failure
+            - update_submit_attempt
+            - update_submit_result
+            - rerun_submit_attempt
+            - rerun_submit_result
+        mode:
+          type: string
+          enum:
+            - detail
+            - edit
+            - rerun
+        workflowId:
+          type: string
+        updateName:
+          type: string
+          enum:
+            - UpdateInputs
+            - RequestRerun
+        result:
+          type: string
+          enum:
+            - success
+            - failure
+        applied:
+          type: string
+        reason:
+          type: string

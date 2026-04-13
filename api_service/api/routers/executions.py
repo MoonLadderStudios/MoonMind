@@ -33,6 +33,7 @@ from api_service.db.models import (
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
@@ -107,6 +108,45 @@ _PR_URL_CANDIDATE_SOURCES = (
     ("params", "prUrl"),
     ("params", "pullRequestUrl"),
 )
+_TASK_EDITING_UPDATE_NAMES = {"UpdateInputs", "RequestRerun"}
+
+
+def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return fallback
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", normalized)[:80] or fallback
+
+
+def _emit_task_editing_metric(
+    event: str,
+    *,
+    update_name: str,
+    workflow_type: object | None,
+    state: object | None,
+    result: str | None = None,
+    reason: str | None = None,
+    applied: str | None = None,
+) -> None:
+    tags = {
+        "event": _bounded_metric_tag(event),
+        "update_name": _bounded_metric_tag(update_name),
+        "workflow_type": _bounded_metric_tag(_enum_value(workflow_type)),
+        "state": _bounded_metric_tag(_enum_value(state)),
+    }
+    if result:
+        tags["result"] = _bounded_metric_tag(result)
+    if reason:
+        tags["reason"] = _bounded_metric_tag(reason)
+    if applied:
+        tags["applied"] = _bounded_metric_tag(applied)
+    try:
+        get_metrics_emitter().increment(
+            "temporal_task_editing.event",
+            tags=tags,
+        )
+    except Exception:
+        return
 
 
 def _enum_value(value: object | None) -> str | None:
@@ -2399,6 +2439,26 @@ async def update_execution(
         workflow_id=workflow_id,
         user=user,
     )
+    is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
+    if is_task_editing_update:
+        _emit_task_editing_metric(
+            "submit_attempt",
+            update_name=payload.update_name,
+            workflow_type=getattr(record, "workflow_type", None),
+            state=getattr(record, "state", None),
+        )
+        logger.info(
+            "Temporal task editing update attempt",
+            extra={
+                "event": "temporal_task_editing.submit_attempt",
+                "workflow_id": record.workflow_id,
+                "update_name": payload.update_name,
+                "workflow_type": _enum_value(getattr(record, "workflow_type", None)),
+                "state": _enum_value(getattr(record, "state", None)),
+                "has_input_artifact_ref": bool(payload.input_artifact_ref),
+                "has_parameters_patch": bool(payload.parameters_patch),
+            },
+        )
 
     try:
         update_result = await service.update_execution(
@@ -2415,6 +2475,25 @@ async def update_execution(
             idempotency_key=payload.idempotency_key,
         )
     except TemporalExecutionValidationError as exc:
+        if is_task_editing_update:
+            _emit_task_editing_metric(
+                "submit_result",
+                update_name=payload.update_name,
+                workflow_type=getattr(record, "workflow_type", None),
+                state=getattr(record, "state", None),
+                result="failure",
+                reason="validation",
+            )
+            logger.info(
+                "Temporal task editing update rejected",
+                extra={
+                    "event": "temporal_task_editing.submit_result",
+                    "workflow_id": record.workflow_id,
+                    "update_name": payload.update_name,
+                    "result": "failure",
+                    "reason": "validation",
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -2424,6 +2503,31 @@ async def update_execution(
         ) from exc
 
     refreshed_record = await service.describe_execution(record.workflow_id)
+    if is_task_editing_update:
+        accepted = bool(update_result.get("accepted", True))
+        applied = str(update_result.get("applied") or "").strip() or None
+        result = "success" if accepted else "failure"
+        reason = None if accepted else "rejected"
+        _emit_task_editing_metric(
+            "submit_result",
+            update_name=payload.update_name,
+            workflow_type=getattr(refreshed_record, "workflow_type", None),
+            state=getattr(refreshed_record, "state", None),
+            result=result,
+            reason=reason,
+            applied=applied,
+        )
+        logger.info(
+            "Temporal task editing update result",
+            extra={
+                "event": "temporal_task_editing.submit_result",
+                "workflow_id": refreshed_record.workflow_id,
+                "update_name": payload.update_name,
+                "result": result,
+                "reason": reason,
+                "applied": applied,
+            },
+        )
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(

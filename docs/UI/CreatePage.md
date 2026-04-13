@@ -57,10 +57,9 @@ Important distinctions:
 
 ## 4. Route and hosting model
 
-The canonical Create page routes are:
+The canonical Create page route is:
 
 - `/tasks/new`
-- `/tasks/queue/new` as a compatibility alias
 
 Rules:
 

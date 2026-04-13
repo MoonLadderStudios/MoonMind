@@ -1010,6 +1010,12 @@ describe('Task Detail Entrypoint', () => {
   });
 
   it('shows Edit and Rerun entry points only when Temporal task editing is flagged on and capabilities allow them', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const telemetryEvents: Array<Record<string, unknown>> = [];
+    const onTelemetry = (event: Event) => {
+      telemetryEvents.push((event as CustomEvent).detail);
+    };
+    window.addEventListener('moonmind:temporal-task-editing', onTelemetry);
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -1064,6 +1070,27 @@ describe('Task Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
       '/tasks/new?rerunExecutionId=test-123',
     );
+    const editLink = screen.getByRole('link', { name: 'Edit' });
+    const rerunLink = screen.getByRole('link', { name: 'Rerun' });
+    editLink.addEventListener('click', (event) => event.preventDefault());
+    rerunLink.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(editLink);
+    fireEvent.click(rerunLink);
+    expect(telemetryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'detail_edit_click',
+          mode: 'detail',
+          workflowId: 'test-123',
+        }),
+        expect.objectContaining({
+          event: 'detail_rerun_click',
+          mode: 'detail',
+          workflowId: 'test-123',
+        }),
+      ]),
+    );
+    window.removeEventListener('moonmind:temporal-task-editing', onTelemetry);
   });
 
   it('shows a one-time Temporal task editing success notice after redirect', async () => {

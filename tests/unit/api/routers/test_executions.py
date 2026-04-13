@@ -1870,6 +1870,87 @@ def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:
         assert response.json()["continueAsNewCause"] == "manual_rerun"
 
 
+def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
+    metrics = Mock()
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record()
+        service.update_execution.return_value = {
+            "accepted": True,
+            "applied": "next_safe_point",
+            "message": "Inputs scheduled.",
+        }
+
+        with patch(
+            "api_service.api.routers.executions.get_metrics_emitter",
+            return_value=metrics,
+        ):
+            response = test_client.post(
+                "/api/executions/mm:wf-1/update",
+                json={
+                    "updateName": "UpdateInputs",
+                    "inputArtifactRef": "artifact://input/new",
+                    "parametersPatch": {
+                        "task": {"instructions": "Edited instructions."}
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        metric_calls = [
+            call
+            for call in metrics.increment.call_args_list
+            if call.args[0] == "temporal_task_editing.event"
+        ]
+        assert len(metric_calls) == 2
+        assert metric_calls[0].kwargs["tags"] == {
+            "event": "submit_attempt",
+            "update_name": "UpdateInputs",
+            "workflow_type": "MoonMind.Run",
+            "state": "executing",
+        }
+        assert metric_calls[1].kwargs["tags"] == {
+            "event": "submit_result",
+            "update_name": "UpdateInputs",
+            "workflow_type": "MoonMind.Run",
+            "state": "executing",
+            "result": "success",
+            "applied": "next_safe_point",
+        }
+
+
+def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
+    metrics = Mock()
+    for test_client, service in _client_with_service():
+        service.describe_execution.return_value = _build_execution_record()
+        service.update_execution.side_effect = TemporalExecutionValidationError(
+            "Workflow state changed and rerun is no longer available."
+        )
+
+        with patch(
+            "api_service.api.routers.executions.get_metrics_emitter",
+            return_value=metrics,
+        ):
+            response = test_client.post(
+                "/api/executions/mm:wf-1/update",
+                json={"updateName": "RequestRerun"},
+            )
+
+        assert response.status_code == 422
+        metric_calls = [
+            call
+            for call in metrics.increment.call_args_list
+            if call.args[0] == "temporal_task_editing.event"
+        ]
+        assert metric_calls[1].kwargs["tags"] == {
+            "event": "submit_result",
+            "update_name": "RequestRerun",
+            "workflow_type": "MoonMind.Run",
+            "state": "executing",
+            "result": "failure",
+            "reason": "validation",
+        }
+
+
 def test_list_executions_preserves_logical_identity_fields() -> None:
     for test_client, service in _client_with_service():
         service.list_executions.return_value = SimpleNamespace(

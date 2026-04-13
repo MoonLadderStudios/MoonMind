@@ -162,6 +162,7 @@ function collectObjectKeys(value: unknown, keys = new Set<string>()): Set<string
 
 describe("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
+  let consoleInfoSpy: MockInstance;
   let executionResponseOverride: Response | null;
   let artifactCreateResponseOverride: Response | null;
 
@@ -178,6 +179,7 @@ describe("Task Create Entrypoint", () => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
     vi.mocked(navigateTo).mockReset();
+    consoleInfoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     executionResponseOverride = null;
     artifactCreateResponseOverride = null;
     fetchSpy = vi
@@ -1096,7 +1098,7 @@ describe("Task Create Entrypoint", () => {
                 todo: [
                   {
                     issueKey: "ENG-101",
-                    summary: "Plan queue controls",
+                    summary: "Plan controls",
                     issueType: "Story",
                     statusName: "Selected",
                     assignee: "Ada",
@@ -1150,6 +1152,7 @@ describe("Task Create Entrypoint", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+    consoleInfoSpy.mockRestore();
     window.sessionStorage.clear();
   });
 
@@ -1815,6 +1818,12 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("submits active edit mode through UpdateInputs and returns to the Temporal detail view", async () => {
+    const telemetryEvents: Array<Record<string, unknown>> = [];
+    const onTelemetry = (event: Event) => {
+      telemetryEvents.push((event as CustomEvent).detail);
+    };
+    window.addEventListener("moonmind:temporal-task-editing", onTelemetry);
+
     renderForEdit("mm:edit-123");
 
     const instructions = (await screen.findByLabelText(
@@ -1889,6 +1898,30 @@ describe("Task Create Entrypoint", () => {
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Changes were saved to this execution.");
+    expect(telemetryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "draft_reconstruction_success",
+          mode: "edit",
+          workflowId: "mm:edit-123",
+        }),
+        expect.objectContaining({
+          event: "update_submit_attempt",
+          mode: "edit",
+          workflowId: "mm:edit-123",
+          updateName: "UpdateInputs",
+        }),
+        expect.objectContaining({
+          event: "update_submit_result",
+          mode: "edit",
+          workflowId: "mm:edit-123",
+          updateName: "UpdateInputs",
+          result: "success",
+          applied: "immediate",
+        }),
+      ]),
+    );
+    window.removeEventListener("moonmind:temporal-task-editing", onTelemetry);
   });
 
   it("shows continue-as-new success copy and redirects to the returned execution context", async () => {
@@ -2058,6 +2091,11 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows artifact preparation failures without submitting UpdateInputs", async () => {
+    const telemetryEvents: Array<Record<string, unknown>> = [];
+    const onTelemetry = (event: Event) => {
+      telemetryEvents.push((event as CustomEvent).detail);
+    };
+    window.addEventListener("moonmind:temporal-task-editing", onTelemetry);
     artifactCreateResponseOverride = {
       ok: false,
       status: 422,
@@ -2085,10 +2123,24 @@ describe("Task Create Entrypoint", () => {
         ([url]) => String(url) === "/api/executions/mm%3Aartifact-failure/update",
       ),
     ).toBe(false);
+    expect(telemetryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "draft_reconstruction_success",
+          workflowId: "mm:artifact-failure",
+        }),
+      ]),
+    );
+    expect(
+      telemetryEvents.some(
+        (event) => String(event.event) === "update_submit_attempt",
+      ),
+    ).toBe(false);
     expect(navigateTo).not.toHaveBeenCalled();
+    window.removeEventListener("moonmind:temporal-task-editing", onTelemetry);
   });
 
-  it("submits the queue-shaped Temporal task payload and redirects on success", async () => {
+  it("submits the Temporal task payload and redirects on success", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(

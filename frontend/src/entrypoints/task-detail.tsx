@@ -7,7 +7,11 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel } from '../utils/formatters';
-import { taskEditHref, taskRerunHref } from '../lib/temporalTaskEditing';
+import {
+  recordTemporalTaskEditingClientEvent,
+  taskEditHref,
+  taskRerunHref,
+} from '../lib/temporalTaskEditing';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -2841,10 +2845,19 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
   const editHref = workflowId ? taskEditHref(workflowId) : '';
   const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
-  const onTaskEditingNavigation = (event: MouseEvent<HTMLAnchorElement>) => {
+  const onTaskEditingNavigation = (
+    event: MouseEvent<HTMLAnchorElement>,
+    telemetryEvent: 'detail_edit_click' | 'detail_rerun_click',
+  ) => {
     if (busy) {
       event.preventDefault();
+      return;
     }
+    recordTemporalTaskEditingClientEvent({
+      event: telemetryEvent,
+      mode: 'detail',
+      workflowId,
+    });
   };
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
@@ -3197,7 +3210,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     className="button secondary"
                     href={editHref}
                     aria-disabled={busy}
-                    onClick={onTaskEditingNavigation}
+                    onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
                   >
                     Edit
                   </a>
@@ -3207,7 +3220,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     className="button secondary"
                     href={rerunHref}
                     aria-disabled={busy}
-                    onClick={onTaskEditingNavigation}
+                    onClick={(event) => onTaskEditingNavigation(event, 'detail_rerun_click')}
                   >
                     Rerun
                   </a>
