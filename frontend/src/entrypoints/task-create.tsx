@@ -2885,20 +2885,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
-  async function handleEditSubmit({
+  async function handleTemporalTaskEditingSubmit({
     workflowId,
+    updateName,
     inputArtifactRef,
     parametersPatch,
   }: {
     workflowId: string;
+    updateName: "UpdateInputs" | "RequestRerun";
     inputArtifactRef: string | null;
     parametersPatch: Record<string, unknown>;
   }): Promise<void> {
     const updatePayload = buildTemporalArtifactEditUpdatePayload({
-      updateName: "UpdateInputs",
+      updateName,
       inputArtifactRef,
       parametersPatch,
     });
+    const isRerun = updateName === "RequestRerun";
     const response = await fetch(
       configuredTemporalUpdateUrl(temporalUpdateEndpoint, workflowId),
       {
@@ -2913,7 +2916,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!response.ok) {
       const detail = await responseErrorDetail(
         response,
-        "Failed to save task changes.",
+        isRerun ? "Failed to request task rerun." : "Failed to save task changes.",
       );
       throw new Error(detail.message);
     }
@@ -2926,12 +2929,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (result.accepted === false) {
       throw new Error(
         String(result.message || "").trim() ||
-          "The workflow no longer accepts input updates.",
+          (isRerun
+            ? "The workflow no longer accepts rerun requests."
+            : "The workflow no longer accepts input updates."),
       );
     }
     const applied = String(result.applied || "").trim();
-    const statusText =
-      applied === "safe_point" || applied === "next_safe_point"
+    const statusText = isRerun
+      ? applied === "continue_as_new"
+        ? "Rerun was requested and the latest execution view is ready."
+        : "Rerun request was accepted."
+      : applied === "safe_point" || applied === "next_safe_point"
         ? "Changes were scheduled for the next safe point."
         : applied === "continue_as_new"
           ? "Changes were accepted and will continue in a refreshed run."
@@ -2957,10 +2965,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setSubmitMessage(null);
-    if (pageMode.mode === "rerun") {
-      setSubmitMessage("Rerun submission is not available in this milestone.");
-      return;
-    }
 
     const primaryStep = steps[0] || null;
     const primaryValidation = validatePrimaryStepSubmission(primaryStep);
@@ -3363,16 +3367,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     try {
       let inputArtifactRef: string | null = null;
       const submittedPayload = requestBody.payload as Record<string, unknown>;
-      const editDraftData =
-        pageMode.mode === "edit" ? temporalDraftQuery.data : undefined;
-      if (pageMode.mode === "edit" && !editDraftData) {
-        throw new Error("Cannot save changes because the execution draft is missing.");
+      const temporalDraftData =
+        pageMode.mode !== "create" ? temporalDraftQuery.data : undefined;
+      if (pageMode.mode !== "create" && !temporalDraftData) {
+        throw new Error(
+          pageMode.mode === "rerun"
+            ? "Cannot request rerun because the execution draft is missing."
+            : "Cannot save changes because the execution draft is missing.",
+        );
       }
       const editParametersPatch =
-        editDraftData
+        temporalDraftData
           ? buildEditParametersPatch({
-              execution: editDraftData.execution,
-              artifactInput: editDraftData.artifactInput,
+              execution: temporalDraftData.execution,
+              artifactInput: temporalDraftData.artifactInput,
               submittedPayload,
             })
           : null;
@@ -3399,13 +3407,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         stripOversizedInlineInstructions({ payload: artifactPayload });
       }
 
-      if (pageMode.mode === "edit") {
+      if (pageMode.mode === "edit" || pageMode.mode === "rerun") {
         const workflowId = String(pageMode.executionId || "").trim();
         if (!workflowId) {
-          throw new Error("Cannot save changes because the execution id is missing.");
+          throw new Error(
+            pageMode.mode === "rerun"
+              ? "Cannot request rerun because the execution id is missing."
+              : "Cannot save changes because the execution id is missing.",
+          );
         }
-        await handleEditSubmit({
+        await handleTemporalTaskEditingSubmit({
           workflowId,
+          updateName:
+            pageMode.mode === "rerun" ? "RequestRerun" : "UpdateInputs",
           inputArtifactRef,
           parametersPatch: artifactPayload,
         });

@@ -576,6 +576,35 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Astale-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:stale-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Rerunnable before submit.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Amissing-artifact?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -737,6 +766,32 @@ describe("Task Create Entrypoint", () => {
               message: "Inputs scheduled.",
               execution: { workflowId: "mm:artifact-edit" },
             }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Arerun-123/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              message: "Rerun requested.",
+              execution: { workflowId: "mm:rerun-123" },
+              continueAsNewCause: "manual_rerun",
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Astale-rerun/update") {
+          return Promise.resolve({
+            ok: false,
+            status: 422,
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  code: "invalid_update_request",
+                  message:
+                    "Workflow state changed and rerun is no longer available.",
+                },
+              }),
           } as Response);
         }
         if (url === "/gateway/api/executions/mm%3Acustom-edit/updates") {
@@ -1137,6 +1192,26 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("builds the canonical Temporal RequestRerun payload with replacement input lineage", () => {
+    expect(
+      buildTemporalArtifactEditUpdatePayload({
+        updateName: "RequestRerun",
+        inputArtifactRef: "art-rerun-input",
+        parametersPatch: {
+          repository: "MoonLadderStudios/MoonMind",
+          task: { instructions: "Rerun with reviewed instructions." },
+        },
+      }),
+    ).toEqual({
+      updateName: "RequestRerun",
+      inputArtifactRef: "art-rerun-input",
+      parametersPatch: {
+        repository: "MoonLadderStudios/MoonMind",
+        task: { instructions: "Rerun with reviewed instructions." },
+      },
+    });
+  });
+
   it("does not load an execution detail draft in create mode", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -1400,6 +1475,101 @@ describe("Task Create Entrypoint", () => {
     );
     expect(screen.queryByText("Schedule (optional)")).toBeNull();
     expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+  });
+
+  it("submits terminal rerun mode through RequestRerun and returns to the Temporal detail view", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Rerun from artifact-backed instructions.");
+    });
+    fireEvent.change(instructions, {
+      target: { value: "Rerun with reviewed Temporal inputs." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Arerun-123/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Arerun-123/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "RequestRerun",
+      inputArtifactRef: "art-001",
+      parametersPatch: {
+        inputArtifactRef: "art-001",
+        repository: "MoonLadderStudios/MoonMind",
+        targetRuntime: "codex_cli",
+        task: {
+          instructions: "Rerun with reviewed Temporal inputs.",
+          runtime: {
+            mode: "codex_cli",
+            model: "gpt-5.4",
+            effort: "medium",
+            profileId: "profile:codex-secondary",
+          },
+          publish: {
+            mode: "pr",
+          },
+        },
+      },
+    });
+    expect(request.inputArtifactRef).not.toBe("historical-input");
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => String(url) === "/api/executions" && init?.method === "POST",
+      ),
+    ).toBe(false);
+    await waitFor(() => {
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/tasks/mm%3Arerun-123?source=temporal",
+      );
+    });
+    expect(
+      window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
+    ).toBe("Rerun was requested and the latest execution view is ready.");
+  });
+
+  it("shows backend stale-state failures without redirecting from rerun mode", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Astale-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Rerunnable before submit.");
+    });
+    fireEvent.change(instructions, {
+      target: { value: "Try to rerun after state changed." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rerun Task" }));
+
+    expect(
+      await screen.findByText(
+        "Workflow state changed and rerun is no longer available.",
+      ),
+    ).toBeTruthy();
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   it("loads draft inputs through configured detail and artifact download routes", async () => {
