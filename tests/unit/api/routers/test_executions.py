@@ -1215,6 +1215,30 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
     assert dumped["targetRuntime"] == "gemini_cli"
 
 
+def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "task": {
+            "instructions": "Reconstruct this draft.",
+            "runtime": {
+                "mode": "claude_code",
+                "model": "claude-3.7-sonnet",
+                "effort": "low",
+                "profileId": "profile:claude-default",
+            },
+        },
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["targetRuntime"] == "claude_code"
+    assert dumped["model"] == "claude-3.7-sonnet"
+    assert dumped["resolvedModel"] == "claude-3.7-sonnet"
+    assert dumped["effort"] == "low"
+    assert dumped["profileId"] == "profile:claude-default"
+
+
 def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

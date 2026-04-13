@@ -3,6 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
+import {
+  buildTemporalSubmissionDraftFromExecution,
+  resolveTaskSubmitPageMode,
+  type TemporalTaskEditingExecutionContract,
+} from "../lib/temporalTaskEditing";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
@@ -53,6 +58,8 @@ interface DashboardConfig {
     temporal?: {
       create?: string;
       artifactCreate?: string;
+      artifactDownload?: string;
+      detail?: string;
       list?: string;
     };
     jira?: {
@@ -62,6 +69,11 @@ interface DashboardConfig {
       columns?: string;
       issues?: string;
       issue?: string;
+    };
+  };
+  features?: {
+    temporalDashboard?: {
+      temporalTaskEditing?: boolean;
     };
   };
   system?: {
@@ -213,6 +225,11 @@ interface ExecutionCreateResponse {
   definitionId?: string;
 }
 
+interface TemporalSubmissionDraftLoadResult {
+  execution: TemporalTaskEditingExecutionContract;
+  draft: ReturnType<typeof buildTemporalSubmissionDraftFromExecution>;
+}
+
 interface ResponseErrorDetail {
   code: string | null;
   message: string;
@@ -360,6 +377,40 @@ function withQueryParams(
     return baseUrl;
   }
   return `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${serialized}`;
+}
+
+function configuredTemporalDetailUrl(
+  detailTemplate: string,
+  workflowId: string,
+): string {
+  return withQueryParams(
+    interpolatePath(detailTemplate, { workflowId }),
+    { source: "temporal" },
+  );
+}
+
+function configuredArtifactDownloadUrl(
+  downloadTemplate: string,
+  artifactId: string,
+): string {
+  return interpolatePath(downloadTemplate, { artifactId });
+}
+
+function hasInlineTaskInstructions(task: unknown): boolean {
+  if (!task || typeof task !== "object" || Array.isArray(task)) {
+    return false;
+  }
+  const taskRecord = task as Record<string, unknown>;
+  if (String(taskRecord.instructions || "").trim()) {
+    return true;
+  }
+  const steps = Array.isArray(taskRecord.steps) ? taskRecord.steps : [];
+  return steps.some((step) => {
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      return false;
+    }
+    return String((step as Record<string, unknown>).instructions || "").trim();
+  });
 }
 
 function readJiraItems<T>(data: unknown): T[] {
@@ -757,6 +808,30 @@ async function responseErrorMessage(
   return (await responseErrorDetail(response, fallback)).message;
 }
 
+async function readTemporalInputArtifact(
+  artifactDownloadEndpoint: string,
+  artifactId: string,
+): Promise<unknown> {
+  const response = await fetch(
+    configuredArtifactDownloadUrl(artifactDownloadEndpoint, artifactId),
+    { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await responseErrorMessage(
+        response,
+        "Task instructions could not be loaded from the input artifact.",
+      ),
+    );
+  }
+  const rawText = await response.text();
+  try {
+    return JSON.parse(rawText) as unknown;
+  } catch {
+    throw new Error("Task input artifact did not contain valid JSON.");
+  }
+}
+
 async function createInputArtifact(
   createEndpoint: string,
   body: string,
@@ -1079,14 +1154,28 @@ function CloseIcon() {
 
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const dashboardConfig = readDashboardConfig(payload);
+  const pageMode = useMemo(
+    () => resolveTaskSubmitPageMode(window.location.search),
+    [],
+  );
+  const temporalTaskEditingEnabled = Boolean(
+    dashboardConfig.features?.temporalDashboard?.temporalTaskEditing,
+  );
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
   );
   const temporalListEndpoint = String(
     dashboardConfig.sources?.temporal?.list || "/api/executions",
   );
+  const temporalDetailEndpoint = String(
+    dashboardConfig.sources?.temporal?.detail || "/api/executions/{workflowId}",
+  );
   const artifactCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.artifactCreate || "/api/artifacts",
+  );
+  const artifactDownloadEndpoint = String(
+    dashboardConfig.sources?.temporal?.artifactDownload ||
+      "/api/artifacts/{artifactId}/download",
   );
   const providerProfilesEndpoint = String(
     dashboardConfig.system?.providerProfiles?.list ||
@@ -1237,8 +1326,72 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
+  const temporalDraftAppliedRef = useRef<string | null>(null);
   const jiraProjectSelectionInitializedRef = useRef(false);
   const jiraBoardSelectionInitializedRef = useRef(false);
+
+  const temporalDraftQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "temporal-editing-draft",
+      pageMode.mode,
+      pageMode.executionId,
+      temporalDetailEndpoint,
+      artifactDownloadEndpoint,
+    ],
+    enabled:
+      pageMode.mode !== "create" &&
+      Boolean(pageMode.executionId) &&
+      temporalTaskEditingEnabled,
+    queryFn: async (): Promise<TemporalSubmissionDraftLoadResult> => {
+      const workflowId = String(pageMode.executionId || "");
+      const response = await fetch(
+        configuredTemporalDetailUrl(temporalDetailEndpoint, workflowId),
+        { headers: { Accept: "application/json" } },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(
+            response,
+            "Failed to load the Temporal execution.",
+          ),
+        );
+      }
+      const execution =
+        (await response.json()) as TemporalTaskEditingExecutionContract;
+      if (String(execution.workflowType || "") !== "MoonMind.Run") {
+        throw new Error(
+          "This execution cannot be edited here because only MoonMind.Run is supported.",
+        );
+      }
+      if (pageMode.mode === "edit" && execution.actions?.canUpdateInputs !== true) {
+        throw new Error(
+          "This execution does not currently allow editing its inputs.",
+        );
+      }
+      if (pageMode.mode === "rerun" && execution.actions?.canRerun !== true) {
+        throw new Error("This execution does not currently allow rerun.");
+      }
+
+      let artifactInput: unknown;
+      const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
+      const inlineTask = execution.inputParameters?.task;
+      if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
+        artifactInput = await readTemporalInputArtifact(
+          artifactDownloadEndpoint,
+          inputArtifactRef,
+        );
+      }
+
+      return {
+        execution,
+        draft: buildTemporalSubmissionDraftFromExecution(
+          execution,
+          artifactInput,
+        ),
+      };
+    },
+  });
 
   const providerProfilesQuery = useQuery({
     queryKey: ["task-create", "provider-profiles", runtime],
@@ -1265,6 +1418,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     const profiles = providerProfilesQuery.data || [];
+    if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
+      return;
+    }
+    if (pageMode.mode !== "create" && temporalDraftAppliedRef.current) {
+      return;
+    }
     if (profiles.length === 0) {
       if (providerProfile) {
         setProviderProfile("");
@@ -1283,7 +1442,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (defaultProfileId && providerProfile !== defaultProfileId) {
       setProviderProfile(defaultProfileId);
     }
-  }, [providerProfile, providerProfilesQuery.data]);
+  }, [
+    pageMode.mode,
+    providerProfile,
+    providerProfilesQuery.data,
+    providerProfilesQuery.isFetching,
+    providerProfilesQuery.isLoading,
+  ]);
 
   useEffect(() => {
     const runtimeChanged = prevRuntimeRef.current !== runtime;
@@ -1300,6 +1465,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     if (profileChanged) {
       prevProviderProfileRef.current = providerProfile;
+    }
+
+    if (
+      pageMode.mode !== "create" &&
+      temporalDraftAppliedRef.current &&
+      !runtimeChanged &&
+      !profileChanged
+    ) {
+      return;
     }
 
     setEffort(
@@ -1336,6 +1510,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     defaultTaskEffortByRuntime,
     defaultTaskModelByRuntime,
     modelManualOverride,
+    pageMode.mode,
     providerProfilesQuery.data,
     providerProfile,
     runtime,
@@ -1357,6 +1532,63 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     writeProposeTasksPreference(proposeTasks);
   }, [proposeTasks]);
+
+  useEffect(() => {
+    if (pageMode.mode === "create" || !temporalDraftQuery.data) {
+      return;
+    }
+    const applyKey = `${pageMode.mode}:${temporalDraftQuery.data.execution.workflowId}`;
+    if (temporalDraftAppliedRef.current === applyKey) {
+      return;
+    }
+    const draft = temporalDraftQuery.data.draft;
+    temporalDraftAppliedRef.current = applyKey;
+
+    if (draft.runtime) {
+      prevRuntimeRef.current = draft.runtime;
+      setRuntime(draft.runtime);
+    }
+    if (draft.providerProfile) {
+      prevProviderProfileRef.current = draft.providerProfile;
+      setProviderProfile(draft.providerProfile);
+    }
+    if (draft.model) {
+      setModel(draft.model);
+      setModelManualOverride(true);
+    }
+    if (draft.effort) {
+      setEffort(draft.effort);
+    }
+    if (draft.repository) {
+      setRepository(draft.repository);
+    }
+    if (draft.startingBranch) {
+      setStartingBranch(draft.startingBranch);
+    }
+    if (draft.targetBranch) {
+      setTargetBranch(draft.targetBranch);
+    }
+    if (draft.publishMode) {
+      setPublishMode(draft.publishMode);
+    }
+    setSteps([
+      createStepStateEntry(1, {
+        instructions: draft.taskInstructions,
+        ...(draft.primarySkill ? { skillId: draft.primarySkill } : {}),
+      }),
+    ]);
+    setNextStepNumber(2);
+    setAppliedTemplates(draft.appliedTemplates);
+    setScheduleMode("immediate");
+    setScheduledFor("");
+    setScheduleDeferredMinutes("");
+    setScheduleCron("");
+    setScheduleName("");
+  }, [
+    defaultPublishMode,
+    pageMode.mode,
+    temporalDraftQuery.data,
+  ]);
 
   const dependencyOptionsQuery = useQuery({
     queryKey: ["task-create", "dependency-options", temporalListEndpoint],
@@ -2238,6 +2470,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setSubmitMessage(null);
+    if (pageMode.mode === "edit") {
+      setSubmitMessage("Saving edits is not available in this milestone.");
+      return;
+    }
+    if (pageMode.mode === "rerun") {
+      setSubmitMessage("Rerun submission is not available in this milestone.");
+      return;
+    }
 
     const primaryStep = steps[0] || null;
     const primaryValidation = validatePrimaryStepSubmission(primaryStep);
@@ -2724,11 +2964,47 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
+  const pageTitle =
+    pageMode.mode === "edit"
+      ? "Edit Task"
+      : pageMode.mode === "rerun"
+        ? "Rerun Task"
+        : "Create Task";
+  const primaryCta =
+    pageMode.mode === "edit"
+      ? "Save Changes"
+      : pageMode.mode === "rerun"
+        ? "Rerun Task"
+        : "Create";
+  const modeLoadError =
+    pageMode.mode !== "create" && !temporalTaskEditingEnabled
+      ? "Temporal task editing is not enabled."
+      : temporalDraftQuery.isError
+        ? temporalDraftQuery.error instanceof Error
+          ? temporalDraftQuery.error.message
+          : "Failed to reconstruct the task draft."
+        : null;
+  const isTemporalFormBlocked =
+    pageMode.mode !== "create" &&
+    (temporalDraftQuery.isLoading || Boolean(modeLoadError));
+
   return (
     <div className="stack">
       <div>
-        <h2 className="page-title">Create Task</h2>
+        <h2 className="page-title">{pageTitle}</h2>
       </div>
+
+      {pageMode.mode !== "create" && temporalDraftQuery.isLoading ? (
+        <p className="notice" role="status">
+          Loading Temporal execution draft...
+        </p>
+      ) : null}
+
+      {modeLoadError ? (
+        <p className="notice error" role="alert">
+          {modeLoadError}
+        </p>
+      ) : null}
 
       {jiraIntegration?.enabled && jiraBrowserOpen ? (
         <div className="jira-browser-backdrop">
@@ -2917,7 +3193,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         id="queue-submit-form"
         className="queue-submit-form"
         onSubmit={handleSubmit}
+        aria-disabled={isTemporalFormBlocked}
       >
+        <fieldset disabled={isTemporalFormBlocked} aria-busy={isTemporalFormBlocked}>
         <section className="queue-steps-section stack">
           <div id="queue-steps-list" className="stack">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
@@ -3450,6 +3728,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           Propose Tasks
         </label>
 
+        {pageMode.mode === "create" ? (
         <details className="card" id="schedule-panel">
           <summary>
             <strong>Schedule (optional)</strong>
@@ -3549,17 +3828,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         </details>
+        ) : null}
 
         <div className="actions">
           <button
             type="submit"
             className="queue-submit-primary"
-            aria-disabled={isSubmitting}
+            disabled={isTemporalFormBlocked}
+            aria-disabled={isSubmitting || isTemporalFormBlocked}
             aria-busy={isSubmitting}
           >
-            Create
+            {primaryCta}
           </button>
         </div>
+        </fieldset>
 
         <p
           id="queue-submit-message"

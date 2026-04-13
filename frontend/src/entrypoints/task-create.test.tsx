@@ -11,6 +11,10 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
+import {
+  buildTemporalSubmissionDraftFromExecution,
+  resolveTaskSubmitPageMode,
+} from "../lib/temporalTaskEditing";
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
@@ -61,6 +65,11 @@ const mockPayload: BootPayload = {
           detail: "/api/task-step-templates/{slug}",
           expand: "/api/task-step-templates/{slug}:expand",
           saveFromTask: "/api/task-step-templates/save-from-task",
+        },
+      },
+      features: {
+        temporalDashboard: {
+          temporalTaskEditing: true,
         },
       },
     },
@@ -322,6 +331,233 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aedit-123?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:edit-123",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "gemini_cli",
+              profileId: "profile:gemini-default",
+              model: "gemini-2.5-pro",
+              effort: "high",
+              repository: "MoonLadderStudios/MoonMind",
+              startingBranch: "main",
+              targetBranch: "task-editing-phase-2",
+              publishMode: "branch",
+              targetSkill: "speckit-implement",
+              inputParameters: {
+                targetRuntime: "gemini_cli",
+                task: {
+                  instructions: "Rebuild the Temporal task draft.",
+                  runtime: {
+                    mode: "gemini_cli",
+                    model: "gemini-2.5-pro",
+                    effort: "high",
+                    profileId: "profile:gemini-default",
+                  },
+                  git: {
+                    startingBranch: "main",
+                    targetBranch: "task-editing-phase-2",
+                  },
+                  publish: { mode: "branch" },
+                  tool: { type: "skill", name: "speckit-implement" },
+                  appliedStepTemplates: [
+                    {
+                      slug: "speckit-demo",
+                      version: "1.2.3",
+                      inputs: { feature_name: "Task Editing" },
+                      stepIds: ["tpl:speckit-demo:1.2.3:01"],
+                      appliedAt: "2026-04-12T00:00:00Z",
+                      capabilities: ["git"],
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Arerun-123?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:rerun-123",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputArtifactRef: "historical-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aunsupported?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:unsupported",
+              workflowType: "MoonMind.ManifestIngest",
+              state: "completed",
+              inputParameters: {},
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Ano-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:no-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              inputParameters: {
+                task: { instructions: "Existing task instructions." },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Ano-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:no-rerun",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputParameters: {
+                task: { instructions: "Terminal task instructions." },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Amissing-artifact?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:missing-artifact",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputArtifactRef: "missing-input",
+              inputParameters: { task: {} },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (
+          url === "/api/executions/mm%3Amalformed-artifact?source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:malformed-artifact",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              inputArtifactRef: "malformed-input",
+              inputParameters: { task: {} },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aincomplete?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:incomplete",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
+        if (
+          url ===
+          "/gateway/api/executions/mm%3Acustom-endpoints?view=detail&source=temporal"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:custom-endpoints",
+              workflowType: "MoonMind.Run",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputArtifactRef: "custom-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           if (executionResponseOverride) {
             return Promise.resolve(executionResponseOverride);
@@ -380,6 +616,52 @@ describe("Task Create Entrypoint", () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({ artifact_id: "art-001" }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/historical-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/MoonMind",
+                task: {
+                  instructions: "Rerun from artifact-backed instructions.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/missing-input/download") {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            statusText: "Not Found",
+            text: async () => "",
+          } as Response);
+        }
+        if (url === "/api/artifacts/malformed-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () => "not-json",
+          } as Response);
+        }
+        if (url === "/gateway/api/artifacts/custom-input/raw") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                task: {
+                  instructions: "Loaded through configured artifact route.",
+                  skill: { id: "speckit-orchestrate" },
+                },
+              }),
           } as Response);
         }
         if (url === "/api/jira/projects") {
@@ -483,6 +765,486 @@ describe("Task Create Entrypoint", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+  });
+
+  it("resolves task submit mode with rerun taking precedence over edit", () => {
+    expect(resolveTaskSubmitPageMode("")).toEqual({
+      mode: "create",
+      executionId: null,
+    });
+    expect(resolveTaskSubmitPageMode("?editExecutionId=mm%3Aedit")).toEqual({
+      mode: "edit",
+      executionId: "mm:edit",
+    });
+    expect(
+      resolveTaskSubmitPageMode(
+        "?editExecutionId=mm%3Aedit&rerunExecutionId=mm%3Arerun",
+      ),
+    ).toEqual({
+      mode: "rerun",
+      executionId: "mm:rerun",
+    });
+  });
+
+  it("does not load an execution detail draft in create mode", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Create Task" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/tasks/skills",
+        expect.objectContaining({
+          headers: { Accept: "application/json" },
+        }),
+      );
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        /^\/api\/executions\/[^?]+\?source=temporal$/.test(String(url)),
+      ),
+    ).toBe(false);
+  });
+
+  it("reconstructs a create-form draft from Temporal execution fields", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:edit-123",
+      workflowType: "MoonMind.Run",
+      targetRuntime: "gemini_cli",
+      profileId: "profile:gemini-default",
+      model: "gemini-2.5-pro",
+      effort: "high",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "task-editing-phase-2",
+      publishMode: "branch",
+      targetSkill: "speckit-implement",
+      inputParameters: {
+        task: {
+          instructions: "Rebuild the Temporal task draft.",
+          appliedStepTemplates: [
+            {
+              slug: "speckit-demo",
+              version: "1.2.3",
+              inputs: { feature_name: "Task Editing" },
+              stepIds: ["tpl:speckit-demo:1.2.3:01"],
+              appliedAt: "2026-04-12T00:00:00Z",
+              capabilities: ["git"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: "gemini_cli",
+      providerProfile: "profile:gemini-default",
+      model: "gemini-2.5-pro",
+      effort: "high",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "task-editing-phase-2",
+      publishMode: "branch",
+      taskInstructions: "Rebuild the Temporal task draft.",
+      primarySkill: "speckit-implement",
+    });
+    expect(draft.appliedTemplates).toEqual([
+      expect.objectContaining({
+        slug: "speckit-demo",
+        version: "1.2.3",
+        inputs: { feature_name: "Task Editing" },
+      }),
+    ]);
+  });
+
+  it("reconstructs a draft from an artifact-backed execution contract", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:rerun-123",
+        workflowType: "MoonMind.Run",
+        inputArtifactRef: "historical-input",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+              profileId: "profile:codex-secondary",
+            },
+          },
+        },
+        actions: {
+          canUpdateInputs: false,
+          canRerun: true,
+        },
+      },
+      {
+        repository: "MoonLadderStudios/MoonMind",
+        task: {
+          instructions: "Rerun from immutable artifact input.",
+          git: {
+            startingBranch: "main",
+            targetBranch: "rerun-target",
+          },
+          publish: { mode: "pr" },
+          skill: { id: "speckit-orchestrate" },
+        },
+      },
+    );
+
+    expect(draft).toMatchObject({
+      runtime: "codex_cli",
+      providerProfile: "profile:codex-secondary",
+      model: "gpt-5.4",
+      effort: "medium",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "rerun-target",
+      publishMode: "pr",
+      taskInstructions: "Rerun from immutable artifact input.",
+      primarySkill: "speckit-orchestrate",
+    });
+  });
+
+  it("includes step-level instructions when reconstructing a draft", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:step-instructions",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Top-level objective.",
+          steps: [
+            { instructions: "First step instructions." },
+            { instructions: "Second step instructions." },
+          ],
+        },
+      },
+    });
+
+    expect(draft.taskInstructions).toBe(
+      [
+        "Top-level objective.",
+        "First step instructions.",
+        "Second step instructions.",
+      ].join("\n\n"),
+    );
+  });
+
+  it("uses null for optional draft fields that cannot be reconstructed", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:minimal",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Only instructions are available.",
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: null,
+      providerProfile: null,
+      model: null,
+      effort: null,
+      repository: null,
+      startingBranch: null,
+      targetBranch: null,
+      publishMode: null,
+      primarySkill: null,
+      taskInstructions: "Only instructions are available.",
+    });
+  });
+
+  it("fails draft reconstruction when instructions are missing", () => {
+    expect(() =>
+      buildTemporalSubmissionDraftFromExecution({
+        workflowId: "mm:incomplete",
+        workflowType: "MoonMind.Run",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+            },
+          },
+        },
+      }),
+    ).toThrow("Task instructions could not be reconstructed from this execution.");
+  });
+
+  it("loads edit mode from an active Temporal execution and prefills the shared form", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Rebuild the Temporal task draft.");
+      expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(
+        "gemini_cli",
+      );
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:gemini-default");
+      expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
+        "gemini-2.5-pro",
+      );
+      expect((screen.getByLabelText("Effort") as HTMLInputElement).value).toBe(
+        "high",
+      );
+      expect(
+        (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
+      ).toBe("MoonLadderStudios/MoonMind");
+      expect(
+        (screen.getByLabelText("Starting Branch (optional)") as HTMLInputElement)
+          .value,
+      ).toBe("main");
+      expect(
+        (screen.getByLabelText("Target Branch (optional)") as HTMLInputElement)
+          .value,
+      ).toBe("task-editing-phase-2");
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("branch");
+      expect(
+        (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
+      ).toBe("speckit-implement");
+    });
+    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
+  });
+
+  it("loads rerun mode instructions from an input artifact when inline instructions are absent", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Rerun from artifact-backed instructions.");
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-secondary");
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/artifacts/historical-input/download",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+  });
+
+  it("loads draft inputs through configured detail and artifact download routes", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Acustom-endpoints",
+    );
+    const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      customPayload.initialData as {
+        dashboardConfig: {
+          sources: {
+            temporal: {
+              detail: string;
+              artifactDownload: string;
+            };
+          };
+        };
+      }
+    ).dashboardConfig.sources.temporal = {
+      ...(
+        customPayload.initialData as {
+          dashboardConfig: { sources: { temporal: Record<string, string> } };
+        }
+      ).dashboardConfig.sources.temporal,
+      detail: "/gateway/api/executions/{workflowId}?view=detail",
+      artifactDownload: "/gateway/api/artifacts/{artifactId}/raw",
+    };
+
+    renderWithClient(<TaskCreatePage payload={customPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Rerun Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+      ).toBe("Loaded through configured artifact route.");
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/gateway/api/executions/mm%3Acustom-endpoints?view=detail&source=temporal",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/gateway/api/artifacts/custom-input/raw",
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+      }),
+    );
+  });
+
+  it("shows a feature-disabled error without loading execution detail", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aedit-123",
+    );
+    const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      disabledPayload.initialData as {
+        dashboardConfig: {
+          features: { temporalDashboard: { temporalTaskEditing: boolean } };
+        };
+      }
+    ).dashboardConfig.features.temporalDashboard.temporalTaskEditing = false;
+
+    renderWithClient(<TaskCreatePage payload={disabledPayload} />);
+
+    expect(
+      await screen.findByText("Temporal task editing is not enabled."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/executions/mm%3Aedit-123?source=temporal",
+      ),
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error for unsupported Temporal workflow types", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aunsupported",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "This execution cannot be edited here because only MoonMind.Run is supported.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when edit capability is missing", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Ano-edit",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "This execution does not currently allow editing its inputs.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when rerun capability is missing", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Ano-rerun",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText("This execution does not currently allow rerun."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows an explicit error when the input artifact cannot be read", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Amissing-artifact",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "Task instructions could not be loaded from the input artifact.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("shows explicit errors for malformed artifacts and incomplete drafts", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Amalformed-artifact",
+    );
+
+    const { unmount } = renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText("Task input artifact did not contain valid JSON."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Rerun Task" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    unmount();
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/tasks/new?editExecutionId=mm%3Aincomplete",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        "Task instructions could not be reconstructed from this execution.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it("submits the queue-shaped Temporal task payload and redirects on success", async () => {
