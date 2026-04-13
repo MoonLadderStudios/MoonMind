@@ -2845,14 +2845,16 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
   const editHref = workflowId ? taskEditHref(workflowId) : '';
   const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
-  const onTaskEditingNavigation = (event: MouseEvent<HTMLAnchorElement>) => {
+  const onTaskEditingNavigation = (
+    event: MouseEvent<HTMLAnchorElement>,
+    telemetryEvent: 'detail_edit_click' | 'detail_rerun_click',
+  ) => {
     if (busy) {
       event.preventDefault();
       return;
     }
-    const label = event.currentTarget.textContent?.trim().toLowerCase();
     recordTemporalTaskEditingClientEvent({
-      event: label === 'rerun' ? 'detail_rerun_click' : 'detail_edit_click',
+      event: telemetryEvent,
       mode: 'detail',
       workflowId,
     });
@@ -3208,7 +3210,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     className="button secondary"
                     href={editHref}
                     aria-disabled={busy}
-                    onClick={onTaskEditingNavigation}
+                    onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
                   >
                     Edit
                   </a>
@@ -3218,7 +3220,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     className="button secondary"
                     href={rerunHref}
                     aria-disabled={busy}
-                    onClick={onTaskEditingNavigation}
+                    onClick={(event) => onTaskEditingNavigation(event, 'detail_rerun_click')}
                   >
                     Rerun
                   </a>
