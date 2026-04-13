@@ -2686,6 +2686,7 @@ describe("Task Create Entrypoint", () => {
         "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
       ),
     ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reapply preset" })).toBeTruthy();
     expect(
       screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
     ).toBeTruthy();
@@ -2701,6 +2702,7 @@ describe("Task Create Entrypoint", () => {
         "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
       ),
     ).toBeNull();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
   });
 
   it("does not mark preset instructions as needing reapply when Jira import leaves text unchanged", async () => {
@@ -2812,6 +2814,58 @@ describe("Task Create Entrypoint", () => {
     expect([undefined, null, ""]).toContain(
       request.payload.task.steps[1]?.id,
     );
+  });
+
+  it("warns before importing Jira text into a template-bound step", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 2 instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Importing into this template-bound step will make it manually customized.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.queryByText(
+        "Importing into this template-bound step will make it manually customized.",
+      ),
+    ).toBeNull();
   });
 
   it("shows Jira browser failures locally", async () => {

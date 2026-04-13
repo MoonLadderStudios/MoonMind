@@ -77,12 +77,12 @@ tasks_file="${feature_dir}/tasks.md"
 
 matches_runtime_path() {
   local path="$1"
-  [[ "$path" =~ ^(api_service/|moonmind/|celery_worker/|services/|docker-compose\.yaml$|docker-compose\.test\.yaml$) ]]
+  [[ "$path" =~ ^(api_service/|moonmind/|celery_worker/|services/|frontend/src/|docker-compose\.yaml$|docker-compose\.test\.yaml$) && ! "$path" =~ ^frontend/src/.*\.test\.(ts|tsx)$ ]]
 }
 
 matches_validation_path() {
   local path="$1"
-  [[ "$path" =~ ^tests/ ]]
+  [[ "$path" =~ ^tests/ || "$path" =~ ^frontend/src/.*\.test\.(ts|tsx)$ ]]
 }
 
 unique_nonempty_lines() {
@@ -99,8 +99,8 @@ validate_tasks_scope() {
   runtime_count="$(
     awk '
       /^- \[[ Xx]\] T[0-9]+/ &&
-      /(api_service\/|moonmind\/|celery_worker\/|services\/|docker-compose\.yaml|docker-compose\.test\.yaml)/ &&
-      $0 !~ /(tests\/|specs\/|docs\/)/ { count += 1 }
+      /(api_service\/|moonmind\/|celery_worker\/|services\/|frontend\/src\/|docker-compose\.yaml|docker-compose\.test\.yaml)/ &&
+      $0 !~ /(tests\/|specs\/|docs\/|frontend\/src\/.*\.test\.(ts|tsx))/ { count += 1 }
       END { print count + 0 }
     ' "$tasks_file"
   )"
@@ -108,7 +108,7 @@ validate_tasks_scope() {
   validation_count="$(
     awk '
       /^- \[[ Xx]\] T[0-9]+/ &&
-      /(tests\/|\.\/tools\/test_unit\.sh|validate-implementation-scope\.sh)/ { count += 1 }
+      /(tests\/|frontend\/src\/.*\.test\.(ts|tsx)|\.\/tools\/test_unit\.sh|validate-implementation-scope\.sh)/ { count += 1 }
       END { print count + 0 }
     ' "$tasks_file"
   )"

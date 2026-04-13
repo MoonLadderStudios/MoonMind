@@ -1,49 +1,51 @@
-# Specification Analysis Report
+## Specification Analysis Report
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| None | None | None | `specs/164-jira-import-actions/spec.md`, `specs/164-jira-import-actions/plan.md`, `specs/164-jira-import-actions/tasks.md` | No cross-artifact consistency, coverage, ambiguity, or constitution issues remain after Prompt B remediation. | Proceed to implementation when ready. |
+| None | None | None | None | No open inconsistencies, ambiguities, duplication issues, constitution conflicts, or coverage gaps were detected in the rerun after Prompt B remediation. | Proceed to implementation. |
 
 ## Coverage Summary
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --- | --- | --- | --- |
-| jira-import-actions | Yes | T010, T011, T016, T017, T018, T024 | Covers explicit Replace and Append actions for supported targets. |
-| read-only-preview | Yes | T013, T016 | Preview no-mutation test plus final import UI. |
-| choose-import-mode | Yes | T012, T016 | Covers mode selector and mode-sensitive import text. |
-| preset-default-mode | Yes | T015 | Explicit implementation task for preset target default. |
-| step-default-mode | Yes | T022, T023 | Test and implementation tasks both cover Execution brief default for step targets. |
-| preset-target-only | Yes | T010, T017, T018 | Covers preset field writes. |
-| objective-precedence | Yes | T017, T018, T040 | Covered through preset objective write behavior and focused Create page suite. |
-| preset-reapply-message | Yes | T027, T028, T029, T030, T031 | Covers reapply signal and no silent preset-step rewrite. |
-| selected-step-only | Yes | T020, T021, T023, T024, T025, T026 | Covers selected-step targeting and missing-target guard. |
-| template-detachment | Yes | T032, T033, T034, T035, T036 | Covers updateStep-based manual edit semantics and submission identity. |
-| append-separator | Yes | T011, T018 | Covers clear append separator. |
-| replace-current-text | Yes | T010, T017, T020, T024 | Covers replace semantics for both target types. |
-| jira-failure-additive | Yes | T037, T041 | Direct failure regression plus repo unit wrapper validation. |
-| moonmind-owned-jira-data | Yes | T008, T009 | Runtime config/browser boundary preserved. |
-| unchanged-submission-contract | Yes | T032, T033, T042 | Submission regression and runtime diff scope validation. |
-| runtime-code-and-tests | Yes | T005-T009, T010-T043 | Runtime production tasks and validation tasks are present. |
+| FR-001 detect-applied-preset-import-change | Yes | T006, T010, T014 | Covered by test-first and implementation tasks for US1. |
+| FR-002 exact-reapply-message | Yes | T006, T010, T014 | Exact message is called out in test and implementation tasks. |
+| FR-003 no-hidden-step-rewrites | Yes | T007, T011, T014 | Expanded-step preservation is explicitly tested and implemented. |
+| FR-004 explicit-reapply | Yes | T015, T017, T018, T019 | Covered by explicit reapply action tests and implementation. |
+| FR-005 clear-reapply-action | Yes | T015, T017, T019 | Covered through `Reapply preset` label assertions. |
+| FR-006 clear-reapply-state | Yes | T008, T012, T016, T019 | Covered by restoring last applied instructions and label reset. |
+| FR-007 unchanged-import-no-op | Yes | T009, T013, T014 | Covered by no-op regression test and implementation. |
+| FR-008 detect-template-bound-target | Yes | T020, T024, T025, T028 | Covered by predicate and target-derived warning state. |
+| FR-009 warn-template-bound-step | Yes | T020, T026, T028 | Covered by exact warning task. |
+| FR-010 allow-template-bound-import | Yes | T021, T027, T028 | Covered by import after warning. |
+| FR-011 update-only-targeted-step | Yes | T022, T027, T028 | Covered by targeted-step assertion. |
+| FR-012 detach-template-identity | Yes | T021, T023, T027, T028 | Covered by warning disappearance and submit assertion. |
+| FR-013 production-runtime-delivery | Yes | T010-T013, T017-T018, T024-T027, T030-T032 | Production code and validation tasks are explicit. |
+| FR-014 validation-tests | Yes | T006-T009, T014-T016, T019-T023, T028-T032 | Automated validation tasks exist for each runtime story. |
+| SC-005 jira-failure-manual-creation | Yes | T029, T031, T032 | Jira failure fallback has an explicit validation task plus targeted/full suite validation. |
 
 ## Constitution Alignment Issues
 
-No constitution alignment issues found.
+None detected. The plan includes a Constitution Check and post-design recheck, runtime work is scoped to production Create page code plus validation tests, and no docs-only substitution is present.
 
 ## Unmapped Tasks
 
-- T001-T004 are setup/review tasks. They support safe implementation and do not need one-to-one functional requirement mapping.
-- T038-T043 are polish/final validation tasks. They map to the runtime validation guard and cross-story quality gates rather than one single user story.
+No problematic unmapped tasks detected. Setup tasks T001-T005 and polish tasks T030-T034 are cross-cutting support/validation tasks rather than single-requirement implementation tasks.
 
 ## Metrics
 
-- Total Requirements: 16
-- Total Tasks: 43
-- Coverage %: 100% have at least one associated task; 100% have clear implementation and validation coverage where applicable
+- Total Requirements: 14
+- Total Tasks: 34
+- Coverage: 100% of functional requirements have at least one task
 - Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
+- High Issues Count: 0
+- Medium Issues Count: 0
+- Low Issues Count: 0
 
 ## Next Actions
 
-- No remediation is required before `speckit-implement`.
-- Proceed with the dependency-ordered tasks in `specs/164-jira-import-actions/tasks.md`.
+- No CRITICAL or HIGH issues block `speckit-implement`.
+- No Prompt B remediation is currently required.
+- Proceed to implementation when ready.

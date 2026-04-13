@@ -1,0 +1,112 @@
+openapi: 3.1.0
+info:
+  title: Create Page Jira Preset Reapply UI Contract
+  version: 0.1.0
+  description: >
+    This feature does not add backend endpoints. The contract documents the
+    Create page UI state/action contract for Jira imports that affect applied
+    presets and template-bound steps.
+paths: {}
+components:
+  schemas:
+    JiraImportTarget:
+      oneOf:
+        - type: object
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              const: preset
+        - type: object
+          required: [kind, localId]
+          properties:
+            kind:
+              type: string
+              const: step
+            localId:
+              type: string
+              minLength: 1
+    PresetReapplyState:
+      type: object
+      required:
+        - required
+        - message
+        - actionLabel
+      properties:
+        required:
+          type: boolean
+        message:
+          type: string
+          const: Preset instructions changed. Reapply the preset to regenerate preset-derived steps.
+        actionLabel:
+          type: string
+          description: Operator-visible preset action label while reapply is required.
+    TemplateBoundStepConflict:
+      type: object
+      required:
+        - target
+        - warningVisible
+        - warningText
+      properties:
+        target:
+          $ref: "#/components/schemas/JiraImportTarget"
+        warningVisible:
+          type: boolean
+        warningText:
+          type: string
+          const: Importing into this template-bound step will make it manually customized.
+    JiraPresetReapplyImportResult:
+      type: object
+      required:
+        - target
+        - changed
+        - expandedStepsMutated
+        - manualCreationAvailable
+      properties:
+        target:
+          $ref: "#/components/schemas/JiraImportTarget"
+        changed:
+          type: boolean
+          description: Whether the import changed the targeted draft text.
+        expandedStepsMutated:
+          type: boolean
+          const: false
+          description: Jira preset import must not silently rewrite already-expanded steps.
+        reapplyPresetRequired:
+          type: boolean
+          description: True when Jira import changed preset instructions after preset application.
+        templateIdentityDetached:
+          type: boolean
+          description: True when imported step instructions manually customized a template-bound step.
+        manualCreationAvailable:
+          type: boolean
+          const: true
+x-ui-actions:
+  - name: import-jira-into-applied-preset
+    resultSchema:
+      $ref: "#/components/schemas/JiraPresetReapplyImportResult"
+    requirements:
+      - FR-001
+      - FR-002
+      - FR-003
+      - FR-004
+      - FR-005
+      - FR-006
+      - FR-007
+  - name: open-jira-for-template-bound-step
+    resultSchema:
+      $ref: "#/components/schemas/TemplateBoundStepConflict"
+    requirements:
+      - FR-008
+      - FR-009
+  - name: import-jira-into-template-bound-step
+    resultSchema:
+      $ref: "#/components/schemas/JiraPresetReapplyImportResult"
+    requirements:
+      - FR-010
+      - FR-011
+      - FR-012
+  - name: validate-runtime-delivery
+    requirements:
+      - FR-013
+      - FR-014

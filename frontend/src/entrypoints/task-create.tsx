@@ -628,6 +628,16 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
   );
 }
 
+function isTemplateBoundStepForInstructions(
+  step: StepState | null | undefined,
+): boolean {
+  return Boolean(
+    step?.templateStepId &&
+      step.id === step.templateStepId &&
+      step.instructions === step.templateInstructions,
+  );
+}
+
 function validatePrimaryStepSubmission(
   primaryStep: StepState | null,
   options: { additionalStepsCount?: number } = {},
@@ -1379,6 +1389,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
+  const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
     useState("");
   const [appliedTemplates, setAppliedTemplates] = useState<
@@ -1996,6 +2007,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
   }, [jiraImportMode, selectedJiraIssue]);
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
+  const jiraTargetStep =
+    jiraImportTarget?.kind === "step"
+      ? steps.find((step) => step.localId === jiraImportTarget.localId) || null
+      : null;
+  const jiraImportWillCustomizeTemplateStep =
+    isTemplateBoundStepForInstructions(jiraTargetStep);
 
   function openJiraBrowser(target: JiraImportTarget) {
     jiraProjectSelectionInitializedRef.current = Boolean(selectedJiraProjectKey);
@@ -2049,7 +2066,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       setTemplateFeatureRequest(nextText);
       if (appliedTemplates.length > 0) {
-        setTemplateMessage(PRESET_REAPPLY_REQUIRED_MESSAGE);
+        setPresetReapplyNeeded(true);
       }
       return;
     }
@@ -2072,11 +2089,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function handleTemplateFeatureRequestChange(value: string) {
     setTemplateFeatureRequest(value);
     if (
-      templateMessage === PRESET_REAPPLY_REQUIRED_MESSAGE &&
+      presetReapplyNeeded &&
       (!value.trim() ||
         value.trim() === appliedTemplateFeatureRequest.trim())
     ) {
-      setTemplateMessage(null);
+      setPresetReapplyNeeded(false);
     }
   }
 
@@ -2169,6 +2186,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
 
   const presetStatusText = useMemo(() => {
+    if (presetReapplyNeeded) {
+      return PRESET_REAPPLY_REQUIRED_MESSAGE;
+    }
     if (templateMessage) {
       return templateMessage;
     }
@@ -2188,6 +2208,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }, [
     templateItems,
     templateMessage,
+    presetReapplyNeeded,
     templateOptionsQuery.data?.failedScopes,
     templateOptionsQuery.isError,
     templateOptionsQuery.isLoading,
@@ -2369,6 +2390,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setIsApplyingPreset(true);
+    setPresetReapplyNeeded(false);
     setTemplateMessage("Applying preset...");
 
     try {
@@ -2448,6 +2470,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         (current) => current + Math.max(expandedSteps.length, 1),
       );
       setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
+      setPresetReapplyNeeded(false);
       if (expandedSteps.length > 0) {
         const appliedTemplate = expanded.appliedTemplate || {};
         setAppliedTemplates((current) => [
@@ -3152,6 +3175,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               <div>
                 <h3 id="jira-browser-title">Browse Jira story</h3>
                 <p className="small">{`Target: ${jiraTargetText}`}</p>
+                {jiraImportWillCustomizeTemplateStep ? (
+                  <p className="notice small">
+                    Importing into this template-bound step will make it manually
+                    customized.
+                  </p>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -3556,6 +3585,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => {
                   setSelectedPresetKey(event.target.value);
                   setTemplateMessage(null);
+                  setPresetReapplyNeeded(false);
                 }}
               >
                 <option value="">Select preset...</option>
@@ -3599,7 +3629,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 aria-disabled={isApplyingPreset}
                 aria-busy={isApplyingPreset}
               >
-                Apply
+                {presetReapplyNeeded ? "Reapply preset" : "Apply"}
               </button>
               {taskTemplateSaveEnabled ? (
                 <button
