@@ -6,6 +6,7 @@ import { navigateTo } from "../lib/navigation";
 import {
   buildTemporalArtifactEditUpdatePayload,
   buildTemporalSubmissionDraftFromExecution,
+  recordTemporalTaskEditingClientEvent,
   resolveTaskSubmitPageMode,
   type TemporalTaskEditingExecutionContract,
 } from "../lib/temporalTaskEditing";
@@ -1607,52 +1608,68 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       temporalTaskEditingEnabled,
     queryFn: async (): Promise<TemporalSubmissionDraftLoadResult> => {
       const workflowId = String(pageMode.executionId || "");
-      const response = await fetch(
-        configuredTemporalDetailUrl(temporalDetailEndpoint, workflowId),
-        { headers: { Accept: "application/json" } },
-      );
-      if (!response.ok) {
-        throw new Error(
-          await responseErrorMessage(
-            response,
-            "Failed to load the Temporal execution.",
-          ),
+      try {
+        const response = await fetch(
+          configuredTemporalDetailUrl(temporalDetailEndpoint, workflowId),
+          { headers: { Accept: "application/json" } },
         );
-      }
-      const execution =
-        (await response.json()) as TemporalTaskEditingExecutionContract;
-      if (String(execution.workflowType || "") !== "MoonMind.Run") {
-        throw new Error(
-          "This execution cannot be edited here because only MoonMind.Run is supported.",
-        );
-      }
-      if (pageMode.mode === "edit" && execution.actions?.canUpdateInputs !== true) {
-        throw new Error(
-          "This execution does not currently allow editing its inputs.",
-        );
-      }
-      if (pageMode.mode === "rerun" && execution.actions?.canRerun !== true) {
-        throw new Error("This execution does not currently allow rerun.");
-      }
+        if (!response.ok) {
+          throw new Error(
+            await responseErrorMessage(
+              response,
+              "Failed to load the Temporal execution.",
+            ),
+          );
+        }
+        const execution =
+          (await response.json()) as TemporalTaskEditingExecutionContract;
+        if (String(execution.workflowType || "") !== "MoonMind.Run") {
+          throw new Error(
+            "This execution cannot be edited here because only MoonMind.Run is supported.",
+          );
+        }
+        if (pageMode.mode === "edit" && execution.actions?.canUpdateInputs !== true) {
+          throw new Error(
+            "This execution does not currently allow editing its inputs.",
+          );
+        }
+        if (pageMode.mode === "rerun" && execution.actions?.canRerun !== true) {
+          throw new Error("This execution does not currently allow rerun.");
+        }
 
-      let artifactInput: Record<string, unknown> | undefined;
-      const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
-      const inlineTask = execution.inputParameters?.task;
-      if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
-        artifactInput = recordValue(await readTemporalInputArtifact(
-          artifactDownloadEndpoint,
-          inputArtifactRef,
-        ));
-      }
+        let artifactInput: Record<string, unknown> | undefined;
+        const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
+        const inlineTask = execution.inputParameters?.task;
+        if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
+          artifactInput = recordValue(await readTemporalInputArtifact(
+            artifactDownloadEndpoint,
+            inputArtifactRef,
+          ));
+        }
 
-      return {
-        execution,
-        artifactInput,
-        draft: buildTemporalSubmissionDraftFromExecution(
+        const draft = buildTemporalSubmissionDraftFromExecution(
           execution,
           artifactInput,
-        ),
-      };
+        );
+        recordTemporalTaskEditingClientEvent({
+          event: "draft_reconstruction_success",
+          mode: pageMode.mode,
+          workflowId,
+        });
+        return {
+          execution,
+          artifactInput,
+          draft,
+        };
+      } catch (error) {
+        recordTemporalTaskEditingClientEvent({
+          event: "draft_reconstruction_failure",
+          mode: pageMode.mode,
+          workflowId,
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+        throw error;
+      }
     },
   });
 
@@ -2855,7 +2872,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     const description =
-      window.prompt("Preset description", `Saved from queue draft: ${title}`) ||
+      window.prompt("Preset description", `Saved from task draft: ${title}`) ||
       "";
 
     const presetSteps: Record<string, unknown>[] = [];
@@ -2967,61 +2984,89 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       parametersPatch,
     });
     const isRerun = updateName === "RequestRerun";
-    const response = await fetch(
-      configuredTemporalUpdateUrl(temporalUpdateEndpoint, workflowId),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(updatePayload),
-      },
-    );
-    if (!response.ok) {
-      const detail = await responseErrorDetail(
-        response,
-        isRerun ? "Failed to request task rerun." : "Failed to save task changes.",
-      );
-      throw new Error(detail.message);
-    }
-    const result = (await response.json()) as {
-      accepted?: boolean;
-      applied?: string | null;
-      message?: string | null;
-      execution?: { workflowId?: string | null } | null;
-    };
-    if (result.accepted === false) {
-      throw new Error(
-        String(result.message || "").trim() ||
-          (isRerun
-            ? "The workflow no longer accepts rerun requests."
-            : "The workflow no longer accepts input updates."),
-      );
-    }
-    const applied = String(result.applied || "").trim();
-    const statusText = isRerun
-      ? applied === "continue_as_new"
-        ? "Rerun was requested and the latest execution view is ready."
-        : "Rerun request was accepted."
-      : applied === "safe_point" || applied === "next_safe_point"
-        ? "Changes were scheduled for the next safe point."
-        : applied === "continue_as_new"
-          ? "Changes were accepted and will continue in a refreshed run."
-          : "Changes were saved to this execution.";
+    const attemptEvent = isRerun ? "rerun_submit_attempt" : "update_submit_attempt";
+    const resultEvent = isRerun ? "rerun_submit_result" : "update_submit_result";
+    recordTemporalTaskEditingClientEvent({
+      event: attemptEvent,
+      mode: isRerun ? "rerun" : "edit",
+      workflowId,
+      updateName,
+    });
     try {
-      window.sessionStorage.setItem(
-        "moonmind.temporalTaskEditing.notice",
-        statusText,
+      const response = await fetch(
+        configuredTemporalUpdateUrl(temporalUpdateEndpoint, workflowId),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(updatePayload),
+        },
       );
-    } catch {
-      // Navigation should not depend on session storage availability.
+      if (!response.ok) {
+        const detail = await responseErrorDetail(
+          response,
+          isRerun ? "Failed to request task rerun." : "Failed to save task changes.",
+        );
+        throw new Error(detail.message);
+      }
+      const result = (await response.json()) as {
+        accepted?: boolean;
+        applied?: string | null;
+        message?: string | null;
+        execution?: { workflowId?: string | null } | null;
+      };
+      if (result.accepted === false) {
+        throw new Error(
+          String(result.message || "").trim() ||
+            (isRerun
+              ? "The workflow no longer accepts rerun requests."
+              : "The workflow no longer accepts input updates."),
+        );
+      }
+      const applied = String(result.applied || "").trim();
+      recordTemporalTaskEditingClientEvent({
+        event: resultEvent,
+        mode: isRerun ? "rerun" : "edit",
+        workflowId,
+        updateName,
+        result: "success",
+        applied,
+      });
+      const statusText = isRerun
+        ? applied === "continue_as_new"
+          ? "Rerun was requested and the latest execution view is ready."
+          : "Rerun request was accepted."
+        : applied === "safe_point" || applied === "next_safe_point"
+          ? "Changes were scheduled for the next safe point."
+          : applied === "continue_as_new"
+            ? "Changes were accepted and will continue in a refreshed run."
+            : "Changes were saved to this execution.";
+      try {
+        window.sessionStorage.setItem(
+          "moonmind.temporalTaskEditing.notice",
+          statusText,
+        );
+      } catch {
+        // Navigation should not depend on session storage availability.
+      }
+      const redirectWorkflowId =
+        String(result.execution?.workflowId || "").trim() || workflowId;
+      navigateTo(
+        `/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
+      );
+    } catch (error) {
+      recordTemporalTaskEditingClientEvent({
+        event: resultEvent,
+        mode: isRerun ? "rerun" : "edit",
+        workflowId,
+        updateName,
+        result: "failure",
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+      throw error;
     }
-    const redirectWorkflowId =
-      String(result.execution?.workflowId || "").trim() || workflowId;
-    navigateTo(
-      `/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
-    );
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {

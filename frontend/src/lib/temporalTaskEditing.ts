@@ -58,6 +58,26 @@ export type TemporalSubmissionDraft = {
 
 export type TemporalTaskEditUpdateName = 'UpdateInputs' | 'RequestRerun';
 
+export type TemporalTaskEditingTelemetryEvent =
+  | 'detail_edit_click'
+  | 'detail_rerun_click'
+  | 'draft_reconstruction_success'
+  | 'draft_reconstruction_failure'
+  | 'update_submit_attempt'
+  | 'update_submit_result'
+  | 'rerun_submit_attempt'
+  | 'rerun_submit_result';
+
+export type TemporalTaskEditingTelemetryPayload = {
+  event: TemporalTaskEditingTelemetryEvent;
+  mode?: TaskSubmitPageMode | 'detail';
+  workflowId?: string | null;
+  updateName?: TemporalTaskEditUpdateName;
+  result?: 'success' | 'failure';
+  reason?: string | null;
+  applied?: string | null;
+};
+
 export type TemporalArtifactEditUpdatePayload = {
   updateName: TemporalTaskEditUpdateName;
   inputArtifactRef?: string;
@@ -81,6 +101,36 @@ export function buildTemporalArtifactEditUpdatePayload({
       : {}),
     parametersPatch,
   };
+}
+
+export function recordTemporalTaskEditingClientEvent(
+  payload: TemporalTaskEditingTelemetryPayload,
+): void {
+  const boundedPayload = {
+    event: payload.event,
+    ...(payload.mode ? { mode: payload.mode } : {}),
+    ...(payload.workflowId ? { workflowId: payload.workflowId } : {}),
+    ...(payload.updateName ? { updateName: payload.updateName } : {}),
+    ...(payload.result ? { result: payload.result } : {}),
+    ...(payload.reason ? { reason: payload.reason.slice(0, 120) } : {}),
+    ...(payload.applied ? { applied: payload.applied.slice(0, 80) } : {}),
+  };
+
+  try {
+    window.dispatchEvent(
+      new CustomEvent('moonmind:temporal-task-editing', {
+        detail: boundedPayload,
+      }),
+    );
+  } catch {
+    // Telemetry must never affect task editing behavior.
+  }
+
+  try {
+    console.info('moonmind.temporal_task_editing', boundedPayload);
+  } catch {
+    // Console availability varies in embedded browser contexts.
+  }
 }
 
 export function taskCreateHref(): string {

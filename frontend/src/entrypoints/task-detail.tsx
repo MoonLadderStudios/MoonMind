@@ -7,7 +7,11 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel } from '../utils/formatters';
-import { taskEditHref, taskRerunHref } from '../lib/temporalTaskEditing';
+import {
+  recordTemporalTaskEditingClientEvent,
+  taskEditHref,
+  taskRerunHref,
+} from '../lib/temporalTaskEditing';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -2844,7 +2848,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const onTaskEditingNavigation = (event: MouseEvent<HTMLAnchorElement>) => {
     if (busy) {
       event.preventDefault();
+      return;
     }
+    const label = event.currentTarget.textContent?.trim().toLowerCase();
+    recordTemporalTaskEditingClientEvent({
+      event: label === 'rerun' ? 'detail_rerun_click' : 'detail_edit_click',
+      mode: 'detail',
+      workflowId,
+    });
   };
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
