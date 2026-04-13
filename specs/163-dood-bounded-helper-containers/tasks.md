@@ -18,12 +18,12 @@
 
 **Purpose**: Confirm existing DooD workload surfaces and align the implementation slice before adding helper behavior.
 
-- [ ] T001 Review current workload contracts in `moonmind/schemas/workload_models.py` against `specs/163-dood-bounded-helper-containers/data-model.md`
-- [ ] T002 Review current runner-profile policy validation in `moonmind/workloads/registry.py` against `specs/163-dood-bounded-helper-containers/contracts/bounded-helper-workload-contract.md`
-- [ ] T003 Review current Docker workload launcher and janitor behavior in `moonmind/workloads/docker_launcher.py`
-- [ ] T004 [P] Review executable tool bridge behavior in `moonmind/workloads/tool_bridge.py` for future helper tool exposure boundaries
-- [ ] T005 [P] Review Temporal workload activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T006 [P] Confirm validation commands and evidence expectations in `specs/163-dood-bounded-helper-containers/quickstart.md`
+- [X] T001 Review current workload contracts in `moonmind/schemas/workload_models.py` against `specs/163-dood-bounded-helper-containers/data-model.md`
+- [X] T002 Review current runner-profile policy validation in `moonmind/workloads/registry.py` against `specs/163-dood-bounded-helper-containers/contracts/bounded-helper-workload-contract.md`
+- [X] T003 Review current Docker workload launcher and janitor behavior in `moonmind/workloads/docker_launcher.py`
+- [X] T004 [P] Review executable tool bridge behavior in `moonmind/workloads/tool_bridge.py` for future helper tool exposure boundaries
+- [X] T005 [P] Review Temporal workload activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T006 [P] Confirm validation commands and evidence expectations in `specs/163-dood-bounded-helper-containers/quickstart.md`
 
 ---
 
@@ -33,11 +33,11 @@
 
 **CRITICAL**: No user story implementation should begin until these tests exist and fail for the expected missing helper behavior.
 
-- [ ] T007 [P] Add failing bounded helper profile/request contract tests in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T008 [P] Add failing helper launcher and janitor boundary tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T009 [P] Add failing helper executable-tool bridge contract tests in `tests/unit/workloads/test_workload_tool_bridge.py`
-- [ ] T010 [P] Add failing Temporal workload activity boundary tests for helper invocation shape in `tests/unit/workflows/temporal/test_workload_run_activity.py`
-- [ ] T011 Add shared helper status/result expectations to workload result assertions in `tests/unit/workloads/test_workload_contract.py`
+- [X] T007 [P] Add failing bounded helper profile/request contract tests in `tests/unit/workloads/test_workload_contract.py`
+- [X] T008 [P] Add failing helper launcher and janitor boundary tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T009 [P] Add failing helper executable-tool bridge contract tests in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T010 [P] Add failing Temporal workload activity boundary tests for helper invocation shape in `tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T011 Add shared helper status/result expectations to workload result assertions in `tests/unit/workloads/test_workload_contract.py`
 
 **Checkpoint**: Tests describe helper kind, TTL policy, readiness contract, helper identity, and teardown/cleanup expectations before production code changes.
 
@@ -53,22 +53,22 @@
 
 > Write these tests first and confirm they fail for the expected missing runtime behavior.
 
-- [ ] T012 [P] [US1] Add helper profile validation tests for required `kind`, `helperTtlSeconds`, `maxHelperTtlSeconds`, and `readinessProbe` in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T013 [P] [US1] Add helper request validation tests for owner step, explicit `ttlSeconds`, profile maximum TTL, artifacts path, and optional session grouping in `tests/unit/workloads/test_workload_contract.py`
-- [ ] T014 [P] [US1] Add deterministic helper container name and `moonmind.kind=bounded_service` label tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T015 [P] [US1] Add helper detached Docker run argument tests for safe mounts, resources, env allowlist, no privileged launch, and TTL labels in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T012 [P] [US1] Add helper profile validation tests for required `kind`, `helperTtlSeconds`, `maxHelperTtlSeconds`, and `readinessProbe` in `tests/unit/workloads/test_workload_contract.py`
+- [X] T013 [P] [US1] Add helper request validation tests for owner step, explicit `ttlSeconds`, profile maximum TTL, artifacts path, and optional session grouping in `tests/unit/workloads/test_workload_contract.py`
+- [X] T014 [P] [US1] Add deterministic helper container name and `moonmind.kind=bounded_service` label tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T015 [P] [US1] Add helper detached Docker run argument tests for safe mounts, resources, env allowlist, no privileged launch, and TTL labels in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 1
 
-- [ ] T016 [US1] Add bounded helper workload kind, helper status values, readiness probe model, TTL fields, and deterministic helper name helper in `moonmind/schemas/workload_models.py`
-- [ ] T017 [US1] Implement helper profile and helper request policy validation in `moonmind/workloads/registry.py`
-- [ ] T018 [US1] Implement helper ownership metadata, helper container labels, and helper TTL expiration labels in `moonmind/workloads/docker_launcher.py`
-- [ ] T019 [US1] Implement detached helper run-argument construction in `moonmind/workloads/docker_launcher.py`
-- [ ] T020 [US1] Ensure helper metadata treats `sessionId`, `sessionEpoch`, and `sourceTurnId` as grouping context only in `moonmind/workloads/docker_launcher.py`
+- [X] T016 [US1] Add bounded helper workload kind, helper status values, readiness probe model, TTL fields, and deterministic helper name helper in `moonmind/schemas/workload_models.py`
+- [X] T017 [US1] Implement helper profile and helper request policy validation in `moonmind/workloads/registry.py`
+- [X] T018 [US1] Implement helper ownership metadata, helper container labels, and helper TTL expiration labels in `moonmind/workloads/docker_launcher.py`
+- [X] T019 [US1] Implement detached helper run-argument construction in `moonmind/workloads/docker_launcher.py`
+- [X] T020 [US1] Ensure helper metadata treats `sessionId`, `sessionEpoch`, and `sourceTurnId` as grouping context only in `moonmind/workloads/docker_launcher.py`
 
 ### Validation for User Story 1
 
-- [ ] T021 [US1] Verify User Story 1 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T021 [US1] Verify User Story 1 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py`
 
 **Checkpoint**: A bounded helper can be validated and started independently without becoming a managed session.
 
@@ -84,21 +84,21 @@
 
 > Write these tests first and confirm they fail for the expected missing readiness behavior.
 
-- [ ] T022 [P] [US2] Add readiness success tests for bounded Docker exec probes in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T023 [P] [US2] Add readiness retry, timeout, exhausted retry, and unhealthy result tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T024 [P] [US2] Add diagnostics redaction tests proving readiness outputs omit env values, secrets, prompts, transcripts, and unbounded logs in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T025 [P] [US2] Add artifact publication tests for helper stdout, stderr, diagnostics, and partial publication failure in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T022 [P] [US2] Add readiness success tests for bounded Docker exec probes in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T023 [P] [US2] Add readiness retry, timeout, exhausted retry, and unhealthy result tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T024 [P] [US2] Add diagnostics redaction tests proving readiness outputs omit env values, secrets, prompts, transcripts, and unbounded logs in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T025 [P] [US2] Add artifact publication tests for helper stdout, stderr, diagnostics, and partial publication failure in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Implement helper readiness probe execution and bounded retry handling in `moonmind/workloads/docker_launcher.py`
-- [ ] T027 [US2] Implement ready, unhealthy, timed-out, and canceled helper result metadata in `moonmind/workloads/docker_launcher.py`
-- [ ] T028 [US2] Publish bounded helper readiness artifacts and diagnostics in `moonmind/workloads/docker_launcher.py`
-- [ ] T029 [US2] Add readiness policy denial/error mapping for helper launch failures in `moonmind/workloads/registry.py` and `moonmind/workloads/docker_launcher.py`
+- [X] T026 [US2] Implement helper readiness probe execution and bounded retry handling in `moonmind/workloads/docker_launcher.py`
+- [X] T027 [US2] Implement ready, unhealthy, timed-out, and canceled helper result metadata in `moonmind/workloads/docker_launcher.py`
+- [X] T028 [US2] Publish bounded helper readiness artifacts and diagnostics in `moonmind/workloads/docker_launcher.py`
+- [X] T029 [US2] Add readiness policy denial/error mapping for helper launch failures in `moonmind/workloads/registry.py` and `moonmind/workloads/docker_launcher.py`
 
 ### Validation for User Story 2
 
-- [ ] T030 [US2] Verify User Story 2 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T030 [US2] Verify User Story 2 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py`
 
 **Checkpoint**: Helper readiness is observable and bounded, and failed readiness is diagnosable from artifacts/metadata.
 
@@ -114,24 +114,24 @@
 
 > Write these tests first and confirm they fail for the expected missing lifecycle behavior.
 
-- [ ] T031 [P] [US3] Add multi-sub-step helper survival test using the same helper ownership record in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T032 [P] [US3] Add explicit helper teardown stop/kill/remove tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T033 [P] [US3] Add cancellation and timeout teardown tests for helper start, readiness, and active helper window in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T034 [P] [US3] Add helper start/stop executable tool mapping tests in `tests/unit/workloads/test_workload_tool_bridge.py`
-- [ ] T035 [P] [US3] Add Temporal activity boundary tests for helper start/stop invocation and result shape in `tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T031 [P] [US3] Add multi-sub-step helper survival test using the same helper ownership record in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T032 [P] [US3] Add explicit helper teardown stop/kill/remove tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T033 [P] [US3] Add cancellation and timeout teardown tests for helper start, readiness, and active helper window in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T034 [P] [US3] Add helper start/stop executable tool mapping tests in `tests/unit/workloads/test_workload_tool_bridge.py`
+- [X] T035 [P] [US3] Add Temporal activity boundary tests for helper start/stop invocation and result shape in `tests/unit/workflows/temporal/test_workload_run_activity.py`
 
 ### Implementation for User Story 3
 
-- [ ] T036 [US3] Implement `DockerWorkloadLauncher.start_helper()` lifecycle orchestration in `moonmind/workloads/docker_launcher.py`
-- [ ] T037 [US3] Implement `DockerWorkloadLauncher.stop_helper()` teardown behavior and diagnostics in `moonmind/workloads/docker_launcher.py`
-- [ ] T038 [US3] Add helper start/stop tool definitions and schemas in `moonmind/workloads/tool_bridge.py`
-- [ ] T039 [US3] Register helper tool handlers and map helper inputs to validated workload requests in `moonmind/workloads/tool_bridge.py`
-- [ ] T040 [US3] Wire helper start/stop execution through the existing workload activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T041 [US3] Preserve one-shot workload behavior and existing `container.run_workload` / `unreal.run_tests` results while adding helper lifecycle handling in `moonmind/workloads/tool_bridge.py`
+- [X] T036 [US3] Implement `DockerWorkloadLauncher.start_helper()` lifecycle orchestration in `moonmind/workloads/docker_launcher.py`
+- [X] T037 [US3] Implement `DockerWorkloadLauncher.stop_helper()` teardown behavior and diagnostics in `moonmind/workloads/docker_launcher.py`
+- [X] T038 [US3] Add helper start/stop tool definitions and schemas in `moonmind/workloads/tool_bridge.py`
+- [X] T039 [US3] Register helper tool handlers and map helper inputs to validated workload requests in `moonmind/workloads/tool_bridge.py`
+- [X] T040 [US3] Wire helper start/stop execution through the existing workload activity boundary in `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T041 [US3] Preserve one-shot workload behavior and existing `container.run_workload` / `unreal.run_tests` results while adding helper lifecycle handling in `moonmind/workloads/tool_bridge.py`
 
 ### Validation for User Story 3
 
-- [ ] T042 [US3] Verify User Story 3 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T042 [US3] Verify User Story 3 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py`
 
 **Checkpoint**: A helper can be launched, used across a bounded window, and explicitly torn down through the control-plane workload path.
 
@@ -147,19 +147,19 @@
 
 > Write these tests first and confirm they fail for the expected missing cleanup behavior.
 
-- [ ] T043 [P] [US4] Add expired helper sweep tests for `moonmind.kind=bounded_service` and `moonmind.expires_at` in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T044 [P] [US4] Add fresh helper, one-shot workload, session container, unrelated container, malformed TTL, and missing TTL skip tests in `tests/unit/workloads/test_docker_workload_launcher.py`
-- [ ] T045 [P] [US4] Add cleanup diagnostics tests for inspected, removed, skipped, and ownership basis metadata in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T043 [P] [US4] Add expired helper sweep tests for `moonmind.kind=bounded_service` and `moonmind.expires_at` in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T044 [P] [US4] Add fresh helper, one-shot workload, session container, unrelated container, malformed TTL, and missing TTL skip tests in `tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T045 [P] [US4] Add cleanup diagnostics tests for inspected, removed, skipped, and ownership basis metadata in `tests/unit/workloads/test_docker_workload_launcher.py`
 
 ### Implementation for User Story 4
 
-- [ ] T046 [US4] Implement helper-specific expired-container sweep in `moonmind/workloads/docker_launcher.py`
-- [ ] T047 [US4] Implement helper cleanup diagnostics and safe skip behavior for malformed or fresh TTL metadata in `moonmind/workloads/docker_launcher.py`
-- [ ] T048 [US4] Ensure helper cleanup does not alter one-shot workload cleanup semantics in `moonmind/workloads/docker_launcher.py`
+- [X] T046 [US4] Implement helper-specific expired-container sweep in `moonmind/workloads/docker_launcher.py`
+- [X] T047 [US4] Implement helper cleanup diagnostics and safe skip behavior for malformed or fresh TTL metadata in `moonmind/workloads/docker_launcher.py`
+- [X] T048 [US4] Ensure helper cleanup does not alter one-shot workload cleanup semantics in `moonmind/workloads/docker_launcher.py`
 
 ### Validation for User Story 4
 
-- [ ] T049 [US4] Verify User Story 4 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py`
+- [X] T049 [US4] Verify User Story 4 with `./tools/test_unit.sh --python-only tests/unit/workloads/test_docker_workload_launcher.py`
 
 **Checkpoint**: Expired helper cleanup is reliable and narrowly scoped.
 
@@ -169,13 +169,13 @@
 
 **Purpose**: Confirm scope, docs, security posture, and full validation after all stories.
 
-- [ ] T050 [P] Update Phase 7 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
-- [ ] T051 [P] Update helper quickstart evidence and any changed validation commands in `specs/163-dood-bounded-helper-containers/quickstart.md`
-- [ ] T052 [P] Scan helper diagnostics and tool outputs for secret-like values in `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/tool_bridge.py`
-- [ ] T053 Run focused feature verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py`
-- [ ] T054 Run full unit verification with `./tools/test_unit.sh`
-- [ ] T055 Run runtime scope validation with `SPECIFY_FEATURE=163-dood-bounded-helper-containers .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T056 Run runtime diff validation with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`
+- [X] T050 [P] Update Phase 7 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+- [X] T051 [P] Update helper quickstart evidence and any changed validation commands in `specs/163-dood-bounded-helper-containers/quickstart.md`
+- [X] T052 [P] Scan helper diagnostics and tool outputs for secret-like values in `moonmind/workloads/docker_launcher.py` and `moonmind/workloads/tool_bridge.py`
+- [X] T053 Run focused feature verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [X] T054 Run full unit verification with `./tools/test_unit.sh`
+- [X] T055 Run runtime scope validation with `SPECIFY_FEATURE=163-dood-bounded-helper-containers .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T056 Run runtime diff validation with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`
 
 ---
 

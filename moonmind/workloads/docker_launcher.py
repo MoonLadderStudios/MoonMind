@@ -882,8 +882,8 @@ class DockerWorkloadLauncher:
                     "status": "ready",
                     "attempts": attempt,
                     "command": list(probe.command),
-                    "stdout": last_stdout,
-                    "stderr": last_stderr,
+                    "stdoutBytes": len(last_stdout.encode("utf-8")),
+                    "stderrBytes": len(last_stderr.encode("utf-8")),
                 }
             if attempt < probe.retries and probe.interval_seconds:
                 await asyncio.sleep(probe.interval_seconds)
@@ -891,8 +891,8 @@ class DockerWorkloadLauncher:
             "status": "unhealthy",
             "attempts": probe.retries,
             "command": list(probe.command),
-            "stdout": last_stdout,
-            "stderr": last_stderr,
+            "stdoutBytes": len(last_stdout.encode("utf-8")),
+            "stderrBytes": len(last_stderr.encode("utf-8")),
         }
 
     def _helper_result(

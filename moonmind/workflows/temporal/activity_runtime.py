@@ -51,6 +51,8 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
 from moonmind.workloads.tool_bridge import (
+    CONTAINER_START_HELPER_TOOL,
+    CONTAINER_STOP_HELPER_TOOL,
     build_dood_tool_definition_payload,
     is_dood_tool,
 )
@@ -2532,10 +2534,21 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 "workload registry and launcher are required for workload.run"
             )
-        request_payload = payload.get("request", payload)
+        request_payload = dict(payload.get("request", payload))
+        reason = str(request_payload.pop("reason", "") or "bounded_window_complete")
+        if request_payload.get("toolName") == CONTAINER_STOP_HELPER_TOOL:
+            request_payload.setdefault("command", ["stop"])
         request = WorkloadRequest.model_validate(request_payload)
         validated = self._workload_registry.validate_request(request)
-        result = await self._workload_launcher.run(validated)
+        if request.tool_name == CONTAINER_START_HELPER_TOOL:
+            result = await self._workload_launcher.start_helper(validated)
+        elif request.tool_name == CONTAINER_STOP_HELPER_TOOL:
+            result = await self._workload_launcher.stop_helper(
+                validated,
+                reason=reason,
+            )
+        else:
+            result = await self._workload_launcher.run(validated)
         if not isinstance(result, WorkloadResult):
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)

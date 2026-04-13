@@ -1039,6 +1039,45 @@ async def test_launcher_reports_unhealthy_helper_after_bounded_readiness_retries
 
 
 @pytest.mark.asyncio
+async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_value = "inline_secret_value_for_redaction_test"
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"helper123\n")
+        if args[1] == "exec":
+            return _Process(
+                returncode=1,
+                stdout=secret_value.encode("utf-8"),
+                stderr=b"not ready\n",
+            )
+        return _Process(returncode=0)
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr("moonmind.workloads.docker_launcher.asyncio.sleep", _no_sleep)
+
+    result = await DockerWorkloadLauncher().start_helper(
+        _validated_helper_request(tmp_path)
+    )
+
+    readiness = result.metadata["helper"]["readiness"]
+    serialized = json.dumps(result.metadata, sort_keys=True)
+    assert "stdout" not in readiness
+    assert "stderr" not in readiness
+    assert readiness["stdoutBytes"] == len(secret_value)
+    assert secret_value not in serialized
+
+
+@pytest.mark.asyncio
 async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

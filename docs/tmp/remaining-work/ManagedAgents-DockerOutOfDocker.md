@@ -88,8 +88,9 @@ Last updated: 2026-04-12
 - Helper ownership uses deterministic `mm-helper-...` container names and `moonmind.kind=bounded_service` labels, preserving the boundary that helpers are not `MoonMind.AgentRun` instances and do not carry managed-session identity.
 - `DockerWorkloadLauncher.start_helper()` launches helpers detached, waits for bounded Docker exec readiness probes, and publishes bounded helper diagnostics and runtime logs under the step artifact directory.
 - `DockerWorkloadLauncher.stop_helper()` performs explicit stop/kill/remove teardown for the bounded execution window.
+- Executable tools `container.start_helper` and `container.stop_helper` route through the existing Docker workload tool bridge and Temporal `workload.run` activity boundary without granting Docker authority to managed-session containers.
 - `DockerContainerJanitor.sweep_expired_helpers()` removes expired helper containers by `moonmind.kind=bounded_service` and `moonmind.expires_at` without touching fresh helpers or one-shot workload containers.
-- Focused unit coverage validates helper profile/request policy, detached launch labels, readiness success/failure, multi-sub-step survival through the bounded window, explicit teardown, and expired-helper sweeping.
+- Focused unit coverage validates helper profile/request policy, detached launch labels, readiness success/failure, bounded readiness diagnostics, multi-sub-step survival through the bounded window, executable tool start/stop mapping, Temporal activity dispatch, explicit teardown, and expired-helper sweeping.
 
 ## Guardrails to preserve during later phases
 

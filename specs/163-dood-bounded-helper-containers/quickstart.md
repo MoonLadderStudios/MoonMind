@@ -9,10 +9,12 @@ Run the workload contract and launcher tests while iterating:
 ```bash
 ./tools/test_unit.sh --python-only \
   tests/unit/workloads/test_workload_contract.py \
-  tests/unit/workloads/test_docker_workload_launcher.py
+  tests/unit/workloads/test_docker_workload_launcher.py \
+  tests/unit/workloads/test_workload_tool_bridge.py \
+  tests/unit/workflows/temporal/test_workload_run_activity.py
 ```
 
-If helper start/stop is exposed through executable tools, include tool bridge and Temporal activity boundary tests:
+For a narrower helper tool/activity pass, run:
 
 ```bash
 ./tools/test_unit.sh --python-only \
@@ -42,5 +44,7 @@ Before finalizing, run:
 - Helper request validation rejects missing TTL, missing readiness, unknown profile, excessive TTL, disallowed env, unsafe mounts, and unsupported helper profile use.
 - Helper metadata uses a helper/workload kind and deterministic helper ownership, not `session_id` as identity.
 - Readiness success and failure are visible from bounded artifacts and metadata.
+- Helper start/stop tool results use normal executable-tool output shape through `container.start_helper` and `container.stop_helper`.
+- Temporal `workload.run` dispatches helper start/stop by tool name while preserving one-shot workload behavior.
 - Teardown records cleanup attempts and final status.
 - Expired-helper sweeper preserves fresh helpers, one-shot workloads, session containers, and unrelated containers.
