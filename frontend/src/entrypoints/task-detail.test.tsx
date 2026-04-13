@@ -243,6 +243,7 @@ describe('Task Detail Entrypoint', () => {
     vi.restoreAllMocks();
     virtuosoPropsSpy.mockClear();
     window.history.pushState({}, 'Test', '/tasks/test-123?source=temporal');
+    window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
   });
@@ -1063,6 +1064,46 @@ describe('Task Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Rerun' }).getAttribute('href')).toBe(
       '/tasks/new?rerunExecutionId=test-123',
     );
+  });
+
+  it('shows a one-time Temporal task editing success notice after redirect', async () => {
+    window.sessionStorage.setItem(
+      'moonmind.temporalTaskEditing.notice',
+      'Changes were saved to this execution.',
+    );
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Edited task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Changes were saved to this execution.')).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
+    expect(
+      window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
+    ).toBeNull();
   });
 
   it('prevents task editing navigation while another action is pending', async () => {
@@ -2438,6 +2479,7 @@ describe('LiveLogsPanel', () => {
 
   beforeEach(() => {
     window.history.pushState({}, 'Test', '/tasks/wf-1?source=temporal');
+    window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     MockEventSource.reset();
     originalEventSource = window.EventSource;

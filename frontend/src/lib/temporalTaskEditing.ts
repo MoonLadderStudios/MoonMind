@@ -56,6 +56,33 @@ export type TemporalSubmissionDraft = {
   }>;
 };
 
+export type TemporalTaskEditUpdateName = 'UpdateInputs' | 'RequestRerun';
+
+export type TemporalArtifactEditUpdatePayload = {
+  updateName: TemporalTaskEditUpdateName;
+  inputArtifactRef?: string;
+  parametersPatch: Record<string, unknown>;
+};
+
+export function buildTemporalArtifactEditUpdatePayload({
+  updateName,
+  inputArtifactRef,
+  parametersPatch,
+}: {
+  updateName: TemporalTaskEditUpdateName;
+  inputArtifactRef?: string | null;
+  parametersPatch: Record<string, unknown>;
+}): TemporalArtifactEditUpdatePayload {
+  const normalizedArtifactRef = String(inputArtifactRef || '').trim();
+  return {
+    updateName,
+    ...(normalizedArtifactRef
+      ? { inputArtifactRef: normalizedArtifactRef }
+      : {}),
+    parametersPatch,
+  };
+}
+
 export function taskCreateHref(): string {
   return '/tasks/new';
 }

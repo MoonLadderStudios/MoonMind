@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
 import {
+  buildTemporalArtifactEditUpdatePayload,
   buildTemporalSubmissionDraftFromExecution,
   resolveTaskSubmitPageMode,
   type TemporalTaskEditingExecutionContract,
@@ -59,6 +60,7 @@ interface DashboardConfig {
   sources?: {
     temporal?: {
       create?: string;
+      update?: string;
       artifactCreate?: string;
       artifactDownload?: string;
       detail?: string;
@@ -395,6 +397,13 @@ function configuredTemporalDetailUrl(
     interpolatePath(detailTemplate, { workflowId }),
     { source: "temporal" },
   );
+}
+
+function configuredTemporalUpdateUrl(
+  updateTemplate: string,
+  workflowId: string,
+): string {
+  return interpolatePath(updateTemplate, { workflowId });
 }
 
 function configuredArtifactDownloadUrl(
@@ -1247,6 +1256,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
   const temporalCreateEndpoint = String(
     dashboardConfig.sources?.temporal?.create || "/api/executions",
+  );
+  const temporalUpdateEndpoint = String(
+    dashboardConfig.sources?.temporal?.update ||
+      "/api/executions/{workflowId}/update",
   );
   const temporalListEndpoint = String(
     dashboardConfig.sources?.temporal?.list || "/api/executions",
@@ -2627,10 +2640,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setSubmitMessage(null);
-    if (pageMode.mode === "edit") {
-      setSubmitMessage("Saving edits is not available in this milestone.");
-      return;
-    }
     if (pageMode.mode === "rerun") {
       setSubmitMessage("Rerun submission is not available in this milestone.");
       return;
@@ -3041,7 +3050,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         task: taskPayload,
       });
       const taskInputArtifactBytes = utf8ByteLength(taskInputArtifactBody);
-      if (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES) {
+      const existingInputArtifactRef = String(
+        temporalDraftQuery.data?.execution.inputArtifactRef || "",
+      ).trim();
+      const shouldCreateInputArtifact =
+        taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
+        (pageMode.mode !== "create" && Boolean(existingInputArtifactRef));
+      if (shouldCreateInputArtifact) {
         const artifact = await createInputArtifact(
           artifactCreateEndpoint,
           taskInputArtifactBody,
@@ -3051,6 +3066,70 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         (requestBody.payload as Record<string, unknown>).inputArtifactRef =
           inputArtifactRef;
         stripOversizedInlineInstructions(requestBody);
+      }
+
+      if (pageMode.mode === "edit") {
+        const workflowId = String(pageMode.executionId || "").trim();
+        if (!workflowId) {
+          throw new Error("Cannot save changes because the execution id is missing.");
+        }
+        const payload = requestBody.payload as Record<string, unknown>;
+        const updatePayload = buildTemporalArtifactEditUpdatePayload({
+          updateName: "UpdateInputs",
+          inputArtifactRef,
+          parametersPatch: payload,
+        });
+        const response = await fetch(
+          configuredTemporalUpdateUrl(temporalUpdateEndpoint, workflowId),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(updatePayload),
+          },
+        );
+        if (!response.ok) {
+          const detail = await responseErrorDetail(
+            response,
+            "Failed to save task changes.",
+          );
+          throw new Error(detail.message);
+        }
+        const result = (await response.json()) as {
+          accepted?: boolean;
+          applied?: string | null;
+          message?: string | null;
+          execution?: { workflowId?: string | null } | null;
+        };
+        if (result.accepted === false) {
+          throw new Error(
+            String(result.message || "").trim() ||
+              "The workflow no longer accepts input updates.",
+          );
+        }
+        const applied = String(result.applied || "").trim();
+        const statusText =
+          applied === "safe_point"
+            ? "Changes were scheduled for the next safe point."
+            : applied === "continue_as_new"
+              ? "Changes were accepted and will continue in a refreshed run."
+              : "Changes were saved to this execution.";
+        try {
+          window.sessionStorage.setItem(
+            "moonmind.temporalTaskEditing.notice",
+            statusText,
+          );
+        } catch {
+          // Navigation should not depend on session storage availability.
+        }
+        const redirectWorkflowId =
+          String(result.execution?.workflowId || "").trim() || workflowId;
+        navigateTo(
+          `/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
+        );
+        return;
       }
 
       const response = await fetch(temporalCreateEndpoint, {
