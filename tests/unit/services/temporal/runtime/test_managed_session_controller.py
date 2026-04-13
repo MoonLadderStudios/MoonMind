@@ -3086,6 +3086,8 @@ async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> N
     [
         "Error response from daemon: container ctr-1 is not running",
         "Error response from daemon: No such container: ctr-1",
+        "Error response from daemon: no such object: ctr-1",
+        "Error response from daemon: container not found: ctr-1",
     ],
 )
 async def test_controller_launch_reports_terminal_container_logs_during_ready_probe(
