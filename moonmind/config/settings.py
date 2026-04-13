@@ -161,6 +161,16 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
         ge=1,
     )
+    worker_versioning_default_behavior: Literal[
+        "Auto-Upgrade", "Pinned", "Disabled"
+    ] = Field(
+        "Auto-Upgrade",
+        validation_alias="TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR",
+    )
+    worker_versioning_pinned_types: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=(),
+        validation_alias="TEMPORAL_WORKER_VERSIONING_PINNED_TYPES",
+    )
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
@@ -188,6 +198,46 @@ class TemporalSettings(BaseSettings):
                 "workflow, artifacts, llm, sandbox, integrations, agent_runtime"
             )
         return normalized
+
+    @field_validator("worker_versioning_default_behavior", mode="before")
+    @classmethod
+    def _normalize_worker_versioning_default_behavior(cls, value: Any) -> str:
+        normalized = str(value or "Auto-Upgrade").strip().lower().replace("_", "-")
+        aliases = {
+            "auto-upgrade": "Auto-Upgrade",
+            "autoupgrade": "Auto-Upgrade",
+            "auto": "Auto-Upgrade",
+            "pinned": "Pinned",
+            "pin": "Pinned",
+            "disabled": "Disabled",
+            "disable": "Disabled",
+            "off": "Disabled",
+            "false": "Disabled",
+        }
+        if normalized not in aliases:
+            raise ValueError(
+                "TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR must be one of "
+                "Auto-Upgrade, Pinned, or Disabled"
+            )
+        return aliases[normalized]
+
+    @field_validator("worker_versioning_pinned_types", mode="before")
+    @classmethod
+    def _split_worker_versioning_pinned_types(
+        cls, value: Optional[str | Sequence[str]]
+    ) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            raw_items: Sequence[object] = value.split(",")
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            raw_items = value
+        else:
+            raw_items = (value,)
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+        return tuple(dict.fromkeys(items))
 
 
 class TemporalDashboardSettings(BaseSettings):
