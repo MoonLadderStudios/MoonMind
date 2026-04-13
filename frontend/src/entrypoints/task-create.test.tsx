@@ -120,6 +120,15 @@ describe("Task Create Entrypoint", () => {
   let executionResponseOverride: Response | null;
   let artifactCreateResponseOverride: Response | null;
 
+  function renderForEdit(executionId: string, payload: BootPayload = mockPayload) {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      `/tasks/new?editExecutionId=${encodeURIComponent(executionId)}`,
+    );
+    return renderWithClient(<TaskCreatePage payload={payload} />);
+  }
+
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
@@ -353,8 +362,10 @@ describe("Task Create Entrypoint", () => {
               targetSkill: "speckit-implement",
               inputParameters: {
                 targetRuntime: "gemini_cli",
+                operatorNote: "Keep this unedited top-level value.",
                 task: {
                   instructions: "Rebuild the Temporal task draft.",
+                  proposeTasks: true,
                   runtime: {
                     mode: "gemini_cli",
                     model: "gemini-2.5-pro",
@@ -677,7 +688,7 @@ describe("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               accepted: true,
-              applied: "safe_point",
+              applied: "next_safe_point",
               message: "Inputs scheduled.",
               execution: { workflowId: "mm:artifact-edit" },
             }),
@@ -1396,11 +1407,6 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("submits edit updates through the configured Temporal update route", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Acustom-edit",
-    );
     const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
     (
       customPayload.initialData as {
@@ -1423,7 +1429,7 @@ describe("Task Create Entrypoint", () => {
       update: "/gateway/api/executions/{workflowId}/updates",
     };
 
-    renderWithClient(<TaskCreatePage payload={customPayload} />);
+    renderForEdit("mm:custom-edit", customPayload);
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1459,11 +1465,6 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows a feature-disabled error without loading execution detail", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aedit-123",
-    );
     const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
     (
       disabledPayload.initialData as {
@@ -1473,7 +1474,7 @@ describe("Task Create Entrypoint", () => {
       }
     ).dashboardConfig.features.temporalDashboard.temporalTaskEditing = false;
 
-    renderWithClient(<TaskCreatePage payload={disabledPayload} />);
+    renderForEdit("mm:edit-123", disabledPayload);
 
     expect(
       await screen.findByText("Temporal task editing is not enabled."),
@@ -1490,13 +1491,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows an explicit error for unsupported Temporal workflow types", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aunsupported",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:unsupported");
 
     expect(
       await screen.findByText(
@@ -1510,13 +1505,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows an explicit error when edit capability is missing", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Ano-edit",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:no-edit");
 
     expect(
       await screen.findByText(
@@ -1585,13 +1574,7 @@ describe("Task Create Entrypoint", () => {
     ).toBe(true);
 
     unmount();
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aincomplete",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:incomplete");
 
     expect(
       await screen.findByText(
@@ -1605,13 +1588,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("submits active edit mode through UpdateInputs and returns to the Temporal detail view", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aedit-123",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:edit-123");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1638,9 +1615,11 @@ describe("Task Create Entrypoint", () => {
       updateName: "UpdateInputs",
       parametersPatch: {
         repository: "MoonLadderStudios/MoonMind",
+        operatorNote: "Keep this unedited top-level value.",
         targetRuntime: "gemini_cli",
         task: {
           instructions: "Save edited Temporal inputs.",
+          proposeTasks: true,
           tool: {
             type: "skill",
             name: "speckit-implement",
@@ -1686,13 +1665,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows continue-as-new success copy and redirects to the returned execution context", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Acontinue-edit",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:continue-edit");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1713,13 +1686,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("creates a fresh input artifact when editing an artifact-backed execution", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aartifact-edit",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:artifact-edit");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1774,13 +1741,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("externalizes oversized edited input before sending UpdateInputs", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aedit-123",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:edit-123");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1827,13 +1788,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows backend stale-state failures without redirecting from edit mode", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Astale-edit",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:stale-edit");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1854,13 +1809,7 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("shows backend validation failures without redirecting from edit mode", async () => {
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Avalidation-edit",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:validation-edit");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",
@@ -1893,13 +1842,7 @@ describe("Task Create Entrypoint", () => {
           },
         }),
     } as Response;
-    window.history.pushState(
-      {},
-      "Task Edit",
-      "/tasks/new?editExecutionId=mm%3Aartifact-failure",
-    );
-
-    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+    renderForEdit("mm:artifact-failure");
 
     const instructions = (await screen.findByLabelText(
       "Instructions",

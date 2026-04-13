@@ -238,6 +238,7 @@ interface ExecutionCreateResponse {
 interface TemporalSubmissionDraftLoadResult {
   execution: TemporalTaskEditingExecutionContract;
   draft: ReturnType<typeof buildTemporalSubmissionDraftFromExecution>;
+  artifactInput?: Record<string, unknown> | undefined;
 }
 
 interface ResponseErrorDetail {
@@ -428,6 +429,69 @@ function hasInlineTaskInstructions(task: unknown): boolean {
     }
     return String((step as Record<string, unknown>).instructions || "").trim();
   });
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function mergeRecordValues(
+  base: Record<string, unknown>,
+  overlay: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...base,
+    ...overlay,
+  };
+}
+
+function buildEditParametersPatch({
+  execution,
+  artifactInput,
+  submittedPayload,
+}: {
+  execution: TemporalTaskEditingExecutionContract;
+  artifactInput?: Record<string, unknown> | undefined;
+  submittedPayload: Record<string, unknown>;
+}): Record<string, unknown> {
+  const baseParameters = mergeRecordValues(
+    recordValue(artifactInput),
+    recordValue(execution.inputParameters),
+  );
+  const submittedTask = recordValue(submittedPayload.task);
+  const baseTask = mergeRecordValues(
+    recordValue(recordValue(artifactInput).task),
+    recordValue(baseParameters.task),
+  );
+  const editTask = { ...submittedTask };
+
+  // This field is not reconstructed into the edit form yet. Preserve the
+  // existing value instead of letting the create-form default overwrite it.
+  if ("proposeTasks" in editTask) {
+    delete editTask.proposeTasks;
+  }
+
+  const mergedTask: Record<string, unknown> = {
+    ...baseTask,
+    ...editTask,
+    runtime: mergeRecordValues(
+      recordValue(baseTask.runtime),
+      recordValue(editTask.runtime),
+    ),
+    git: mergeRecordValues(recordValue(baseTask.git), recordValue(editTask.git)),
+    publish: mergeRecordValues(
+      recordValue(baseTask.publish),
+      recordValue(editTask.publish),
+    ),
+  };
+
+  return {
+    ...baseParameters,
+    ...submittedPayload,
+    task: mergedTask,
+  };
 }
 
 function readJiraItems<T>(data: unknown): T[] {
@@ -1473,18 +1537,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         throw new Error("This execution does not currently allow rerun.");
       }
 
-      let artifactInput: unknown;
+      let artifactInput: Record<string, unknown> | undefined;
       const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
       const inlineTask = execution.inputParameters?.task;
       if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
-        artifactInput = await readTemporalInputArtifact(
+        artifactInput = recordValue(await readTemporalInputArtifact(
           artifactDownloadEndpoint,
           inputArtifactRef,
-        );
+        ));
       }
 
       return {
         execution,
+        artifactInput,
         draft: buildTemporalSubmissionDraftFromExecution(
           execution,
           artifactInput,
@@ -2634,6 +2699,72 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }
 
+  async function handleEditSubmit({
+    workflowId,
+    inputArtifactRef,
+    parametersPatch,
+  }: {
+    workflowId: string;
+    inputArtifactRef: string | null;
+    parametersPatch: Record<string, unknown>;
+  }): Promise<void> {
+    const updatePayload = buildTemporalArtifactEditUpdatePayload({
+      updateName: "UpdateInputs",
+      inputArtifactRef,
+      parametersPatch,
+    });
+    const response = await fetch(
+      configuredTemporalUpdateUrl(temporalUpdateEndpoint, workflowId),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(updatePayload),
+      },
+    );
+    if (!response.ok) {
+      const detail = await responseErrorDetail(
+        response,
+        "Failed to save task changes.",
+      );
+      throw new Error(detail.message);
+    }
+    const result = (await response.json()) as {
+      accepted?: boolean;
+      applied?: string | null;
+      message?: string | null;
+      execution?: { workflowId?: string | null } | null;
+    };
+    if (result.accepted === false) {
+      throw new Error(
+        String(result.message || "").trim() ||
+          "The workflow no longer accepts input updates.",
+      );
+    }
+    const applied = String(result.applied || "").trim();
+    const statusText =
+      applied === "safe_point" || applied === "next_safe_point"
+        ? "Changes were scheduled for the next safe point."
+        : applied === "continue_as_new"
+          ? "Changes were accepted and will continue in a refreshed run."
+          : "Changes were saved to this execution.";
+    try {
+      window.sessionStorage.setItem(
+        "moonmind.temporalTaskEditing.notice",
+        statusText,
+      );
+    } catch {
+      // Navigation should not depend on session storage availability.
+    }
+    const redirectWorkflowId =
+      String(result.execution?.workflowId || "").trim() || workflowId;
+    navigateTo(
+      `/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
+    );
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isSubmitting) {
@@ -3045,9 +3176,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setIsSubmitting(true);
     try {
       let inputArtifactRef: string | null = null;
+      const submittedPayload = requestBody.payload as Record<string, unknown>;
+      const editDraftData =
+        pageMode.mode === "edit" ? temporalDraftQuery.data : undefined;
+      if (pageMode.mode === "edit" && !editDraftData) {
+        throw new Error("Cannot save changes because the execution draft is missing.");
+      }
+      const editParametersPatch =
+        editDraftData
+          ? buildEditParametersPatch({
+              execution: editDraftData.execution,
+              artifactInput: editDraftData.artifactInput,
+              submittedPayload,
+            })
+          : null;
+      const artifactPayload = editParametersPatch ?? submittedPayload;
       const taskInputArtifactBody = JSON.stringify({
-        repository: normalizedRepository,
-        task: taskPayload,
+        repository: artifactPayload.repository ?? normalizedRepository,
+        task: artifactPayload.task ?? taskPayload,
       });
       const taskInputArtifactBytes = utf8ByteLength(taskInputArtifactBody);
       const existingInputArtifactRef = String(
@@ -3063,9 +3209,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           normalizedRepository,
         );
         inputArtifactRef = artifact.artifactId;
-        (requestBody.payload as Record<string, unknown>).inputArtifactRef =
-          inputArtifactRef;
-        stripOversizedInlineInstructions(requestBody);
+        artifactPayload.inputArtifactRef = inputArtifactRef;
+        stripOversizedInlineInstructions({ payload: artifactPayload });
       }
 
       if (pageMode.mode === "edit") {
@@ -3073,62 +3218,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         if (!workflowId) {
           throw new Error("Cannot save changes because the execution id is missing.");
         }
-        const payload = requestBody.payload as Record<string, unknown>;
-        const updatePayload = buildTemporalArtifactEditUpdatePayload({
-          updateName: "UpdateInputs",
+        await handleEditSubmit({
+          workflowId,
           inputArtifactRef,
-          parametersPatch: payload,
+          parametersPatch: artifactPayload,
         });
-        const response = await fetch(
-          configuredTemporalUpdateUrl(temporalUpdateEndpoint, workflowId),
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify(updatePayload),
-          },
-        );
-        if (!response.ok) {
-          const detail = await responseErrorDetail(
-            response,
-            "Failed to save task changes.",
-          );
-          throw new Error(detail.message);
-        }
-        const result = (await response.json()) as {
-          accepted?: boolean;
-          applied?: string | null;
-          message?: string | null;
-          execution?: { workflowId?: string | null } | null;
-        };
-        if (result.accepted === false) {
-          throw new Error(
-            String(result.message || "").trim() ||
-              "The workflow no longer accepts input updates.",
-          );
-        }
-        const applied = String(result.applied || "").trim();
-        const statusText =
-          applied === "safe_point"
-            ? "Changes were scheduled for the next safe point."
-            : applied === "continue_as_new"
-              ? "Changes were accepted and will continue in a refreshed run."
-              : "Changes were saved to this execution.";
-        try {
-          window.sessionStorage.setItem(
-            "moonmind.temporalTaskEditing.notice",
-            statusText,
-          );
-        } catch {
-          // Navigation should not depend on session storage availability.
-        }
-        const redirectWorkflowId =
-          String(result.execution?.workflowId || "").trim() || workflowId;
-        navigateTo(
-          `/tasks/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
-        );
         return;
       }
 
