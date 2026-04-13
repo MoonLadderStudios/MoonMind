@@ -382,8 +382,15 @@ class RunnerProfile(BaseModel):
                 raise ValueError(
                     "helperTtlSeconds must not exceed maxHelperTtlSeconds"
                 )
-        elif self.readiness_probe is not None:
-            raise ValueError("readinessProbe is only valid for bounded_service")
+        else:
+            if self.readiness_probe is not None:
+                raise ValueError("readinessProbe is only valid for bounded_service")
+            if self.helper_ttl_seconds is not None:
+                raise ValueError("helperTtlSeconds is only valid for bounded_service")
+            if self.max_helper_ttl_seconds is not None:
+                raise ValueError(
+                    "maxHelperTtlSeconds is only valid for bounded_service"
+                )
         return self
 
 

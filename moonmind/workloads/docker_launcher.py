@@ -127,6 +127,12 @@ async def _wait_with_limited_output(
     return await process.wait()
 
 
+async def _kill_and_reap_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is None:
+        process.kill()
+    await process.wait()
+
+
 def _docker_env(*, docker_host: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
     if docker_host:
@@ -521,6 +527,7 @@ class DockerWorkloadLauncher:
         self._concurrency_limiter = (
             concurrency_limiter or DockerWorkloadConcurrencyLimiter()
         )
+        self._helper_leases: dict[str, _ConcurrencyLease] = {}
 
     def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
         _ensure_paths_are_mounted(request)
@@ -797,9 +804,12 @@ class DockerWorkloadLauncher:
                         "reason": "docker run failed",
                     },
                 )
+            self._helper_leases[request.container_name] = lease
+            lease = None
             readiness = await self._wait_for_helper_readiness(request)
         finally:
-            await lease.release()
+            if lease is not None:
+                await lease.release()
 
         completed_at = datetime.now(UTC)
         status = "ready" if readiness.get("status") == "ready" else "unhealthy"
@@ -824,17 +834,23 @@ class DockerWorkloadLauncher:
                 "stop_helper requires a bounded_service runner profile"
             )
         started_at = datetime.now(UTC)
-        await self._terminate_container(request)
-        if request.profile.cleanup.remove_container_on_exit:
-            await self._janitor.remove(request.container_name)
+        stdout, stderr = await self._collect_container_logs(request.container_name)
+        try:
+            await self._terminate_container(request)
+            if request.profile.cleanup.remove_container_on_exit:
+                await self._janitor.remove(request.container_name)
+        finally:
+            lease = self._helper_leases.pop(request.container_name, None)
+            if lease is not None:
+                await lease.release()
         completed_at = datetime.now(UTC)
         return self._helper_result(
             request,
             status="stopped",
             started_at=started_at,
             completed_at=completed_at,
-            stdout="",
-            stderr="",
+            stdout=stdout,
+            stderr=stderr,
             readiness={},
             teardown={
                 "status": "complete",
@@ -865,18 +881,25 @@ class DockerWorkloadLauncher:
                 env=_docker_env(docker_host=self._docker_host),
             )
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                stdout_buffer = bytearray()
+                stderr_buffer = bytearray()
+                await asyncio.wait_for(
+                    _wait_with_limited_output(
+                        process,
+                        stdout_buffer=stdout_buffer,
+                        stderr_buffer=stderr_buffer,
+                    ),
                     timeout=probe.timeout_seconds,
                 )
             except asyncio.TimeoutError:
+                await _kill_and_reap_process(process)
                 last_stdout = ""
                 last_stderr = "readiness probe timed out"
                 if attempt < probe.retries and probe.interval_seconds:
                     await asyncio.sleep(probe.interval_seconds)
                 continue
-            last_stdout = _decode_stream(stdout)
-            last_stderr = _decode_stream(stderr)
+            last_stdout = _decode_stream(bytes(stdout_buffer))
+            last_stderr = _decode_stream(bytes(stderr_buffer))
             if int(process.returncode or 0) == 0:
                 return {
                     "status": "ready",
@@ -931,13 +954,16 @@ class DockerWorkloadLauncher:
                 by_alias=True,
             ),
         }
+        declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        diagnostics["declaredOutputRefs"] = dict(declared_refs)
+        diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
                 stdout=stdout,
                 stderr=stderr,
                 diagnostics=diagnostics,
-                declared_output_refs={},
+                declared_output_refs=declared_refs,
             )
         )
         helper_metadata["artifactPublication"] = artifact_publication
@@ -967,6 +993,24 @@ class DockerWorkloadLauncher:
             outputRefs=output_refs,
             metadata=metadata,
         )
+
+    async def _collect_container_logs(self, container_name: str) -> tuple[str, str]:
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        process = await asyncio.create_subprocess_exec(
+            self._docker_binary,
+            "logs",
+            container_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_docker_env(docker_host=self._docker_host),
+        )
+        await _wait_with_limited_output(
+            process,
+            stdout_buffer=stdout_buffer,
+            stderr_buffer=stderr_buffer,
+        )
+        return _decode_stream(bytes(stdout_buffer)), _decode_stream(bytes(stderr_buffer))
 
     async def _terminate_container(self, request: ValidatedWorkloadRequest) -> None:
         await self._janitor.stop(

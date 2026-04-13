@@ -381,6 +381,31 @@ def test_registry_rejects_unsafe_profile_policy(
         )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"helper_ttl_seconds": 300}, "helperTtlSeconds"),
+        ({"max_helper_ttl_seconds": 900}, "maxHelperTtlSeconds"),
+    ],
+)
+def test_registry_rejects_helper_ttl_policy_on_non_helper_profiles(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps({"profiles": [_profile_payload(**overrides)]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match=message):
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+        )
+
+
 def test_registry_rejects_unsupported_registry_extension(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.toml"
     registry_path.write_text("profiles = []", encoding="utf-8")
