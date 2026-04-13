@@ -81,10 +81,27 @@ def resolve_active_feature_dir(
     if not raw_value:
         return None
 
+    if Path(raw_value).is_absolute():
+        raise AgentSessionDeploymentSafetyError(
+            f"active feature override must stay within specs/: {raw_value}"
+        )
+
     normalized = normalize_repo_path(raw_value)
+    normalized_path = Path(normalized)
+    if ".." in normalized_path.parts:
+        raise AgentSessionDeploymentSafetyError(
+            f"active feature override must stay within specs/: {normalized}"
+        )
     relative = normalized if normalized.startswith("specs/") else f"specs/{normalized}"
     root = Path(repo_root)
-    feature_dir = root / relative
+    specs_root = (root / "specs").resolve()
+    feature_dir = (root / relative).resolve()
+    try:
+        feature_dir.relative_to(specs_root)
+    except ValueError as exc:
+        raise AgentSessionDeploymentSafetyError(
+            f"active feature override must stay within specs/: {relative}"
+        ) from exc
     if not feature_dir.is_dir():
         raise AgentSessionDeploymentSafetyError(
             f"active feature override does not exist: {relative}"

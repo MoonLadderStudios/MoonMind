@@ -69,6 +69,46 @@ def test_validate_cli_changed_paths_uses_explicit_base_ref(monkeypatch) -> None:
     assert calls[0] == ("merge-base", "origin/main", "HEAD")
 
 
+def test_validate_cli_run_git_executes_from_repo_root(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+        class Result:
+            stdout = "README.md\n"
+
+        return Result()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    assert cli._run_git(["ls-files"]) == ["README.md"]
+    assert captured["kwargs"]["cwd"] == cli.REPO_ROOT
+
+
+def test_validate_cli_main_includes_git_stderr_in_failure(monkeypatch, capsys) -> None:
+    def fail_run_git(args: list[str]) -> list[str]:
+        raise cli.subprocess.CalledProcessError(
+            returncode=128,
+            cmd=["git", *args],
+            stderr="fatal: bad revision",
+            output="merge-base failed",
+        )
+
+    monkeypatch.setattr(cli, "_run_git", fail_run_git)
+    monkeypatch.setattr(
+        cli,
+        "resolve_active_feature_dir",
+        lambda *, repo_root, active_feature: None,
+    )
+
+    assert cli.main() == 1
+    captured = capsys.readouterr()
+    assert "fatal: bad revision" in captured.err
+    assert "merge-base failed" in captured.err
+
+
 def test_active_feature_override_resolves_spec_number(tmp_path) -> None:
     feature_dir = tmp_path / "specs" / "165-agent-session-deployment-safety"
     feature_dir.mkdir(parents=True)
@@ -82,6 +122,38 @@ def test_active_feature_override_resolves_spec_number(tmp_path) -> None:
         )
         == "specs/165-agent-session-deployment-safety"
     )
+
+
+def test_active_feature_override_rejects_parent_traversal(tmp_path) -> None:
+    feature_dir = tmp_path / "somewhere"
+    feature_dir.mkdir()
+    for name in ("spec.md", "plan.md", "tasks.md"):
+        (feature_dir / name).write_text("# artifact\n", encoding="utf-8")
+
+    with pytest.raises(
+        AgentSessionDeploymentSafetyError,
+        match="must stay within specs/",
+    ):
+        resolve_active_feature_dir(
+            repo_root=tmp_path,
+            active_feature="specs/../somewhere",
+        )
+
+
+def test_active_feature_override_rejects_absolute_path(tmp_path) -> None:
+    feature_dir = tmp_path / "specs" / "165-agent-session-deployment-safety"
+    feature_dir.mkdir(parents=True)
+    for name in ("spec.md", "plan.md", "tasks.md"):
+        (feature_dir / name).write_text("# artifact\n", encoding="utf-8")
+
+    with pytest.raises(
+        AgentSessionDeploymentSafetyError,
+        match="must stay within specs/",
+    ):
+        resolve_active_feature_dir(
+            repo_root=tmp_path,
+            active_feature=feature_dir,
+        )
 
 
 def test_active_feature_override_requires_complete_artifact_set(tmp_path) -> None:

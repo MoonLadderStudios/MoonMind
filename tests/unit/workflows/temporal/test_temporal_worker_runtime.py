@@ -787,6 +787,9 @@ def test_worker_deployment_kwargs_disabled_requires_explicit_local_escape_hatch(
         update={"temporal": temporal_settings}
     )
     monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
+    monkeypatch.delenv(
+        "MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", raising=False
+    )
 
     with pytest.raises(RuntimeError, match="Temporal worker versioning is disabled"):
         _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))

@@ -26,6 +26,7 @@ def _run_git(args: list[str]) -> list[str]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        cwd=REPO_ROOT,
     )
     return [line for line in result.stdout.splitlines() if line.strip()]
 
@@ -78,8 +79,19 @@ def main() -> int:
             cutover_playbook_text=playbook_text,
             active_feature_dir=active_feature_dir,
         )
-    except (AgentSessionDeploymentSafetyError, subprocess.CalledProcessError) as exc:
+    except AgentSessionDeploymentSafetyError as exc:
         print(f"AgentSession deployment safety validation failed: {exc}", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        details = "\n".join(
+            part.strip()
+            for part in (str(exc), exc.stderr or "", exc.stdout or "")
+            if part.strip()
+        )
+        print(
+            f"AgentSession deployment safety validation failed: {details}",
+            file=sys.stderr,
+        )
         return 1
 
     if report.required:
