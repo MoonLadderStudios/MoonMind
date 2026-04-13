@@ -2206,12 +2206,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       jiraImportMode,
       jiraImportTarget,
     );
-    if (provenance) {
-      setStepJiraProvenance((current) => ({
+    setStepJiraProvenance((current) => {
+      if (provenance) {
+        return {
+          ...current,
+          [jiraImportTarget.localId]: provenance,
+        };
+      }
+      if (!current[jiraImportTarget.localId]) {
+        return current;
+      }
+      const next = {
         ...current,
-        [jiraImportTarget.localId]: provenance,
-      }));
-    }
+      };
+      delete next[jiraImportTarget.localId];
+      return next;
+    });
   }
 
   function handleTemplateFeatureRequestChange(value: string) {

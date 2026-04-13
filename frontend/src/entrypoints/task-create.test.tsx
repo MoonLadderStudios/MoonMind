@@ -114,6 +114,36 @@ function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withJiraSessionMemory(
+  rememberLastBoardInSession: boolean,
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const nextPayload = withJiraIntegration(payload);
+  const initialData = nextPayload.initialData as {
+    dashboardConfig: {
+      system?: {
+        jiraIntegration?: Record<string, unknown>;
+      };
+    };
+  };
+  return {
+    ...nextPayload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          jiraIntegration: {
+            ...initialData.dashboardConfig.system?.jiraIntegration,
+            rememberLastBoardInSession,
+          },
+        },
+      },
+    },
+  };
+}
+
 describe("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
   let executionResponseOverride: Response | null;
@@ -2347,8 +2377,8 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
+    expect(await screen.findAllByText("Let operators browse Jira stories."))
+      .not.toHaveLength(0);
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
@@ -2379,8 +2409,8 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
+    expect(await screen.findAllByText("Let operators browse Jira stories."))
+      .not.toHaveLength(0);
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
@@ -2629,8 +2659,8 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
+    expect(await screen.findAllByText("Let operators browse Jira stories."))
+      .not.toHaveLength(0);
 
     fireEvent.change(screen.getByLabelText("Import mode"), {
       target: { value: "acceptance-only" },
@@ -2909,6 +2939,138 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Jira: ENG-202");
   });
 
+  it("clears Jira provenance chips when imported text is manually edited", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    const stepInstructions = screen.getByLabelText("Instructions");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.getByLabelText(
+        "Jira import provenance for Feature Request / Initial Instructions",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(presetInstructions, {
+      target: { value: "Manual preset instructions." },
+    });
+    expect(
+      screen.queryByLabelText(
+        "Jira import provenance for Feature Request / Initial Instructions",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.getByLabelText("Jira import provenance for Step 1 instructions"),
+    ).toBeTruthy();
+    fireEvent.change(stepInstructions, {
+      target: { value: "Manual step instructions." },
+    });
+    expect(
+      screen.queryByLabelText("Jira import provenance for Step 1 instructions"),
+    ).toBeNull();
+  });
+
+  it("clears step Jira provenance when the imported step is removed", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.getByLabelText("Jira import provenance for Step 1 instructions"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove step" }));
+    expect(
+      screen.queryByLabelText("Jira import provenance for Step 1 instructions"),
+    ).toBeNull();
+  });
+
+  it("does not render a Jira provenance chip when the imported issue has no issue key", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "",
+            url: "https://jira.example.test/browse/ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            acceptanceCriteriaText: "",
+            recommendedImports: {
+              presetInstructions: "Let operators browse Jira stories.",
+              stepInstructions: "Complete the Jira browser story.",
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findAllByText("Let operators browse Jira stories."))
+      .not.toHaveLength(0);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.queryByLabelText(
+        "Jira import provenance for Feature Request / Initial Instructions",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps Jira provenance out of the task submission payload", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -2967,6 +3129,135 @@ describe("Task Create Entrypoint", () => {
       expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
       expect((boardSelect as HTMLSelectElement).value).toBe("7");
     });
+  });
+
+  it("does not write or restore Jira project and board session memory when disabled", async () => {
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-project-key",
+      "ENG",
+    );
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-board-id",
+      "7",
+    );
+
+    renderWithClient(
+      <TaskCreatePage payload={withJiraSessionMemory(false)} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+      expect((boardSelect as HTMLSelectElement).value).toBe("42");
+    });
+
+    window.sessionStorage.clear();
+    fireEvent.change(boardSelect, { target: { value: "7" } });
+    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+      .toBeNull();
+  });
+
+  it("clears remembered Jira project and board when selections are manually cleared", async () => {
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-project-key",
+      "ENG",
+    );
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-board-id",
+      "7",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+      expect((boardSelect as HTMLSelectElement).value).toBe("7");
+    });
+
+    fireEvent.change(projectSelect, { target: { value: "" } });
+    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-project-key"))
+      .toBeNull();
+    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+      .toBeNull();
+
+    fireEvent.change(projectSelect, { target: { value: "ENG" } });
+    fireEvent.change(boardSelect, { target: { value: "7" } });
+    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+      .toBe("7");
+
+    fireEvent.change(boardSelect, { target: { value: "" } });
+    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+      .toBeNull();
+  });
+
+  it("keeps Jira browsing and manual task creation available when session storage fails", async () => {
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation((key: string) => {
+        if (key.startsWith("moonmind.task-create.jira.")) {
+          throw new Error("session storage unavailable");
+        }
+        return null;
+      });
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation((key: string) => {
+        if (key.startsWith("moonmind.task-create.jira.")) {
+          throw new Error("session storage unavailable");
+        }
+      });
+    const removeItemSpy = vi
+      .spyOn(Storage.prototype, "removeItem")
+      .mockImplementation((key: string) => {
+        if (key.startsWith("moonmind.task-create.jira.")) {
+          throw new Error("session storage unavailable");
+        }
+      });
+
+    try {
+      renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Browse Jira story for preset instructions",
+        }),
+      );
+
+      expect(
+        await screen.findByRole("dialog", { name: "Browse Jira story" }),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+      fireEvent.change(screen.getByLabelText("Instructions"), {
+        target: { value: "Create this task manually." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          "/api/executions",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+    } finally {
+      getItemSpy.mockRestore();
+      setItemSpy.mockRestore();
+      removeItemSpy.mockRestore();
+    }
   });
 
   it("shows Jira browser failures locally", async () => {
