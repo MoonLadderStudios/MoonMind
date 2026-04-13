@@ -1,26 +1,18 @@
 # Prompt A Remediation Discovery: Codex Managed Session Phase 4/5 Hardening
 
+**Scope**: `spec.md`, `plan.md`, `tasks.md`, and latest `speckit_analyze_report.md` for `specs/162-session-phase45-hardening/`.
+
 ## Findings
 
 | Severity | Artifact | Location | Problem | Remediation | Rationale |
 | --- | --- | --- | --- | --- | --- |
-| HIGH | `spec.md`, `tasks.md`, `speckit_analyze_report.md` | `spec.md:L6`, `spec.md:L92-L111`, `tasks.md:L50-L170`, `speckit_analyze_report.md:U1` | The canonical feature input includes metrics/tracing/log correlation as part of Phase 4, but the formal functional requirements and task list do not explicitly preserve that deliverable. Implementation could complete all current tasks while skipping telemetry/log-correlation behavior. | Add a functional requirement for metrics/tracing/log correlation and add paired test-first implementation tasks, or explicitly declare telemetry/log-correlation out of scope for this feature before implementation begins. | This is a user-provided runtime deliverable. Omitting it creates a scope mismatch between the canonical request and executable tasks. It is not classified CRITICAL because production runtime code tasks do exist and no DOC-REQ mapping gate applies, but it should be resolved before implementation to prevent silent drift. |
-
-## Prompt B Application
-
-**Status**: Completed.
-
-Applied remediation:
-
-- Added `FR-021` to `spec.md` for metrics, tracing, and log correlation with bounded identifiers and forbidden-value exclusion.
-- Added telemetry context as a key entity and `SC-009` as a measurable outcome in `spec.md`.
-- Updated `plan.md` summary, technical context, constraints, research/design bullets, and implementation surfaces to include telemetry/log-correlation behavior.
-- Added test-first task `T052` and production runtime task `T053` to `tasks.md`.
+| None | None | None | No blocking inconsistencies, missing production-runtime tasks, missing validation tasks, DOC-REQ traceability gaps, or unresolved Prompt A remediation items were found in the current artifacts. | No remediation required. | Runtime mode is preserved by explicit production runtime tasks and validation tasks. The latest analysis report shows 100% requirement coverage, and no `DOC-REQ-*` identifiers exist in the active feature artifacts. |
 
 ## Runtime Mode Gates
 
-- **No production runtime code tasks**: Not triggered. `tasks.md` includes runtime implementation tasks T013-T016, T021-T023, T030-T036, and T045-T050.
-- **DOC-REQ coverage gate**: Not triggered. No `DOC-REQ-*` identifiers exist in the active feature artifacts.
+- **No production runtime code tasks**: Not triggered. `tasks.md` includes production runtime implementation tasks T013-T016, T021-T023, T030-T036, T045-T050, and T053.
+- **Validation task coverage**: Present. `tasks.md` includes test-first and verification tasks T005-T007, T009-T012, T017-T020, T024-T029, T037-T044, T051-T052, and T056-T058.
+- **DOC-REQ coverage gate**: Not triggered. No `DOC-REQ-*` identifiers exist in `spec.md`, `plan.md`, `tasks.md`, or the current contract artifacts.
 
 ## Safe to Implement
 
@@ -28,8 +20,8 @@ Applied remediation:
 
 ## Blocking Remediations
 
-None remaining after Prompt B remediation.
+None.
 
 ## Determination Rationale
 
-The generated tasks are executable, include production runtime code changes and validation tasks, and now explicitly include the previously omitted telemetry/log-correlation deliverable. No `DOC-REQ-*` identifiers exist, so no traceability mapping gate applies. Residual risk is limited to implementation-time discovery of already-complete telemetry behavior, which is covered by the audit and "only missing behavior" tasks.
+The current artifacts preserve the canonical runtime scope: production code changes plus validation tests are required, and docs-only completion is invalid. The previously identified telemetry/log-correlation scope risk is now covered by `FR-021`, `SC-009`, and tasks T052/T053. The latest `speckit_analyze_report.md` reports 21/21 requirements covered by 59 tasks with zero critical issues. No `DOC-REQ-*` identifiers exist, so no document-requirement mapping remediation is applicable.
