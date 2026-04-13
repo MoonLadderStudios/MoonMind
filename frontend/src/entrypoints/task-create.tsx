@@ -1996,6 +1996,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     const projects = jiraProjectsQuery.data || [];
     if (selectedJiraProjectKey) {
+      const selectedProjectExists = projects.some(
+        (project) => project.key === selectedJiraProjectKey,
+      );
+      if (jiraProjectsQuery.data && !selectedProjectExists) {
+        if (jiraIntegration.rememberLastBoardInSession) {
+          writeSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY, "");
+          writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, "");
+        }
+        setSelectedJiraProjectKey("");
+        setSelectedJiraBoardId("");
+        setActiveJiraColumnId("");
+        setSelectedJiraIssueKey("");
+        jiraProjectSelectionInitializedRef.current = false;
+        jiraBoardSelectionInitializedRef.current = false;
+        return;
+      }
       jiraProjectSelectionInitializedRef.current = true;
       return;
     }
@@ -2021,6 +2037,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     const boards = jiraBoardsQuery.data || [];
     if (selectedJiraBoardId) {
+      const selectedBoardExists = boards.some(
+        (board) => board.id === selectedJiraBoardId,
+      );
+      if (jiraBoardsQuery.data && !selectedBoardExists) {
+        if (jiraIntegration.rememberLastBoardInSession) {
+          writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, "");
+        }
+        setSelectedJiraBoardId("");
+        setActiveJiraColumnId("");
+        setSelectedJiraIssueKey("");
+        jiraBoardSelectionInitializedRef.current = false;
+        return;
+      }
       jiraBoardSelectionInitializedRef.current = true;
       return;
     }
@@ -2216,11 +2245,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!current[jiraImportTarget.localId]) {
         return current;
       }
-      const next = {
-        ...current,
-      };
-      delete next[jiraImportTarget.localId];
-      return next;
+      const { [jiraImportTarget.localId]: _removed, ...rest } = current;
+      return rest;
     });
   }
 
@@ -2385,9 +2411,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (!current[localId]) {
         return current;
       }
-      const next = { ...current };
-      delete next[localId];
-      return next;
+      const { [localId]: _removed, ...rest } = current;
+      return rest;
     });
   }
 
@@ -2426,9 +2451,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         if (!provenance[removedStep.localId]) {
           return provenance;
         }
-        const next = { ...provenance };
-        delete next[removedStep.localId];
-        return next;
+        const { [removedStep.localId]: _removed, ...rest } = provenance;
+        return rest;
       });
     }
     setSteps((current) =>

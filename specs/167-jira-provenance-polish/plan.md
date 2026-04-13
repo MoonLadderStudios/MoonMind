@@ -1,7 +1,7 @@
 # Implementation Plan: Jira Provenance Polish
 
 **Branch**: `167-jira-provenance-polish` | **Date**: 2026-04-13 | **Spec**: [spec.md](./spec.md)  
-**Input**: Feature specification from `/work/agent_jobs/mm:be668a55-890f-4858-94d3-cf5f397162e1/repo/specs/167-jira-provenance-polish/spec.md`
+**Input**: Feature specification from `specs/167-jira-provenance-polish/spec.md`
 
 ## Summary
 

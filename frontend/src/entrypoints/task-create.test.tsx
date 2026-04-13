@@ -144,6 +144,21 @@ function withJiraSessionMemory(
   };
 }
 
+function collectObjectKeys(value: unknown, keys = new Set<string>()): Set<string> {
+  if (!value || typeof value !== "object") {
+    return keys;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectObjectKeys(item, keys));
+    return keys;
+  }
+  Object.entries(value as Record<string, unknown>).forEach(([key, nested]) => {
+    keys.add(key);
+    collectObjectKeys(nested, keys);
+  });
+  return keys;
+}
+
 describe("Task Create Entrypoint", () => {
   let fetchSpy: MockInstance;
   let executionResponseOverride: Response | null;
@@ -3099,10 +3114,13 @@ describe("Task Create Entrypoint", () => {
       .filter(([url]) => String(url) === "/api/executions")
       .at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
-    expect(JSON.stringify(request)).not.toContain("jira");
-    expect(JSON.stringify(request)).not.toContain("boardId");
-    expect(JSON.stringify(request)).not.toContain("importMode");
-    expect(JSON.stringify(request)).not.toContain("targetType");
+    const requestKeys = collectObjectKeys(request);
+    expect(requestKeys).not.toContain("jiraProvenance");
+    expect(requestKeys).not.toContain("sessionJiraSelection");
+    expect(requestKeys).not.toContain("issueKey");
+    expect(requestKeys).not.toContain("boardId");
+    expect(requestKeys).not.toContain("importMode");
+    expect(requestKeys).not.toContain("targetType");
   });
 
   it("restores the last selected Jira project and board from session storage", async () => {
@@ -3129,6 +3147,37 @@ describe("Task Create Entrypoint", () => {
       expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
       expect((boardSelect as HTMLSelectElement).value).toBe("7");
     });
+  });
+
+  it("falls back when remembered Jira project and board selections are stale", async () => {
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-project-key",
+      "OLD",
+    );
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-board-id",
+      "999",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+      expect((boardSelect as HTMLSelectElement).value).toBe("42");
+    });
+    expect(
+      window.sessionStorage.getItem("moonmind.task-create.jira.last-project-key"),
+    ).toBeNull();
+    expect(window.sessionStorage.getItem("moonmind.task-create.jira.last-board-id"))
+      .toBeNull();
   });
 
   it("does not write or restore Jira project and board session memory when disabled", async () => {

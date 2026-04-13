@@ -125,5 +125,16 @@ components:
         mode, or target type as separate Jira metadata.
       additionalProperties: true
       not:
-        required:
-          - jiraProvenance
+        anyOf:
+          - required:
+              - jiraProvenance
+          - required:
+              - sessionJiraSelection
+          - required:
+              - issueKey
+          - required:
+              - boardId
+          - required:
+              - importMode
+          - required:
+              - targetType
