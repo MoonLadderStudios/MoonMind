@@ -186,6 +186,8 @@ def _managed_session_telemetry_context(
     if activity_type:
         context["activityType"] = activity_type
     for key in _MANAGED_SESSION_TELEMETRY_KEYS:
+        if key == "activityType":
+            continue
         value = raw_payload.get(key)
         if isinstance(value, bool):
             context[key] = value

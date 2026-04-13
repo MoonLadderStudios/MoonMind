@@ -1040,14 +1040,23 @@ class OpenTelemetryLoggingFilter(logging.Filter):
 
         managed_session = getattr(record, "managed_session", None)
         if isinstance(managed_session, Mapping):
+            sanitized_managed_session = {}
             for context_key, record_field in _MANAGED_SESSION_LOG_FIELD_MAP:
                 value = managed_session.get(context_key)
+                normalized_value = None
                 if isinstance(value, bool):
-                    setattr(record, record_field, str(value).lower())
+                    normalized_value = str(value).lower()
                 elif isinstance(value, int) and not isinstance(value, bool):
-                    setattr(record, record_field, str(value))
+                    normalized_value = str(value)
                 elif isinstance(value, str) and value.strip():
-                    setattr(record, record_field, value.strip())
+                    normalized_value = value.strip()
+
+                if normalized_value is not None:
+                    setattr(record, record_field, normalized_value)
+                    sanitized_managed_session[context_key] = normalized_value
+            record.managed_session = sanitized_managed_session
+        elif hasattr(record, "managed_session"):
+            delattr(record, "managed_session")
 
         return True
 

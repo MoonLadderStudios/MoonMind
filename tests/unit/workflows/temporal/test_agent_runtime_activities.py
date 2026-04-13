@@ -1870,3 +1870,18 @@ async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     assert "Write a private implementation plan" not in rendered
     assert "terminal scrollback" not in rendered
     assert "ghp_secret_token" not in rendered
+
+
+async def test_managed_session_telemetry_context_uses_trusted_activity_type() -> None:
+    raw_context = activity_runtime_module._managed_session_telemetry_context(
+        {
+            "activityType": "payload.controlled_activity",
+            "sessionId": "sess:wf-run-1:codex_cli",
+        },
+        activity_type="agent_runtime.send_turn",
+    )
+
+    assert raw_context == {
+        "activityType": "agent_runtime.send_turn",
+        "sessionId": "sess:wf-run-1:codex_cli",
+    }

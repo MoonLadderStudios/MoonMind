@@ -64,6 +64,19 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
     assert record.managed_session_container_id == "container-1"
     assert record.managed_session_thread_id == "thread-1"
     assert record.managed_session_turn_id == "turn-1"
+    assert record.managed_session == {
+        "taskRunId": "wf-run-1",
+        "runtimeId": "codex_cli",
+        "sessionId": "sess:wf-run-1:codex_cli",
+        "sessionEpoch": "1",
+        "sessionStatus": "active",
+        "isDegraded": "false",
+        "activityType": "agent_runtime.send_turn",
+        "transition": "active turn running",
+        "containerId": "container-1",
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+    }
     rendered = " ".join(
         str(getattr(record, field))
         for field in record.__dict__
@@ -72,6 +85,9 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -
     assert "Write a private implementation plan" not in rendered
     assert "terminal scrollback" not in rendered
     assert "ghp_secret_token" not in rendered
+    assert "instructions" not in record.managed_session
+    assert "rawLog" not in record.managed_session
+    assert "token" not in record.managed_session
 
 
 def test_runtime_planner_preserves_execution_profile_ref():
