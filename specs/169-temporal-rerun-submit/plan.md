@@ -5,7 +5,7 @@
 
 ## Summary
 
-Enable terminal `MoonMind.Run` executions to be rerun from the shared `/tasks/new` Temporal task form. The implementation will reuse existing Temporal draft reconstruction and artifact preparation, then submit a distinct `RequestRerun` execution update instead of falling through to create, queue, or active edit behavior. Success handling returns operators to the Temporal detail context and surfaces latest-run lineage where available; rejection handling remains explicit and non-redirecting.
+Enable terminal `MoonMind.Run` executions to be rerun from the shared `/tasks/new` Temporal task form. The implementation will reuse existing Temporal draft reconstruction and artifact preparation, then submit a distinct `RequestRerun` execution update instead of falling through to create, queue, or active edit behavior. Success handling returns operators to the Temporal detail context and surfaces latest-run lineage where available, with initial lineage covering source execution id, replacement input artifact ref, backend application mode, and returned workflow/run context; rejection handling remains explicit and non-redirecting.
 
 ## Technical Context
 

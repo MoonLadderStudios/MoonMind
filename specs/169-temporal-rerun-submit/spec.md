@@ -75,8 +75,8 @@ An operator receives explicit, actionable feedback when rerun is unavailable bec
 - **FR-007**: Rerun submission MUST use artifact-safe input preparation and create replacement input artifact references when modified inputs require artifact storage or the source used artifact-backed inputs.
 - **FR-008**: The system MUST NOT mutate historical input artifacts when preparing a rerun request.
 - **FR-009**: The system MUST return operators to the Temporal execution context after rerun request acceptance.
-- **FR-010**: When a latest run view or run-chain result is available, the success state MUST make that latest rerun context clear to the operator.
-- **FR-011**: The system MUST preserve enough rerun lineage metadata to identify the source execution, replacement input artifacts, and resulting run or run chain.
+- **FR-010**: When a latest run view or run-chain result is available, the success state MUST make that latest rerun context clear to the operator by showing or navigating to the returned execution context and preserving rerun-specific success copy.
+- **FR-011**: The system MUST preserve rerun lineage metadata for the initial slice: source execution identifier, replacement input artifact reference when created, backend application mode, and resulting workflow/run context when returned.
 - **FR-012**: The system MUST surface backend rerun rejections, validation failures, stale lifecycle states, and artifact preparation failures without redirecting as if submission succeeded.
 - **FR-013**: The system MUST NOT use queue-era routes, `editJobId`, queue resubmit terminology, or legacy queue fallback behavior for terminal Temporal reruns.
 - **FR-014**: Regression coverage MUST compare edit and rerun semantics, including update name, capability validation, artifact handling, success redirect, and rejection handling.
