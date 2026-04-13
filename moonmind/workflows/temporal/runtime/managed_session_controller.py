@@ -54,6 +54,8 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
 )
 _GIT_COMMAND_LOCALE = {"LC_ALL": "C", "LANG": "C"}
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
+_CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
+_CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
 logger = logging.getLogger(__name__)
 
 
@@ -650,18 +652,21 @@ class DockerCodexManagedSessionController:
         workspace_path = Path(request.workspace_path)
         session_workspace_path = Path(request.session_workspace_path)
         artifact_spool_path = Path(request.artifact_spool_path)
-        support_paths: list[Path] = [
+        support_root_paths: list[Path] = [
             session_workspace_path,
             artifact_spool_path,
         ]
+        recursive_support_paths: list[Path] = []
 
         session_workspace_path.mkdir(parents=True, exist_ok=True)
         artifact_spool_path.mkdir(parents=True, exist_ok=True)
         self._collect_managed_support_paths(
             request=request,
-            owned_paths=support_paths,
+            owned_root_paths=support_root_paths,
+            recursively_owned_paths=recursive_support_paths,
         )
-        self._normalize_container_path_ownership(support_paths)
+        self._normalize_container_path_owners(support_root_paths)
+        self._normalize_container_path_ownership(recursive_support_paths)
 
         repository = str(
             request.workspace_spec.get("repository")
@@ -703,7 +708,8 @@ class DockerCodexManagedSessionController:
         self,
         *,
         request: LaunchCodexManagedSessionRequest,
-        owned_paths: list[Path],
+        owned_root_paths: list[Path],
+        recursively_owned_paths: list[Path],
     ) -> None:
         codex_home_path = Path(request.codex_home_path)
         if not self._is_within_workspace_root(codex_home_path):
@@ -712,11 +718,11 @@ class DockerCodexManagedSessionController:
         runtime_support_path = codex_home_path.parent
         if not runtime_support_path.exists():
             runtime_support_path.mkdir(parents=True, exist_ok=True)
-        owned_paths.append(runtime_support_path)
+        owned_root_paths.append(runtime_support_path)
 
         if not codex_home_path.exists():
             codex_home_path.mkdir(parents=True, exist_ok=True)
-        owned_paths.append(codex_home_path)
+        recursively_owned_paths.append(codex_home_path)
 
     async def _ensure_target_branch(
         self,
@@ -784,19 +790,40 @@ class DockerCodexManagedSessionController:
         )
 
     @staticmethod
-    def _normalize_container_path_owner(path: Path) -> None:
+    def _can_normalize_container_path_ownership() -> bool:
         geteuid = getattr(os, "geteuid", None)
-        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+        return os.name == "posix" and callable(geteuid) and geteuid() == 0
+
+    @staticmethod
+    def _normalize_container_path_owner(path: Path) -> None:
+        if (
+            not DockerCodexManagedSessionController
+            ._can_normalize_container_path_ownership()
+        ):
             return
         if path.exists():
             DockerCodexManagedSessionController._chown_path(path)
 
     @staticmethod
-    def _normalize_container_path_ownership(paths: Sequence[Path]) -> None:
-        geteuid = getattr(os, "geteuid", None)
-        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+    def _normalize_container_path_owners(paths: Sequence[Path]) -> None:
+        if (
+            not DockerCodexManagedSessionController
+            ._can_normalize_container_path_ownership()
+        ):
             return
         for path in paths:
+            if path.exists():
+                DockerCodexManagedSessionController._chown_path(path)
+
+    @staticmethod
+    def _normalize_container_path_ownership(paths: Sequence[Path]) -> None:
+        if (
+            not DockerCodexManagedSessionController
+            ._can_normalize_container_path_ownership()
+        ):
+            return
+        roots = DockerCodexManagedSessionController._deduplicate_ownership_roots(paths)
+        for path in roots:
             if not path.exists():
                 continue
             DockerCodexManagedSessionController._chown_path(path)
@@ -806,6 +833,16 @@ class DockerCodexManagedSessionController:
                     DockerCodexManagedSessionController._chown_path(root_path / dirname)
                 for filename in filenames:
                     DockerCodexManagedSessionController._chown_path(root_path / filename)
+
+    @staticmethod
+    def _deduplicate_ownership_roots(paths: Sequence[Path]) -> list[Path]:
+        deduplicated: list[Path] = []
+        roots = sorted({Path(item) for item in paths}, key=lambda item: len(item.parts))
+        for path in roots:
+            if any(path == root or path.is_relative_to(root) for root in deduplicated):
+                continue
+            deduplicated.append(path)
+        return deduplicated
 
     @staticmethod
     def _chown_path(path: Path) -> None:
@@ -1120,6 +1157,10 @@ class DockerCodexManagedSessionController:
                 "exited",
                 "is stopped",
                 "cannot exec in a stopped",
+                "no such container",
+                "no such object",
+                "not found",
+                "container not found",
             )
         )
 
@@ -1128,7 +1169,7 @@ class DockerCodexManagedSessionController:
             self._docker_binary,
             "logs",
             "--tail",
-            "40",
+            str(_CONTAINER_LOG_EXCERPT_TAIL_LINES),
             container_id,
         )
         returncode, stdout, stderr = await self._command_runner(
@@ -1144,7 +1185,7 @@ class DockerCodexManagedSessionController:
             command,
             detail,
         )
-        return scrubbed_detail[-2000:]
+        return scrubbed_detail[-_CONTAINER_LOG_EXCERPT_MAX_CHARS:]
 
     async def _persist_handle_transition(
         self,

@@ -3081,16 +3081,25 @@ async def test_controller_launch_retries_ready_probe_errors(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_controller_launch_reports_exited_container_logs_during_ready_probe(
+@pytest.mark.parametrize(
+    "ready_stderr",
+    [
+        "Error response from daemon: container ctr-1 is not running",
+        "Error response from daemon: No such container: ctr-1",
+    ],
+)
+async def test_controller_launch_reports_terminal_container_logs_during_ready_probe(
     tmp_path: Path,
+    ready_stderr: str,
 ) -> None:
+    workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
         taskRunId="task-1",
         sessionId="sess-1",
         threadId="logical-thread-1",
-        workspacePath="/tmp/agent_jobs/task-1/repo",
-        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
-        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
         codexHomePath="/home/app/.codex",
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
     )
@@ -3108,11 +3117,7 @@ async def test_controller_launch_reports_exited_container_logs_during_ready_prob
         if command[:2] == ("docker", "run"):
             return 0, "ctr-1\n", ""
         if "ready" in command:
-            return (
-                1,
-                "",
-                "Error response from daemon: container ctr-1 is not running",
-            )
+            return 1, "", ready_stderr
         if command[:3] == ("docker", "logs", "--tail"):
             return (
                 0,
@@ -3125,7 +3130,7 @@ async def test_controller_launch_reports_exited_container_logs_during_ready_prob
     controller = DockerCodexManagedSessionController(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
-        workspace_root="/tmp/agent_jobs",
+        workspace_root=str(workspace_root),
         command_runner=_fake_runner,
         ready_poll_interval_seconds=0,
         ready_poll_attempts=3,
@@ -3137,6 +3142,7 @@ async def test_controller_launch_reports_exited_container_logs_during_ready_prob
     message = str(exc_info.value)
     assert "exited before ready" in message
     assert "MOONMIND_SESSION_WORKSPACE_STATE_PATH must be writable" in message
+    assert ("docker", "logs", "--tail", "40", "ctr-1") in commands
     assert commands[-1] == ("docker", "rm", "-f", "ctr-1")
 
 
