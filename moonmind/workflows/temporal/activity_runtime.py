@@ -135,6 +135,18 @@ async def _run_command(cmd, **kwargs):
 
 logger = getLogger(__name__)
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
+_MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
+    "activityType",
+    "taskRunId",
+    "runtimeId",
+    "sessionId",
+    "sessionEpoch",
+    "sessionStatus",
+    "isDegraded",
+    "containerId",
+    "threadId",
+    "turnId",
+)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
 PlanGenerator = Callable[
@@ -153,6 +165,53 @@ _GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
 )
 _GEMINI_ERROR_REPORT_DIR = Path("/tmp")
 _GEMINI_ERROR_REPORT_GLOB = "gemini-client-error-*.json"
+
+
+def _managed_session_telemetry_context(
+    payload: Mapping[str, Any] | BaseModel | None,
+    *,
+    activity_type: str | None = None,
+) -> dict[str, str | int | bool]:
+    if isinstance(payload, BaseModel):
+        raw_payload: Mapping[str, Any] = payload.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
+    elif isinstance(payload, Mapping):
+        raw_payload = payload
+    else:
+        raw_payload = {}
+    context: dict[str, str | int | bool] = {}
+    if activity_type:
+        context["activityType"] = activity_type
+    for key in _MANAGED_SESSION_TELEMETRY_KEYS:
+        if key == "activityType":
+            continue
+        value = raw_payload.get(key)
+        if isinstance(value, bool):
+            context[key] = value
+        elif isinstance(value, int) and not isinstance(value, bool):
+            context[key] = value
+        elif isinstance(value, str) and value.strip():
+            context[key] = value.strip()
+    return context
+
+
+def _log_managed_session_activity(
+    activity_type: str,
+    payload: Mapping[str, Any] | BaseModel | None,
+) -> None:
+    context = _managed_session_telemetry_context(
+        payload,
+        activity_type=activity_type,
+    )
+    if not context:
+        return
+    logger.info(
+        "managed session activity",
+        extra={"managed_session": context},
+    )
 _GEMINI_ERROR_REPORT_TIME_PADDING_SECONDS = 45
 _GEMINI_QUOTA_MARKERS: tuple[str, ...] = (
     "terminalquotaerror",
@@ -2749,6 +2808,7 @@ class TemporalAgentRuntimeActivities:
         model_type: type[SessionContractT],
     ) -> SessionContractT:
         if isinstance(request, model_type):
+            _log_managed_session_activity(activity_type, request)
             return request
         raw_payload: Mapping[str, Any] | None
         if isinstance(request, BaseModel):
@@ -2756,7 +2816,9 @@ class TemporalAgentRuntimeActivities:
         else:
             raw_payload = request
         payload = _coerce_activity_request(raw_payload, activity_type=activity_type)
-        return model_type.model_validate(payload)
+        validated = model_type.model_validate(payload)
+        _log_managed_session_activity(activity_type, validated)
+        return validated
 
     @staticmethod
     def _validate_session_response(

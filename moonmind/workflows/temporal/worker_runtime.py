@@ -102,6 +102,20 @@ from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
 
+_MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("taskRunId", "managed_session_task_run_id"),
+    ("runtimeId", "managed_session_runtime_id"),
+    ("sessionId", "managed_session_id"),
+    ("sessionEpoch", "managed_session_epoch"),
+    ("sessionStatus", "managed_session_status"),
+    ("isDegraded", "managed_session_is_degraded"),
+    ("activityType", "managed_session_activity_type"),
+    ("transition", "managed_session_transition"),
+    ("containerId", "managed_session_container_id"),
+    ("threadId", "managed_session_thread_id"),
+    ("turnId", "managed_session_turn_id"),
+)
+
 _SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # Agent runtimes where PR creation is driven by the provider API (e.g. Jules
@@ -996,6 +1010,8 @@ class OpenTelemetryLoggingFilter(logging.Filter):
         record.temporal_workflow_id = ""
         record.temporal_run_id = ""
         record.temporal_activity_id = ""
+        for _, record_field in _MANAGED_SESSION_LOG_FIELD_MAP:
+            setattr(record, record_field, "")
 
         # 1. OpenTelemetry trace/span IDs
         span = otel_trace.get_current_span()
@@ -1022,6 +1038,26 @@ class OpenTelemetryLoggingFilter(logging.Filter):
         except Exception:
             logging.debug("Failed to retrieve Temporal activity context", exc_info=True)
 
+        managed_session = getattr(record, "managed_session", None)
+        if isinstance(managed_session, Mapping):
+            sanitized_managed_session = {}
+            for context_key, record_field in _MANAGED_SESSION_LOG_FIELD_MAP:
+                value = managed_session.get(context_key)
+                normalized_value = None
+                if isinstance(value, bool):
+                    normalized_value = str(value).lower()
+                elif isinstance(value, int) and not isinstance(value, bool):
+                    normalized_value = str(value)
+                elif isinstance(value, str) and value.strip():
+                    normalized_value = value.strip()
+
+                if normalized_value is not None:
+                    setattr(record, record_field, normalized_value)
+                    sanitized_managed_session[context_key] = normalized_value
+            record.managed_session = sanitized_managed_session
+        elif hasattr(record, "managed_session"):
+            delattr(record, "managed_session")
+
         return True
 
 
@@ -1032,7 +1068,15 @@ if __name__ == "__main__":
             "%(asctime)s %(levelname)s [%(name)s] "
             "[trace_id=%(trace_id)s span_id=%(span_id)s] "
             "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
-            "activity_id=%(temporal_activity_id)s] %(message)s"
+            "activity_id=%(temporal_activity_id)s] "
+            "[managed_session_id=%(managed_session_id)s "
+            "task_run_id=%(managed_session_task_run_id)s "
+            "runtime_id=%(managed_session_runtime_id)s "
+            "epoch=%(managed_session_epoch)s "
+            "status=%(managed_session_status)s "
+            "degraded=%(managed_session_is_degraded)s "
+            "activity=%(managed_session_activity_type)s "
+            "transition=%(managed_session_transition)s] %(message)s"
         )
         logging.basicConfig(level=logging.INFO, format=log_format)
         for handler in logging.root.handlers:
