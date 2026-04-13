@@ -1,41 +1,63 @@
-## Specification Analysis Report
+# Specification Analysis Report
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| None | None | LOW | N/A | No open consistency, coverage, ambiguity, duplication, or constitution issues were detected after Prompt B remediation. | Proceed to implementation. |
+| C1 | Coverage | MEDIUM | `specs/170-temporal-editing-hardening/spec.md`: FR-014; `specs/170-temporal-editing-hardening/tasks.md`: T048, T050 | FR-014 requires runtime-visible documentation or internal references that describe active primary Temporal task editing behavior to reflect the Temporal-native model. Tasks currently update only the feature quickstart and search primary runtime source surfaces, not current docs/internal references outside the feature folder. | Add a task to inspect current runtime-visible docs/internal references such as `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and relevant `docs/tmp/` trackers, updating only non-historical current guidance if needed. |
+| I1 | Inconsistency | LOW | `specs/170-temporal-editing-hardening/plan.md`: Source Code section; `specs/170-temporal-editing-hardening/tasks.md`: all phases | The plan lists `moonmind/workflows/temporal/service.py` as a target source surface, but no task references that file. The spec can still be satisfied at the API/router boundary, so this is likely an over-broad planned surface rather than a missing implementation task. | Either add a targeted task if service-layer telemetry or rejection semantics must change, or remove `moonmind/workflows/temporal/service.py` from the plan's source surface list during remediation. |
 
-**Coverage Summary Table:**
+## Coverage Summary
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --- | --- | --- | --- |
-| FR-001 track local Jira import provenance | Yes | T005, T013, T014 | Covered by shared types and preset/step write paths. |
-| FR-002 record issue key, board id, import mode, target type | Yes | T005, T013, T014 | Covered; T013 and T014 explicitly guard empty issue keys. |
-| FR-003 show compact provenance indicator | Yes | T007, T008, T015, T016 | Covered by component/helper, CSS, and target rendering tasks. |
-| FR-004 scope indicators to exact target | Yes | T010, T014, T016 | Covered by step-specific test and local-id implementation. |
-| FR-005 remove stale provenance on manual edit | Yes | T011, T017, T018 | Covered by tests and preset/step clearing tasks. |
-| FR-006 remember last project/board when enabled | Yes | T020, T024, T025 | Covered by enabled-session test and implementation. |
-| FR-007 do not remember when disabled | Yes | T021, T025 | Covered by disabled-session test and gated persistence task. |
-| FR-008 clear remembered selection values | Yes | T022, T026, T027 | Covered by test and clear-on-change tasks. |
-| FR-009 keep provenance out of task payload | Yes | T030, T033, T034 | Covered by payload regression and submission assembly tasks. |
-| FR-010 preserve existing submission semantics | Yes | T031, T032, T034, T038 | Covered by regression tests, audit task, and full unit wrapper. |
-| FR-011 remain usable if session storage fails | Yes | T006, T023, T028 | Covered by safe helpers, failure test, and fallback task. |
-| FR-012 include validation tests | Yes | T009-T012, T020-T023, T030-T032, T036-T038 | Covered across all user stories and final validation. |
-| FR-013 production runtime code plus validation tests | Yes | T005-T008, T013-T018, T024-T028, T033-T038 | Runtime scope validation passes. |
+| FR-001 client telemetry for detail edit/rerun clicks | Yes | T013, T018, T019, T025 | Covered by frontend click telemetry tests and implementation. |
+| FR-002 draft reconstruction telemetry | Yes | T014, T020, T025 | Covered for success and failure with bounded reasons. |
+| FR-003 UpdateInputs attempt/result telemetry | Yes | T015, T016, T021, T022, T024, T025 | Covered on client and server. |
+| FR-004 RequestRerun attempt/result telemetry | Yes | T015, T017, T021, T022, T024, T025 | Covered on client and server. |
+| FR-005 telemetry excludes sensitive/unbounded content | Yes | T007, T009, T010, T023 | Covered through helper design and server tests. |
+| FR-006 telemetry failures do not block behavior | Yes | T018, T020, T021 | Covered by non-blocking client helper and wiring tasks. |
+| FR-007 active edit happy path regression | Yes | T028, T036, T040 | Covered by frontend regression test and submit implementation. |
+| FR-008 terminal rerun happy path regression | Yes | T029, T037, T040 | Covered by frontend regression test and submit implementation. |
+| FR-009 explicit failure regression coverage | Yes | T030, T031, T032, T035, T036, T037, T038, T040, T041 | Covers unsupported workflow, missing capability/artifacts, malformed artifact, stale state, validation, and artifact externalization failure. |
+| FR-010 route, mode, precedence, payload unit coverage | Yes | T026, T027, T033, T034, T040 | Covered by frontend helper tests and implementation. |
+| FR-011 no queue-era primary flow usage | Yes | T042, T045, T046, T047, T050 | Covered in primary source surfaces; docs/internal-reference scan gap captured separately as C1. |
+| FR-012 success returns to Temporal detail context | Yes | T028, T029, T036, T037, T043, T049 | Covered in happy-path and cleanup tests. |
+| FR-013 copy distinguishes active edit and terminal rerun without queue language | Yes | T044, T046, T049 | Covered by operator-facing copy tests and implementation. |
+| FR-014 current runtime docs/internal references reflect Temporal-native model | Partial | T048 | Feature quickstart is covered, but current runtime-visible docs/internal references are not explicitly inspected. See C1. |
+| FR-015 rollout control supports local/staging/dogfood/limited/all-operator exposure | Yes | T008, T011, T051, T054, T055, T057, T058 | Covered by backend config and rollout-gate tasks. |
+| FR-016 rollout readiness health signals | Yes | T057 | Covered in quickstart rollout gates. |
+| FR-017 runtime code changes plus validation tests | Yes | T009-T011, T018-T023, T033-T039, T045-T047, T054-T056, T060-T065 | Runtime scope validation already passes. |
 
-**Constitution Alignment Issues:** None.
+## Constitution Alignment Issues
 
-**Unmapped Tasks:** None requiring removal. Setup/review tasks T001-T004 and final validation tasks T036-T040 support implementation readiness and quality gates.
+No CRITICAL constitution conflicts found.
 
-**Metrics:**
+- Principle XI is satisfied: `spec.md`, `plan.md`, and `tasks.md` exist and the plan includes initial and post-design constitution checks.
+- Principle XII is mostly satisfied: rollout sequencing remains in feature artifacts rather than canonical docs. Finding C1 asks only for inspection/update of current guidance where needed, not migration-plan duplication.
+- Principle XIII is supported by queue-era cleanup tasks that remove current primary flow leakage rather than preserving fallback aliases.
+- Principle IX is supported by stale-state, validation-failure, artifact-failure, and non-blocking telemetry tasks.
 
-- Total Requirements: 13
-- Total Tasks: 40
-- Coverage %: 100%
+## Unmapped Tasks
+
+- T001-T005 are setup/review tasks and do not map directly to a single requirement; they are acceptable preparation tasks.
+- T012, T060-T066 are validation/meta-validation tasks and map to FR-017 plus the quickstart validation path.
+- No implementation task appears unrelated to the feature scope.
+
+## Metrics
+
+- Total Requirements: 17
+- Total Tasks: 66
+- Requirements with full task coverage: 16
+- Requirements with partial task coverage: 1
+- Coverage: 94%
 - Ambiguity Count: 0
 - Duplication Count: 0
 - Critical Issues Count: 0
+- High Issues Count: 0
+- Medium Issues Count: 1
+- Low Issues Count: 1
 
-**Next Actions:**
+## Next Actions
 
-- No CRITICAL, HIGH, MEDIUM, or actionable LOW remediation remains.
-- Proceed with `speckit-implement`.
+- No CRITICAL or HIGH issues block implementation.
+- Before `speckit-implement`, consider remediating C1 by adding one explicit task for current docs/internal-reference inspection and any needed update.
+- Consider remediating I1 by either adding a service-layer task for `moonmind/workflows/temporal/service.py` or removing that file from the plan's source surface list if it is not part of the intended implementation.
