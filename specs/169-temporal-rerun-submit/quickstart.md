@@ -21,7 +21,7 @@ Validate that a supported terminal `MoonMind.Run` execution can be rerun from th
 6. Modify the instructions or another supported field.
 7. Submit the form.
 8. Confirm the request uses the source execution update path with `updateName = "RequestRerun"`.
-9. Confirm artifact-backed or oversized input content creates a new input artifact reference and does not reuse the historical artifact as the replacement.
+9. Confirm artifact-backed or oversized input content creates a new input artifact reference with source execution lineage metadata and does not reuse the historical artifact as the replacement.
 10. Confirm success returns to a Temporal detail view for the source or latest execution context.
 
 ## Negative Runtime Validation
@@ -59,6 +59,6 @@ If frontend dependency resolution in the managed runtime does not expose npm scr
 
 - Rerun mode submits `RequestRerun`; edit mode continues submitting `UpdateInputs`.
 - Rerun mode never calls task creation or queue-era routes.
-- Replacement input artifacts are created when required and historical artifacts remain immutable.
+- Replacement input artifacts are created when required, carry the source workflow id for rerun lineage, and historical artifacts remain immutable.
 - Accepted reruns return operators to Temporal execution detail context.
 - Rejected reruns show explicit operator-facing errors and do not redirect.

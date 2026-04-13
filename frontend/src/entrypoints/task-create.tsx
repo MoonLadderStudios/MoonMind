@@ -1071,7 +1071,9 @@ async function createInputArtifact(
   createEndpoint: string,
   body: string,
   repository: string,
+  options: { sourceWorkflowId?: string | null } = {},
 ): Promise<{ artifactId: string }> {
+  const sourceWorkflowId = String(options.sourceWorkflowId || "").trim();
   let createResponse: Response;
   try {
     createResponse = await fetch(createEndpoint, {
@@ -1087,6 +1089,7 @@ async function createInputArtifact(
           label: "Submitted Task Input",
           repository: repository || null,
           source: "task-dashboard-submit",
+          ...(sourceWorkflowId ? { sourceWorkflowId } : {}),
         },
       }),
     });
@@ -3397,10 +3400,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
         (pageMode.mode !== "create" && Boolean(existingInputArtifactRef));
       if (shouldCreateInputArtifact) {
+        const sourceWorkflowId =
+          pageMode.mode === "rerun" ? String(pageMode.executionId || "").trim() : null;
         const artifact = await createInputArtifact(
           artifactCreateEndpoint,
           taskInputArtifactBody,
           normalizedRepository,
+          { sourceWorkflowId },
         );
         inputArtifactRef = artifact.artifactId;
         artifactPayload.inputArtifactRef = inputArtifactRef;

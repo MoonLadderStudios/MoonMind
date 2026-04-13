@@ -1507,6 +1507,17 @@ describe("Task Create Entrypoint", () => {
       .filter(([url]) => String(url) === "/api/executions/mm%3Arerun-123/update")
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
+    );
+    const artifactCreateRequest = JSON.parse(
+      String(artifactCreateCall?.[1]?.body),
+    );
+    expect(artifactCreateRequest).toMatchObject({
+      metadata: {
+        sourceWorkflowId: "mm:rerun-123",
+      },
+    });
     expect(request).toMatchObject({
       updateName: "RequestRerun",
       inputArtifactRef: "art-001",

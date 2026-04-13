@@ -10,10 +10,10 @@
 
 **Purpose**: Confirm the existing Temporal task editing surfaces before story work begins.
 
-- [ ] T001 Review the current Temporal task form mode helpers and payload builder in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T002 Review the current shared task form submit path, artifact preparation, and redirect behavior in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T003 [P] Review the execution update request schema and router forwarding for `RequestRerun` in `moonmind/schemas/temporal_models.py` and `api_service/api/routers/executions.py`
-- [ ] T004 [P] Review existing terminal rerun service behavior in `moonmind/workflows/temporal/service.py` and `tests/unit/workflows/temporal/test_temporal_service.py`
+- [X] T001 Review the current Temporal task form mode helpers and payload builder in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T002 Review the current shared task form submit path, artifact preparation, and redirect behavior in `frontend/src/entrypoints/task-create.tsx`
+- [X] T003 [P] Review the execution update request schema and router forwarding for `RequestRerun` in `moonmind/schemas/temporal_models.py` and `api_service/api/routers/executions.py`
+- [X] T004 [P] Review existing terminal rerun service behavior in `moonmind/workflows/temporal/service.py` and `tests/unit/workflows/temporal/test_temporal_service.py`
 
 ---
 
@@ -23,11 +23,11 @@
 
 **CRITICAL**: No user story implementation should begin until these foundation tasks are complete.
 
-- [ ] T005 [P] Add or update shared terminal `MoonMind.Run` rerun execution fixtures in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T006 [P] Add or update stale rerun rejection and artifact-backed rerun fixture responses in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T007 Add a failing route precedence regression test proving `rerunExecutionId` wins over `editExecutionId` in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T008 Add a failing payload-builder regression test for `RequestRerun`, `parametersPatch`, and replacement `inputArtifactRef` in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T009 Ensure `resolveTaskSubmitPageMode` preserves rerun-first precedence and update-name types represent both edit and rerun in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T005 [P] Add or update shared terminal `MoonMind.Run` rerun execution fixtures in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T006 [P] Add or update stale rerun rejection and artifact-backed rerun fixture responses in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T007 Add a failing route precedence regression test proving `rerunExecutionId` wins over `editExecutionId` in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T008 Add a failing payload-builder regression test for `RequestRerun`, `parametersPatch`, and replacement `inputArtifactRef` in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T009 Ensure `resolveTaskSubmitPageMode` preserves rerun-first precedence and update-name types represent both edit and rerun in `frontend/src/lib/temporalTaskEditing.ts`
 
 **Checkpoint**: Shared fixtures, route precedence, and helper contract coverage are ready. User story work can proceed.
 
@@ -41,19 +41,19 @@
 
 ### Tests for User Story 1
 
-- [ ] T010 [US1] Add a failing rerun submit test that asserts `/api/executions/{workflowId}/update` receives `updateName: "RequestRerun"` in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T011 [US1] Add a failing rerun submit test that asserts the normal task create endpoint is not called from rerun mode in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T012 [P] [US1] Add or update backend contract coverage that `RequestRerun` remains an accepted update name in `tests/unit/api/routers/test_executions.py`
+- [X] T010 [US1] Add a failing rerun submit test that asserts `/api/executions/{workflowId}/update` receives `updateName: "RequestRerun"` in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T011 [US1] Add a failing rerun submit test that asserts the normal task create endpoint is not called from rerun mode in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T012 [P] [US1] Add or update backend contract coverage that `RequestRerun` remains an accepted update name in `tests/unit/api/routers/test_executions.py`
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Replace the rerun milestone block with shared Temporal update submission handling in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T014 [US1] Select `RequestRerun` for rerun mode and preserve `UpdateInputs` for edit mode in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T015 [US1] Keep rerun submit routing on `configuredTemporalUpdateUrl(...)` for the source workflow in `frontend/src/entrypoints/task-create.tsx`
+- [X] T013 [US1] Replace the rerun milestone block with shared Temporal update submission handling in `frontend/src/entrypoints/task-create.tsx`
+- [X] T014 [US1] Select `RequestRerun` for rerun mode and preserve `UpdateInputs` for edit mode in `frontend/src/entrypoints/task-create.tsx`
+- [X] T015 [US1] Keep rerun submit routing on `configuredTemporalUpdateUrl(...)` for the source workflow in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 1
 
-- [ ] T016 [US1] Run focused UI coverage for terminal rerun submit with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T016 [US1] Run focused UI coverage for terminal rerun submit with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Story 1 is independently functional and rerun submission uses the Temporal-native update path.
 
@@ -67,21 +67,21 @@
 
 ### Tests for User Story 2
 
-- [ ] T017 [US2] Add a failing artifact-backed rerun test that asserts a new input artifact is created before `RequestRerun` in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T018 [US2] Add a failing lineage source test that asserts replacement artifact creation carries `sourceWorkflowId` or an equivalent source execution lineage field in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T019 [US2] Add a failing lineage success test that asserts accepted reruns preserve backend `applied` mode and redirect to `/tasks/{workflowId}?source=temporal` or the returned workflow context in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T020 [P] [US2] Add or update service-level coverage for rerun input and parameter overrides in `tests/unit/workflows/temporal/test_temporal_service.py`
+- [X] T017 [US2] Add a failing artifact-backed rerun test that asserts a new input artifact is created before `RequestRerun` in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T018 [US2] Add a failing lineage source test that asserts replacement artifact creation carries `sourceWorkflowId` or an equivalent source execution lineage field in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T019 [US2] Add a failing lineage success test that asserts accepted reruns preserve backend `applied` mode and redirect to `/tasks/{workflowId}?source=temporal` or the returned workflow context in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T020 [P] [US2] Add or update service-level coverage for rerun input and parameter overrides in `tests/unit/workflows/temporal/test_temporal_service.py`
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Reuse edit-mode artifact preparation for rerun mode and assign replacement `inputArtifactRef` in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T022 [US2] Include source execution lineage when creating rerun replacement input artifacts in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T023 [US2] Store rerun-specific accepted-state copy based on backend `applied` mode in `moonmind.temporalTaskEditing.notice` without reusing edit success language in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T024 [US2] Redirect accepted rerun submissions to the returned execution workflow id when present, otherwise the source workflow id, in `frontend/src/entrypoints/task-create.tsx`
+- [X] T021 [US2] Reuse edit-mode artifact preparation for rerun mode and assign replacement `inputArtifactRef` in `frontend/src/entrypoints/task-create.tsx`
+- [X] T022 [US2] Include source execution lineage when creating rerun replacement input artifacts in `frontend/src/entrypoints/task-create.tsx`
+- [X] T023 [US2] Store rerun-specific accepted-state copy based on backend `applied` mode in `moonmind.temporalTaskEditing.notice` without reusing edit success language in `frontend/src/entrypoints/task-create.tsx`
+- [X] T024 [US2] Redirect accepted rerun submissions to the returned execution workflow id when present, otherwise the source workflow id, in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2
 
-- [ ] T025 [US2] Verify artifact-backed rerun lineage behavior with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T025 [US2] Verify artifact-backed rerun lineage behavior with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Stories 1 and 2 preserve rerun submission semantics, explicit source lineage, and latest-run success context.
 
@@ -95,17 +95,17 @@
 
 ### Tests for User Story 3
 
-- [ ] T026 [US3] Add a failing backend stale-state rerun rejection test that asserts the error is shown and `navigateTo` is not called in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T027 [US3] Add or update reconstruction failure tests for missing and malformed input artifacts in rerun mode in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T026 [US3] Add a failing backend stale-state rerun rejection test that asserts the error is shown and `navigateTo` is not called in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T027 [US3] Add or update reconstruction failure tests for missing and malformed input artifacts in rerun mode in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T028 [US3] Surface rerun-specific backend rejection fallback messages without redirecting in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T029 [US3] Ensure rerun mode still requires `actions.canRerun` and supported workflow type before submit in `frontend/src/entrypoints/task-create.tsx`
+- [X] T028 [US3] Surface rerun-specific backend rejection fallback messages without redirecting in `frontend/src/entrypoints/task-create.tsx`
+- [X] T029 [US3] Ensure rerun mode still requires `actions.canRerun` and supported workflow type before submit in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 3
 
-- [ ] T030 [US3] Verify stale, unsupported, and malformed-artifact rerun behavior with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T030 [US3] Verify stale, unsupported, and malformed-artifact rerun behavior with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: All user stories have explicit negative-path behavior and no queue-era fallback.
 
@@ -115,11 +115,11 @@
 
 **Purpose**: Confirm the complete runtime scope and update validation guidance.
 
-- [ ] T031 [P] Update final rerun validation notes in `specs/169-temporal-rerun-submit/quickstart.md`
-- [ ] T032 Run TypeScript validation with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T033 Run focused lint validation with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T034 Run final unit verification with `./tools/test_unit.sh`
-- [ ] T035 Run runtime task scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T031 [P] Update final rerun validation notes in `specs/169-temporal-rerun-submit/quickstart.md`
+- [X] T032 Run TypeScript validation with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T033 Run focused lint validation with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [X] T034 Run final unit verification with `./tools/test_unit.sh`
+- [X] T035 Run runtime task scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
 
 ---
 
