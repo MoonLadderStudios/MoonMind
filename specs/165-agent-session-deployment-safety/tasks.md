@@ -41,7 +41,7 @@
 
 ### Tests for User Story 1
 
-- [ ] T012 [P] [US1] Add accepted-path workflow tests for `SendFollowUp`, `SteerTurn`, `InterruptTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
+- [ ] T012 [P] [US1] Add accepted-path workflow tests for session start/resume binding initialization, runtime handle attachment, `SendFollowUp`, `SteerTurn`, `InterruptTurn`, `ClearSession`, `CancelSession`, and `TerminateSession` in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
 - [ ] T013 [P] [US1] Add workflow rejection tests for stale epoch, missing handles, missing active turn, duplicate request, clear while clearing, and mutator after termination in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
 - [ ] T014 [P] [US1] Add runtime-level steer, interrupt, cancel, clear, and terminate behavior tests in `tests/unit/services/temporal/runtime/test_codex_session_runtime.py`
 - [ ] T015 [P] [US1] Add controller idempotency and finalization tests for clear, interrupt, steer, cancel, and terminate in `tests/unit/services/temporal/runtime/test_managed_session_controller.py`
@@ -50,7 +50,7 @@
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Enforce typed workflow Update validators and deterministic pre-mutation rejection in `moonmind/workflows/temporal/workflows/agent_session.py`
+- [ ] T018 [US1] Enforce typed workflow Update validators, deterministic pre-mutation rejection, `@workflow.init` start-state binding, and resume/carry-forward input handling in `moonmind/workflows/temporal/workflows/agent_session.py`
 - [ ] T019 [US1] Restrict generic `control_action` handling to replay or explicit bridge behavior in `moonmind/workflows/temporal/workflows/agent_session.py`
 - [ ] T020 [US1] Wire workflow `InterruptTurn` and `SteerTurn` through runtime activities and bounded state updates in `moonmind/workflows/temporal/workflows/agent_session.py`
 - [ ] T021 [US1] Implement distinct workflow `CancelSession` semantics that stop active work without marking runtime teardown complete in `moonmind/workflows/temporal/workflows/agent_session.py`
@@ -143,22 +143,22 @@
 - [ ] T057 [P] [US4] Add Worker Versioning configuration tests for managed-session workflow workers in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`
 - [ ] T058 [P] [US4] Add replay gate tests for representative open and closed `AgentSessionWorkflow` histories in `tests/unit/workflows/temporal/test_agent_session_replayer.py`
 - [ ] T059 [P] [US4] Add patch or versioned-cutover assertion tests for handler, payload, Continue-As-New, and visibility-shape changes in `tests/unit/workflows/temporal/workflows/test_agent_session.py`
-- [ ] T060 [P] [US4] Add deployment-safety helper tests for sensitive path detection, worker-versioning enforcement, replay coverage, and cutover topics in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
+- [ ] T060 [P] [US4] Add deployment-safety helper tests for sensitive path detection, changed-path base-ref handling, active feature override behavior, worker-versioning enforcement, replay coverage, and cutover topics in `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
 
 ### Implementation for User Story 4
 
 - [ ] T061 [US4] Enforce managed-session Worker Versioning configuration and safe default behavior in `moonmind/workflows/temporal/worker_runtime.py`
 - [ ] T062 [US4] Add or harden explicit patch/version gates around replay-sensitive managed-session workflow-shape changes in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [ ] T063 [US4] Add deployment-safety helper logic for sensitive path, replay, worker-versioning, and cutover validation in `moonmind/workflows/temporal/deployment_safety.py`
-- [ ] T064 [US4] Add executable deployment-safety validation entrypoint in `tools/validate_agent_session_deployment_safety.py`
-- [ ] T065 [US4] Wire AgentSession deployment-safety validation into backend CI in `.github/workflows/pytest-unit-tests.yml`
+- [ ] T063 [US4] Add deployment-safety helper logic for sensitive changed paths, explicit base-ref comparison, replay coverage, worker-versioning, active feature override, and cutover validation in `moonmind/workflows/temporal/deployment_safety.py`
+- [ ] T064 [US4] Add executable deployment-safety validation entrypoint with `--base-ref` and local `SPECIFY_FEATURE`/active-feature handling in `tools/validate_agent_session_deployment_safety.py`
+- [ ] T065 [US4] Wire AgentSession deployment-safety validation into backend CI with full-history checkout and explicit pull-request base SHA handling in `.github/workflows/pytest-unit-tests.yml`
 - [ ] T066 [US4] Add cutover playbook entries for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing visibility metadata in `docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md`
 - [ ] T067 [US4] Wire deployment-safety validation guidance into the feature quickstart in `specs/165-agent-session-deployment-safety/quickstart.md`
 
 ### Validation for User Story 4
 
 - [ ] T068 [US4] Run focused US4 validation with `./tools/test_unit.sh` for `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, `tests/unit/workflows/temporal/test_agent_session_replayer.py`, `tests/unit/workflows/temporal/workflows/test_agent_session.py`, and `tests/unit/workflows/temporal/test_agent_session_deployment_safety.py`
-- [ ] T069 [US4] Run AgentSession deployment-safety validation with `tools/validate_agent_session_deployment_safety.py`
+- [ ] T069 [US4] Run AgentSession deployment-safety validation with explicit base-ref and local active-feature override coverage using `tools/validate_agent_session_deployment_safety.py`
 
 **Checkpoint**: User Story 4 is independently functional and deployment gates are enforceable.
 

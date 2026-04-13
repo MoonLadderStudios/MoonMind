@@ -27,19 +27,19 @@ Traceability status: this feature has no `DOC-REQ-*` identifiers. No `contracts/
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- **I. Temporal-First Orchestration**: PASS. Session lifecycle, reconciliation, deployment safety, and replay gates remain Temporal workflow/activity concerns.
-- **II. Declarative Desired State**: PASS. The feature defines desired managed-session control and deployment behavior, then reconciles runtime state through controller/supervisor/store boundaries.
-- **III. Durable State Over Ephemeral Memory**: PASS. Operator/audit state is artifacts plus bounded workflow metadata; the managed session record is a recovery index; container-local state is disposable.
-- **IV. Strict Runtime Boundaries**: PASS. Runtime/container effects stay in activities/controllers, not workflow code.
-- **V. Operator Visibility Without Secret Leakage**: PASS. Visibility, summaries, telemetry, schedules, and replay fixtures are restricted to bounded identifiers and refs.
-- **VI. Testable Workflow Boundaries**: PASS. Required work includes workflow-boundary, runtime/controller, replay, race/idempotency, and reconciliation validation, with test-driven sequencing required by FR-028.
-- **VII. Idempotent Side Effects**: PASS. Launch, clear, interrupt, cancel, steer, and terminate are planned as retry-safe or deduplicated at the side-effect boundary.
-- **VIII. Safe Evolution of Durable Code**: PASS. Worker Versioning, patching, replay gates, and cutover playbooks are first-class deliverables.
-- **IX. Minimal Surface Area**: PASS. The scope is Codex managed sessions only, with standalone-image delivery excluded.
-- **X. No Hidden Compatibility Layers for Internal Contracts**: PASS. Legacy or bridge behavior must be scoped to replay/versioned cutover needs, not indefinite production aliases.
-- **XI. Runtime Deliverables Over Paper Compliance**: PASS. Production code changes and validation tests are required.
-- **XII. Canonical Docs vs Temporary Migration Notes**: PASS. Any runbook/cutover notes support the runtime change and do not replace implementation.
-- **XIII. Pre-Release Compatibility Policy**: PASS. Incompatible internal contract changes use explicit versioning/cutover rather than silent compatibility transforms.
+- **I. Orchestrate, Don't Recreate**: PASS. Codex remains an orchestrated managed runtime behind workflow/activity/controller boundaries; MoonMind does not recreate agent cognition.
+- **II. One-Click Agent Deployment**: PASS. The rollout preserves Docker Compose/local-first operation and does not introduce mandatory external cloud dependencies or standalone-image scope.
+- **III. Avoid Vendor Lock-In**: PASS. Codex-specific behavior stays behind managed-runtime adapter/controller surfaces, and the plan does not make core orchestration Codex-only.
+- **IV. Own Your Data**: PASS. Artifacts, bounded workflow metadata, and managed-session recovery records remain operator-controlled data surfaces.
+- **V. Skills Are First-Class and Easy to Add**: PASS. This feature does not alter executable tool contracts or agent instruction bundles, and it preserves runtime-neutral workflow boundaries where applicable.
+- **VI. The Bittersweet Lesson**: PASS. Test-driven validation and replay gates keep the scaffolding replaceable while preserving objective evidence.
+- **VII. Powerful Runtime Configurability**: PASS. Worker Versioning, task queues, and runtime behavior remain controlled by explicit configuration and observable metadata.
+- **VIII. Modular and Extensible Architecture**: PASS. Changes are scoped to workflow, activity, runtime/controller, worker, and validation modules with clear contracts.
+- **IX. Resilient by Default**: PASS. The plan requires idempotent side effects, deterministic workflow behavior, failure classification, replay coverage, and lifecycle cleanup.
+- **X. Facilitate Continuous Improvement**: PASS. The feature preserves structured terminal outcomes, diagnostics, artifact refs, and validation evidence for future improvement.
+- **XI. Spec-Driven Development Is the Source of Truth**: PASS. Spec, plan, tasks, contracts, and validation gates are maintained before implementation.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Long-lived docs remain declarative while cutover/playbook material stays under `docs/tmp/`.
+- **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. Legacy bridge behavior is scoped to replay/cutover needs with removal expectations rather than indefinite compatibility aliases.
 
 No complexity violations are introduced.
 
@@ -145,12 +145,19 @@ tests/integration/services/temporal/workflows/
 
 ## Post-Design Constitution Check
 
-- **Temporal and runtime boundaries** remain intact: workflow code carries compact state and delegates side effects to activities/controllers.
-- **Durable-state and operator-truth separation** is explicit in the model and contract.
-- **Security constraints** are testable through bounded metadata and forbidden-content checks.
-- **Deployment safety** is covered through Worker Versioning or versioned cutover plus replay gates.
-- **Runtime-mode deliverables** are enforced by the contract and quickstart validation; docs-only completion cannot satisfy FR-001.
-- **TDD sequencing** is explicit in the plan and aligns with FR-028.
+- **I. Orchestrate, Don't Recreate**: PASS. The design continues to orchestrate Codex through managed runtime boundaries.
+- **II. One-Click Agent Deployment**: PASS. No new mandatory deployment dependency or standalone-image path is introduced.
+- **III. Avoid Vendor Lock-In**: PASS. Codex-specific details remain adapter/controller-bound and do not alter core orchestration contracts.
+- **IV. Own Your Data**: PASS. Operator/audit truth and recovery indexes remain artifact and local runtime-control surfaces.
+- **V. Skills Are First-Class and Easy to Add**: PASS. Skill/tool terminology remains unchanged and outside this feature's runtime scope.
+- **VI. The Bittersweet Lesson**: PASS. TDD, replay, and cutover gates provide durable evidence for replaceable runtime scaffolding.
+- **VII. Powerful Runtime Configurability**: PASS. Runtime mode, worker routing, and versioning remain explicit configuration surfaces.
+- **VIII. Modular and Extensible Architecture**: PASS. The data model and contract keep workflow, activity, runtime, controller, and worker responsibilities separated.
+- **IX. Resilient by Default**: PASS. Retry safety, deterministic workflow boundaries, failure classification, and replay validation are required.
+- **X. Facilitate Continuous Improvement**: PASS. Bounded diagnostics and completion evidence are preserved through artifacts and validation outputs.
+- **XI. Spec-Driven Development Is the Source of Truth**: PASS. Runtime implementation remains traceable to spec, plan, contracts, and tasks.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs and tmp cutover notes remain separated.
+- **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. Obsolete bridges are planned for removal after replay/cutover conditions are satisfied.
 
 No new complexity violations are introduced.
 
