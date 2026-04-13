@@ -68,6 +68,7 @@ class MoonMindAgentSessionWorkflow:
         self._latest_checkpoint_ref: str | None = None
         self._latest_control_event_ref: str | None = None
         self._latest_reset_boundary_ref: str | None = None
+        self._is_degraded = False
         self._continue_as_new_event_threshold = (
             session_input.continue_as_new_event_threshold
         )
@@ -115,8 +116,107 @@ class MoonMindAgentSessionWorkflow:
         return await workflow.execute_activity(
             activity_name,
             payload,
+            summary=self._activity_summary(activity_name, payload),
             **self._execute_kwargs_for_route(route),
         )
+
+    def _activity_summary(
+        self, activity_name: str, payload: Mapping[str, Any] | None
+    ) -> str:
+        action = {
+            "agent_runtime.launch_session": "Launch managed Codex session",
+            "agent_runtime.send_turn": "Send managed Codex turn",
+            "agent_runtime.steer_turn": "Steer managed Codex turn",
+            "agent_runtime.interrupt_turn": "Interrupt managed Codex turn",
+            "agent_runtime.clear_session": "Clear managed Codex session",
+            "agent_runtime.terminate_session": "Terminate managed Codex session",
+            "agent_runtime.fetch_session_summary": "Fetch managed Codex session summary",
+            "agent_runtime.publish_session_artifacts": "Publish managed Codex session artifacts",
+        }.get(activity_name, activity_name)
+        identifiers = []
+        payload = payload or {}
+        for key in ("sessionId", "sessionEpoch", "containerId", "threadId", "turnId"):
+            value = payload.get(key)
+            if value is not None and str(value).strip():
+                identifiers.append(f"{key}={value}")
+        return f"{action}: {', '.join(identifiers)}" if identifiers else action
+
+    def _search_attributes(self) -> dict[str, list[str] | list[int] | list[bool]]:
+        binding = self._require_binding()
+        return {
+            "TaskRunId": [binding.task_run_id],
+            "RuntimeId": [binding.runtime_id],
+            "SessionId": [binding.session_id],
+            "SessionEpoch": [binding.session_epoch],
+            "SessionStatus": [self._status],
+            "IsDegraded": [self._is_degraded],
+        }
+
+    def _telemetry_context(self, transition: str) -> dict[str, str | int | bool]:
+        binding = self._require_binding()
+        context: dict[str, str | int | bool] = {
+            "transition": transition,
+            "taskRunId": binding.task_run_id,
+            "runtimeId": binding.runtime_id,
+            "sessionId": binding.session_id,
+            "sessionEpoch": binding.session_epoch,
+            "sessionStatus": self._status,
+            "isDegraded": self._is_degraded,
+        }
+        for key, value in (
+            ("containerId", self._container_id),
+            ("threadId", self._thread_id),
+            ("turnId", self._active_turn_id),
+        ):
+            if value:
+                context[key] = value
+        return context
+
+    def _current_details(self, transition: str) -> str:
+        binding = self._require_binding()
+        parts = [
+            f"Codex managed session {transition}",
+            f"session={binding.session_id}",
+            f"runtime={binding.runtime_id}",
+            f"epoch={binding.session_epoch}",
+            f"status={self._status}",
+        ]
+        if self._container_id:
+            parts.append(f"container={self._container_id}")
+        if self._thread_id:
+            parts.append(f"thread={self._thread_id}")
+        if self._active_turn_id:
+            parts.append(f"turn={self._active_turn_id}")
+        for label, value in (
+            ("summaryRef", self._latest_summary_ref),
+            ("checkpointRef", self._latest_checkpoint_ref),
+            ("controlRef", self._latest_control_event_ref),
+            ("resetRef", self._latest_reset_boundary_ref),
+        ):
+            if value:
+                parts.append(f"{label}={value}")
+        if self._is_degraded:
+            parts.append("degraded=true")
+        return " | ".join(parts)
+
+    def _update_operator_visibility(self, transition: str) -> None:
+        try:
+            workflow.set_current_details(self._current_details(transition))
+            workflow.upsert_search_attributes(self._search_attributes())
+            workflow.logger.info(
+                "managed session transition",
+                extra={"managed_session": self._telemetry_context(transition)},
+            )
+        except Exception as exc:
+            # Unit tests instantiate workflow classes outside a Temporal workflow
+            # context. Real workflow execution records the visibility update.
+            if "NotInWorkflow" in type(exc).__name__ or "Not in workflow" in str(exc):
+                return
+            raise
+
+    def _mark_degraded(self, transition: str) -> None:
+        self._is_degraded = True
+        self._update_operator_visibility(transition)
 
     def _require_binding(self) -> CodexManagedSessionBinding:
         return self._binding
@@ -334,7 +434,14 @@ class MoonMindAgentSessionWorkflow:
         if self._termination_requested:
             return False
         info = workflow.info()
-        if getattr(info, "is_continue_as_new_suggested", False):
+        is_continue_as_new_suggested = getattr(
+            info, "is_continue_as_new_suggested", False
+        )
+        if (
+            is_continue_as_new_suggested()
+            if callable(is_continue_as_new_suggested)
+            else bool(is_continue_as_new_suggested)
+        ):
             return True
         threshold = self._continue_as_new_event_threshold
         history_length = getattr(info, "get_current_history_length", None)
@@ -349,6 +456,7 @@ class MoonMindAgentSessionWorkflow:
         self, session_input: CodexManagedSessionWorkflowInput
     ) -> dict[str, Any]:
         del session_input
+        self._update_operator_visibility("session started")
         while not self._termination_requested:
             await workflow.wait_condition(
                 lambda: self._termination_requested or self._should_continue_as_new()
@@ -395,6 +503,7 @@ class MoonMindAgentSessionWorkflow:
         if last_control_reason is not None:
             normalized_reason = str(last_control_reason).strip()
             self._last_control_reason = normalized_reason or None
+        self._update_operator_visibility("session started")
 
     @workflow.signal(name="control_action")
     def apply_control_action(self, payload: dict[str, Any] | None = None) -> None:
@@ -451,11 +560,13 @@ class MoonMindAgentSessionWorkflow:
                 self._container_id = container_id
             self._binding = binding.model_copy(update={"session_epoch": next_epoch})
             self._status = AGENT_SESSION_STATUS_ACTIVE
+            self._update_operator_visibility("cleared to new epoch")
             return
 
         if action in {"cancel_session", "terminate_session"}:
             self._status = AGENT_SESSION_STATUS_TERMINATING
             self._termination_requested = True
+            self._update_operator_visibility("terminating")
             return
 
         if container_id is not None:
@@ -464,6 +575,7 @@ class MoonMindAgentSessionWorkflow:
             self._thread_id = thread_id
         if active_turn_id is not None:
             self._active_turn_id = active_turn_id
+        self._update_operator_visibility("session updated")
 
     @workflow.query
     def get_status(self) -> dict[str, Any]:
@@ -503,6 +615,8 @@ class MoonMindAgentSessionWorkflow:
                 session_epoch=request_epoch,
             )
             try:
+                self._status = AGENT_SESSION_STATUS_ACTIVE
+                self._update_operator_visibility("active turn running")
                 locator = self._require_locator()
                 response = CodexManagedSessionTurnResponse.model_validate(
                     await self._execute_routed_activity(
@@ -527,6 +641,8 @@ class MoonMindAgentSessionWorkflow:
                     metadata={"action": "send_follow_up", "reason": request.reason},
                 )
                 self._apply_continuity_projection(continuity)
+                self._is_degraded = False
+                self._update_operator_visibility("session started")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="send_turn",
@@ -542,6 +658,7 @@ class MoonMindAgentSessionWorkflow:
                     **continuity,
                 }
             except Exception:
+                self._mark_degraded("degraded")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="send_turn",
@@ -579,6 +696,7 @@ class MoonMindAgentSessionWorkflow:
             try:
                 locator = self._require_locator()
                 turn_id = self._require_active_turn()
+                self._update_operator_visibility("active turn running")
                 response = CodexManagedSessionTurnResponse.model_validate(
                     await self._execute_routed_activity(
                         "agent_runtime.interrupt_turn",
@@ -602,6 +720,8 @@ class MoonMindAgentSessionWorkflow:
                     metadata={"action": "interrupt_turn", "reason": request.reason},
                 )
                 self._apply_continuity_projection(continuity)
+                self._is_degraded = False
+                self._update_operator_visibility("interrupted")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="interrupt_turn",
@@ -617,6 +737,7 @@ class MoonMindAgentSessionWorkflow:
                     **continuity,
                 }
             except Exception:
+                self._mark_degraded("degraded")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="interrupt_turn",
@@ -657,6 +778,7 @@ class MoonMindAgentSessionWorkflow:
             try:
                 locator = self._require_locator()
                 turn_id = self._require_active_turn()
+                self._update_operator_visibility("active turn running")
                 response = CodexManagedSessionTurnResponse.model_validate(
                     await self._execute_routed_activity(
                         "agent_runtime.steer_turn",
@@ -683,6 +805,8 @@ class MoonMindAgentSessionWorkflow:
                     metadata={"action": "steer_turn", "reason": request.reason},
                 )
                 self._apply_continuity_projection(continuity)
+                self._is_degraded = False
+                self._update_operator_visibility("active turn running")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="steer_turn",
@@ -698,6 +822,7 @@ class MoonMindAgentSessionWorkflow:
                     **continuity,
                 }
             except Exception:
+                self._mark_degraded("degraded")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="steer_turn",
@@ -739,6 +864,7 @@ class MoonMindAgentSessionWorkflow:
             binding = self._require_binding()
             locator = self._require_locator()
             self._status = AGENT_SESSION_STATUS_CLEARING
+            self._update_operator_visibility("clearing")
             try:
                 next_thread_id = f"thread:{binding.session_id}:{binding.session_epoch + 1}"
                 handle = CodexManagedSessionHandle.model_validate(
@@ -764,6 +890,7 @@ class MoonMindAgentSessionWorkflow:
                     metadata={"action": "clear_session", "reason": request.reason},
                 )
                 self._apply_continuity_projection(continuity)
+                self._is_degraded = False
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="clear_session",
@@ -778,6 +905,7 @@ class MoonMindAgentSessionWorkflow:
                     **continuity,
                 }
             except Exception:
+                self._mark_degraded("degraded")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="clear_session",
@@ -788,6 +916,13 @@ class MoonMindAgentSessionWorkflow:
             finally:
                 if self._status == AGENT_SESSION_STATUS_CLEARING:
                     self._status = AGENT_SESSION_STATUS_ACTIVE
+                    transition = (
+                        "cleared to new epoch"
+                        if not self._is_degraded
+                        and self._last_control_action == "clear_session"
+                        else "session started"
+                    )
+                    self._update_operator_visibility(transition)
 
     @clear_session_update.validator
     def validate_clear_session(self, payload: dict[str, Any] | None = None) -> None:
@@ -840,6 +975,8 @@ class MoonMindAgentSessionWorkflow:
                 self._status = AGENT_SESSION_STATUS_ACTIVE
                 self._last_control_action = "cancel_session"
                 self._last_control_reason = request.reason
+                self._is_degraded = False
+                self._update_operator_visibility("interrupted")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="cancel_session",
@@ -848,6 +985,7 @@ class MoonMindAgentSessionWorkflow:
                 )
                 return self.get_status()
             except Exception:
+                self._mark_degraded("degraded")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="cancel_session",
@@ -885,6 +1023,7 @@ class MoonMindAgentSessionWorkflow:
                 self._status = AGENT_SESSION_STATUS_TERMINATING
                 self._last_control_action = "terminate_session"
                 self._last_control_reason = request.reason
+                self._update_operator_visibility("terminating")
                 if self._container_id and self._thread_id:
                     locator = self._require_locator()
                     handle = CodexManagedSessionHandle.model_validate(
@@ -911,8 +1050,11 @@ class MoonMindAgentSessionWorkflow:
                     session_epoch=request_epoch,
                 )
                 self._termination_requested = True
+                self._is_degraded = False
+                self._update_operator_visibility("terminated")
                 return self.get_status()
             except Exception:
+                self._mark_degraded("degraded")
                 self._record_request_tracking(
                     request_id=request_tracking_id,
                     action="terminate_session",

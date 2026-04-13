@@ -357,6 +357,21 @@ class TestFeatureFlagsSettings:
         assert settings.jira_create_page_default_board_id == "84"
         assert settings.jira_create_page_remember_last_board_in_session is False
 
+    def test_jira_create_page_defaults_trim_operator_values(self, monkeypatch):
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
+            " eng ",
+        )
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
+            " 42 ",
+        )
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.jira_create_page_default_project_key == "ENG"
+        assert settings.jira_create_page_default_board_id == "42"
+
 
 class TestWorkflowSettings:
     @pytest.fixture(autouse=True)

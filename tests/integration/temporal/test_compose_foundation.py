@@ -69,6 +69,7 @@ def test_temporal_persistence_and_visibility_environment_defaults():
     assert temporal_env["DYNAMIC_CONFIG_FILE_PATH"] == (
         "/etc/temporal/dynamicconfig/development-sql.yaml"
     )
+    assert temporal_env["SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES"] == "true"
 
     namespace_env = _env_map(services["temporal-namespace-init"]["environment"])
     assert namespace_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-default}"

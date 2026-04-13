@@ -26,6 +26,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
     CodexManagedSessionHandle,
+    CodexManagedSessionRecord,
     CodexManagedSessionSnapshot,
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
@@ -72,6 +73,24 @@ def _save_record(
             errorMessage=error_message,
         )
     )
+
+
+def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
+    return CodexManagedSessionRecord(
+        sessionId=session_id,
+        sessionEpoch=1,
+        taskRunId="wf-run-1",
+        containerId=f"container-{session_id}",
+        threadId=f"thread-{session_id}",
+        runtimeId="codex_cli",
+        imageRef="moonmind:latest",
+        controlUrl="http://session-control",
+        status=status,
+        workspacePath="/work/agent_jobs/wf-run-1/repo",
+        sessionWorkspacePath="/work/agent_jobs/wf-run-1/session",
+        artifactSpoolPath="/work/agent_jobs/wf-run-1/artifacts",
+        startedAt=datetime.now(tz=UTC),
+    ).model_dump(mode="json", by_alias=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1732,3 +1751,137 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
 
             assert result.startswith("Injected context instruction")
             assert "Managed Codex CLI note:" in result
+
+
+async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary() -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [
+                _session_record("sess-ready", status="ready"),
+                _session_record("sess-stale-degraded", status="degraded"),
+                _session_record("sess-orphaned-container", status="degraded"),
+            ]
+
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert result == {
+        "managedSessionRecordsReconciled": 3,
+        "degradedSessionRecords": 2,
+        "sessionIds": [
+            "sess-ready",
+            "sess-stale-degraded",
+            "sess-orphaned-container",
+        ],
+        "truncated": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [
+                _session_record(f"sess-{index}", status="degraded")
+                for index in range(60)
+            ]
+
+    heartbeat_payloads: list[dict[str, Any]] = []
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: dict[str, Any],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert heartbeat_payloads == [
+        {"activityType": "agent_runtime.reconcile_managed_sessions"}
+    ]
+    assert result["managedSessionRecordsReconciled"] == 60
+    assert result["degradedSessionRecords"] == 60
+    assert len(result["sessionIds"]) == 50
+    assert result["truncated"] is True
+
+
+async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_contexts: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        activity_runtime_module.logger,
+        "info",
+        lambda _message, **kwargs: log_contexts.append(
+            dict(kwargs.get("extra", {}).get("managed_session", {}))
+        ),
+    )
+
+    validated = TemporalAgentRuntimeActivities._validate_session_request(
+        {
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "instructions": "Write a private implementation plan",
+        },
+        activity_type="agent_runtime.send_turn",
+        model_type=activity_runtime_module.SendCodexManagedSessionTurnRequest,
+    )
+    raw_context = activity_runtime_module._managed_session_telemetry_context(
+        {
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+            "instructions": "Write a private implementation plan",
+            "rawLog": "terminal scrollback",
+            "token": "ghp_secret_token",
+        },
+        activity_type="agent_runtime.send_turn",
+    )
+
+    assert validated.session_id == "sess:wf-run-1:codex_cli"
+    assert log_contexts == [
+        {
+            "activityType": "agent_runtime.send_turn",
+            "sessionId": "sess:wf-run-1:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        }
+    ]
+    assert raw_context == log_contexts[0]
+    rendered = str(log_contexts)
+    assert "Write a private implementation plan" not in rendered
+    assert "terminal scrollback" not in rendered
+    assert "ghp_secret_token" not in rendered
+
+
+async def test_managed_session_telemetry_context_uses_trusted_activity_type() -> None:
+    raw_context = activity_runtime_module._managed_session_telemetry_context(
+        {
+            "activityType": "payload.controlled_activity",
+            "sessionId": "sess:wf-run-1:codex_cli",
+        },
+        activity_type="agent_runtime.send_turn",
+    )
+
+    assert raw_context == {
+        "activityType": "agent_runtime.send_turn",
+        "sessionId": "sess:wf-run-1:codex_cli",
+    }

@@ -129,6 +129,7 @@ services:
       - VISIBILITY_DBNAME=${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
       - NUM_HISTORY_SHARDS=${TEMPORAL_NUM_HISTORY_SHARDS:-1}
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml
+      - SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true
       - BIND_ON_IP=0.0.0.0
     ports:
       - "7233:7233"

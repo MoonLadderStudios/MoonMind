@@ -62,6 +62,14 @@ interface DashboardConfig {
       detail?: string;
       list?: string;
     };
+    jira?: {
+      connections?: string;
+      projects?: string;
+      boards?: string;
+      columns?: string;
+      issues?: string;
+      issue?: string;
+    };
   };
   features?: {
     temporalDashboard?: {
@@ -96,8 +104,78 @@ interface DashboardConfig {
       totalBytes?: number;
       allowedContentTypes?: string[];
     };
+    jiraIntegration?: {
+      enabled?: boolean;
+      defaultProjectKey?: string;
+      defaultBoardId?: string;
+      rememberLastBoardInSession?: boolean;
+    };
   };
 }
+
+interface JiraIntegrationConfig {
+  enabled: boolean;
+  defaultProjectKey: string;
+  defaultBoardId: string;
+  rememberLastBoardInSession: boolean;
+  endpoints: {
+    connections: string;
+    projects: string;
+    boards: string;
+    columns: string;
+    issues: string;
+    issue: string;
+  };
+}
+
+type JiraEndpointTemplates = JiraIntegrationConfig["endpoints"];
+
+interface JiraProject {
+  key: string;
+  name: string;
+}
+
+interface JiraBoard {
+  id: string;
+  name: string;
+  projectKey?: string | null;
+}
+
+interface JiraColumn {
+  id: string;
+  name: string;
+  count?: number | null;
+}
+
+interface JiraIssueSummary {
+  issueKey: string;
+  summary: string;
+  issueType?: string | null;
+  statusName?: string | null;
+  assignee?: string | null;
+  updatedAt?: string | null;
+}
+
+interface JiraIssueDetail extends JiraIssueSummary {
+  url?: string | null;
+  column?: JiraColumn | null;
+  status?: {
+    id?: string | null;
+    name?: string | null;
+  } | null;
+  descriptionText?: string | null;
+  acceptanceCriteriaText?: string | null;
+  recommendedImports?: {
+    presetInstructions?: string | null;
+    stepInstructions?: string | null;
+  } | null;
+}
+
+type JiraImportTarget =
+  | { kind: "preset" }
+  | { kind: "step"; localId: string };
+
+type JiraReplaceAppendPreference = "replace" | "append";
 
 interface ProviderProfile {
   profile_id: string;
@@ -333,6 +411,58 @@ function hasInlineTaskInstructions(task: unknown): boolean {
     }
     return String((step as Record<string, unknown>).instructions || "").trim();
   });
+}
+
+function readJiraItems<T>(data: unknown): T[] {
+  if (Array.isArray(data)) {
+    return data as T[];
+  }
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+  const items = (data as { items?: unknown }).items;
+  return Array.isArray(items) ? (items as T[]) : [];
+}
+
+function normalizeMoonMindApiPath(value: unknown): string | null {
+  const normalized = String(value || "").trim();
+  if (
+    !normalized ||
+    !normalized.startsWith("/api/") ||
+    normalized.includes("://")
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function readJiraEndpointTemplates(sourceConfig: {
+  [key: string]: unknown;
+}): JiraEndpointTemplates | null {
+  const connections = normalizeMoonMindApiPath(sourceConfig.connections);
+  const projects = normalizeMoonMindApiPath(sourceConfig.projects);
+  const boards = normalizeMoonMindApiPath(sourceConfig.boards);
+  const columns = normalizeMoonMindApiPath(sourceConfig.columns);
+  const issues = normalizeMoonMindApiPath(sourceConfig.issues);
+  const issue = normalizeMoonMindApiPath(sourceConfig.issue);
+  if (!connections || !projects || !boards || !columns || !issues || !issue) {
+    return null;
+  }
+  return { connections, projects, boards, columns, issues, issue };
+}
+
+function jiraTargetLabel(
+  target: JiraImportTarget | null,
+  steps: StepState[],
+): string {
+  if (!target) {
+    return "No target selected";
+  }
+  if (target.kind === "preset") {
+    return "Feature Request / Initial Instructions";
+  }
+  const index = steps.findIndex((step) => step.localId === target.localId);
+  return index >= 0 ? `Step ${index + 1} Instructions` : "Step Instructions";
 }
 
 function createStepStateEntry(
@@ -1069,6 +1199,29 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     taskTemplateCatalog?.saveFromTask ||
       "/api/task-step-templates/save-from-task",
   );
+  const jiraIntegration = useMemo<JiraIntegrationConfig | null>(() => {
+    const systemConfig = dashboardConfig.system?.jiraIntegration;
+    const sourceConfig = dashboardConfig.sources?.jira;
+    if (!systemConfig?.enabled || !sourceConfig) {
+      return null;
+    }
+    const endpoints = readJiraEndpointTemplates(sourceConfig);
+    if (!endpoints) {
+      return null;
+    }
+    return {
+      enabled: true,
+      defaultProjectKey: String(systemConfig.defaultProjectKey || "").trim(),
+      defaultBoardId: String(systemConfig.defaultBoardId || "").trim(),
+      rememberLastBoardInSession: Boolean(
+        systemConfig.rememberLastBoardInSession,
+      ),
+      endpoints,
+    };
+  }, [
+    dashboardConfig.sources?.jira,
+    dashboardConfig.system?.jiraIntegration,
+  ]);
 
   const attachmentPolicy = useMemo<AttachmentPolicy>(() => {
     const config = dashboardConfig.system?.attachmentPolicy;
@@ -1155,6 +1308,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [appliedTemplates, setAppliedTemplates] = useState<
     AppliedTemplateState[]
   >([]);
+  const [jiraBrowserOpen, setJiraBrowserOpen] = useState(false);
+  const [jiraImportTarget, setJiraImportTarget] =
+    useState<JiraImportTarget | null>(null);
+  const [selectedJiraProjectKey, setSelectedJiraProjectKey] = useState("");
+  const [selectedJiraBoardId, setSelectedJiraBoardId] = useState("");
+  const [activeJiraColumnId, setActiveJiraColumnId] = useState("");
+  const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
+  const [jiraReplaceAppendPreference, setJiraReplaceAppendPreference] =
+    useState<JiraReplaceAppendPreference>("replace");
   const [selectedAttachmentFiles, setSelectedAttachmentFiles] = useState<
     File[]
   >([]);
@@ -1165,6 +1327,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
   const temporalDraftAppliedRef = useRef<string | null>(null);
+  const jiraProjectSelectionInitializedRef = useRef(false);
+  const jiraBoardSelectionInitializedRef = useRef(false);
 
   const temporalDraftQuery = useQuery({
     queryKey: [
@@ -1518,7 +1682,205 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const jiraProjectsQuery = useQuery({
+    queryKey: ["task-create", "jira", "projects", jiraIntegration?.endpoints.projects],
+    enabled: Boolean(jiraIntegration?.enabled && jiraBrowserOpen),
+    queryFn: async (): Promise<JiraProject[]> => {
+      const endpoint = jiraIntegration?.endpoints.projects || "";
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira projects."),
+        );
+      }
+      return readJiraItems<JiraProject>(await response.json());
+    },
+  });
+
+  const jiraBoardsQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "boards",
+      jiraIntegration?.endpoints.boards,
+      selectedJiraProjectKey,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraProjectKey,
+    ),
+    queryFn: async (): Promise<JiraBoard[]> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.boards || "",
+        { projectKey: selectedJiraProjectKey },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira boards."),
+        );
+      }
+      return readJiraItems<JiraBoard>(await response.json());
+    },
+  });
+
+  const jiraColumnsQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "columns",
+      jiraIntegration?.endpoints.columns,
+      selectedJiraBoardId,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
+    ),
+    queryFn: async (): Promise<JiraColumn[]> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.columns || "",
+        { boardId: selectedJiraBoardId },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira columns."),
+        );
+      }
+      const data = (await response.json()) as { columns?: unknown } | null;
+      return Array.isArray(data?.columns) ? (data.columns as JiraColumn[]) : [];
+    },
+  });
+
+  const jiraIssuesQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "issues",
+      jiraIntegration?.endpoints.issues,
+      selectedJiraBoardId,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
+    ),
+    queryFn: async (): Promise<Record<string, JiraIssueSummary[]>> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.issues || "",
+        { boardId: selectedJiraBoardId },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira issues."),
+        );
+      }
+      const data = (await response.json()) as {
+        itemsByColumn?: Record<string, JiraIssueSummary[]>;
+      } | null;
+      return data?.itemsByColumn || {};
+    },
+  });
+
+  const jiraIssueDetailQuery = useQuery({
+    queryKey: [
+      "task-create",
+      "jira",
+      "issue",
+      jiraIntegration?.endpoints.issue,
+      selectedJiraIssueKey,
+    ],
+    enabled: Boolean(
+      jiraIntegration?.enabled &&
+        jiraBrowserOpen &&
+        selectedJiraIssueKey,
+    ),
+    queryFn: async (): Promise<JiraIssueDetail> => {
+      const endpoint = interpolatePath(
+        jiraIntegration?.endpoints.issue || "",
+        { issueKey: selectedJiraIssueKey },
+      );
+      const response = await fetch(endpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to load Jira issue."),
+        );
+      }
+      return (await response.json()) as JiraIssueDetail;
+    },
+  });
+
   const templateItems = templateOptionsQuery.data?.items || [];
+
+  useEffect(() => {
+    if (!jiraBrowserOpen || !jiraIntegration) {
+      return;
+    }
+    const projects = jiraProjectsQuery.data || [];
+    if (selectedJiraProjectKey) {
+      jiraProjectSelectionInitializedRef.current = true;
+      return;
+    }
+    if (projects.length === 0 || jiraProjectSelectionInitializedRef.current) {
+      return;
+    }
+    const configured = projects.find(
+      (project) => project.key === jiraIntegration.defaultProjectKey,
+    );
+    setSelectedJiraProjectKey((configured || projects[0])?.key || "");
+    jiraProjectSelectionInitializedRef.current = true;
+    jiraBoardSelectionInitializedRef.current = false;
+  }, [
+    jiraBrowserOpen,
+    jiraIntegration,
+    jiraProjectsQuery.data,
+    selectedJiraProjectKey,
+  ]);
+
+  useEffect(() => {
+    if (!jiraBrowserOpen || !jiraIntegration) {
+      return;
+    }
+    const boards = jiraBoardsQuery.data || [];
+    if (selectedJiraBoardId) {
+      jiraBoardSelectionInitializedRef.current = true;
+      return;
+    }
+    if (boards.length === 0 || jiraBoardSelectionInitializedRef.current) {
+      return;
+    }
+    const configured = boards.find(
+      (board) => board.id === jiraIntegration.defaultBoardId,
+    );
+    setSelectedJiraBoardId((configured || boards[0])?.id || "");
+    jiraBoardSelectionInitializedRef.current = true;
+  }, [
+    jiraBoardsQuery.data,
+    jiraBrowserOpen,
+    jiraIntegration,
+    selectedJiraBoardId,
+  ]);
+
+  useEffect(() => {
+    if (!jiraBrowserOpen) {
+      return;
+    }
+    const columns = jiraColumnsQuery.data || [];
+    const activeStillExists = columns.some(
+      (column) => column.id === activeJiraColumnId,
+    );
+    if (activeStillExists) {
+      return;
+    }
+    setActiveJiraColumnId(columns[0]?.id || "");
+  }, [activeJiraColumnId, jiraBrowserOpen, jiraColumnsQuery.data]);
 
   useEffect(() => {
     if (!taskTemplateCatalogEnabled || templateItems.length === 0) {
@@ -1546,6 +1908,44 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ),
     [dependencyOptionsQuery.data, selectedDependencies],
   );
+
+  const activeJiraIssues =
+    (activeJiraColumnId && jiraIssuesQuery.data?.[activeJiraColumnId]) || [];
+  const selectedJiraIssue = jiraIssueDetailQuery.data || null;
+  const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
+
+  function openJiraBrowser(target: JiraImportTarget) {
+    jiraProjectSelectionInitializedRef.current = Boolean(selectedJiraProjectKey);
+    jiraBoardSelectionInitializedRef.current = Boolean(selectedJiraBoardId);
+    setJiraImportTarget(target);
+    setJiraBrowserOpen(true);
+    setSelectedJiraIssueKey("");
+  }
+
+  function closeJiraBrowser() {
+    setJiraBrowserOpen(false);
+  }
+
+  function selectJiraProject(projectKey: string) {
+    jiraProjectSelectionInitializedRef.current = true;
+    jiraBoardSelectionInitializedRef.current = false;
+    setSelectedJiraProjectKey(projectKey);
+    setSelectedJiraBoardId("");
+    setActiveJiraColumnId("");
+    setSelectedJiraIssueKey("");
+  }
+
+  function selectJiraBoard(boardId: string) {
+    jiraBoardSelectionInitializedRef.current = true;
+    setSelectedJiraBoardId(boardId);
+    setActiveJiraColumnId("");
+    setSelectedJiraIssueKey("");
+  }
+
+  function selectJiraColumn(columnId: string) {
+    setActiveJiraColumnId(columnId);
+    setSelectedJiraIssueKey("");
+  }
 
   function addDependency(workflowId: string) {
     const normalizedId = workflowId.trim();
@@ -2606,6 +3006,189 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </p>
       ) : null}
 
+      {jiraIntegration?.enabled && jiraBrowserOpen ? (
+        <div className="jira-browser-backdrop">
+          <section
+            className="jira-browser-panel stack"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="jira-browser-title"
+          >
+            <div className="queue-step-header">
+              <div>
+                <h3 id="jira-browser-title">Browse Jira story</h3>
+                <p className="small">{`Target: ${jiraTargetText}`}</p>
+              </div>
+              <button
+                type="button"
+                className="queue-step-icon-button"
+                aria-label="Close Jira browser"
+                onClick={closeJiraBrowser}
+              >
+                <CloseIcon />
+                <span className="sr-only">Close Jira browser</span>
+              </button>
+            </div>
+
+            <div className="grid-2">
+              <label>
+                Project
+                <select
+                  value={selectedJiraProjectKey}
+                  disabled={
+                    jiraProjectsQuery.isLoading || jiraProjectsQuery.isError
+                  }
+                  onChange={(event) => selectJiraProject(event.target.value)}
+                >
+                  <option value="">Select project...</option>
+                  {(jiraProjectsQuery.data || []).map((project) => (
+                    <option key={project.key} value={project.key}>
+                      {project.name
+                        ? `${project.name} (${project.key})`
+                        : project.key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Board
+                <select
+                  value={selectedJiraBoardId}
+                  disabled={
+                    !selectedJiraProjectKey ||
+                    jiraBoardsQuery.isLoading ||
+                    jiraBoardsQuery.isError
+                  }
+                  onChange={(event) => selectJiraBoard(event.target.value)}
+                >
+                  <option value="">Select board...</option>
+                  {(jiraBoardsQuery.data || []).map((board) => (
+                    <option key={board.id} value={board.id}>
+                      {board.name || board.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {jiraProjectsQuery.isError ? (
+              <p className="notice small">Failed to load Jira projects.</p>
+            ) : null}
+            {jiraBoardsQuery.isError ? (
+              <p className="notice small">Failed to load Jira boards.</p>
+            ) : null}
+            {jiraColumnsQuery.isError || jiraIssuesQuery.isError ? (
+              <p className="notice small">Failed to load Jira board issues.</p>
+            ) : null}
+
+            <div className="jira-browser-layout">
+              <div className="stack">
+                <div
+                  className="jira-column-tabs"
+                  aria-label="Jira board columns"
+                >
+                  {(jiraColumnsQuery.data || []).map((column) => (
+                    <button
+                      key={column.id}
+                      type="button"
+                      className={
+                        column.id === activeJiraColumnId
+                          ? "secondary jira-column-tab active"
+                          : "secondary jira-column-tab"
+                      }
+                      aria-pressed={column.id === activeJiraColumnId}
+                      onClick={() => selectJiraColumn(column.id)}
+                    >
+                      {`${column.name} ${Number(column.count || 0)}`}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="jira-issue-list" aria-live="polite">
+                  {jiraColumnsQuery.isLoading || jiraIssuesQuery.isLoading ? (
+                    <p className="small">Loading Jira issues...</p>
+                  ) : activeJiraIssues.length > 0 ? (
+                    activeJiraIssues.map((issue) => (
+                      <button
+                        key={issue.issueKey}
+                        type="button"
+                        className={
+                          issue.issueKey === selectedJiraIssueKey
+                            ? "jira-issue-button active"
+                            : "jira-issue-button"
+                        }
+                        onClick={() => setSelectedJiraIssueKey(issue.issueKey)}
+                      >
+                        <strong>{issue.issueKey}</strong>
+                        <span>{issue.summary}</span>
+                        <span className="small">
+                          {[issue.issueType, issue.statusName, issue.assignee]
+                            .filter(Boolean)
+                            .join(" / ")}
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="small">No Jira issues in this column.</p>
+                  )}
+                </div>
+              </div>
+
+              <aside className="jira-issue-preview stack">
+                {jiraIssueDetailQuery.isError ? (
+                  <p className="notice small">Failed to load Jira issue.</p>
+                ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
+                  <p className="small">Loading Jira story...</p>
+                ) : selectedJiraIssue ? (
+                  <>
+                    <div>
+                      <p className="small">{selectedJiraIssue.issueKey}</p>
+                      <h4>{selectedJiraIssue.summary}</h4>
+                    </div>
+                    {selectedJiraIssue.descriptionText ? (
+                      <section>
+                        <strong>Description</strong>
+                        <p style={{ whiteSpace: "pre-wrap" }}>
+                          {selectedJiraIssue.descriptionText}
+                        </p>
+                      </section>
+                    ) : null}
+                    {selectedJiraIssue.acceptanceCriteriaText ? (
+                      <section>
+                        <strong>Acceptance criteria</strong>
+                        <p style={{ whiteSpace: "pre-wrap" }}>
+                          {selectedJiraIssue.acceptanceCriteriaText}
+                        </p>
+                      </section>
+                    ) : null}
+                    <label>
+                      Import behavior
+                      <select
+                        value={jiraReplaceAppendPreference}
+                        onChange={(event) =>
+                          setJiraReplaceAppendPreference(
+                            event.target.value as JiraReplaceAppendPreference,
+                          )
+                        }
+                      >
+                        <option value="replace">Replace target text</option>
+                        <option value="append">Append to target text</option>
+                      </select>
+                    </label>
+                    <p className="small">
+                      Import actions are added in the next phase.
+                    </p>
+                  </>
+                ) : (
+                  <p className="small">Choose a Jira story to preview.</p>
+                )}
+              </aside>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <form
         id="queue-submit-form"
         className="queue-submit-form"
@@ -2690,9 +3273,29 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </div>
 
-                  <label>
-                    Instructions
+                  <div className="stack">
+                    <div className="queue-field-heading">
+                      <label htmlFor={`queue-step-instructions-${step.localId}`}>
+                        Instructions
+                      </label>
+                      {jiraIntegration?.enabled ? (
+                        <button
+                          type="button"
+                          className="secondary jira-browse-button"
+                          aria-label={`Browse Jira story for Step ${index + 1} instructions`}
+                          onClick={() =>
+                            openJiraBrowser({
+                              kind: "step",
+                              localId: step.localId,
+                            })
+                          }
+                        >
+                          Browse Jira story
+                        </button>
+                      ) : null}
+                    </div>
                     <textarea
+                      id={`queue-step-instructions-${step.localId}`}
                       className="queue-step-instructions"
                       data-step-field="instructions"
                       data-step-index={String(index)}
@@ -2708,7 +3311,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         })
                       }
                     />
-                  </label>
+                  </div>
 
                   <div className="grid-2">
                     <label>
@@ -2809,8 +3412,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 ))}
               </select>
             </label>
-            <label>
-              Feature Request / Initial Instructions
+            <div className="stack">
+              <div className="queue-field-heading">
+                <label htmlFor="queue-template-feature-request">
+                  Feature Request / Initial Instructions
+                </label>
+                {jiraIntegration?.enabled ? (
+                  <button
+                    type="button"
+                    className="secondary jira-browse-button"
+                    aria-label="Browse Jira story for preset instructions"
+                    onClick={() => openJiraBrowser({ kind: "preset" })}
+                  >
+                    Browse Jira story
+                  </button>
+                ) : null}
+              </div>
               <textarea
                 id="queue-template-feature-request"
                 placeholder="Describe the feature request this preset should execute."
@@ -2819,7 +3436,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   setTemplateFeatureRequest(event.target.value)
                 }
               />
-            </label>
+            </div>
             <div className="actions">
               <button
                 type="button"

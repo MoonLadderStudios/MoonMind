@@ -182,11 +182,28 @@ mm_state:Keyword
 mm_updated_at:Datetime
 mm_repo:Keyword
 mm_integration:Keyword
-mm_continue_as_new_cause:Keyword
 mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
-mm_dependency_state:Keyword
 mm_dependency_count:Int
+TaskRunId:Keyword
+RuntimeId:Keyword
+SessionId:Keyword
+SessionEpoch:Int
+SessionStatus:Keyword
+IsDegraded:Bool
+EOF
+)
+
+RETIRED_SEARCH_ATTRIBUTES=$(cat <<'EOF'
+CustomKeywordField
+CustomStringField
+CustomTextField
+CustomIntField
+CustomDatetimeField
+CustomDoubleField
+CustomBoolField
+mm_continue_as_new_cause
+mm_dependency_state
 EOF
 )
 
@@ -214,11 +231,52 @@ create_search_attribute() {
   fi
 }
 
+remove_search_attribute() {
+  name="$1"
+  if [ "$CLI_KIND" = "temporal" ]; then
+    run_temporal_cli operator search-attribute remove \
+      --address "$TEMPORAL_ADDRESS" \
+      --namespace "$TEMPORAL_NAMESPACE" \
+      --name "$name" \
+      --yes >/dev/null 2>&1
+  else
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 admin cluster remove-search-attributes \
+      --name "$name" >/dev/null 2>&1
+  fi
+}
+
 search_attribute_registered() {
   name="$1"
   output="$2"
   printf '%s\n' "$output" | grep -Eq "(^|[[:space:]])${name}([[:space:]]|$)"
 }
+
+retired_removed=""
+list_output="$(list_search_attributes 2>/dev/null || true)"
+if [ -n "$list_output" ]; then
+  old_ifs=$IFS
+  IFS='
+'
+  for name in $RETIRED_SEARCH_ATTRIBUTES; do
+    [ -n "$name" ] || continue
+    if ! search_attribute_registered "$name" "$list_output"; then
+      continue
+    fi
+    if remove_search_attribute "$name"; then
+      if [ -n "$retired_removed" ]; then
+        retired_removed="${retired_removed}, "
+      fi
+      retired_removed="${retired_removed}${name}"
+    else
+      log "Failed to remove retired search attribute ${name}."
+      exit 1
+    fi
+  done
+  IFS=$old_ifs
+fi
+if [ -n "$retired_removed" ]; then
+  log "Removed retired search attributes: ${retired_removed}."
+fi
 
 MAX_ATTEMPTS=30
 attempt=0

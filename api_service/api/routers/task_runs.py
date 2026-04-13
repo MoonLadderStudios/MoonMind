@@ -109,6 +109,44 @@ def _coerce_owner_id(value: object) -> str | None:
 async def _load_execution_owner_binding(
     workflow_id: str,
 ) -> tuple[str | None, str | None]:
+    for candidate_workflow_id in _execution_owner_binding_candidates(workflow_id):
+        owner_type, owner_id = await _load_exact_execution_owner_binding(
+            candidate_workflow_id
+        )
+        if owner_id or (owner_type and owner_type != "user"):
+            return owner_type, owner_id
+    return None, None
+
+
+def _execution_owner_binding_candidates(workflow_id: str) -> tuple[str, ...]:
+    normalized_workflow_id = str(workflow_id or "").strip()
+    if not normalized_workflow_id:
+        return ()
+
+    candidates: list[str] = [normalized_workflow_id]
+    parent_workflow_id: str | None = None
+    if ":agent:" in normalized_workflow_id:
+        parent_workflow_id = normalized_workflow_id.partition(":agent:")[0]
+    elif ":session:" in normalized_workflow_id:
+        parent_workflow_id = normalized_workflow_id.partition(":session:")[0]
+    else:
+        parts = normalized_workflow_id.split(":")
+        if normalized_workflow_id.startswith("mm:") and len(parts) >= 2:
+            parent_workflow_id = f"{parts[0]}:{parts[1]}"
+        elif len(parts) > 1:
+            parent_workflow_id = parts[0]
+
+    if parent_workflow_id:
+        parent_workflow_id = parent_workflow_id.strip()
+        if parent_workflow_id and parent_workflow_id != normalized_workflow_id:
+            candidates.append(parent_workflow_id)
+
+    return tuple(dict.fromkeys(candidates))
+
+
+async def _load_exact_execution_owner_binding(
+    workflow_id: str,
+) -> tuple[str | None, str | None]:
     from api_service.db.base import get_async_session_context
     from api_service.db.models import TemporalExecutionCanonicalRecord
 

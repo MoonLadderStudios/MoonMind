@@ -38,6 +38,10 @@ _MOONMIND_TASK_QUEUES: tuple[str, ...] = (
     "mm.activity.integrations",
     "mm.activity.agent_runtime",
 )
+MANAGED_SESSION_RECONCILE_SCHEDULE_ID = "mm-operational:managed-session-reconcile"
+MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE = (
+    "mm-operational:managed-session-reconcile:{{.ScheduleTime}}"
+)
 
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
@@ -402,6 +406,88 @@ class TemporalClientAdapter:
         return signaled
 
     # --- Temporal Schedule CRUD ---
+
+    async def ensure_managed_session_reconcile_schedule(
+        self,
+        *,
+        cron_expression: str = "*/10 * * * *",
+        timezone: str = "UTC",
+        enabled: bool = True,
+    ) -> str:
+        """Create or replace the recurring managed-session reconcile Schedule."""
+
+        from temporalio.client import (
+            Schedule,
+            ScheduleActionStartWorkflow,
+            ScheduleUpdate,
+        )
+
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+        )
+
+        client = await self.get_client()
+        schedule = Schedule(
+            action=ScheduleActionStartWorkflow(
+                "MoonMind.ManagedSessionReconcile",
+                {},
+                id=MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE,
+                task_queue=self._get_task_queue(),
+                typed_search_attributes=_build_typed_search_attributes(
+                    {
+                        "mm_entry": ["operational"],
+                        "mm_state": ["scheduled"],
+                    }
+                ),
+                static_summary="Managed session reconcile",
+                static_details=(
+                    "Recurring operational sweeper for managed Codex sessions"
+                ),
+            ),
+            spec=build_schedule_spec(
+                cron=cron_expression,
+                timezone=timezone,
+                jitter_seconds=0,
+            ),
+            policy=build_schedule_policy(
+                overlap_mode="skip",
+                catchup_mode="last",
+            ),
+            state=build_schedule_state(
+                enabled=enabled,
+                note="Managed Codex session reconcile and orphan sweep",
+            ),
+        )
+        try:
+            handle = client.get_schedule_handle(MANAGED_SESSION_RECONCILE_SCHEDULE_ID)
+            async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
+                del input
+                return ScheduleUpdate(schedule=schedule)
+
+            await handle.update(_replace_schedule)
+            return MANAGED_SESSION_RECONCILE_SCHEDULE_ID
+        except Exception as update_exc:
+            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
+                update_exc
+            ).lower():
+                raise ScheduleOperationError(
+                    "Failed to update managed session reconcile schedule: "
+                    f"{update_exc}"
+                ) from update_exc
+        try:
+            handle = await client.create_schedule(
+                MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
+                schedule,
+            )
+            return handle.id
+        except Exception as create_exc:
+            raise ScheduleOperationError(
+                "Failed to create managed session reconcile schedule: "
+                f"{create_exc}"
+            ) from create_exc
 
     async def create_schedule(
         self,

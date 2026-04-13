@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moonmind.local/contracts/runtime-config-jira-tests.schema.json",
+  "title": "Create Page Jira Runtime Config",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "sources": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "jira": {
+          "$ref": "#/$defs/jiraSources"
+        }
+      }
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "jiraIntegration": {
+          "$ref": "#/$defs/jiraIntegration"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "moonmindApiPath": {
+      "type": "string",
+      "allOf": [
+        {
+          "pattern": "^/api/"
+        },
+        {
+          "not": {
+            "pattern": "://"
+          }
+        }
+      ]
+    },
+    "jiraSources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connections",
+        "projects",
+        "boards",
+        "columns",
+        "issues",
+        "issue"
+      ],
+      "properties": {
+        "connections": {
+          "$ref": "#/$defs/moonmindApiPath"
+        },
+        "projects": {
+          "$ref": "#/$defs/moonmindApiPath"
+        },
+        "boards": {
+          "$ref": "#/$defs/moonmindApiPath"
+        },
+        "columns": {
+          "$ref": "#/$defs/moonmindApiPath"
+        },
+        "issues": {
+          "$ref": "#/$defs/moonmindApiPath"
+        },
+        "issue": {
+          "$ref": "#/$defs/moonmindApiPath"
+        }
+      }
+    },
+    "jiraIntegration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "defaultProjectKey",
+        "defaultBoardId",
+        "rememberLastBoardInSession"
+      ],
+      "properties": {
+        "enabled": {
+          "const": true
+        },
+        "defaultProjectKey": {
+          "type": "string"
+        },
+        "defaultBoardId": {
+          "type": "string"
+        },
+        "rememberLastBoardInSession": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

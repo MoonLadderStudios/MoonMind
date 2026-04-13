@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from api_service.api.routers.task_dashboard_view_model import (
-    build_live_logs_feature_config,
-    build_runtime_config,
-    normalize_status,
-    status_maps,
-)
+import pytest
+
+import api_service.api.routers.task_dashboard_view_model as dashboard_view_model
 from moonmind.config.settings import settings
 
 
@@ -15,30 +12,33 @@ from moonmind.config.settings import settings
 
 
 def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
-    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+    assert (
+        dashboard_view_model.normalize_status("temporal", "awaiting_external")
+        == "awaiting_action"
+    )
 
 
 def test_normalize_status_maps_temporal_executing_to_running() -> None:
-    assert normalize_status("temporal", "executing") == "running"
+    assert dashboard_view_model.normalize_status("temporal", "executing") == "running"
 
 
 def test_normalize_status_maps_temporal_planning_to_running() -> None:
-    assert normalize_status("temporal", "planning") == "running"
+    assert dashboard_view_model.normalize_status("temporal", "planning") == "running"
 
 
 def test_normalize_status_maps_temporal_canceled_spellings_to_canceled() -> None:
-    assert normalize_status("temporal", "canceled") == "canceled"
-    assert normalize_status("temporal", "cancelled") == "canceled"
+    assert dashboard_view_model.normalize_status("temporal", "canceled") == "canceled"
+    assert dashboard_view_model.normalize_status("temporal", "cancelled") == "canceled"
 
 
 def test_normalize_status_fallback_for_unknown_source() -> None:
-    assert normalize_status("unknown-source", "anything") == "queued"
+    assert dashboard_view_model.normalize_status("unknown-source", "anything") == "queued"
 
 
 def test_status_maps_returns_copy() -> None:
-    mapping = status_maps()
+    mapping = dashboard_view_model.status_maps()
     mapping["temporal"]["queued"] = "changed"
-    assert status_maps()["temporal"]["queued"] == "queued"
+    assert dashboard_view_model.status_maps()["temporal"]["queued"] == "queued"
 
 
 def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
@@ -51,7 +51,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
     assert config["pollIntervalsMs"]["list"] > 0
     assert config["sources"]["temporal"]["list"] == "/api/executions"
@@ -143,7 +143,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
 def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
     monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
 
-    config = build_runtime_config("/tasks/new")
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
 
     assert "jira" not in config["sources"]
     assert "jiraIntegration" not in config["system"]
@@ -156,7 +156,7 @@ def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
     monkeypatch.setattr(settings.atlassian.jira, "jira_enabled", True)
     monkeypatch.setattr(settings.atlassian.jira, "jira_tool_enabled", True)
 
-    config = build_runtime_config("/tasks/new")
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
 
     assert "jira" not in config["sources"]
     assert "jiraIntegration" not in config["system"]
@@ -180,7 +180,7 @@ def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
         True,
     )
 
-    config = build_runtime_config("/tasks/new")
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
 
     assert config["sources"]["jira"] == {
         "connections": "/api/jira/connections/verify",
@@ -196,6 +196,40 @@ def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
         "defaultBoardId": "",
         "rememberLastBoardInSession": True,
     }
+    assert all(
+        value.startswith("/api/") and "://" not in value
+        for value in config["sources"]["jira"].values()
+    )
+
+
+def test_validate_jira_source_templates_rejects_non_moonmind_paths() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "projects": "https://jira.example.test/rest/api/3/project",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
+
+
+def test_validate_jira_source_templates_rejects_blank_paths() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "issues": " ",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
+
+
+def test_validate_jira_source_templates_rejects_trailing_whitespace() -> None:
+    sources = {
+        **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
+        "projects": "/api/jira/projects ",
+    }
+
+    with pytest.raises(ValueError, match="MoonMind API path"):
+        dashboard_view_model._validate_jira_source_templates(sources)
 
 
 def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
@@ -218,7 +252,7 @@ def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
         False,
     )
 
-    config = build_runtime_config("/tasks/new")
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
 
     assert config["system"]["jiraIntegration"]["defaultProjectKey"] == "ENG"
     assert config["system"]["jiraIntegration"]["defaultBoardId"] == "42"
@@ -228,7 +262,7 @@ def test_build_runtime_config_exposes_jira_ui_defaults_when_configured(
 def test_build_runtime_config_includes_dashboard_build_metadata(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_BUILD_ID", "20260408.1703")
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["buildId"] == "20260408.1703"
 
@@ -242,7 +276,7 @@ def test_build_runtime_config_reads_baked_build_id_when_env_missing(
     monkeypatch.delenv("MOONMIND_BUILD_ID", raising=False)
     monkeypatch.setenv("MOONMIND_BUILD_ID_PATH", str(build_id_path))
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["buildId"] == "20260408.1703"
 
@@ -259,7 +293,7 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
         (),
     )
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     attachment_policy = config["system"]["attachmentPolicy"]
 
     assert isinstance(attachment_policy["enabled"], bool)
@@ -276,7 +310,7 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
 def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini_cli")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-flash")
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert config["system"]["defaultTaskRuntime"] == "gemini_cli"
     assert config["system"]["defaultTaskModel"] == "gemini-2.5-flash"
     assert config["system"]["defaultTaskEffort"] == ""
@@ -297,7 +331,7 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
     assert config["system"]["defaultTaskRuntime"] == "claude_code"
@@ -312,7 +346,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
     monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["defaultRepository"] == "Octo/Repo"
     assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
@@ -334,7 +368,7 @@ def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> N
     monkeypatch.setattr(settings.workflow, "codex_model", None)
     monkeypatch.setattr(settings.workflow, "codex_effort", None)
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-5.4"
     assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-3.1-pro-preview"
@@ -342,7 +376,7 @@ def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> N
 
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
-    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+    assert dashboard_view_model.normalize_status("temporal", "awaiting_external") == "awaiting_action"
 
 
 def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> None:
@@ -351,7 +385,7 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
 
@@ -380,7 +414,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         "/api/temporal/artifacts/{artifactId}/download",
     )
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["features"]["temporalDashboard"] == {
         "enabled": False,
@@ -411,7 +445,7 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_api_url", "https://jules.example.test")
     monkeypatch.setattr(settings.jules, "jules_api_key", "test-key")
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == [
         "codex_cli",
@@ -423,13 +457,13 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
 
 
 def test_build_runtime_config_log_streaming_enabled_by_default() -> None:
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert config["features"]["logStreamingEnabled"] is True
 
 
 def test_build_runtime_config_log_streaming_disabled_via_env(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "false")
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert config["features"]["logStreamingEnabled"] is False
 
 
@@ -440,7 +474,7 @@ def test_build_runtime_config_session_timeline_rollout_defaults_off(monkeypatch)
         "off",
     )
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["features"]["liveLogsSessionTimelineEnabled"] is False
     assert config["features"]["liveLogsSessionTimelineRollout"] == "off"
@@ -453,7 +487,7 @@ def test_build_runtime_config_session_timeline_rollout_is_exposed(monkeypatch) -
         "codex_managed",
     )
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["features"]["liveLogsSessionTimelineEnabled"] is True
     assert config["features"]["liveLogsSessionTimelineRollout"] == "codex_managed"
@@ -472,7 +506,7 @@ def test_build_runtime_config_groups_live_logs_feature_flags(monkeypatch) -> Non
         False,
     )
 
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["features"]["logStreamingEnabled"] is True
     assert config["features"]["liveLogsSessionTimelineEnabled"] is True
@@ -493,7 +527,7 @@ def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch)
         True,
     )
 
-    feature_config = build_live_logs_feature_config()
+    feature_config = dashboard_view_model.build_live_logs_feature_config()
 
     assert feature_config == {
         "logStreamingEnabled": True,
@@ -504,7 +538,7 @@ def test_build_live_logs_feature_config_exposes_all_managed_rollout(monkeypatch)
 
 
 def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert "liveSession" not in config["sources"]["temporal"]
 
 
@@ -515,7 +549,7 @@ def test_build_runtime_config_omits_temporal_live_session_endpoint() -> None:
 
 def test_runtime_config_exposes_manifest_status_endpoint() -> None:
     """Manifest-status endpoint must be present for run-index visibility."""
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert (
         config["sources"]["temporal"]["manifestStatus"]
         == "/api/executions/{workflowId}/manifest-status"
@@ -524,7 +558,7 @@ def test_runtime_config_exposes_manifest_status_endpoint() -> None:
 
 def test_runtime_config_exposes_manifest_nodes_endpoint() -> None:
     """Manifest-nodes endpoint must be present for run-index pagination."""
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert (
         config["sources"]["temporal"]["manifestNodes"]
         == "/api/executions/{workflowId}/manifest-nodes"
@@ -536,15 +570,15 @@ def test_runtime_config_exposes_manifest_nodes_endpoint() -> None:
 
 def test_normalize_status_maps_manifest_ingest_states() -> None:
     """Manifest-ingest-specific temporal states should map correctly."""
-    assert normalize_status("temporal", "executing") == "running"
-    assert normalize_status("temporal", "planning") == "running"
-    assert normalize_status("temporal", "canceled") == "canceled"
-    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+    assert dashboard_view_model.normalize_status("temporal", "executing") == "running"
+    assert dashboard_view_model.normalize_status("temporal", "planning") == "running"
+    assert dashboard_view_model.normalize_status("temporal", "canceled") == "canceled"
+    assert dashboard_view_model.normalize_status("temporal", "awaiting_external") == "awaiting_action"
 
 
 def test_runtime_config_temporal_update_endpoint_for_manifest_updates() -> None:
     """The update endpoint used for manifest SetConcurrency/Pause/Resume must exist."""
-    config = build_runtime_config("/tasks")
+    config = dashboard_view_model.build_runtime_config("/tasks")
     assert (
         config["sources"]["temporal"]["update"]
         == "/api/executions/{workflowId}/update"
@@ -553,9 +587,9 @@ def test_runtime_config_temporal_update_endpoint_for_manifest_updates() -> None:
 
 def test_normalize_status_maps_temporal_awaiting_slot_to_queued() -> None:
     """awaiting_slot (auth-slot wait) should map to queued on the dashboard."""
-    assert normalize_status("temporal", "awaiting_slot") == "queued"
+    assert dashboard_view_model.normalize_status("temporal", "awaiting_slot") == "queued"
 
 
 def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> None:
     """waiting_on_dependencies should map to waiting on the dashboard."""
-    assert normalize_status("temporal", "waiting_on_dependencies") == "waiting"
+    assert dashboard_view_model.normalize_status("temporal", "waiting_on_dependencies") == "waiting"
