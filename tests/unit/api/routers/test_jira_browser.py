@@ -35,8 +35,11 @@ class _FakeJiraBrowserService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.raise_error: JiraToolError | None = None
+        self.raise_unexpected = False
 
     def _maybe_raise(self) -> None:
+        if self.raise_unexpected:
+            raise RuntimeError("unexpected Jira adapter failure")
         if self.raise_error is not None:
             raise self.raise_error
 
@@ -231,6 +234,8 @@ async def test_router_maps_jira_errors_to_safe_details(
     assert detail == {
         "code": "jira_policy_denied",
         "message": "Project is not allowed.",
+        "source": "jira_browser",
+        "action": "jira_browser.list_boards",
     }
 
 
@@ -254,4 +259,26 @@ async def test_router_sanitizes_secret_like_error_messages(
     detail = response.json()["detail"]
     assert response.status_code == 502
     assert detail["message"] == "Jira browser request failed."
+    assert detail["source"] == "jira_browser"
+    assert detail["action"] == "jira_browser.get_issue"
     assert "secret-value" not in str(detail)
+
+
+async def test_router_maps_unexpected_errors_to_structured_jira_browser_error(
+    router_app: tuple[FastAPI, _FakeJiraBrowserService],
+) -> None:
+    app, service = router_app
+    service.raise_unexpected = True
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/jira/projects")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "code": "jira_browser_request_failed",
+        "message": "Jira browser request failed.",
+        "source": "jira_browser",
+    }

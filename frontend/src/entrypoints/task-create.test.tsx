@@ -3963,22 +3963,33 @@ describe("Task Create Entrypoint", () => {
       }),
     );
 
-    expect(await screen.findByText("Failed to load Jira projects.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Failed to load Jira projects. You can continue creating the task manually. Jira unavailable",
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Browse Jira story" }))
       .toBeTruthy();
     expect(screen.getByLabelText("Instructions")).toBeTruthy();
   });
 
-  it("keeps manual task creation available after Jira browser failure", async () => {
+  it("keeps structured Jira endpoint failures local and manual creation available", async () => {
     fetchSpy.mockImplementation(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === "/api/jira/projects") {
           return Promise.resolve({
             ok: false,
-            status: 503,
-            statusText: "Service Unavailable",
-            text: async () => "Jira unavailable",
+            status: 502,
+            statusText: "Bad Gateway",
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  code: "jira_request_failed",
+                  message: "Jira was temporarily unavailable.",
+                  source: "jira_browser",
+                },
+              }),
           } as Response);
         }
         if (url === "/api/executions") {
@@ -4014,7 +4025,11 @@ describe("Task Create Entrypoint", () => {
         name: "Browse Jira story for preset instructions",
       }),
     );
-    expect(await screen.findByText("Failed to load Jira projects.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Failed to load Jira projects. You can continue creating the task manually. Jira was temporarily unavailable.",
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.change(screen.getByLabelText("Instructions"), {

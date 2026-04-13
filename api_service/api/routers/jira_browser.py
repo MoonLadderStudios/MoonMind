@@ -49,11 +49,24 @@ def _to_http_exception(exc: JiraToolError) -> HTTPException:
     message = str(exc.args[0]) if exc.args else _GENERIC_ERROR_MESSAGE
     if _SECRET_MESSAGE_RE.search(message):
         message = _GENERIC_ERROR_MESSAGE
+    detail = {
+        "code": exc.code,
+        "message": message,
+        "source": "jira_browser",
+    }
+    if exc.action:
+        detail["action"] = exc.action
+    return HTTPException(status_code=exc.status_code, detail=detail)
+
+
+def _unexpected_http_exception() -> HTTPException:
+    logger.exception("jira_browser_unexpected_request_failed")
     return HTTPException(
-        status_code=exc.status_code,
+        status_code=502,
         detail={
-            "code": exc.code,
-            "message": message,
+            "code": "jira_browser_request_failed",
+            "message": _GENERIC_ERROR_MESSAGE,
+            "source": "jira_browser",
         },
     )
 
@@ -72,6 +85,8 @@ async def verify_connection(
         return await service.verify_connection(project_key=project_key)
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None
 
 
 @router.get(
@@ -87,6 +102,8 @@ async def list_projects(
         return await service.list_projects()
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None
 
 
 @router.get(
@@ -103,6 +120,8 @@ async def list_project_boards(
         return await service.list_boards(project_key.upper())
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None
 
 
 @router.get(
@@ -119,6 +138,8 @@ async def list_board_columns(
         return await service.list_columns(board_id)
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None
 
 
 @router.get(
@@ -136,6 +157,8 @@ async def list_board_issues(
         return await service.list_issues(board_id, q=q)
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None
 
 
 @router.get(
@@ -153,3 +176,5 @@ async def get_issue(
         return await service.get_issue(issue_key.upper(), board_id=board_id)
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None

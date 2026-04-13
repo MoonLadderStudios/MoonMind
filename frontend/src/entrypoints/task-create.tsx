@@ -1043,6 +1043,12 @@ async function responseErrorMessage(
   return (await responseErrorDetail(response, fallback)).message;
 }
 
+function localJiraErrorMessage(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  const suffix = detail && detail !== fallback ? ` ${detail}` : "";
+  return `${fallback} You can continue creating the task manually.${suffix}`;
+}
+
 async function readTemporalInputArtifact(
   artifactDownloadEndpoint: string,
   artifactId: string,
@@ -2196,6 +2202,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
   }, [jiraImportMode, selectedJiraIssue]);
+  const jiraProjectsError = jiraProjectsQuery.isError
+    ? localJiraErrorMessage(
+        jiraProjectsQuery.error,
+        "Failed to load Jira projects.",
+      )
+    : null;
+  const jiraBoardsError = jiraBoardsQuery.isError
+    ? localJiraErrorMessage(
+        jiraBoardsQuery.error,
+        "Failed to load Jira boards.",
+      )
+    : null;
+  const jiraBoardIssuesError =
+    jiraColumnsQuery.isError || jiraIssuesQuery.isError
+      ? localJiraErrorMessage(
+          jiraColumnsQuery.error || jiraIssuesQuery.error,
+          "Failed to load Jira stories.",
+        )
+      : null;
+  const jiraIssueError = jiraIssueDetailQuery.isError
+    ? localJiraErrorMessage(
+        jiraIssueDetailQuery.error,
+        "Failed to load Jira story.",
+      )
+    : null;
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
   const jiraTargetStep =
     jiraImportTarget?.kind === "step"
@@ -3594,14 +3625,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </label>
             </div>
 
-            {jiraProjectsQuery.isError ? (
-              <p className="notice small">Failed to load Jira projects.</p>
+            {jiraProjectsError ? (
+              <p className="notice small">{jiraProjectsError}</p>
             ) : null}
-            {jiraBoardsQuery.isError ? (
-              <p className="notice small">Failed to load Jira boards.</p>
+            {jiraBoardsError ? (
+              <p className="notice small">{jiraBoardsError}</p>
             ) : null}
-            {jiraColumnsQuery.isError || jiraIssuesQuery.isError ? (
-              <p className="notice small">Failed to load Jira board issues.</p>
+            {jiraBoardIssuesError ? (
+              <p className="notice small">{jiraBoardIssuesError}</p>
             ) : null}
 
             <div className="jira-browser-layout">
@@ -3658,8 +3689,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </div>
 
               <aside className="jira-issue-preview stack">
-                {jiraIssueDetailQuery.isError ? (
-                  <p className="notice small">Failed to load Jira issue.</p>
+                {jiraIssueError ? (
+                  <p className="notice small">{jiraIssueError}</p>
                 ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
                   <p className="small">Loading Jira story...</p>
                 ) : selectedJiraIssue ? (
