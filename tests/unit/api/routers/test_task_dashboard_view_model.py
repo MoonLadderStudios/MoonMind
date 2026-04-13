@@ -149,6 +149,14 @@ def test_build_runtime_config_omits_jira_ui_when_disabled(monkeypatch) -> None:
     assert "jiraIntegration" not in config["system"]
 
 
+def test_jira_create_page_enabled_reads_feature_flag(monkeypatch) -> None:
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", False)
+    assert dashboard_view_model._jira_create_page_enabled() is False
+
+    monkeypatch.setattr(settings.feature_flags, "jira_create_page_enabled", True)
+    assert dashboard_view_model._jira_create_page_enabled() is True
+
+
 def test_build_runtime_config_keeps_jira_ui_separate_from_trusted_tooling(
     monkeypatch,
 ) -> None:

@@ -2041,9 +2041,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const targetStep = steps.find(
       (step) => step.localId === jiraImportTarget.localId,
     );
+    if (!targetStep) {
+      return;
+    }
     updateStep(jiraImportTarget.localId, {
       instructions: writeJiraImportedText(
-        targetStep?.instructions || "",
+        targetStep.instructions,
         importedText,
         writeMode,
       ),

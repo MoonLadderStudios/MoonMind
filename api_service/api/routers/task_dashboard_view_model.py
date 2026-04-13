@@ -61,6 +61,12 @@ def _build_jira_sources() -> dict[str, str]:
 
     return dict(_JIRA_CREATE_PAGE_SOURCES)
 
+
+def _jira_create_page_enabled() -> bool:
+    """Return whether the Create-page Jira browser rollout is enabled."""
+
+    return bool(settings.feature_flags.jira_create_page_enabled)
+
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
         "open": "queued",
@@ -184,7 +190,7 @@ def _build_dashboard_system_metadata() -> dict[str, str | None]:
 def _build_jira_runtime_config() -> dict[str, Any] | None:
     """Build Create-page Jira browser config when the UI rollout is enabled."""
 
-    if not settings.feature_flags.jira_create_page_enabled:
+    if not _jira_create_page_enabled():
         return None
 
     return {

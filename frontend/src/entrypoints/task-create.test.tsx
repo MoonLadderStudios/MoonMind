@@ -2324,6 +2324,38 @@ describe("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
+  it("does not mutate draft fields when selecting a Jira issue preview", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.",
+    );
+  });
+
   it("replaces preset instructions with selected Jira import text", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -2391,14 +2423,25 @@ describe("Task Create Entrypoint", () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const primaryStep = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
     fireEvent.change(primaryStep, {
       target: { value: "Keep primary instructions." },
     });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep preset instructions." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
     fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
     const stepInstructions = screen.getAllByLabelText("Instructions");
     const secondStep = stepInstructions[1] as HTMLTextAreaElement;
+    const thirdStep = stepInstructions[2] as HTMLTextAreaElement;
     fireEvent.change(secondStep, {
       target: { value: "Replace this secondary step." },
+    });
+    fireEvent.change(thirdStep, {
+      target: { value: "Keep tertiary instructions." },
     });
 
     fireEvent.click(
@@ -2418,7 +2461,111 @@ describe("Task Create Entrypoint", () => {
     expect((primaryStep as HTMLTextAreaElement).value).toBe(
       "Keep primary instructions.",
     );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep preset instructions.",
+    );
     expect(secondStep.value).toBe("Complete Jira story ENG-202: Build browser shell");
+    expect(thirdStep.value).toBe("Keep tertiary instructions.");
+  });
+
+  it("defaults step-target Jira imports to execution brief mode", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    expect((screen.getByLabelText("Import mode") as HTMLSelectElement).value)
+      .toBe("execution-brief");
+    expect(
+      screen.getByText("Complete Jira story ENG-202: Build browser shell"),
+    ).toBeTruthy();
+  });
+
+  it("preserves existing target text when selected Jira import mode is empty", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            url: "https://jira.example.test/browse/ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "",
+            acceptanceCriteriaText: "",
+            recommendedImports: {
+              presetInstructions: "",
+              stepInstructions: "",
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Import mode")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Import mode"), {
+      target: { value: "acceptance-only" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Import mode")).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText("Import mode"), {
+      target: { value: "description-only" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
   });
 
   it("imports selected Jira text by mode", async () => {
