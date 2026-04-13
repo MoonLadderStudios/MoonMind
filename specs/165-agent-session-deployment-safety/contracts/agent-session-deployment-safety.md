@@ -185,3 +185,18 @@ Required gates:
 | Observability safety | Bounded metadata/search attribute/summary assertions and forbidden-content scan |
 | Reconcile | Scheduled/client and controller reconcile tests |
 | Deployment safety | Replay tests plus Worker Versioning or cutover assertions |
+
+## Contract Coverage Checklist
+
+- [x] Production mutation controls are request/response workflow Updates.
+- [x] Runtime handle attachment remains fire-and-forget state propagation.
+- [x] Invalid mutators are rejected before state mutation.
+- [x] Cancel and terminate have distinct lifecycle semantics.
+- [x] Steering and interruption are runtime-bound behaviors, not unsupported stubs.
+- [x] Runtime/controller side effects are retry-safe or deduplicated.
+- [x] Blocking managed-session activities heartbeat for cancellation delivery.
+- [x] Continue-As-New carries only bounded workflow state.
+- [x] Operator/audit truth, recovery index, and disposable cache are separate.
+- [x] Search Attributes, summaries, schedule metadata, telemetry, and replay fixtures exclude sensitive or unbounded content.
+- [x] Recurring reconcile returns bounded outcomes for stale, degraded, missing-container, and orphan cases.
+- [x] Worker Versioning, scoped patching, or explicit cutover gates incompatible workflow-shape rollout.

@@ -89,6 +89,19 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 
 For workflow-shape changes, also run the managed-session replay validation and confirm Worker Versioning, patching, or explicit versioned cutover is present before rollout.
 
+For deployment-safety review, validate the cutover playbook and replay gates together:
+
+```bash
+rg -n "SteerTurn|Continue-As-New|CancelSession|TerminateSession|Search Attribute|Worker Versioning|replay" \
+  docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md \
+  specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md \
+  specs/165-agent-session-deployment-safety/tasks.md
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only \
+  tests/unit/workflows/temporal/test_temporal_worker_runtime.py \
+  tests/unit/workflows/temporal/test_agent_session_replayer.py \
+  tests/unit/workflows/temporal/workflows/test_agent_session.py
+```
+
 ## 6. Completion Checklist
 
 - Production runtime code was changed or verified as already compliant for each relevant requirement.

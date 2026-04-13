@@ -9,6 +9,8 @@ Finish the remaining runtime work needed to make Codex managed session workflow 
 
 The current repository already contains substantial Phase 3-5 surfaces, including typed `AgentSessionWorkflow` updates, runtime steering/termination hooks, workflow handler hardening, bounded visibility metadata, managed-session reconcile workflow, and worker deployment configuration. This plan treats those as implementation candidates to verify, preserve, and close any gaps against the spec rather than reimplementing completed behavior blindly.
 
+Traceability status: this feature has no `DOC-REQ-*` identifiers. No `contracts/requirements-traceability.md` artifact is required for this spec, and implementation traceability is maintained through FR-to-task coverage in `tasks.md` and `speckit_analyze_report.md`.
+
 ## Technical Context
 
 **Language/Version**: Python 3.12 for Temporal workflows, activities, runtime services, and tests; TypeScript only if an affected operator/API surface needs payload or visibility-field handling.
