@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.temporal.deployment_safety import (
     AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
     AgentSessionDeploymentSafetyError,
+    resolve_active_feature_dir,
     validate_agent_session_deployment_safety,
 )
 
@@ -48,12 +50,25 @@ def main() -> int:
         description="Validate AgentSession workflow deployment-safety gates."
     )
     parser.add_argument("--base-ref", default="origin/main")
+    parser.add_argument(
+        "--feature-dir",
+        default=os.environ.get("SPECIFY_FEATURE"),
+        help=(
+            "Optional active Spec Kit feature directory or name. Defaults to "
+            "SPECIFY_FEATURE when set, which lets local non-feature branches use "
+            "the intended feature artifacts."
+        ),
+    )
     args = parser.parse_args()
 
     playbook = REPO_ROOT / AGENT_SESSION_CUTOVER_PLAYBOOK_PATH
     playbook_text = playbook.read_text(encoding="utf-8") if playbook.exists() else ""
 
     try:
+        active_feature_dir = resolve_active_feature_dir(
+            repo_root=REPO_ROOT,
+            active_feature=args.feature_dir,
+        )
         report = validate_agent_session_deployment_safety(
             changed_paths=_changed_paths(args.base_ref),
             worker_versioning_behavior=(
@@ -61,6 +76,7 @@ def main() -> int:
             ),
             repo_paths=_repo_paths(),
             cutover_playbook_text=playbook_text,
+            active_feature_dir=active_feature_dir,
         )
     except (AgentSessionDeploymentSafetyError, subprocess.CalledProcessError) as exc:
         print(f"AgentSession deployment safety validation failed: {exc}", file=sys.stderr)
@@ -74,6 +90,8 @@ def main() -> int:
         )
     else:
         print("AgentSession deployment safety validation passed; no sensitive changes.")
+    if report.active_feature_dir:
+        print(f"Active Spec Kit feature: {report.active_feature_dir}")
     return 0
 
 
