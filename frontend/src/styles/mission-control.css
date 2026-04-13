@@ -1485,6 +1485,20 @@ button.secondary:hover {
   border-radius: 8px;
 }
 
+.jira-provenance-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-muted));
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .jira-browser-backdrop {
   position: fixed;
   inset: 0;

@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+  title: Create Page Jira Provenance UI Contract
+  version: 0.1.0
+  description: >
+    Local Create page state/action contract for Jira import provenance and
+    session-only Jira browser selection memory. This is a UI contract, not a
+    browser-to-server API, and it must not change task submission payloads.
+paths: {}
+components:
+  schemas:
+    JiraImportMode:
+      type: string
+      enum:
+        - preset-brief
+        - execution-brief
+        - description-only
+        - acceptance-only
+    JiraImportTarget:
+      oneOf:
+        - type: object
+          required:
+            - kind
+          additionalProperties: false
+          properties:
+            kind:
+              type: string
+              const: preset
+        - type: object
+          required:
+            - kind
+            - localId
+          additionalProperties: false
+          properties:
+            kind:
+              type: string
+              const: step
+            localId:
+              type: string
+              minLength: 1
+    JiraImportProvenance:
+      type: object
+      required:
+        - issueKey
+        - boardId
+        - importMode
+        - targetType
+      additionalProperties: false
+      properties:
+        issueKey:
+          type: string
+          minLength: 1
+        boardId:
+          type: string
+        importMode:
+          $ref: "#/components/schemas/JiraImportMode"
+        targetType:
+          type: string
+          enum:
+            - preset
+            - step
+    SessionJiraSelection:
+      type: object
+      required:
+        - enabled
+        - projectKey
+        - boardId
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        projectKey:
+          type: string
+        boardId:
+          type: string
+    CreatePageJiraProvenanceState:
+      type: object
+      required:
+        - presetProvenance
+        - stepProvenanceByLocalId
+        - sessionSelection
+      additionalProperties: false
+      properties:
+        presetProvenance:
+          anyOf:
+            - $ref: "#/components/schemas/JiraImportProvenance"
+            - type: "null"
+        stepProvenanceByLocalId:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/JiraImportProvenance"
+        sessionSelection:
+          $ref: "#/components/schemas/SessionJiraSelection"
+    SuccessfulJiraImportAction:
+      type: object
+      required:
+        - target
+        - issueKey
+        - boardId
+        - importMode
+      additionalProperties: false
+      properties:
+        target:
+          $ref: "#/components/schemas/JiraImportTarget"
+        issueKey:
+          type: string
+          minLength: 1
+        boardId:
+          type: string
+        importMode:
+          $ref: "#/components/schemas/JiraImportMode"
+    ManualInstructionEditAction:
+      type: object
+      required:
+        - target
+      additionalProperties: false
+      properties:
+        target:
+          $ref: "#/components/schemas/JiraImportTarget"
+    TaskSubmissionBoundary:
+      type: object
+      description: >
+        Task submission must include imported instruction text only. It must
+        not include JiraImportProvenance, SessionJiraSelection, board id, import
+        mode, or target type as separate Jira metadata.
+      additionalProperties: true
+      not:
+        anyOf:
+          - required:
+              - jiraProvenance
+          - required:
+              - sessionJiraSelection
+          - required:
+              - issueKey
+          - required:
+              - boardId
+          - required:
+              - importMode
+          - required:
+              - targetType
