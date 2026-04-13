@@ -21,9 +21,18 @@ WorkloadToolHandler = Callable[
 ]
 
 CONTAINER_RUN_WORKLOAD_TOOL = "container.run_workload"
+CONTAINER_START_HELPER_TOOL = "container.start_helper"
+CONTAINER_STOP_HELPER_TOOL = "container.stop_helper"
 UNREAL_RUN_TESTS_TOOL = "unreal.run_tests"
 DEFAULT_UNREAL_PROFILE_ID = "unreal-5_3-linux"
-DOOD_TOOL_NAMES = frozenset({CONTAINER_RUN_WORKLOAD_TOOL, UNREAL_RUN_TESTS_TOOL})
+DOOD_TOOL_NAMES = frozenset(
+    {
+        CONTAINER_RUN_WORKLOAD_TOOL,
+        CONTAINER_START_HELPER_TOOL,
+        CONTAINER_STOP_HELPER_TOOL,
+        UNREAL_RUN_TESTS_TOOL,
+    }
+)
 
 
 def is_dood_tool(name: str) -> bool:
@@ -95,6 +104,69 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "additionalProperties": False,
         }
         description = "Run one policy-gated Docker workload through MoonMind."
+    elif normalized == CONTAINER_START_HELPER_TOOL:
+        input_schema = {
+            "type": "object",
+            "required": [
+                "profileId",
+                "repoDir",
+                "artifactsDir",
+                "command",
+                "ttlSeconds",
+            ],
+            "properties": {
+                "profileId": {"type": "string", "minLength": 1},
+                "taskRunId": {"type": "string", "minLength": 1},
+                "stepId": {"type": "string", "minLength": 1},
+                "attempt": {"type": "integer", "minimum": 1},
+                "repoDir": {"type": "string", "minLength": 1},
+                "artifactsDir": {"type": "string", "minLength": 1},
+                "command": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
+                },
+                "envOverrides": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "ttlSeconds": {"type": "integer", "minimum": 1},
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "resources": _resources_schema(),
+                "declaredOutputs": _declared_outputs_schema(),
+                "sessionId": {"type": "string", "minLength": 1},
+                "sessionEpoch": {"type": "integer", "minimum": 1},
+                "sourceTurnId": {"type": "string", "minLength": 1},
+            },
+            "additionalProperties": False,
+        }
+        description = "Start one policy-gated bounded helper container."
+    elif normalized == CONTAINER_STOP_HELPER_TOOL:
+        input_schema = {
+            "type": "object",
+            "required": ["profileId", "repoDir", "artifactsDir", "ttlSeconds"],
+            "properties": {
+                "profileId": {"type": "string", "minLength": 1},
+                "taskRunId": {"type": "string", "minLength": 1},
+                "stepId": {"type": "string", "minLength": 1},
+                "attempt": {"type": "integer", "minimum": 1},
+                "repoDir": {"type": "string", "minLength": 1},
+                "artifactsDir": {"type": "string", "minLength": 1},
+                "command": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
+                },
+                "reason": {"type": "string", "minLength": 1},
+                "ttlSeconds": {"type": "integer", "minimum": 1},
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "sessionId": {"type": "string", "minLength": 1},
+                "sessionEpoch": {"type": "integer", "minimum": 1},
+                "sourceTurnId": {"type": "string", "minLength": 1},
+            },
+            "additionalProperties": False,
+        }
+        description = "Stop one policy-gated bounded helper container."
     elif normalized == UNREAL_RUN_TESTS_TOOL:
         input_schema = {
             "type": "object",
@@ -212,7 +284,17 @@ def build_workload_tool_handler(
                 context=context,
             )
             validated = registry.validate_request(request)
-            result = await launcher.run(validated)
+            if normalized == CONTAINER_START_HELPER_TOOL:
+                result = await launcher.start_helper(validated)
+            elif normalized == CONTAINER_STOP_HELPER_TOOL:
+                result = await launcher.stop_helper(
+                    validated,
+                    reason=str(
+                        _request_payload_reason(inputs) or "bounded_window_complete"
+                    ),
+                )
+            else:
+                result = await launcher.run(validated)
         except WorkloadPolicyError as exc:
             raise ToolFailure(
                 error_code="PERMISSION_DENIED",
@@ -250,6 +332,10 @@ def _build_workload_request(
     if "attempt" not in request_payload:
         request_payload["attempt"] = _context_int(context, "attempt", default=1)
     request_payload["toolName"] = tool_name
+    if tool_name == CONTAINER_STOP_HELPER_TOOL:
+        request_payload.pop("reason", None)
+        if "command" not in request_payload:
+            request_payload["command"] = ["stop"]
 
     for source_key, target_key in (
         ("session_id", "sessionId"),
@@ -285,6 +371,12 @@ def _build_workload_request(
             request_payload.pop(curated_only_key, None)
 
     return WorkloadRequest.model_validate(request_payload)
+
+
+def _request_payload_reason(inputs: Mapping[str, Any]) -> str | None:
+    value = inputs.get("reason")
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
 def _unreal_report_paths(value: Any) -> dict[str, str]:
@@ -402,8 +494,13 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
         "failed": "FAILED",
         "timed_out": "FAILED",
         "canceled": "CANCELLED",
+        "ready": "COMPLETED",
+        "unhealthy": "FAILED",
+        "stopped": "COMPLETED",
     }[result.status]
     workload_metadata = dict(result.metadata.get("workload") or {})
+    if not workload_metadata and "helper" in result.metadata:
+        workload_metadata["helper"] = result.metadata["helper"]
     workload_metadata["artifactPublication"] = result.metadata.get(
         "artifactPublication"
     )
@@ -436,6 +533,8 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
 
 __all__ = [
     "CONTAINER_RUN_WORKLOAD_TOOL",
+    "CONTAINER_START_HELPER_TOOL",
+    "CONTAINER_STOP_HELPER_TOOL",
     "DEFAULT_UNREAL_PROFILE_ID",
     "DOOD_TOOL_NAMES",
     "UNREAL_RUN_TESTS_TOOL",

@@ -381,6 +381,31 @@ def test_registry_rejects_unsafe_profile_policy(
         )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"helper_ttl_seconds": 300}, "helperTtlSeconds"),
+        ({"max_helper_ttl_seconds": 900}, "maxHelperTtlSeconds"),
+    ],
+)
+def test_registry_rejects_helper_ttl_policy_on_non_helper_profiles(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps({"profiles": [_profile_payload(**overrides)]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match=message):
+        RunnerProfileRegistry.load_file(
+            registry_path,
+            workspace_root=WORKSPACE_ROOT,
+        )
+
+
 def test_registry_rejects_unsupported_registry_extension(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.toml"
     registry_path.write_text("profiles = []", encoding="utf-8")
@@ -476,3 +501,142 @@ def test_workload_request_rejects_runtime_reserved_declared_outputs(
 ) -> None:
     with pytest.raises(ValueError, match="runtime artifact classes"):
         _request(declaredOutputs={artifact_class: "logs.txt"})
+
+
+def test_registry_validates_bounded_helper_contract(tmp_path: Path) -> None:
+    registry = _registry(
+        tmp_path,
+        _profile_payload(
+            id="redis-helper",
+            kind="bounded_service",
+            image="redis:7.2-alpine",
+            entrypoint=["redis-server"],
+            command_wrapper=[],
+            env_allowlist=[],
+            timeout_seconds=60,
+            max_timeout_seconds=60,
+            helper_ttl_seconds=300,
+            max_helper_ttl_seconds=900,
+            readiness_probe={
+                "type": "exec",
+                "command": ["redis-cli", "ping"],
+                "interval_seconds": 1,
+                "timeout_seconds": 2,
+                "retries": 5,
+            },
+        ),
+    )
+
+    validated = registry.validate_request(
+        _request(
+            profileId="redis-helper",
+            command=["--appendonly", "no"],
+            envOverrides={},
+            timeoutSeconds=60,
+            resources={"cpu": "2", "memory": "2g"},
+            ttlSeconds=300,
+            sessionId=None,
+            sessionEpoch=None,
+            sourceTurnId=None,
+        )
+    )
+
+    assert validated.profile.kind == "bounded_service"
+    assert validated.container_name == "mm-helper-task-1-step-test-1"
+    assert validated.ownership.kind == "bounded_service"
+    assert validated.ownership.labels["moonmind.kind"] == "bounded_service"
+    assert validated.request.ttl_seconds == 300
+    assert validated.profile.readiness_probe is not None
+    assert validated.profile.readiness_probe.command == ("redis-cli", "ping")
+
+
+def test_registry_rejects_bounded_helper_without_readiness_contract(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValidationError, match="readiness"):
+        _registry(
+            tmp_path,
+            _profile_payload(
+                id="redis-helper",
+                kind="bounded_service",
+                image="redis:7.2-alpine",
+                helper_ttl_seconds=300,
+                max_helper_ttl_seconds=900,
+            ),
+        )
+
+
+def test_registry_rejects_bounded_helper_request_without_ttl(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(
+        tmp_path,
+        _profile_payload(
+            id="redis-helper",
+            kind="bounded_service",
+            image="redis:7.2-alpine",
+            env_allowlist=[],
+            helper_ttl_seconds=300,
+            max_helper_ttl_seconds=900,
+            readiness_probe={
+                "type": "exec",
+                "command": ["redis-cli", "ping"],
+            },
+        ),
+    )
+
+    with pytest.raises(WorkloadPolicyError, match="ttlSeconds") as exc_info:
+        registry.validate_request(
+            _request(
+                profileId="redis-helper",
+                command=["--appendonly", "no"],
+                envOverrides={},
+                timeoutSeconds=60,
+                resources={"cpu": "2", "memory": "2g"},
+                sessionId=None,
+                sessionEpoch=None,
+                sourceTurnId=None,
+            )
+        )
+    assert exc_info.value.reason == "missing_helper_ttl"
+    assert exc_info.value.details == {"profileId": "redis-helper"}
+
+
+def test_registry_rejects_bounded_helper_ttl_above_profile_limit(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(
+        tmp_path,
+        _profile_payload(
+            id="redis-helper",
+            kind="bounded_service",
+            image="redis:7.2-alpine",
+            env_allowlist=[],
+            helper_ttl_seconds=300,
+            max_helper_ttl_seconds=900,
+            readiness_probe={
+                "type": "exec",
+                "command": ["redis-cli", "ping"],
+            },
+        ),
+    )
+
+    with pytest.raises(WorkloadPolicyError, match="ttlSeconds") as exc_info:
+        registry.validate_request(
+            _request(
+                profileId="redis-helper",
+                command=["--appendonly", "no"],
+                envOverrides={},
+                timeoutSeconds=60,
+                resources={"cpu": "2", "memory": "2g"},
+                ttlSeconds=901,
+                sessionId=None,
+                sessionEpoch=None,
+                sourceTurnId=None,
+            )
+        )
+    assert exc_info.value.reason == "resource_request_too_large"
+    assert exc_info.value.details == {
+        "resource": "ttlSeconds",
+        "profileId": "redis-helper",
+    }

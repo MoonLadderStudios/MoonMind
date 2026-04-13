@@ -43,10 +43,20 @@ _SIZE_MULTIPLIERS: dict[str, int] = {
 }
 
 
-WorkloadStatus = Literal["succeeded", "failed", "timed_out", "canceled"]
-WorkloadKind = Literal["one_shot"]
+WorkloadStatus = Literal[
+    "succeeded",
+    "failed",
+    "timed_out",
+    "canceled",
+    "ready",
+    "unhealthy",
+    "stopped",
+]
+WorkloadKind = Literal["one_shot", "bounded_service"]
+WorkloadOwnershipKind = Literal["workload", "bounded_service"]
 WorkloadNetworkPolicy = Literal["none", "bridge"]
 WorkloadDeviceMode = Literal["none"]
+WorkloadReadinessProbeType = Literal["exec"]
 
 
 def parse_cpu_units(value: str) -> float:
@@ -94,6 +104,19 @@ def workload_container_name(
     task = _sanitize_name_part(task_run_id)
     step = _sanitize_name_part(step_id)
     return f"mm-workload-{task}-{step}-{attempt}"
+
+
+def helper_container_name(
+    *,
+    task_run_id: str,
+    step_id: str,
+    attempt: int,
+) -> str:
+    """Return the deterministic bounded-helper container name."""
+
+    task = _sanitize_name_part(task_run_id)
+    step = _sanitize_name_part(step_id)
+    return f"mm-helper-{task}-{step}-{attempt}"
 
 
 def _sanitize_name_part(value: str) -> str:
@@ -253,6 +276,26 @@ class WorkloadDevicePolicy(BaseModel):
     mode: WorkloadDeviceMode = Field("none", alias="mode")
 
 
+class WorkloadReadinessProbe(BaseModel):
+    """Bounded readiness probe for a helper container."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: WorkloadReadinessProbeType = Field("exec", alias="type")
+    command: tuple[NonBlankStr, ...] = Field(..., alias="command", min_length=1)
+    interval_seconds: int = Field(1, alias="intervalSeconds", ge=0)
+    timeout_seconds: int = Field(5, alias="timeoutSeconds", ge=1)
+    retries: int = Field(5, alias="retries", ge=1)
+
+    @model_validator(mode="after")
+    def _validate_probe(self) -> "WorkloadReadinessProbe":
+        self.command = tuple(
+            require_non_blank(item, field_name="readinessProbe.command[]")
+            for item in self.command
+        )
+        return self
+
+
 class RunnerProfile(BaseModel):
     """Deployment-owned workload runner profile."""
 
@@ -284,6 +327,16 @@ class RunnerProfile(BaseModel):
     timeout_seconds: int = Field(300, alias="timeoutSeconds", ge=1)
     max_timeout_seconds: int | None = Field(None, alias="maxTimeoutSeconds", ge=1)
     max_concurrency: int = Field(1, alias="maxConcurrency", ge=1)
+    helper_ttl_seconds: int | None = Field(None, alias="helperTtlSeconds", ge=1)
+    max_helper_ttl_seconds: int | None = Field(
+        None,
+        alias="maxHelperTtlSeconds",
+        ge=1,
+    )
+    readiness_probe: WorkloadReadinessProbe | None = Field(
+        None,
+        alias="readinessProbe",
+    )
     cleanup: WorkloadCleanupPolicy = Field(
         default_factory=WorkloadCleanupPolicy,
         alias="cleanup",
@@ -312,6 +365,32 @@ class RunnerProfile(BaseModel):
         if self.max_timeout_seconds is not None:
             if self.timeout_seconds > self.max_timeout_seconds:
                 raise ValueError("timeoutSeconds must not exceed maxTimeoutSeconds")
+        if self.kind == "bounded_service":
+            if self.readiness_probe is None:
+                raise ValueError(
+                    "bounded_service profiles must define a readinessProbe"
+                )
+            if self.helper_ttl_seconds is None:
+                raise ValueError(
+                    "bounded_service profiles must define helperTtlSeconds"
+                )
+            if self.max_helper_ttl_seconds is None:
+                raise ValueError(
+                    "bounded_service profiles must define maxHelperTtlSeconds"
+                )
+            if self.helper_ttl_seconds > self.max_helper_ttl_seconds:
+                raise ValueError(
+                    "helperTtlSeconds must not exceed maxHelperTtlSeconds"
+                )
+        else:
+            if self.readiness_probe is not None:
+                raise ValueError("readinessProbe is only valid for bounded_service")
+            if self.helper_ttl_seconds is not None:
+                raise ValueError("helperTtlSeconds is only valid for bounded_service")
+            if self.max_helper_ttl_seconds is not None:
+                raise ValueError(
+                    "maxHelperTtlSeconds is only valid for bounded_service"
+                )
         return self
 
 
@@ -320,7 +399,7 @@ class WorkloadOwnershipMetadata(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    kind: Literal["workload"] = Field("workload", alias="kind")
+    kind: WorkloadOwnershipKind = Field("workload", alias="kind")
     task_run_id: NonBlankStr = Field(..., alias="taskRunId")
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
@@ -361,6 +440,7 @@ class WorkloadRequest(BaseModel):
     command: tuple[NonBlankStr, ...] = Field(..., alias="command", min_length=1)
     env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")
     timeout_seconds: int | None = Field(None, alias="timeoutSeconds", ge=1)
+    ttl_seconds: int | None = Field(None, alias="ttlSeconds", ge=1)
     resources: WorkloadResourceOverrides = Field(
         default_factory=WorkloadResourceOverrides,
         alias="resources",

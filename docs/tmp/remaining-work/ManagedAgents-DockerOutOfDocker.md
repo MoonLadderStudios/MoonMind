@@ -1,7 +1,7 @@
 # DockerOutOfDocker Remaining Work
 
 Source doc: [`docs/ManagedAgents/DockerOutOfDocker.md`](../../ManagedAgents/DockerOutOfDocker.md)
-Status: Phases 0 through 6 complete; Phase 7 pending
+Status: Phases 0 through 7 complete
 Last updated: 2026-04-12
 
 ## Phase checklist
@@ -13,7 +13,7 @@ Last updated: 2026-04-12
 - [x] Phase 4: Publish durable workload artifacts, live-log linkage, and optional session-association metadata without confusing workload identity with session identity.
 - [x] Phase 5: Harden security, policy, concurrency control, and orphan cleanup.
 - [x] Phase 6: Validate the architecture with the Unreal pilot runner profile and representative repository coverage.
-- [ ] Phase 7: Evaluate bounded helper containers only after one-shot workload containers are stable and well observed.
+- [x] Phase 7: Evaluate and implement bounded helper containers after one-shot workload containers are stable and well observed.
 
 ## Phase 0 completion notes
 
@@ -81,10 +81,21 @@ Last updated: 2026-04-12
 3. Keep the Docker-capable `agent_runtime` worker connected to the Docker proxy and carrying the `docker_workload` capability.
 4. Invoke `unreal.run_tests` with `projectPath`, optional `target`/`testSelector`, and optional relative `reportPaths`; inspect runtime logs and reports under the step artifacts directory.
 
+## Phase 7 completion notes
+
+- Runner profiles can now declare `kind: bounded_service` as a separate helper lifecycle from default one-shot workload containers.
+- Bounded helper profiles must define `helperTtlSeconds`, `maxHelperTtlSeconds`, and an explicit `readinessProbe`; helper requests must provide `ttlSeconds` within the selected profile limit.
+- Helper ownership uses deterministic `mm-helper-...` container names and `moonmind.kind=bounded_service` labels, preserving the boundary that helpers are not `MoonMind.AgentRun` instances and do not carry managed-session identity.
+- `DockerWorkloadLauncher.start_helper()` launches helpers detached, waits for bounded Docker exec readiness probes, and publishes bounded helper diagnostics and runtime logs under the step artifact directory.
+- `DockerWorkloadLauncher.stop_helper()` performs explicit stop/kill/remove teardown for the bounded execution window.
+- Executable tools `container.start_helper` and `container.stop_helper` route through the existing Docker workload tool bridge and Temporal `workload.run` activity boundary without granting Docker authority to managed-session containers.
+- `DockerContainerJanitor.sweep_expired_helpers()` removes expired helper containers by `moonmind.kind=bounded_service` and `moonmind.expires_at` without touching fresh helpers or one-shot workload containers.
+- Focused unit coverage validates helper profile/request policy, detached launch labels, readiness success/failure, bounded readiness diagnostics, multi-sub-step survival through the bounded window, executable tool start/stop mapping, Temporal activity dispatch, explicit teardown, and expired-helper sweeping.
+
 ## Guardrails to preserve during later phases
 
 - Keep `tool.type = "skill"` as the initial execution primitive for Docker-backed workload launches.
 - Keep the current Docker-capable `agent_runtime` fleet as the first workload host.
 - Keep one-shot workload containers as the MVP lifecycle.
-- Keep bounded helper containers as a later phase, not part of the MVP.
+- Keep bounded helper containers as an explicit bounded-service lifecycle, not a hidden long-lived service model.
 - Keep artifacts and bounded workflow metadata as durable truth.
