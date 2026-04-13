@@ -92,6 +92,7 @@ For workflow-shape changes, also run the managed-session replay validation and c
 For deployment-safety review, validate the cutover playbook and replay gates together:
 
 ```bash
+./tools/validate_agent_session_deployment_safety.py --base-ref origin/main
 rg -n "SteerTurn|Continue-As-New|CancelSession|TerminateSession|Search Attribute|Worker Versioning|replay" \
   docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md \
   specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md \

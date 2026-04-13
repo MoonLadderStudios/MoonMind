@@ -777,6 +777,21 @@ def test_worker_deployment_kwargs_fail_fast_without_build_id(monkeypatch) -> Non
             _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
 
 
+def test_worker_deployment_kwargs_disabled_requires_explicit_local_escape_hatch(
+    monkeypatch,
+) -> None:
+    temporal_settings = worker_runtime_module.settings.temporal.model_copy(
+        update={"worker_versioning_default_behavior": "Disabled"}
+    )
+    app_settings = worker_runtime_module.settings.model_copy(
+        update={"temporal": temporal_settings}
+    )
+    monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
+
+    with pytest.raises(RuntimeError, match="Temporal worker versioning is disabled"):
+        _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))
+
+
 def test_worker_deployment_kwargs_disabled_supplies_explicit_build_id(monkeypatch) -> None:
     temporal_settings = worker_runtime_module.settings.temporal.model_copy(
         update={"worker_versioning_default_behavior": "Disabled"}
@@ -785,6 +800,7 @@ def test_worker_deployment_kwargs_disabled_supplies_explicit_build_id(monkeypatc
         update={"temporal": temporal_settings}
     )
     monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
+    monkeypatch.setenv("MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", "1")
     monkeypatch.setattr(
         worker_runtime_module,
         "resolve_moonmind_build_id",
@@ -804,6 +820,7 @@ def test_worker_deployment_kwargs_disabled_falls_back_to_unknown(monkeypatch) ->
         update={"temporal": temporal_settings}
     )
     monkeypatch.setattr(worker_runtime_module, "settings", app_settings)
+    monkeypatch.setenv("MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING", "1")
     monkeypatch.setattr(worker_runtime_module, "resolve_moonmind_build_id", lambda: None)
     with patch("subprocess.check_output", side_effect=RuntimeError("git unavailable")):
         kwargs = _worker_deployment_kwargs(SimpleNamespace(fleet=WORKFLOW_FLEET))

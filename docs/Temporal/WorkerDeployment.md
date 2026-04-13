@@ -31,7 +31,10 @@ Workers report their build ID to the Temporal cluster, allowing the system to ro
 
 - `Auto-Upgrade`: default for normal deployments and new executions.
 - `Pinned`: use only for an explicit cutover window where started workflows must remain bound to a deployment version.
-- `Disabled`: local escape hatch only; do not deploy incompatible `MoonMind.AgentSession` workflow-shape changes with versioning disabled.
+- `Disabled`: local escape hatch only. Worker startup fails unless
+  `MOONMIND_ALLOW_DISABLED_TEMPORAL_WORKER_VERSIONING=1` is also set. Do not
+  deploy incompatible `MoonMind.AgentSession` workflow-shape changes with
+  versioning disabled.
 
 ## Compatibility Matrix
 
@@ -71,6 +74,11 @@ else:
 2. Add or update a replay test for a representative `MoonMind.AgentSession` history.
 3. Use `workflow.patched(...)` only for replay-sensitive command-shape transitions that must coexist with older histories.
 4. For `SteerTurn`, Continue-As-New activation, cancel/terminate semantic changes, or new visibility metadata, deploy with `Auto-Upgrade` for normal rollout or `Pinned` for a bounded migration window, then remove any patch gate only after the oldest affected histories have completed or aged out.
+
+CI runs `tools/validate_agent_session_deployment_safety.py` after the unit suite.
+When deployment-sensitive AgentSession paths change, that gate requires worker
+versioning, the managed-session replay test module, and the cutover playbook
+topics to be present before rollout.
 
 ## Rollback Procedure
 
