@@ -107,7 +107,7 @@ Research is captured in [research.md](./research.md). Decisions:
 - [contracts/temporal-editing-hardening.openapi.yaml](./contracts/temporal-editing-hardening.openapi.yaml): Captures the relevant runtime read/update/config contracts and telemetry event shape.
 - [quickstart.md](./quickstart.md): Lists deterministic validation commands and manual checks for Phase 5 readiness.
 
-No `DOC-REQ-*` identifiers are present in `spec.md`, so `contracts/requirements-traceability.md` is not required for this feature.
+No document requirement identifiers are present in `spec.md`, so `contracts/requirements-traceability.md` is not required for this feature.
 
 ## Implementation Strategy
 

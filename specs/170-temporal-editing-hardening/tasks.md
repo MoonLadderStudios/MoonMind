@@ -17,11 +17,11 @@
 
 **Purpose**: Confirm the existing Temporal task editing surfaces and test entrypoints before story work begins.
 
-- [ ] T001 Review existing Temporal task editing helper exports and route helpers in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T002 [P] Review current detail-page edit/rerun action handling in `frontend/src/entrypoints/task-detail.tsx`
-- [ ] T003 [P] Review current shared task form edit/rerun mode handling in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T004 [P] Review current execution update endpoint behavior in `api_service/api/routers/executions.py`
-- [ ] T005 [P] Review runtime feature flag exposure for `temporalTaskEditing` in `moonmind/config/settings.py` and `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T001 Review existing Temporal task editing helper exports and route helpers in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T002 [P] Review current detail-page edit/rerun action handling in `frontend/src/entrypoints/task-detail.tsx`
+- [X] T003 [P] Review current shared task form edit/rerun mode handling in `frontend/src/entrypoints/task-create.tsx`
+- [X] T004 [P] Review current execution update endpoint behavior in `api_service/api/routers/executions.py`
+- [X] T005 [P] Review runtime feature flag exposure for `temporalTaskEditing` in `moonmind/config/settings.py` and `api_service/api/routers/task_dashboard_view_model.py`
 
 ---
 
@@ -33,19 +33,19 @@
 
 ### Tests for Shared Foundations
 
-- [ ] T006 [P] Add failing unit coverage for bounded client telemetry event names and failure reasons in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T007 [P] Add failing unit coverage for server-side update telemetry dimensions and raw-payload exclusion in `tests/unit/api/routers/test_executions.py`
-- [ ] T008 [P] Add failing unit coverage for `temporalTaskEditing` runtime flag exposure in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T006 [P] Add failing unit coverage for bounded client telemetry event names and failure reasons in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T007 [P] Add failing unit coverage for server-side update telemetry dimensions and raw-payload exclusion in `tests/unit/api/routers/test_executions.py`
+- [X] T008 [P] Add failing unit coverage for `temporalTaskEditing` runtime flag exposure in `tests/unit/api/routers/test_task_dashboard_view_model.py`
 
 ### Implementation for Shared Foundations
 
-- [ ] T009 Implement bounded Temporal task editing telemetry types, event names, and failure reason normalization in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T010 Implement best-effort server telemetry helpers for task editing update attempts/results in `api_service/api/routers/executions.py`
-- [ ] T011 Ensure `temporalTaskEditing` remains runtime-visible and configurable for local/staging readiness in `moonmind/config/settings.py` and `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T009 Implement bounded Temporal task editing telemetry types, event names, and failure reason normalization in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T010 Implement best-effort server telemetry helpers for task editing update attempts/results in `api_service/api/routers/executions.py`
+- [X] T011 Ensure `temporalTaskEditing` remains runtime-visible and configurable for local/staging readiness in `moonmind/config/settings.py` and `api_service/api/routers/task_dashboard_view_model.py`
 
 ### Validation for Shared Foundations
 
-- [ ] T012 Run foundation tests with `pytest tests/unit/api/routers/test_executions.py tests/unit/api/routers/test_task_dashboard_view_model.py -q` and `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T012 Run foundation tests with `pytest tests/unit/api/routers/test_executions.py tests/unit/api/routers/test_task_dashboard_view_model.py -q` and `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Shared telemetry and rollout foundations are ready. User story implementation can now begin in priority order or parallel by separate owners.
 
@@ -60,25 +60,25 @@
 
 > Write these tests first and confirm they fail for the expected reason before implementation.
 
-- [ ] T013 [P] [US1] Add failing detail-page telemetry tests for Edit and Rerun click events in `frontend/src/entrypoints/task-detail.test.tsx`
-- [ ] T014 [P] [US1] Add failing draft reconstruction telemetry tests for success and failure in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T015 [P] [US1] Add failing submit telemetry tests for `UpdateInputs` and `RequestRerun` attempts/results in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T016 [P] [US1] Add failing backend telemetry tests for `UpdateInputs` accepted, rejected, and validation-failure outcomes in `tests/unit/api/routers/test_executions.py`
-- [ ] T017 [P] [US1] Add failing backend telemetry tests for `RequestRerun` accepted, rejected, and validation-failure outcomes in `tests/unit/api/routers/test_executions.py`
+- [X] T013 [P] [US1] Add failing detail-page telemetry tests for Edit and Rerun click events in `frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T014 [P] [US1] Add failing draft reconstruction telemetry tests for success and failure in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T015 [P] [US1] Add failing submit telemetry tests for `UpdateInputs` and `RequestRerun` attempts/results in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T016 [P] [US1] Add failing backend telemetry tests for `UpdateInputs` accepted, rejected, and validation-failure outcomes in `tests/unit/api/routers/test_executions.py`
+- [X] T017 [P] [US1] Add failing backend telemetry tests for `RequestRerun` accepted, rejected, and validation-failure outcomes in `tests/unit/api/routers/test_executions.py`
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Wire non-blocking client telemetry emission and bounded dimension sanitization in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T019 [US1] Record detail-page Edit and Rerun click telemetry only for allowed navigation in `frontend/src/entrypoints/task-detail.tsx`
-- [ ] T020 [US1] Record draft reconstruction success/failure telemetry with mode and bounded reason in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T021 [US1] Record edit/rerun submit attempt and result telemetry with update name, outcome, applied state, and reason in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T022 [US1] Emit bounded server metrics/logs for `UpdateInputs` and `RequestRerun` attempts/results in `api_service/api/routers/executions.py`
-- [ ] T023 [US1] Ensure telemetry helpers never include task instructions, artifact contents, credentials, or full update payloads in `api_service/api/routers/executions.py` and `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T018 [US1] Wire non-blocking client telemetry emission and bounded dimension sanitization in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T019 [US1] Record detail-page Edit and Rerun click telemetry only for allowed navigation in `frontend/src/entrypoints/task-detail.tsx`
+- [X] T020 [US1] Record draft reconstruction success/failure telemetry with mode and bounded reason in `frontend/src/entrypoints/task-create.tsx`
+- [X] T021 [US1] Record edit/rerun submit attempt and result telemetry with update name, outcome, applied state, and reason in `frontend/src/entrypoints/task-create.tsx`
+- [X] T022 [US1] Emit bounded server metrics/logs for `UpdateInputs` and `RequestRerun` attempts/results in `api_service/api/routers/executions.py`
+- [X] T023 [US1] Ensure telemetry helpers never include task instructions, artifact contents, credentials, or full update payloads in `api_service/api/routers/executions.py` and `frontend/src/lib/temporalTaskEditing.ts`
 
 ### Validation for User Story 1
 
-- [ ] T024 [US1] Verify User Story 1 with `pytest tests/unit/api/routers/test_executions.py -q`
-- [ ] T025 [US1] Verify User Story 1 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [X] T024 [US1] Verify User Story 1 with `pytest tests/unit/api/routers/test_executions.py -q`
+- [X] T025 [US1] Verify User Story 1 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: User Story 1 is independently observable and ready for MVP validation.
 
@@ -93,28 +93,28 @@
 
 > Write these tests first and confirm they fail for the expected reason before implementation.
 
-- [ ] T026 [P] [US2] Add failing route parsing, mode resolution, and rerun-over-edit precedence tests in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T027 [P] [US2] Add failing artifact-safe payload building tests for edit and rerun submissions in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T028 [P] [US2] Add failing active `MoonMind.Run` edit happy-path test covering prefill, `UpdateInputs`, and Temporal detail return in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T029 [P] [US2] Add failing terminal `MoonMind.Run` rerun happy-path test covering prefill, `RequestRerun`, and Temporal detail return in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T030 [P] [US2] Add failing unsupported workflow type, missing capability, missing artifact, and malformed artifact tests in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T031 [P] [US2] Add failing stale-state, validation-error, and artifact externalization failure tests in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T032 [P] [US2] Add failing backend stale-state and validation rejection tests for execution update handling in `tests/unit/api/routers/test_executions.py`
+- [X] T026 [P] [US2] Add failing route parsing, mode resolution, and rerun-over-edit precedence tests in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T027 [P] [US2] Add failing artifact-safe payload building tests for edit and rerun submissions in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T028 [P] [US2] Add failing active `MoonMind.Run` edit happy-path test covering prefill, `UpdateInputs`, and Temporal detail return in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T029 [P] [US2] Add failing terminal `MoonMind.Run` rerun happy-path test covering prefill, `RequestRerun`, and Temporal detail return in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T030 [P] [US2] Add failing unsupported workflow type, missing capability, missing artifact, and malformed artifact tests in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T031 [P] [US2] Add failing stale-state, validation-error, and artifact externalization failure tests in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T032 [P] [US2] Add failing backend stale-state and validation rejection tests for execution update handling in `tests/unit/api/routers/test_executions.py`
 
 ### Implementation for User Story 2
 
-- [ ] T033 [US2] Harden canonical route parsing and mode resolution so rerun wins over edit in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T034 [US2] Harden artifact-safe edit/rerun payload construction without mutating historical artifacts in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T035 [US2] Harden draft reconstruction error handling for unsupported workflow type, missing capability, missing artifact, and malformed artifact in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T036 [US2] Harden edit submit handling for stale state, backend validation failure, artifact preparation failure, `UpdateInputs`, and Temporal detail return in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T037 [US2] Harden rerun submit handling for stale state, backend validation failure, artifact preparation failure, `RequestRerun`, and Temporal detail return in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T038 [US2] Preserve server-side rejection semantics and bounded failure responses for changed workflow state in `api_service/api/routers/executions.py`
-- [ ] T039 [US2] Update shared Temporal update response typing for applied/deferred/continued outcomes in `moonmind/schemas/temporal_models.py`
+- [X] T033 [US2] Harden canonical route parsing and mode resolution so rerun wins over edit in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T034 [US2] Harden artifact-safe edit/rerun payload construction without mutating historical artifacts in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T035 [US2] Harden draft reconstruction error handling for unsupported workflow type, missing capability, missing artifact, and malformed artifact in `frontend/src/entrypoints/task-create.tsx`
+- [X] T036 [US2] Harden edit submit handling for stale state, backend validation failure, artifact preparation failure, `UpdateInputs`, and Temporal detail return in `frontend/src/entrypoints/task-create.tsx`
+- [X] T037 [US2] Harden rerun submit handling for stale state, backend validation failure, artifact preparation failure, `RequestRerun`, and Temporal detail return in `frontend/src/entrypoints/task-create.tsx`
+- [X] T038 [US2] Preserve server-side rejection semantics and bounded failure responses for changed workflow state in `api_service/api/routers/executions.py`
+- [X] T039 [US2] Update shared Temporal update response typing for applied/deferred/continued outcomes in `moonmind/schemas/temporal_models.py`
 
 ### Validation for User Story 2
 
-- [ ] T040 [US2] Verify User Story 2 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T041 [US2] Verify User Story 2 with `pytest tests/unit/api/routers/test_executions.py -q`
+- [X] T040 [US2] Verify User Story 2 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T041 [US2] Verify User Story 2 with `pytest tests/unit/api/routers/test_executions.py -q`
 
 **Checkpoint**: User Story 2 proves all required edit/rerun happy paths and failure modes with automated coverage.
 
@@ -129,21 +129,21 @@
 
 > Write these tests first and confirm they fail for the expected reason before implementation.
 
-- [ ] T042 [P] [US3] Add failing tests that detail-page Edit and Rerun navigation never targets `/tasks/queue/new` or `editJobId` in `frontend/src/entrypoints/task-detail.test.tsx`
-- [ ] T043 [P] [US3] Add failing tests that edit/rerun success redirects return to Temporal detail context and not queue/list pages in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T044 [P] [US3] Add failing tests that operator-facing Temporal edit/rerun copy avoids queue resubmit terminology in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T042 [P] [US3] Add failing tests that detail-page Edit and Rerun navigation never targets `/tasks/queue/new` or `editJobId` in `frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T043 [P] [US3] Add failing tests that edit/rerun success redirects return to Temporal detail context and not queue/list pages in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T044 [P] [US3] Add failing tests that operator-facing Temporal edit/rerun copy avoids queue resubmit terminology in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T045 [US3] Remove queue-era route, `editJobId`, and resubmit copy from primary detail-page task editing navigation in `frontend/src/entrypoints/task-detail.tsx`
-- [ ] T046 [US3] Remove queue-era submit, redirect, and resubmit copy from shared edit/rerun form behavior in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T047 [US3] Remove or replace queue-era helper exports from primary Temporal task editing helpers in `frontend/src/lib/temporalTaskEditing.ts`
-- [ ] T048 [US3] Inspect and update current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/101-PlansOverview.md`
+- [X] T045 [US3] Remove queue-era route, `editJobId`, and resubmit copy from primary detail-page task editing navigation in `frontend/src/entrypoints/task-detail.tsx`
+- [X] T046 [US3] Remove queue-era submit, redirect, and resubmit copy from shared edit/rerun form behavior in `frontend/src/entrypoints/task-create.tsx`
+- [X] T047 [US3] Remove or replace queue-era helper exports from primary Temporal task editing helpers in `frontend/src/lib/temporalTaskEditing.ts`
+- [X] T048 [US3] Inspect and update current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/101-PlansOverview.md`
 
 ### Validation for User Story 3
 
-- [ ] T049 [US3] Verify User Story 3 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T050 [US3] Search primary runtime surfaces and current docs/internal references for queue-era references with `rg -n "(/tasks/queue/new|editJobId|queue resubmit|resubmit)" frontend/src api_service moonmind docs/Tasks/TaskEditingSystem.md docs/UI/CreatePage.md docs/tmp specs/170-temporal-editing-hardening/quickstart.md`
+- [X] T049 [US3] Verify User Story 3 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [X] T050 [US3] Search primary runtime surfaces and current docs/internal references for queue-era references with `rg -n "(/tasks/queue/new|editJobId|queue resubmit|resubmit)" frontend/src api_service moonmind docs/Tasks/TaskEditingSystem.md docs/UI/CreatePage.md docs/tmp specs/170-temporal-editing-hardening/quickstart.md`
 
 **Checkpoint**: User Story 3 has removed queue-era primary-flow leakage from current runtime surfaces.
 
@@ -158,21 +158,21 @@
 
 > Write these tests first and confirm they fail for the expected reason before implementation.
 
-- [ ] T051 [P] [US4] Add failing dashboard view-model tests for local/staging `temporalTaskEditing` exposure in `tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [ ] T052 [P] [US4] Add failing settings tests for runtime flag parsing and disabled-state behavior in `tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [ ] T053 [P] [US4] Add failing frontend tests that disabled rollout hides edit/rerun entry points without queue fallback in `frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T051 [P] [US4] Add failing dashboard view-model tests for local/staging `temporalTaskEditing` exposure in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T052 [P] [US4] Add failing settings tests for runtime flag parsing and disabled-state behavior in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T053 [P] [US4] Add failing frontend tests that disabled rollout hides edit/rerun entry points without queue fallback in `frontend/src/entrypoints/task-detail.test.tsx`
 
 ### Implementation for User Story 4
 
-- [ ] T054 [US4] Ensure `TEMPORAL_TASK_EDITING_ENABLED` or equivalent runtime setting controls `temporalTaskEditing` in `moonmind/config/settings.py`
-- [ ] T055 [US4] Ensure dashboard boot/config payload exposes `temporalTaskEditing` consistently for local and staging validation in `api_service/api/routers/task_dashboard_view_model.py`
-- [ ] T056 [US4] Ensure disabled rollout state hides Temporal edit/rerun entry points without queue fallback in `frontend/src/entrypoints/task-detail.tsx`
-- [ ] T057 [US4] Document rollout gates for dogfood, limited production, and all-operator expansion in `specs/170-temporal-editing-hardening/quickstart.md`
+- [X] T054 [US4] Ensure `TEMPORAL_TASK_EDITING_ENABLED` or equivalent runtime setting controls `temporalTaskEditing` in `moonmind/config/settings.py`
+- [X] T055 [US4] Ensure dashboard boot/config payload exposes `temporalTaskEditing` consistently for local and staging validation in `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T056 [US4] Ensure disabled rollout state hides Temporal edit/rerun entry points without queue fallback in `frontend/src/entrypoints/task-detail.tsx`
+- [X] T057 [US4] Document rollout gates for dogfood, limited production, and all-operator expansion in `specs/170-temporal-editing-hardening/quickstart.md`
 
 ### Validation for User Story 4
 
-- [ ] T058 [US4] Verify User Story 4 with `pytest tests/unit/api/routers/test_task_dashboard_view_model.py -q`
-- [ ] T059 [US4] Verify User Story 4 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T058 [US4] Verify User Story 4 with `pytest tests/unit/api/routers/test_task_dashboard_view_model.py -q`
+- [X] T059 [US4] Verify User Story 4 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx`
 
 **Checkpoint**: User Story 4 supports controlled rollout with runtime flags and explicit rollout health gates.
 
@@ -182,13 +182,13 @@
 
 **Purpose**: Final runtime validation, type/lint checks, and cross-artifact consistency.
 
-- [ ] T060 [P] Run backend targeted validation from quickstart with `pytest tests/unit/api/routers/test_executions.py tests/unit/api/routers/test_task_dashboard_view_model.py -q`
-- [ ] T061 [P] Run frontend targeted validation from quickstart with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T062 [P] Run frontend typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T063 [P] Run frontend lint for edited files with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src/lib/temporalTaskEditing.ts frontend/src/entrypoints/task-detail.tsx frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T064 Run full required unit validation with `./tools/test_unit.sh`
-- [ ] T065 Run Spec Kit runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
-- [ ] T066 Confirm no unresolved placeholders or traceability gaps remain in `specs/170-temporal-editing-hardening/tasks.md`
+- [X] T060 [P] Run backend targeted validation from quickstart with `pytest tests/unit/api/routers/test_executions.py tests/unit/api/routers/test_task_dashboard_view_model.py -q`
+- [X] T061 [P] Run frontend targeted validation from quickstart with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [X] T062 [P] Run frontend typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T063 [P] Run frontend lint for edited files with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src/lib/temporalTaskEditing.ts frontend/src/entrypoints/task-detail.tsx frontend/src/entrypoints/task-create.tsx frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
+- [X] T064 Run full required unit validation with `./tools/test_unit.sh`
+- [X] T065 Run Spec Kit runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`
+- [X] T066 Confirm no unresolved placeholders or traceability gaps remain in `specs/170-temporal-editing-hardening/tasks.md`
 
 ---
 
