@@ -1389,6 +1389,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
+  const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
     useState("");
   const [appliedTemplates, setAppliedTemplates] = useState<
@@ -2065,7 +2066,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       setTemplateFeatureRequest(nextText);
       if (appliedTemplates.length > 0) {
-        setTemplateMessage(PRESET_REAPPLY_REQUIRED_MESSAGE);
+        setPresetReapplyNeeded(true);
       }
       return;
     }
@@ -2088,11 +2089,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function handleTemplateFeatureRequestChange(value: string) {
     setTemplateFeatureRequest(value);
     if (
-      templateMessage === PRESET_REAPPLY_REQUIRED_MESSAGE &&
+      presetReapplyNeeded &&
       (!value.trim() ||
         value.trim() === appliedTemplateFeatureRequest.trim())
     ) {
-      setTemplateMessage(null);
+      setPresetReapplyNeeded(false);
     }
   }
 
@@ -2185,6 +2186,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
 
   const presetStatusText = useMemo(() => {
+    if (presetReapplyNeeded) {
+      return PRESET_REAPPLY_REQUIRED_MESSAGE;
+    }
     if (templateMessage) {
       return templateMessage;
     }
@@ -2204,6 +2208,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }, [
     templateItems,
     templateMessage,
+    presetReapplyNeeded,
     templateOptionsQuery.data?.failedScopes,
     templateOptionsQuery.isError,
     templateOptionsQuery.isLoading,
@@ -2385,6 +2390,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setIsApplyingPreset(true);
+    setPresetReapplyNeeded(false);
     setTemplateMessage("Applying preset...");
 
     try {
@@ -2464,6 +2470,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         (current) => current + Math.max(expandedSteps.length, 1),
       );
       setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
+      setPresetReapplyNeeded(false);
       if (expandedSteps.length > 0) {
         const appliedTemplate = expanded.appliedTemplate || {};
         setAppliedTemplates((current) => [
@@ -3578,6 +3585,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => {
                   setSelectedPresetKey(event.target.value);
                   setTemplateMessage(null);
+                  setPresetReapplyNeeded(false);
                 }}
               >
                 <option value="">Select preset...</option>
@@ -3621,9 +3629,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 aria-disabled={isApplyingPreset}
                 aria-busy={isApplyingPreset}
               >
-                {templateMessage === PRESET_REAPPLY_REQUIRED_MESSAGE
-                  ? "Reapply preset"
-                  : "Apply"}
+                {presetReapplyNeeded ? "Reapply preset" : "Apply"}
               </button>
               {taskTemplateSaveEnabled ? (
                 <button

@@ -77,7 +77,7 @@ tasks_file="${feature_dir}/tasks.md"
 
 matches_runtime_path() {
   local path="$1"
-  [[ "$path" =~ ^(api_service/|moonmind/|celery_worker/|services/|frontend/src/|docker-compose\.yaml$|docker-compose\.test\.yaml$) ]]
+  [[ "$path" =~ ^(api_service/|moonmind/|celery_worker/|services/|frontend/src/|docker-compose\.yaml$|docker-compose\.test\.yaml$) && ! "$path" =~ ^frontend/src/.*\.test\.(ts|tsx)$ ]]
 }
 
 matches_validation_path() {
@@ -100,7 +100,7 @@ validate_tasks_scope() {
     awk '
       /^- \[[ Xx]\] T[0-9]+/ &&
       /(api_service\/|moonmind\/|celery_worker\/|services\/|frontend\/src\/|docker-compose\.yaml|docker-compose\.test\.yaml)/ &&
-      $0 !~ /(tests\/|specs\/|docs\/)/ { count += 1 }
+      $0 !~ /(tests\/|specs\/|docs\/|frontend\/src\/.*\.test\.(ts|tsx))/ { count += 1 }
       END { print count + 0 }
     ' "$tasks_file"
   )"
