@@ -264,6 +264,34 @@ async def test_router_sanitizes_secret_like_error_messages(
     assert "secret-value" not in str(detail)
 
 
+async def test_router_sanitizes_trace_like_error_messages(
+    router_app: tuple[FastAPI, _FakeJiraBrowserService],
+) -> None:
+    app, service = router_app
+    service.raise_error = JiraToolError(
+        "Traceback (most recent call last): RuntimeError: raw provider failure",
+        code="jira_request_failed",
+        status_code=502,
+        action="jira_browser.list_projects",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/jira/projects")
+
+    detail = response.json()["detail"]
+    assert response.status_code == 502
+    assert detail == {
+        "code": "jira_request_failed",
+        "message": "Jira browser request failed.",
+        "source": "jira_browser",
+        "action": "jira_browser.list_projects",
+    }
+    assert "Traceback" not in str(detail)
+
+
 async def test_router_maps_unexpected_errors_to_structured_jira_browser_error(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
 ) -> None:

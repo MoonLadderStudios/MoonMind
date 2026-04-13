@@ -2898,6 +2898,187 @@ describe("Task Create Entrypoint", () => {
     expect(screen.queryByText("ENG-101")).toBeNull();
   });
 
+  it("shows project load failures only inside the Jira browser and keeps manual editing available", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/projects") {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: async () =>
+            JSON.stringify({
+              detail: {
+                code: "jira_provider_unavailable",
+                message: "Jira is unavailable.",
+              },
+            }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Failed to load Jira projects. You can continue creating the task manually. Jira is unavailable.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(stepInstructions, {
+      target: { value: "Write the task manually after Jira failed." },
+    });
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Write the task manually after Jira failed.",
+    );
+    expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
+  it("renders empty Jira browser states with manual continuation guidance", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/projects/ENG/boards") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "No Jira boards are available for this project. You can continue creating the task manually.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Instructions")).toBeTruthy();
+  });
+
+  it("renders empty Jira projects with manual continuation guidance", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/projects") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "No Jira projects are available. You can continue creating the task manually.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Instructions")).toBeTruthy();
+  });
+
+  it("renders empty Jira columns and issue lists with manual continuation guidance", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/boards/42/columns") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            board: { id: "42", name: "Delivery", projectKey: "ENG" },
+            columns: [{ id: "todo", name: "To Do", count: 0 }],
+          }),
+        } as Response);
+      }
+      if (url === "/api/jira/boards/42/issues") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            boardId: "42",
+            columns: [{ id: "todo", name: "To Do", count: 0 }],
+            itemsByColumn: { todo: [] },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "No Jira stories are available in this column. You can continue creating the task manually.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /ENG-202/ })).toBeNull();
+  });
+
+  it("renders empty Jira columns with manual continuation guidance", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/boards/42/columns") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            board: { id: "42", name: "Delivery", projectKey: "ENG" },
+            columns: [],
+          }),
+        } as Response);
+      }
+      if (url === "/api/jira/boards/42/issues") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            boardId: "42",
+            columns: [],
+            itemsByColumn: {},
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "No Jira columns are available for this board. You can continue creating the task manually.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("keeps the Jira browser disabled when endpoint templates are incomplete", async () => {
     const payload = withJiraIntegration();
     const initialData = payload.initialData as {
@@ -3008,6 +3189,61 @@ describe("Task Create Entrypoint", () => {
 
     expect(await screen.findAllByText("Let operators browse Jira stories."))
       .not.toHaveLength(0);
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing step instructions.",
+    );
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep existing preset instructions.",
+    );
+  });
+
+  it("keeps issue-detail failures local and leaves import actions unavailable", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: false,
+          status: 502,
+          text: async () =>
+            JSON.stringify({
+              detail: {
+                code: "jira_browser_request_failed",
+                message: "Jira story detail failed.",
+              },
+            }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep existing step instructions." },
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep existing preset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(
+      await screen.findByText(
+        "Failed to load Jira story. You can continue creating the task manually. Jira story detail failed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Replace target text" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Append to target text" })).toBeNull();
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
@@ -3735,6 +3971,71 @@ describe("Task Create Entrypoint", () => {
     expect(requestKeys).not.toContain("boardId");
     expect(requestKeys).not.toContain("importMode");
     expect(requestKeys).not.toContain("targetType");
+  });
+
+  it("submits a manual task with unchanged payload shape after Jira failure", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/projects") {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: async () =>
+            JSON.stringify({
+              detail: {
+                code: "jira_provider_unavailable",
+                message: "Jira is unavailable.",
+              },
+            }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    const presetInstructions = screen.getByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(presetInstructions, {
+      target: { value: "Manual objective after Jira failure." },
+    });
+    fireEvent.change(stepInstructions, {
+      target: { value: "Manual step after Jira failure." },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    expect(
+      await screen.findByText(
+        "Failed to load Jira projects. You can continue creating the task manually. Jira is unavailable.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.instructions).toBe(
+      "Manual objective after Jira failure.",
+    );
+    expect(request.payload.task.steps[0].instructions).toBe(
+      "Manual step after Jira failure.",
+    );
+    const requestKeys = collectObjectKeys(request);
+    expect(requestKeys).not.toContain("jiraProvenance");
+    expect(requestKeys).not.toContain("jiraFailure");
+    expect(requestKeys).not.toContain("issueKey");
   });
 
   it("restores the last selected Jira project and board from session storage", async () => {

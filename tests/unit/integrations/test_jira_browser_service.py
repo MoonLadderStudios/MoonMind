@@ -169,6 +169,18 @@ async def test_list_projects_skips_failed_allowed_project_fetches() -> None:
     assert [call["path"] for call in service.calls] == ["/project/ENG", "/project/OPS"]
 
 
+async def test_list_projects_returns_empty_response_when_jira_has_no_projects() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(),
+        responses=[{"values": []}],
+    )
+
+    result = await service.list_projects()
+
+    assert result.items == []
+    assert service.calls[0]["path"] == "/project/search"
+
+
 async def test_list_boards_uses_agile_path_alias() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -194,6 +206,18 @@ async def test_list_boards_uses_agile_path_alias() -> None:
         "projectKeyOrId": "ENG",
         "maxResults": 50,
     }
+
+
+async def test_list_boards_returns_empty_response_when_project_has_no_boards() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[{"values": []}],
+    )
+
+    result = await service.list_boards("ENG")
+
+    assert result.project_key == "ENG"
+    assert result.items == []
 
 
 async def test_list_boards_enforces_project_allowlist() -> None:
@@ -265,6 +289,26 @@ async def test_board_columns_preserve_order_and_status_mapping() -> None:
     ]
 
 
+async def test_board_columns_returns_empty_columns_when_configuration_has_no_columns() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "ENG"},
+            },
+            {"columnConfig": {"columns": []}},
+        ],
+    )
+
+    result = await service.list_columns("42")
+
+    assert result.board.project_key == "ENG"
+    assert result.columns == []
+
+
 async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -324,6 +368,35 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
         "maxResults": 50,
         "startAt": 0,
     }
+
+
+async def test_board_issues_returns_empty_column_buckets_when_jira_has_no_issues() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "ENG"},
+            },
+            {
+                "columnConfig": {
+                    "columns": [
+                        {"name": "To Do", "statuses": [{"id": "1", "name": "Open"}]},
+                        {"name": "Done", "statuses": [{"id": "3", "name": "Done"}]},
+                    ]
+                }
+            },
+            {"issues": [], "total": 0},
+        ],
+    )
+
+    result = await service.list_issues("42")
+
+    assert [column.id for column in result.columns] == ["to-do", "done"]
+    assert result.items_by_column == {"to-do": [], "done": []}
+    assert result.unmapped_items == []
 
 
 async def test_board_issues_paginates_until_all_issues_are_loaded() -> None:

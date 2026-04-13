@@ -28,6 +28,12 @@ pytest tests/unit/integrations/test_jira_browser_service.py -q
 npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx
 ```
 
+In managed agent workspaces whose path contains a colon, use the repository wrapper so Vitest is invoked by absolute path:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx
+```
+
 Expected coverage:
 
 - Jira browser failures render inside the browser panel.
