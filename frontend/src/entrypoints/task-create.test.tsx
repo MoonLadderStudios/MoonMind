@@ -765,6 +765,7 @@ describe("Task Create Entrypoint", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+    window.sessionStorage.clear();
   });
 
   it("resolves task submit mode with rerun taking precedence over edit", () => {
@@ -2866,6 +2867,106 @@ describe("Task Create Entrypoint", () => {
         "Importing into this template-bound step will make it manually customized.",
       ),
     ).toBeNull();
+  });
+
+  it("shows Jira provenance chips after importing into preset and step targets", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.getByLabelText(
+        "Jira import provenance for Feature Request / Initial Instructions",
+      ).textContent,
+    ).toBe("Jira: ENG-202");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
+
+    expect(
+      screen.getByLabelText("Jira import provenance for Step 1 instructions")
+        .textContent,
+    ).toBe("Jira: ENG-202");
+  });
+
+  it("keeps Jira provenance out of the task submission payload", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(JSON.stringify(request)).not.toContain("jira");
+    expect(JSON.stringify(request)).not.toContain("boardId");
+    expect(JSON.stringify(request)).not.toContain("importMode");
+    expect(JSON.stringify(request)).not.toContain("targetType");
+  });
+
+  it("restores the last selected Jira project and board from session storage", async () => {
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-project-key",
+      "ENG",
+    );
+    window.sessionStorage.setItem(
+      "moonmind.task-create.jira.last-board-id",
+      "7",
+    );
+
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    const projectSelect = await screen.findByLabelText("Project");
+    const boardSelect = screen.getByLabelText("Board");
+    await waitFor(() => {
+      expect((projectSelect as HTMLSelectElement).value).toBe("ENG");
+      expect((boardSelect as HTMLSelectElement).value).toBe("7");
+    });
   });
 
   it("shows Jira browser failures locally", async () => {

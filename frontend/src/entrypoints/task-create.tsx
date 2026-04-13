@@ -19,6 +19,10 @@ const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
+const JIRA_LAST_PROJECT_SESSION_KEY =
+  "moonmind.task-create.jira.last-project-key";
+const JIRA_LAST_BOARD_SESSION_KEY =
+  "moonmind.task-create.jira.last-board-id";
 const DEPENDENCY_LIMIT = 10;
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
@@ -49,6 +53,27 @@ function writeProposeTasksPreference(value: boolean): void {
     );
   } catch {
     // Ignore localStorage write failures to keep task submission behavior unaffected.
+  }
+}
+
+function readSessionPreference(key: string): string {
+  try {
+    return String(window.sessionStorage.getItem(key) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeSessionPreference(key: string, value: string): void {
+  try {
+    const normalized = value.trim();
+    if (normalized) {
+      window.sessionStorage.setItem(key, normalized);
+    } else {
+      window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Keep Jira browser preferences best-effort and local to this session.
   }
 }
 
@@ -184,6 +209,13 @@ type JiraImportMode =
   | "acceptance-only";
 
 type JiraWriteMode = "replace" | "append";
+
+interface JiraImportProvenance {
+  issueKey: string;
+  boardId: string;
+  importMode: JiraImportMode;
+  targetType: JiraImportTarget["kind"];
+}
 
 interface ProviderProfile {
   profile_id: string;
@@ -537,6 +569,52 @@ function writeJiraImportedText(
     return normalizedImport;
   }
   return `${currentText.trimEnd()}\n\n---\n\n${normalizedImport}`;
+}
+
+function createJiraProvenance(
+  issue: JiraIssueDetail,
+  boardId: string,
+  importMode: JiraImportMode,
+  target: JiraImportTarget,
+): JiraImportProvenance | null {
+  const issueKey = String(issue.issueKey || "").trim();
+  if (!issueKey) {
+    return null;
+  }
+  return {
+    issueKey,
+    boardId: String(boardId || "").trim(),
+    importMode,
+    targetType: target.kind,
+  };
+}
+
+function JiraProvenanceChip({
+  label,
+  provenance,
+}: {
+  label: string;
+  provenance: JiraImportProvenance | null | undefined;
+}) {
+  if (!provenance?.issueKey) {
+    return null;
+  }
+  return (
+    <span
+      className="jira-provenance-chip"
+      aria-label={`Jira import provenance for ${label}`}
+      title={[
+        `Jira issue ${provenance.issueKey}`,
+        provenance.boardId ? `board ${provenance.boardId}` : "",
+        `mode ${provenance.importMode}`,
+        `target ${provenance.targetType}`,
+      ]
+        .filter(Boolean)
+        .join(" / ")}
+    >
+      {`Jira: ${provenance.issueKey}`}
+    </span>
+  );
 }
 
 function createStepStateEntry(
@@ -1404,6 +1482,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
   const [jiraImportMode, setJiraImportMode] =
     useState<JiraImportMode>("preset-brief");
+  const [presetJiraProvenance, setPresetJiraProvenance] =
+    useState<JiraImportProvenance | null>(null);
+  const [stepJiraProvenance, setStepJiraProvenance] = useState<
+    Record<string, JiraImportProvenance>
+  >({});
   const [selectedAttachmentFiles, setSelectedAttachmentFiles] = useState<
     File[]
   >([]);
@@ -2015,8 +2098,26 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     isTemplateBoundStepForInstructions(jiraTargetStep);
 
   function openJiraBrowser(target: JiraImportTarget) {
-    jiraProjectSelectionInitializedRef.current = Boolean(selectedJiraProjectKey);
-    jiraBoardSelectionInitializedRef.current = Boolean(selectedJiraBoardId);
+    const rememberedProjectKey =
+      jiraIntegration?.rememberLastBoardInSession && !selectedJiraProjectKey
+        ? readSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY)
+        : "";
+    const rememberedBoardId =
+      jiraIntegration?.rememberLastBoardInSession && !selectedJiraBoardId
+        ? readSessionPreference(JIRA_LAST_BOARD_SESSION_KEY)
+        : "";
+    if (rememberedProjectKey) {
+      setSelectedJiraProjectKey(rememberedProjectKey);
+    }
+    if (rememberedBoardId) {
+      setSelectedJiraBoardId(rememberedBoardId);
+    }
+    jiraProjectSelectionInitializedRef.current = Boolean(
+      selectedJiraProjectKey || rememberedProjectKey,
+    );
+    jiraBoardSelectionInitializedRef.current = Boolean(
+      selectedJiraBoardId || rememberedBoardId,
+    );
     setJiraImportTarget(target);
     setJiraImportMode(defaultJiraImportMode(target));
     setJiraBrowserOpen(true);
@@ -2030,6 +2131,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function selectJiraProject(projectKey: string) {
     jiraProjectSelectionInitializedRef.current = true;
     jiraBoardSelectionInitializedRef.current = false;
+    if (jiraIntegration?.rememberLastBoardInSession) {
+      writeSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY, projectKey);
+      writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, "");
+    }
     setSelectedJiraProjectKey(projectKey);
     setSelectedJiraBoardId("");
     setActiveJiraColumnId("");
@@ -2038,6 +2143,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   function selectJiraBoard(boardId: string) {
     jiraBoardSelectionInitializedRef.current = true;
+    if (jiraIntegration?.rememberLastBoardInSession) {
+      writeSessionPreference(JIRA_LAST_BOARD_SESSION_KEY, boardId);
+    }
     setSelectedJiraBoardId(boardId);
     setActiveJiraColumnId("");
     setSelectedJiraIssueKey("");
@@ -2065,6 +2173,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         return;
       }
       setTemplateFeatureRequest(nextText);
+      setPresetJiraProvenance(
+        createJiraProvenance(
+          selectedJiraIssue,
+          selectedJiraBoardId,
+          jiraImportMode,
+          jiraImportTarget,
+        ),
+      );
       if (appliedTemplates.length > 0) {
         setPresetReapplyNeeded(true);
       }
@@ -2084,10 +2200,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         writeMode,
       ),
     });
+    const provenance = createJiraProvenance(
+      selectedJiraIssue,
+      selectedJiraBoardId,
+      jiraImportMode,
+      jiraImportTarget,
+    );
+    if (provenance) {
+      setStepJiraProvenance((current) => ({
+        ...current,
+        [jiraImportTarget.localId]: provenance,
+      }));
+    }
   }
 
   function handleTemplateFeatureRequestChange(value: string) {
     setTemplateFeatureRequest(value);
+    setPresetJiraProvenance(null);
     if (
       presetReapplyNeeded &&
       (!value.trim() ||
@@ -2240,6 +2369,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
   }
 
+  function handleStepInstructionsChange(localId: string, value: string) {
+    updateStep(localId, { instructions: value });
+    setStepJiraProvenance((current) => {
+      if (!current[localId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[localId];
+      return next;
+    });
+  }
+
   function addStep() {
     setSteps((current) => [...current, createStepStateEntry(nextStepNumber)]);
     setNextStepNumber((current) => current + 1);
@@ -2269,6 +2410,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function removeStep(index: number) {
+    const removedStep = steps[index];
+    if (removedStep) {
+      setStepJiraProvenance((provenance) => {
+        if (!provenance[removedStep.localId]) {
+          return provenance;
+        }
+        const next = { ...provenance };
+        delete next[removedStep.localId];
+        return next;
+      });
+    }
     setSteps((current) =>
       current.filter((_, currentIndex) => currentIndex !== index),
     );
@@ -3461,6 +3613,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       <label htmlFor={`queue-step-instructions-${step.localId}`}>
                         Instructions
                       </label>
+                      <JiraProvenanceChip
+                        label={`Step ${index + 1} instructions`}
+                        provenance={stepJiraProvenance[step.localId]}
+                      />
                       {jiraIntegration?.enabled ? (
                         <button
                           type="button"
@@ -3489,9 +3645,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       }
                       value={step.instructions}
                       onChange={(event) =>
-                        updateStep(step.localId, {
-                          instructions: event.target.value,
-                        })
+                        handleStepInstructionsChange(
+                          step.localId,
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -3601,6 +3758,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 <label htmlFor="queue-template-feature-request">
                   Feature Request / Initial Instructions
                 </label>
+                <JiraProvenanceChip
+                  label="Feature Request / Initial Instructions"
+                  provenance={presetJiraProvenance}
+                />
                 {jiraIntegration?.enabled ? (
                   <button
                     type="button"
