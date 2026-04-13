@@ -2488,6 +2488,52 @@ describe("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
+  it("uses an unnamed Jira story fallback when issue title metadata is empty", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "",
+            url: "https://jira.example.test/browse/ENG-202",
+            summary: "",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "",
+            acceptanceCriteriaText: "",
+            recommendedImports: {
+              presetInstructions: "",
+              stepInstructions: "",
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Complete Jira story (unnamed)")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Complete Jira story (unnamed)",
+    );
+  });
+
   it("preserves existing target text when selected Jira import mode is empty", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -2643,6 +2689,65 @@ describe("Task Create Entrypoint", () => {
     expect(
       screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
     ).toBeTruthy();
+
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    expect(
+      screen.queryByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not mark preset instructions as needing reapply when Jira import leaves text unchanged", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    const importedText =
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.";
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: importedText },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+
+    expect(
+      screen.queryByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeNull();
   });
 
   it("detaches template step identity when Jira import edits a template-bound step", async () => {
@@ -2704,9 +2809,8 @@ describe("Task Create Entrypoint", () => {
         instructions: "Complete Jira story ENG-202: Build browser shell",
       }),
     ]);
-    expect(request.payload.task.steps[1]).not.toHaveProperty(
-      "id",
-      "tpl:speckit-demo:1.2.3:02",
+    expect([undefined, null, ""]).toContain(
+      request.payload.task.steps[1]?.id,
     );
   });
 

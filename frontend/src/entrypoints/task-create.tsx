@@ -20,6 +20,8 @@ const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const DEPENDENCY_LIMIT = 10;
+const PRESET_REAPPLY_REQUIRED_MESSAGE =
+  "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
 
 function readProposeTasksPreference(defaultValue: boolean): boolean {
   try {
@@ -516,8 +518,10 @@ function jiraImportTextForMode(
   if (recommended) {
     return recommended;
   }
+  const issueTitle =
+    [issueKey, summary].filter(Boolean).join(": ") || "(unnamed)";
   return joinJiraText([
-    `Complete Jira story ${[issueKey, summary].filter(Boolean).join(": ")}`,
+    `Complete Jira story ${issueTitle}`,
     description ? `Description\n${description}` : "",
     acceptanceCriteria ? `Acceptance criteria\n${acceptanceCriteria}` : "",
   ]);
@@ -1375,6 +1379,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
+  const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
+    useState("");
   const [appliedTemplates, setAppliedTemplates] = useState<
     AppliedTemplateState[]
   >([]);
@@ -1649,6 +1655,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     ]);
     setNextStepNumber(2);
     setAppliedTemplates(draft.appliedTemplates);
+    setAppliedTemplateFeatureRequest("");
     setScheduleMode("immediate");
     setScheduledFor("");
     setScheduleDeferredMinutes("");
@@ -1982,6 +1989,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const activeJiraIssues =
     (activeJiraColumnId && jiraIssuesQuery.data?.[activeJiraColumnId]) || [];
   const selectedJiraIssue = jiraIssueDetailQuery.data || null;
+  const selectedJiraImportText = useMemo(() => {
+    if (!selectedJiraIssue) {
+      return "";
+    }
+    return jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
+  }, [jiraImportMode, selectedJiraIssue]);
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
 
   function openJiraBrowser(target: JiraImportTarget) {
@@ -2022,18 +2035,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!selectedJiraIssue || !jiraImportTarget) {
       return;
     }
-    const importedText = jiraImportTextForMode(selectedJiraIssue, jiraImportMode);
-    if (!importedText.trim()) {
+    if (!selectedJiraImportText.trim()) {
       return;
     }
     if (jiraImportTarget.kind === "preset") {
-      setTemplateFeatureRequest((current) =>
-        writeJiraImportedText(current, importedText, writeMode),
+      const nextText = writeJiraImportedText(
+        templateFeatureRequest,
+        selectedJiraImportText,
+        writeMode,
       );
+      if (nextText.trim() === templateFeatureRequest.trim()) {
+        return;
+      }
+      setTemplateFeatureRequest(nextText);
       if (appliedTemplates.length > 0) {
-        setTemplateMessage(
-          "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
-        );
+        setTemplateMessage(PRESET_REAPPLY_REQUIRED_MESSAGE);
       }
       return;
     }
@@ -2047,10 +2063,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     updateStep(jiraImportTarget.localId, {
       instructions: writeJiraImportedText(
         targetStep.instructions,
-        importedText,
+        selectedJiraImportText,
         writeMode,
       ),
     });
+  }
+
+  function handleTemplateFeatureRequestChange(value: string) {
+    setTemplateFeatureRequest(value);
+    if (
+      templateMessage === PRESET_REAPPLY_REQUIRED_MESSAGE &&
+      (!value.trim() ||
+        value.trim() === appliedTemplateFeatureRequest.trim())
+    ) {
+      setTemplateMessage(null);
+    }
   }
 
   function addDependency(workflowId: string) {
@@ -2420,6 +2447,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setNextStepNumber(
         (current) => current + Math.max(expandedSteps.length, 1),
       );
+      setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
       if (expandedSteps.length > 0) {
         const appliedTemplate = expanded.appliedTemplate || {};
         setAppliedTemplates((current) => [
@@ -3287,7 +3315,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <section>
                       <strong>Import preview</strong>
                       <p style={{ whiteSpace: "pre-wrap" }}>
-                        {jiraImportTextForMode(selectedJiraIssue, jiraImportMode)}
+                        {selectedJiraImportText}
                       </p>
                     </section>
                     <div className="actions">
@@ -3559,7 +3587,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 placeholder="Describe the feature request this preset should execute."
                 value={templateFeatureRequest}
                 onChange={(event) =>
-                  setTemplateFeatureRequest(event.target.value)
+                  handleTemplateFeatureRequestChange(event.target.value)
                 }
               />
             </div>
