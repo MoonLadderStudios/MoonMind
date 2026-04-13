@@ -1,0 +1,236 @@
+openapi: 3.1.0
+info:
+  title: Temporal Rerun Submit Contract
+  version: 0.1.0
+  description: Contract slice for requesting a rerun of a supported terminal MoonMind.Run execution from the shared task form.
+paths:
+  /api/executions/{workflowId}:
+    get:
+      summary: Read execution detail for rerun draft reconstruction
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            const: temporal
+      responses:
+        "200":
+          description: Execution detail containing rerun capability and input state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalExecutionDetail"
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Request rerun for a supported terminal execution
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TemporalRerunUpdateRequest"
+      responses:
+        "200":
+          description: Rerun request accepted or explicitly rejected by workflow state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalUpdateResponse"
+        "400":
+          description: Malformed rerun request.
+        "403":
+          description: Actions or rerun capability are disabled for the requester.
+        "404":
+          description: Execution not found.
+        "422":
+          description: Rerun rejected by validation or stale lifecycle state.
+  /api/artifacts:
+    post:
+      summary: Create replacement input artifact for rerun inputs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInputArtifactRequest"
+      responses:
+        "200":
+          description: Artifact create response with upload information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateInputArtifactResponse"
+components:
+  schemas:
+    TemporalExecutionDetail:
+      type: object
+      required:
+        - workflowId
+        - workflowType
+        - actions
+      properties:
+        workflowId:
+          type: string
+        workflowType:
+          type: string
+          enum:
+            - MoonMind.Run
+        state:
+          type: string
+        inputParameters:
+          type: object
+          additionalProperties: true
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        targetRuntime:
+          type:
+            - string
+            - "null"
+        profileId:
+          type:
+            - string
+            - "null"
+        model:
+          type:
+            - string
+            - "null"
+        effort:
+          type:
+            - string
+            - "null"
+        repository:
+          type:
+            - string
+            - "null"
+        startingBranch:
+          type:
+            - string
+            - "null"
+        targetBranch:
+          type:
+            - string
+            - "null"
+        publishMode:
+          type:
+            - string
+            - "null"
+        targetSkill:
+          type:
+            - string
+            - "null"
+        actions:
+          type: object
+          required:
+            - canUpdateInputs
+            - canRerun
+          properties:
+            canUpdateInputs:
+              type: boolean
+            canRerun:
+              type: boolean
+            disabledReasons:
+              type: object
+              additionalProperties:
+                type: string
+    TemporalRerunUpdateRequest:
+      type: object
+      required:
+        - updateName
+        - parametersPatch
+      properties:
+        updateName:
+          type: string
+          const: RequestRerun
+        inputArtifactRef:
+          type: string
+          description: Replacement artifact reference for rerun input content.
+        parametersPatch:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+    TemporalUpdateResponse:
+      type: object
+      required:
+        - accepted
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type:
+            - string
+            - "null"
+          enum:
+            - immediate
+            - next_safe_point
+            - safe_point
+            - continue_as_new
+            - async
+            - null
+        message:
+          type:
+            - string
+            - "null"
+        continueAsNewCause:
+          type:
+            - string
+            - "null"
+        execution:
+          type:
+            - object
+            - "null"
+          properties:
+            workflowId:
+              type:
+                - string
+                - "null"
+            runId:
+              type:
+                - string
+                - "null"
+            latestRunView:
+              type:
+                - boolean
+                - "null"
+    CreateInputArtifactRequest:
+      type: object
+      required:
+        - repository
+        - task
+      properties:
+        repository:
+          type: string
+        task:
+          type: object
+          additionalProperties: true
+        sourceWorkflowId:
+          type: string
+    CreateInputArtifactResponse:
+      type: object
+      required:
+        - artifact_ref
+      properties:
+        artifact_ref:
+          type: object
+          required:
+            - artifact_id
+          properties:
+            artifact_id:
+              type: string
+        upload:
+          type: object
+          additionalProperties: true
