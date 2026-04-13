@@ -168,7 +168,7 @@
 - [X] T055 [P] Remove obsolete internal compatibility shims or superseded managed-session paths found during implementation in `moonmind/workflows/temporal/workflows/agent_session.py`, `moonmind/workflows/temporal/runtime/managed_session_controller.py`, and adjacent tests
 - [X] T056 Run focused verification from `specs/162-session-phase45-hardening/quickstart.md`
 - [X] T057 Run required full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [X] T058 Run hermetic integration verification with `./tools/test_integration.sh` if changed files touch required `integration_ci` seams
+- [ ] T058 Run hermetic integration verification with `./tools/test_integration.sh` if changed files touch required `integration_ci` seams
 - [X] T059 Record any intentionally deferred provider-verification coverage in `specs/162-session-phase45-hardening/quickstart.md`
 
 ---
