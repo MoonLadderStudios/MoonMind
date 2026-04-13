@@ -750,8 +750,6 @@ form {
 }
 
 .queue-submit-form > fieldset {
-  display: grid;
-  gap: 0.9rem;
   min-inline-size: 0;
   margin: 0;
   padding: 0;
