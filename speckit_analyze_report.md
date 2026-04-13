@@ -2,7 +2,7 @@
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| U1 | Underspecification | MEDIUM | spec.md Edge Cases; tasks.md T012-T014 | Remediated by Prompt B: T013 and T014 now explicitly require storing provenance only when the selected issue has a non-empty issue key. | No further remediation needed unless implementation reveals an additional empty-key path. |
+| None | None | LOW | N/A | No open consistency, coverage, ambiguity, duplication, or constitution issues were detected after Prompt B remediation. | Proceed to implementation. |
 
 **Coverage Summary Table:**
 
@@ -20,7 +20,7 @@
 | FR-010 preserve existing submission semantics | Yes | T031, T032, T034, T038 | Covered by regression tests, audit task, and full unit wrapper. |
 | FR-011 remain usable if session storage fails | Yes | T006, T023, T028 | Covered by safe helpers, failure test, and fallback task. |
 | FR-012 include validation tests | Yes | T009-T012, T020-T023, T030-T032, T036-T038 | Covered across all user stories and final validation. |
-| FR-013 production runtime code plus validation tests | Yes | T005-T008, T013-T018, T024-T028, T033-T038 | Runtime scope validation also passes. |
+| FR-013 production runtime code plus validation tests | Yes | T005-T008, T013-T018, T024-T028, T033-T038 | Runtime scope validation passes. |
 
 **Constitution Alignment Issues:** None.
 
@@ -37,6 +37,5 @@
 
 **Next Actions:**
 
-- No CRITICAL issues were found; implementation may proceed.
-- Prompt B remediation has made the empty issue-key guard explicit in `tasks.md`.
-- Suggested next command: run `speckit-implement`.
+- No CRITICAL, HIGH, MEDIUM, or actionable LOW remediation remains.
+- Proceed with `speckit-implement`.
