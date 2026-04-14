@@ -1,4 +1,4 @@
-# Codex Managed Session Plane
+# Codex CLI Managed Sessions
 
 Status: Desired state
 Owners: MoonMind Platform

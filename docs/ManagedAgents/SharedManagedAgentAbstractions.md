@@ -1,370 +1,610 @@
-# Shared Managed Agent Abstractions Review
+# Shared Managed Agent Abstractions
 
-**Tracking note:** This document tracks the managed-runtime **strategy pattern** rollout. Implementation status below was reconciled with the tree under `moonmind/workflows/temporal/runtime/strategies/` and related launch/adapter/supervisor code on **2026-03-22**.
+## Status
 
-## Current State
+This document describes the **new desired state** for managed agents.
 
-We have Managed Agents support for three runtimes: Gemini CLI, Codex CLI, and Claude Code. **Command construction** for all three is implemented via `ManagedRuntimeStrategy` subclasses and `RUNTIME_STRATEGIES` (`moonmind/workflows/temporal/runtime/strategies/`). **`build_command()`** in `ManagedRuntimeLauncher` delegates to the registry when `profile.runtime_id` is registered, then falls through to a **generic** template path (model/effort/prompt flags) for unknown runtimes — the old per-runtime `if/elif` block is gone. **Environment shaping** and **workspace preparation** are both wired through the launcher to strategies.
+- **Codex runtime:** implemented in the project and is the reference implementation for this model.
+- **Claude Code runtime:** not yet implemented, but should fit the same abstraction.
+- **Gemini CLI runtime:** not yet implemented, but should fit the same abstraction.
 
-### Workflow Adapters
+This document supersedes the older, more imperative framing where a “managed agent” was treated as a runtime-specific thing to start, stop, and hold directly. The new model is **declarative** and **session-plane based**.
 
-`ManagedAgentAdapter` (`moonmind/workflows/adapters/managed_agent_adapter.py`) provides a common execution interface: provider profile resolution, environment shaping (`_shape_environment_for_oauth`, `_shape_environment_for_api_key`), slot leasing, and launcher triggering. **Default** `command_template` and `auth_mode` are taken from the matching strategy when registered; **fallbacks** remain for unregistered `runtime_id` values (auth: api_key; template: `[runtime_id]`).
+## Executive summary
 
-There are also `JulesAgentAdapter`, `CodexCloudAgentAdapter`, and `OpenClawAgentAdapter` which subclass `BaseExternalAgentAdapter`.
+A managed agent is no longer the runtime object.
 
-### Runtime Launchers
+A managed agent is now the **declarative intent** that some long-lived, resumable, observable work session should exist for a given runtime, workspace, role, and policy.
 
-`ManagedRuntimeLauncher.build_command()` uses **`get_strategy(runtime_id)`** and `strategy.build_command(...)` for all four runtimes.
+The runtime-specific owner of that session is a **managed session plane**.
 
-`ManagedRuntimeLauncher.launch()`:
-- Calls `strategy.prepare_workspace()` when a workspace path exists and a strategy is registered (line 405–416).
-- Calls `strategy.shape_environment()` to shape env_overrides before subprocess spawn (line 418–419).
-- The old `_runtime_env_keys` hardcoded list has been removed from the launcher.
+A managed session plane is responsible for:
 
-### Environment Handling
+- reconciling desired state into actual runtime sessions,
+- resuming or adopting existing sessions when appropriate,
+- creating new sessions when necessary,
+- observing session lifecycle and streamed events,
+- surfacing normalized status back to the rest of the system,
+- handling runtime-specific control operations such as interrupt, resume, steer, or delete.
 
-`GeminiCliStrategy` and `CodexCliStrategy` define **`shape_environment()`** (restricted passthrough sets for Gemini/Codex home keys). **`ManagedRuntimeLauncher.launch()` calls `strategy.shape_environment()`** — the old `_runtime_env_keys` is gone.
+This gives us one shared abstraction for Codex now and for Claude Code and Gemini CLI later, without forcing higher layers to care about runtime-specific session mechanics.
 
-OAuth/API-key clearing and injection remain in the adapter helpers (`_shape_environment_for_oauth`, `_shape_environment_for_api_key`), not in strategies. A shared `env_shaping.py` module has **not** been factored out yet.
+## Why the abstraction changed
 
-The profile object also supports `passthrough_env_keys` for additional pass-through.
+The earlier abstraction worked only as long as the project effectively had one concrete runtime model in mind.
 
-> [!NOTE]
-> `settings.py` still has `agent_runtime_env_keys` as a configuration option (lines 715, 1234). This may be dead config — it is not used by the launcher, which now delegates entirely to strategies. Should be verified and cleaned up.
+That model breaks down when we want to support multiple agent runtimes that differ in how they:
 
-### Gemini / Claude Workspace Prep (Not Implemented)
+- start and resume sessions,
+- persist transcripts and state,
+- expose streaming events,
+- request approvals,
+- support workspace isolation,
+- handle subagents or delegated work,
+- represent interruption, completion, and failure.
 
-No workspace preparation code exists yet for Gemini CLI (e.g. `GEMINI_INSTRUCTIONS` or `.gemini/` instruction files) or Claude Code (e.g. `CLAUDE.md`) inside the strategies. **`prepare_workspace()`** is a no-op on the base class for those runtimes.
+Trying to model all of that directly in a top-level “managed agent” abstraction causes three problems:
 
-### Codex CLI Workspace Prep (RAG Context Injection)
+1. **Runtime leakage**
+   Higher layers become full of Codex-specific, Claude-specific, or Gemini-specific branching.
 
-`CodexCliStrategy.prepare_workspace()` invokes `ContextInjectionService.inject_context()` from `moonmind/rag/context_injection.py` for RAG context injection before the Codex CLI process is launched.
+2. **Imperative coupling**
+   The system starts reasoning in terms of “launch this agent process now” instead of “reconcile this desired capability into an owned session.”
 
-### Exit Classification (Strategy-Delegated)
+3. **Poor portability**
+   Every new runtime needs a new family of top-level concepts instead of one shared contract.
 
-`ManagedRunSupervisor._classify_exit()` now delegates to `strategy.classify_exit()` with `exit_code`, `stdout`, and `stderr` context when a strategy is registered for the `runtime_id`. Timeout is handled before strategy delegation.
+The session-plane model fixes this by making the shared layer own **intent, policy, identity, and status**, while each runtime plane owns **session realization and runtime control**.
 
-### Output Parsing
+## The new conceptual model
 
-`moonmind/workflows/temporal/runtime/output_parser.py` defines **`NdjsonOutputParser`** and **`PlainTextOutputParser`** implementing **`RuntimeOutputParser`**. The base class `create_output_parser()` returns `PlainTextOutputParser`.
+There are four key concepts:
 
-**Output parsers are NOT integrated into the log streaming pipeline** — `RuntimeLogStreamer.stream_to_artifact()` streams raw bytes without parsing.
+### 1. Managed agent
 
-### Codex Worker (Parallel Execution Path)
+A **managed agent** is a logical, durable workload identity.
 
-`moonmind/agents/codex_worker/` is a **standalone execution pipeline** (8 source files: handlers, metrics, secret_refs, self_heal, worker, cli, runtime_mode, `__init__`) that predates the managed runtime path. It provides capabilities beyond what the managed-runtime strategy path offers:
+It describes:
 
-- **Output sanitization** (via `publish_sanitization.py` — removed from package but logic may be elsewhere)
-- **Self-healing** (`self_heal.py`)
-- **Metrics** (`metrics.py`)
-- **Secret reference handling** (`secret_refs.py`)
-- **Full publish/PR workflow** (via `PublishService` from `moonmind/publish/service.py`, consumed in `handlers.py`)
+- who or what the session is for,
+- which runtime should back it,
+- which workspace and profile it should use,
+- what policies apply,
+- what state is desired.
 
-It is **not wired through** `ManagedRuntimeLauncher` and runs separately.
+A managed agent is **not** a process handle, thread handle, CLI process id, or runtime session id.
 
----
+### 2. Managed session
 
-## Runtime-Specific Branching Sites (Current)
+A **managed session** is the concrete runtime-owned session that does the work.
 
-Most **command-line construction** is encapsulated in strategies. Remaining cross-cutting or legacy touchpoints:
+Examples:
 
-| Location | What it branches on | Notes |
-|---|---|---|
-| `launcher.py` `build_command()` | registry → generic fallback | Registered runtimes use strategy; unknown `runtime_id` uses generic model/effort/prompt extension |
-| `adapter.py` command_template default | strategy → fallback | If no profile template: use `default_command_template`, else `[runtime_id]` |
-| `adapter.py` auth_mode default | strategy → fallback | If strategy missing: api_key |
-| `log_streamer.py` `stream_to_artifact()` | raw bytes only | Does not use output parsers — streaming is format-agnostic |
+- a Codex thread/session bound to a workspace and agent profile,
+- a future Claude Code session,
+- a future Gemini CLI session.
 
-> [!NOTE]
-> The previous branching sites for `_runtime_env_keys` (launcher hardcoded list) and `_classify_exit` (exit code + timeout only) have been resolved. The launcher now delegates env shaping to strategies (line 419) and the supervisor delegates exit classification to strategies (lines 270–280).
+A managed session is always owned by exactly one session plane.
 
----
+### 3. Managed session plane
 
-## Proposed Strategy Pattern
+A **managed session plane** is the runtime-specific control and reconciliation layer.
 
-The sketch below matches the actual `moonmind/workflows/temporal/runtime/strategies/base.py`. It accurately reflects the live ABC.
+It is responsible for translating a shared managed-agent spec into runtime-native session operations.
 
-### `ManagedRuntimeStrategy` Interface
+A plane owns:
 
-```python
-class ManagedRuntimeStrategy(ABC):
-    """Per-runtime strategy for managed agent lifecycle."""
+- create / resume / adopt decisions,
+- session binding,
+- event subscription,
+- status observation,
+- lifecycle control,
+- runtime capability reporting.
 
-    @property
-    @abstractmethod
-    def runtime_id(self) -> str: ...
+### 4. Desired state + observed state
 
-    @property
-    @abstractmethod
-    def default_command_template(self) -> list[str]:
-        """e.g. ['gemini'] or ['codex', 'exec']"""
+The system should think in terms of reconciliation:
 
-    @property
-    def default_auth_mode(self) -> str:
-        """Override for runtimes using oauth.
+- **desired state** says what should exist,
+- **observed state** says what the runtime currently has,
+- the plane closes the gap.
 
-        Must align with the OAuthProviderSpec entries defined in
-        docs/ManagedAgents/TmateArchitecture.md.  Both registries
-        share the runtime_id namespace (codex_cli, gemini_cli,
-        claude_code).
-        """
-        return "api_key"
+That means higher layers stop asking “how do I launch Codex?” and instead ask “ensure this managed agent is present and healthy.”
 
-    @abstractmethod
-    def build_command(
-        self,
-        profile: Any,
-        request: Any,
-    ) -> list[str]: ...
+## Shared abstraction boundaries
 
-    def shape_environment(
-        self,
-        base_env: dict[str, str],
-        profile: Any,
-    ) -> dict[str, str]:
-        """Shape the subprocess environment for this runtime.
+### Shared layer responsibilities
 
-        Replaces both _runtime_env_keys passthrough AND
-        _shape_environment_for_oauth/_api_key logic.  Each strategy
-        decides what to clear, set, and preserve.
+The shared abstraction layer owns:
 
-        Note: The underlying helpers (_OAUTH_CLEARED_VARS,
-        _shape_environment_for_oauth) are also used by the OAuth
-        session orchestrator (TmateArchitecture.md §8.2).  Shared
-        env-shaping logic should be factored into common utilities
-        rather than duplicated.
-        """
-        return dict(base_env)
+- the managed-agent identity model,
+- desired-state shape,
+- normalized status and conditions,
+- reconciliation contract,
+- runtime capability contract,
+- opaque session references,
+- event normalization model,
+- policy surfaces that higher layers care about.
 
-    async def prepare_workspace(
-        self,
-        workspace_path: Path,
-        request: Any,
-    ) -> None:
-        """Pre-launch workspace setup.
+### Session-plane responsibilities
 
-        Examples:
-         - Gemini: write GEMINI_INSTRUCTIONS or .gemini/ instruction files
-         - Claude: write CLAUDE.md
-        """
+A runtime plane owns:
 
-    def classify_exit(
-        self,
-        exit_code: int | None,
-        stdout: str,
-        stderr: str,
-    ) -> tuple[str, str | None]:
-        """Classify process exit into (status, failure_class|None).
+- runtime-specific session creation and resumption,
+- adoption/import of existing sessions when supported,
+- mapping shared policies to runtime-native settings,
+- streaming and event translation,
+- handling runtime quirks,
+- determining whether a change is in-place, deferred, or replacement-requiring.
 
-        Default treats 0 as completed, non-zero as failed.
-        Override for runtimes with non-standard exit semantics.
-        """
-        if exit_code == 0:
-            return "completed", None
-        return "failed", "execution_error"
+### Runtime adapter responsibilities
 
-    def create_output_parser(self) -> RuntimeOutputParser:
-        """Factory for the runtime's stream parser.
+Inside a plane, a lower-level adapter may still exist for concrete API or CLI calls. That is an implementation detail.
 
-        Returns PlainTextOutputParser by default. Override for
-        structured formats like NDJSON.
-        """
-        return PlainTextOutputParser()
+The rest of the system should depend on the plane contract, not on raw runtime adapters.
+
+## Core shared abstractions
+
+The names below are conceptual. Exact type names can vary, but the shape should remain the same.
+
+### ManagedAgentSpec
+
+A managed agent spec is the desired-state object.
+
+```text
+ManagedAgentSpec
+  id
+  runtime
+  desiredState            # present | suspended | absent
+  workspace
+  profile
+  bootstrap
+  sessionPolicy
+  permissions
+  observability
+  metadata
 ```
 
-### Output Handling
+Recommended contents:
 
-Output parsing is available per-strategy but **not yet integrated into log streaming**. Different runtimes stream differently:
+- `id`: stable logical identity.
+- `runtime`: `codex`, `claude-code`, `gemini-cli`, or another supported runtime kind.
+- `desiredState`:
+  - `present` means a session should exist and be available for work.
+  - `suspended` means no active session is required, but resumable state may be retained.
+  - `absent` means the binding should be removed and retention policy applied.
+- `workspace`: repo root, worktree, sandbox root, or equivalent scope.
+- `profile`: role, skill bundle, template, or policy profile.
+- `bootstrap`: initial instructions, attachments, references, or setup guidance.
+- `sessionPolicy`: reuse, retention, replacement, isolation, resume, and steering policies.
+- `permissions`: approval, sandbox, network, filesystem, and escalation defaults.
+- `observability`: whether to retain transcripts, stream events, publish deltas, etc.
+- `metadata`: labels and non-runtime business metadata.
 
-- **Gemini CLI**: plain text stdout — `PlainTextOutputParser` (base default)
-- **Claude Code**: JSON output mode available but not currently enforced — `PlainTextOutputParser`
-- **Codex CLI**: plain text stdout — `PlainTextOutputParser`
+### ManagedSessionRef
 
-**Open:** Integrate output parsers into `RuntimeLogStreamer.stream_to_artifact()` for structured event extraction and real-time parsing during log streaming.
+A managed session ref is an **opaque reference** to a concrete runtime session.
 
-### Runtime Registry
-
-```python
-RUNTIME_STRATEGIES: dict[str, ManagedRuntimeStrategy] = {
-    "claude_code": ClaudeCodeStrategy(),
-    "codex_cli": CodexCliStrategy(),
-    "gemini_cli": GeminiCliStrategy(),
-}
+```text
+ManagedSessionRef
+  runtime
+  planeId
+  nativeSessionId
 ```
 
-The launcher and adapter look up the strategy:
+Important rule: higher layers may store and pass this reference around, but should not depend on the structure or semantics of `nativeSessionId`.
 
-```python
-strategy = RUNTIME_STRATEGIES.get(profile.runtime_id)
-if strategy is None:
-    raise ValueError(f"Unsupported runtime: '{profile.runtime_id}'")
-cmd = strategy.build_command(profile, request)
+### ManagedSessionBinding
+
+A binding connects a logical managed agent to a concrete session.
+
+```text
+ManagedSessionBinding
+  managedAgentId
+  sessionRef
+  bindingMode             # created | resumed | adopted
+  createdAt
+  updatedAt
+  compatibilityHash
 ```
 
----
+The compatibility hash is useful when deciding whether an existing session still satisfies the current desired state.
 
-## Supervisor vs Strategy Boundary
+### ManagedSessionObservation
 
-The following concerns stay in the **supervisor** (cross-cutting, not runtime-specific):
+This is the normalized snapshot of what the plane currently knows.
 
-- Process heartbeats and timeout
-- Exit-code-file resolution and concurrent stdout/stderr streaming to run artifacts
-- Endpoint persistence for live sessions via `agent_runtime.report_live_session` / `end_live_session` activities
-- SIGTERM → SIGKILL escalation
-- PID reconciliation on restart
-- Runtime file cleanup (including orphaned artifact/socket reconciliation on startup where applicable)
+```text
+ManagedSessionObservation
+  sessionRef
+  phase
+  readiness
+  conditions
+  lastActivityAt
+  lastTurnSummary
+  pendingApproval
+  terminalReason
+  runtimeDetails
+```
 
-The following are in the **strategy** (runtime-specific):
+Recommended normalized phases:
 
-- Command construction (`build_command`) ✅
-- Environment shaping (`shape_environment`) ✅ wired in launcher
-- Workspace preparation (`prepare_workspace`) ✅ wired in launcher
-- Exit classification (`classify_exit`) ✅ wired in supervisor
-- Output parsing (`create_output_parser`) ⚠️ exists but not used in log streaming
-- Default command template and auth mode ✅
+- `pending`
+- `reconciling`
+- `ready`
+- `running`
+- `waitingForInput`
+- `awaitingApproval`
+- `interrupted`
+- `completed`
+- `failed`
+- `deleted`
 
----
+Planes can retain richer runtime-native detail under `runtimeDetails`, but the shared layer should prefer the normalized fields.
 
-## codex_worker Unification
+### ManagedSessionPlaneCapabilities
 
-The standalone `codex_worker` package (8 source files) provides capabilities not yet present in the managed runtime path:
+Capabilities are how runtimes differ **without** changing the top-level abstraction.
 
-- **Self-healing** (`self_heal.py`)
-- **Metrics** (`metrics.py`)
-- **Secret reference handling** (`secret_refs.py`)
-- **Full publish/PR workflows** (via `PublishService` in `moonmind/publish/service.py`)
+```text
+ManagedSessionPlaneCapabilities
+  supportsResume
+  supportsAdoptExisting
+  supportsInterrupt
+  supportsSteer
+  supportsStructuredEvents
+  supportsApprovalCallbacks
+  supportsWorkspaceOverride
+  supportsFork
+  supportsSubagents
+  supportsEphemeralSessions
+```
 
-### Progress
+This is the main extension mechanism for runtime differences.
 
-| Capability | Status | Notes |
-|---|---|---|
-| RAG context injection | ✅ Shared | `ContextInjectionService` in `moonmind/rag/context_injection.py`; wired from `CodexCliStrategy.prepare_workspace()` |
-| Publish/PR workflows | ✅ Shared service | `PublishService` exists at `moonmind/publish/service.py`; now consumed from `agent_runtime_launch` in managed runtime path |
-| Self-healing | ✅ Shared | `self_heal.py` moved to `moonmind/workflows/temporal/runtime/` |
-| Metrics | ❌ codex_worker only | `metrics.py` — standalone |
-| Secret refs | ✅ Shared | `secret_refs.py` moved to `moonmind/auth/` |
-| Output sanitization | ❓ Status unclear | `publish_sanitization.py` was removed from `codex_worker` directory listing; may have moved |
+### ManagedSessionPlane
 
-> [!IMPORTANT]
-> The **Wrap first, absorb incrementally** approach remains recommended. RAG context injection, Publish workflows, self-healing, and secret refs are now shared. Remaining capabilities (metrics) are candidates for absorption into shared services or supervisor hooks.
+This is the core runtime-owned contract.
 
----
+```text
+ManagedSessionPlane
+  runtimeKind
+  capabilities
 
-## Summary
+  reconcile(spec) -> ManagedSessionBinding + ManagedSessionObservation
+  get(sessionRef) -> ManagedSessionObservation
+  watch(sessionRef) -> stream<ManagedSessionEvent>
+  sendInput(sessionRef, input)
+  interrupt(sessionRef)
+  suspend(spec or sessionRef)
+  delete(spec or sessionRef)
+```
 
-The codebase has adopted a **Strategy Pattern-based Registry** (`ManagedRuntimeStrategy`, `RUNTIME_STRATEGIES`) for:
+Exact method names are not important. The important thing is that the shared layer talks to a plane in terms of **reconciliation and observation**, not raw process management.
 
-| Concern | Status | Wiring |
-|---|---|---|
-| Command construction | ✅ Done | Launcher delegates to `strategy.build_command()` |
-| Environment shaping | ✅ Done | Launcher calls `strategy.shape_environment()` |
-| Workspace preparation | ✅ Hook wired | Launcher calls `strategy.prepare_workspace()`; content exists for Codex only |
-| Exit classification | ✅ Done | Supervisor delegates to `strategy.classify_exit()` |
-| Output parsing | ✅ Done | Integrated via `RuntimeLogStreamer.stream_and_parse()`; supervisor wires strategy parser |
-| Auth mode defaults | ✅ Done | Adapter reads from strategy |
-| Command template defaults | ✅ Done | Adapter reads from strategy |
+## Desired-state examples
 
-**Still outstanding:**
-- **Gemini/Claude** workspace prep content (no-op stubs)
+### Minimal example
 
-- **Shared env-shaping module** (`moonmind/auth/env_shaping.py`) to unify strategies and OAuth session orchestrator
-- **`agent_runtime_env_keys` in `settings.py`** may be dead config — verify and clean up
-- **codex_worker** unification: self-heal, metrics, and secret refs not yet factored into shared services
+```yaml
+managedAgents:
+  - id: backend-implementer
+    runtime: codex
+    desiredState: present
+    workspace:
+      root: ./src/MyService
+    profile: implementation
+```
 
-The supervisor retains cross-cutting process lifecycle concerns (heartbeats, timeouts, log streaming, reconciliation).
+### More complete example
 
----
+```yaml
+managedAgents:
+  - id: backend-implementer
+    runtime: codex
+    desiredState: present
+    workspace:
+      root: ./src/MyService
+      isolation: worktree
+    profile: implementation
+    bootstrap:
+      instructions: |
+        Work only in the service and tests projects.
+        Keep diffs scoped.
+        Run relevant tests before marking work complete.
+      references:
+        - docs/Architecture/ServiceBoundaries.md
+        - docs/ManagedAgents/CodexManagedSessionPlane.md
+    sessionPolicy:
+      reuse: resume-or-create
+      retention: keep-history
+      replacement: compatible-only
+    permissions:
+      approvalPolicy: project-default
+      sandboxPolicy: workspace-write
+      networkPolicy: restricted
+    observability:
+      publishEvents: true
+      retainTranscript: true
+    metadata:
+      team: payments
+      purpose: feature-delivery
+```
 
-## Implementation Phases
+This same shape should remain valid when `runtime` becomes `claude-code` or `gemini-cli`.
 
-Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./tools/test_unit.sh` (and integration tests as needed) to confirm nothing has regressed.
+That is the point of the abstraction.
 
-### Phase 1 — Foundation: ABC + Registry + Gemini Strategy
+## Reconciliation model
 
-**Goal**: Establish the pattern with the simplest runtime first.
+The shared system should treat session management as a reconciliation loop.
 
-- [x] Create `ManagedRuntimeStrategy` ABC in `moonmind/workflows/temporal/runtime/strategies/base.py`
-- [x] Create `RUNTIME_STRATEGIES` registry in `moonmind/workflows/temporal/runtime/strategies/__init__.py`
-- [x] Implement `GeminiCliStrategy` — the simplest runtime (no special output parsing, no workspace prep today)
-  - `build_command`: former launcher `gemini_cli` branch
-  - `shape_environment`: `HOME`, `GEMINI_HOME`, `GEMINI_CLI_HOME` passthrough — **wired in launcher**
-  - `default_command_template`: `["gemini"]`
-  - `default_auth_mode`: `"api_key"`
-- [x] Wire `ManagedRuntimeLauncher.build_command()` to delegate to strategy when available; generic fallback for unregistered runtimes (no per-runtime `if/elif`)
-- [x] Wire `ManagedAgentAdapter.start()` to read `default_command_template` and `default_auth_mode` from strategy when available
-- [x] Add unit tests for `GeminiCliStrategy` (`tests/unit/workflows/temporal/runtime/strategies/test_gemini_cli.py`)
-- [x] Verify existing integration tests still pass *(expected on mainline; re-run when changing this area)*
+### Reconcile algorithm at a high level
 
-**Output**: ✅ **Complete.** Strategy pattern is live; all four runtimes were later registered (Phase 2).
+For a given `ManagedAgentSpec`:
 
----
+1. Select the plane using `spec.runtime`.
+2. Check whether a compatible binding already exists.
+3. If a compatible session exists:
+   - reuse it,
+   - resume or attach if necessary,
+   - refresh observation.
+4. Otherwise, if the plane supports adoption and an adoptable session exists:
+   - adopt it,
+   - record binding mode as `adopted`.
+5. Otherwise:
+   - create a new runtime-native session,
+   - bind it,
+   - publish observation.
+6. Subscribe to runtime events and normalize them.
+7. Persist updated binding and status.
 
-### Phase 2 — Remaining Strategies: Claude, Codex
+### Idempotency requirement
 
-**Goal**: Eliminate all `if/elif` branching in `build_command()`.
+`reconcile(spec)` must be safe to call repeatedly.
 
-- [x] Implement `ClaudeCodeStrategy`
-  - [x] `build_command`: former generic / `claude_code` path
-  - [x] `prepare_workspace`: no-op (stub until workspace prep content is needed)
-- [x] Implement `CodexCliStrategy`
-  - [x] `build_command`: former `codex_cli` branch
-  - [x] `shape_environment`: Codex home/config keys — **wired via launcher**
-  - [x] `default_command_template`: `["codex", "exec"]`
-  - [x] `prepare_workspace`: RAG context injection via `ContextInjectionService`
-- [x] Remove all per-runtime `if/elif` branching from `launcher.py:build_command()`
-- [x] Remove `_runtime_env_keys` hardcoded list from `launcher.py`
-- [x] Remove command template defaults from adapter *(completed; strategy-first approach used)*
-- [x] Remove auth mode defaults from adapter *(completed; strategy-first approach used)*
-- [x] Add unit tests for each new strategy (`test_remaining_strategies.py`, `test_gemini_cli.py`, `test_base.py`)
-- [x] Run full test suite *(maintain via CI / `./tools/test_unit.sh`)*
+Repeated reconciliation with no meaningful spec drift should not create duplicate sessions.
 
-**Output**: ✅ **Complete.** Command building, env shaping, and workspace prep all live in strategies. Launcher delegates fully.
+### Compatibility and replacement
 
----
+Some spec changes can be applied in place. Others require replacement.
 
-### Phase 3 — codex_worker Unification Decision + Execution
+Typical examples:
 
-**Goal**: Resolve the parallel execution path.
+- **Usually replacement-requiring**
+  - runtime kind
+  - workspace root or isolation mode
+  - identity-defining profile changes
+- **Potentially in-place or next-turn only**
+  - approval policy
+  - model or reasoning defaults
+  - steering instructions
+  - observability toggles
 
-**Decision**: **Absorb incrementally** (wrap deferred — absorb shared services as they become cross-runtime useful).
+Each plane decides this using its runtime semantics, but the result should be surfaced consistently through shared conditions.
 
-- [x] Extract `_resolve_prompt_context` into a shared `ContextInjectionService` (`moonmind/rag/context_injection.py`; used from `CodexCliStrategy.prepare_workspace()`)
-- [x] Extract `_maybe_publish` into a shared `PublishService` (`moonmind/publish/service.py`)
-- [x] Verify Codex CLI tasks work through the managed runtime path end-to-end *(ongoing validation)*
-- [x] Wire `PublishService` from the managed runtime path (currently only `codex_worker/handlers.py` consumes it)
-- [x] Factor out self-heal capability into a shared supervisor hook or strategy method
-- [x] Factor out secret-ref resolution into a shared module
+Suggested shared conditions:
 
-**Output**: **Complete.** RAG context injection is shared and hooked for Codex managed runs. `PublishService` is integrated into the managed runtime lifecycle (`agent_runtime_launch`). Self-heal capability and secret-ref resolution have been factored into shared modules (`moonmind/workflows/temporal/runtime/self_heal.py` and `moonmind/auth/secret_refs.py`). Metrics remain `codex_worker`-only.
+- `Bound`
+- `Compatible`
+- `RequiresReplacement`
+- `AwaitingApproval`
+- `Suspended`
+- `Terminal`
+- `DriftDetected`
 
----
+## Session lifecycle semantics
 
-### Phase 4 — Exit Classification + Output Parsing
+The shared layer should reason about lifecycle in a runtime-neutral way.
 
-**Goal**: Per-runtime correctness for exit codes and structured output.
+### Present
 
-- [x] Move `_classify_exit` in `supervisor.py` to call `strategy.classify_exit()` with stdout/stderr context
-- [x] Implement `PlainTextOutputParser` in `output_parser.py`
-- [x] Base class `create_output_parser()` returns `PlainTextOutputParser` by default
-- [x] Add unit tests for output parsers and related behavior (`test_output_parser.py`, strategy tests)
-- [x] Integrate output parsers into `RuntimeLogStreamer.stream_to_artifact()` for structured event extraction during log streaming
+The session should exist and be available.
 
-**Output**: ✅ **Complete.** Exit classification is fully strategy-delegated. Output parsers are integrated into the log streaming pipeline via `RuntimeLogStreamer.stream_and_parse()` — the supervisor obtains the parser from `strategy.create_output_parser()` and parsed output metadata (error messages, rate-limit flag, event count) flows into diagnostics.
+- The plane may create, resume, or adopt.
+- The session may be idle or active.
+- Higher layers care that it is bound and usable.
 
----
+### Suspended
 
-### Phase 5 — Workspace Prep + Polish
+The session does not need to be actively loaded or executing.
 
-**Goal**: Enable per-runtime workspace preparation and clean up remaining tech debt.
+- Binding and transcript may be retained.
+- The plane may unload, detach, or simply mark the session as not expected to be active.
+- Resume semantics remain runtime-specific.
 
-- [x] Implement `GeminiCliStrategy.prepare_workspace()` — write `.gemini/` instruction files or `GEMINI_INSTRUCTIONS`
-- [x] Implement `ClaudeCodeStrategy.prepare_workspace()` — write `CLAUDE.md` with task context
-- [x] Add workspace prep call in `launcher.py:launch()` after workspace resolution, before subprocess spawn *(calls `await strategy.prepare_workspace(...)`)*
-- [x] Wire launcher subprocess env through `strategy.shape_environment()` (launcher line 419)
-- [x] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per TmateArchitecture.md alignment)
-- [x] Clean up `agent_runtime_env_keys` in `settings.py` if confirmed dead config
-- [x] Remove dead imports and unused code from adapter and launcher
-- [x] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference the managed runtime strategy pattern
-- [x] Move this file to `docs/ManagedAgents/SharedManagedAgentAbstractions.md`
+### Absent
 
-**Output**: **Complete.** Per-runtime workspace preparation, shared env factoring, settings cleanup, and documentation updates have all been completed successfully.
+The session should no longer be managed.
+
+- The plane removes the binding.
+- Runtime-native deletion, archival, or transcript retention is controlled by policy.
+
+## Normalized event model
+
+Planes should translate runtime-specific streams into a shared event surface where possible.
+
+Suggested normalized events:
+
+- `SessionCreated`
+- `SessionResumed`
+- `SessionAdopted`
+- `SessionReady`
+- `TurnStarted`
+- `MessageDelta`
+- `ToolCallStarted`
+- `ToolCallCompleted`
+- `ApprovalRequested`
+- `ApprovalResolved`
+- `SessionInterrupted`
+- `SessionCompleted`
+- `SessionFailed`
+- `SessionDeleted`
+
+Raw runtime-native events can still be attached as extended details for diagnostics.
+
+## Codex as the reference implementation
+
+Codex is the first implemented runtime for this model and should be treated as the reference session-plane implementation, not as a special-case top-level abstraction.
+
+### Codex mapping
+
+In the Codex runtime, the plane maps the shared abstractions to Codex-native session and turn concepts.
+
+Conceptually:
+
+- the managed agent becomes desired state for a Codex-backed session,
+- the plane owns create / resume / attach decisions,
+- a bound session is represented by a Codex-native session or thread reference,
+- user-visible work is driven through turns,
+- streaming runtime activity is normalized into shared observation and events,
+- interrupt, steer, approval, and completion flow through the plane contract.
+
+### What the Codex plane should own
+
+The Codex plane should own all Codex-specific concerns, including:
+
+- how a session is created or resumed,
+- how workspace and policy settings are mapped,
+- how event streams are subscribed to,
+- how approval and interruption are bridged,
+- how compatibility is determined,
+- how runtime-native ids are persisted and recovered.
+
+Higher layers should not need to know whether Codex realizes this through app-server threads, CLI session artifacts, or another Codex-specific substrate.
+
+### Subagents in Codex
+
+Codex has runtime-native support for delegated or parallel agent work. That does **not** change the top-level abstraction.
+
+The shared model should treat runtime-native subagents as one of two things:
+
+1. **internal runtime behavior** of a managed session, or
+2. **explicit child sessions** only if the plane intentionally projects them outward.
+
+Do not make subagents part of the base shared managed-agent abstraction.
+
+## Planned Claude Code and Gemini CLI support
+
+Claude Code and Gemini CLI should be added by implementing new planes, not by inventing new top-level managed-agent abstractions.
+
+### Required design rule
+
+Do **not** introduce concepts like:
+
+- `ClaudeManagedAgent`
+- `GeminiManagedAgent`
+- `ClaudeSessionManager` as a new top-level abstraction
+- `GeminiManagedRuntime` as a peer to the shared managed-agent model
+
+Instead, add:
+
+- `ClaudeCodeManagedSessionPlane`
+- `GeminiCliManagedSessionPlane`
+
+Both should consume the same `ManagedAgentSpec` shape and return the same shared binding, observation, and event model.
+
+### What is allowed to vary by runtime
+
+Claude Code and Gemini CLI will vary in:
+
+- how sessions are started and resumed,
+- what can be controlled mid-session,
+- what event structure is available,
+- how approvals and permissions behave,
+- whether adoption or fork is possible,
+- how persistent state is stored locally or remotely.
+
+Those differences belong behind the plane contract and capability flags.
+
+### Declarative-first requirement
+
+For future runtimes, implementation should start from the same desired-state workflow:
+
+1. define a shared spec,
+2. select a plane,
+3. reconcile to a runtime session,
+4. normalize observation,
+5. expose runtime-specific gaps through capabilities and conditions.
+
+That is the intended long-term architecture.
+
+## What should no longer be modeled at the shared layer
+
+The following patterns are now considered the wrong abstraction direction:
+
+- treating a managed agent as a directly launched runtime process,
+- exposing runtime-native session ids as first-class shared identifiers,
+- baking Codex-specific lifecycle calls into top-level abstractions,
+- requiring separate orchestration paths for each runtime,
+- coupling shared policy code to runtime-specific event payloads,
+- assuming one managed agent must always equal one always-live process.
+
+## Recommended invariants
+
+These invariants should hold across all implementations.
+
+1. **Managed agents are declarative.**
+   They describe desired capability, not runtime handles.
+
+2. **Planes own runtime realization.**
+   Create, resume, adopt, attach, interrupt, and delete are plane responsibilities.
+
+3. **Bindings are opaque.**
+   Only the owning plane interprets native session ids.
+
+4. **Reconciliation is idempotent.**
+   Repeated reconcile calls should converge, not duplicate work.
+
+5. **Status is normalized.**
+   Higher layers consume shared phases and conditions first.
+
+6. **Runtime differences use capabilities, not forks in the abstraction model.**
+   New runtimes should extend the same contract.
+
+7. **Replacement is explicit.**
+   Incompatible drift should surface clearly rather than silently mutating sessions in undefined ways.
+
+## Migration guidance from the previous model
+
+When updating code or docs that still use the older framing, apply the following rewrite mentally:
+
+### Old framing
+
+- “A managed agent is a runtime-specific managed process or session.”
+- “The manager launches the agent.”
+- “The system stores the agent handle.”
+- “Supporting a new runtime needs a new top-level abstraction.”
+
+### New framing
+
+- “A managed agent is declarative desired state.”
+- “A session plane reconciles that desired state into a runtime-owned session.”
+- “The system stores a binding and normalized observation.”
+- “Supporting a new runtime means implementing a new plane.”
+
+## Relationship to other docs
+
+This document is the shared, runtime-neutral abstraction layer.
+
+It should be read together with runtime-specific documents such as:
+
+- `docs\ManagedAgents\CodexManagedSessionPlane.md`
+
+Future runtime docs should follow the same pattern:
+
+- `docs\ManagedAgents\ClaudeCodeManagedSessionPlane.md`
+- `docs\ManagedAgents\GeminiCliManagedSessionPlane.md`
+
+Those runtime docs should explain **how** their plane realizes the shared contract, not redefine the shared contract itself.
+
+## Final desired-state statement
+
+The project’s desired state is:
+
+- **managed agents are modeled declaratively,**
+- **managed sessions are owned by runtime-specific managed session planes,**
+- **Codex is the first concrete implementation of that model,**
+- **Claude Code and Gemini CLI should be added by implementing additional planes against the same shared abstractions.**
+
+That is the architecture this document defines.
