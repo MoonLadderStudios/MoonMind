@@ -567,6 +567,28 @@ async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     assert "Acceptance criteria\nGiven a board" in result.recommended_imports.step_instructions
 
 
+async def test_issue_detail_ignores_blank_browse_url_and_falls_back_to_self_url() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "key": "ENG-123",
+                "browseUrl": "  ",
+                "self": "https://jira.example/rest/api/3/issue/10001",
+                "fields": {
+                    "summary": "Add Jira browser",
+                    "status": {"id": "1", "name": "Open"},
+                    "description": "Do the work",
+                },
+            }
+        ],
+    )
+
+    result = await service.get_issue("ENG-123")
+
+    assert result.url == "https://jira.example/browse/ENG-123"
+
+
 async def test_issue_detail_maps_status_to_board_column_when_board_context_is_provided() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),

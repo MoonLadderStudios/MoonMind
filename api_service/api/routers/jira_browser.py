@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jira", tags=["jira-browser"])
 
 _SECRET_MESSAGE_RE = re.compile(
-    r"(?i)(ghp_|github_pat_|AIza|ATATT|AKIA|token=|password=|authorization:|\bbearer\s+|private key|traceback|stack trace)"
+    r"(?i)(ghp_|github_pat_|AIza|ATATT|AKIA|token=|password=|authorization:|\bbearer[:\s]\s*|private key|traceback|stack trace)"
 )
 _GENERIC_ERROR_MESSAGE = "Jira browser request failed."
 

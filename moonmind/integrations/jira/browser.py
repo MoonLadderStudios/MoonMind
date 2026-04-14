@@ -702,9 +702,9 @@ class JiraBrowserService:
         )
 
     def _issue_url(self, payload: Mapping[str, Any]) -> str | None:
-        browse = payload.get("browseUrl") or payload.get("url")
+        browse = str(payload.get("browseUrl") or payload.get("url") or "").strip()
         if browse:
-            return str(browse)
+            return browse
         self_url = str(payload.get("self") or "")
         marker = "/rest/api/"
         if marker in self_url:

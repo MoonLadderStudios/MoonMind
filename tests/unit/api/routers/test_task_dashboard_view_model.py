@@ -210,6 +210,19 @@ def test_build_runtime_config_exposes_jira_ui_when_enabled(monkeypatch) -> None:
     )
 
 
+def test_build_jira_sources_returns_independent_moonmind_endpoint_templates() -> None:
+    first = dashboard_view_model._build_jira_sources()
+    first["projects"] = "https://jira.example.test/rest/api/3/project"
+
+    second = dashboard_view_model._build_jira_sources()
+
+    assert second["projects"] == "/api/jira/projects"
+    assert all(
+        value.startswith("/api/") and "://" not in value
+        for value in second.values()
+    )
+
+
 def test_validate_jira_source_templates_rejects_non_moonmind_paths() -> None:
     sources = {
         **dashboard_view_model._JIRA_CREATE_PAGE_SOURCES,
