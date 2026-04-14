@@ -1,0 +1,128 @@
+slug: moonspec-orchestrate
+title: MoonSpec Orchestrate
+description: Run the full Moon Spec lifecycle from a feature request or design through specification, planning, alignment, implementation, and verification.
+scope: global
+version: 1.0.0
+tags:
+  - moonspec
+  - orchestration
+  - runtime
+  - docs
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: moonspec-orchestrate
+  profile: runtime-first
+inputs:
+  - name: feature_request
+    label: Feature Request
+    type: markdown
+    required: true
+  - name: orchestration_mode
+    label: Orchestration Mode
+    type: enum
+    required: true
+    default: runtime
+    options:
+      - runtime
+      - docs
+  - name: source_design_path
+    label: Source Design Path
+    type: text
+    required: false
+    default: ""
+  - name: constraints
+    label: Constraints
+    type: textarea
+    required: false
+    default: ""
+steps:
+  - title: Classify request and resume point
+    instructions: |-
+      Use this request as the canonical Moon Spec orchestration input:
+      {{ inputs.feature_request }}
+
+      Additional constraints:
+      {{ inputs.constraints }}
+
+      Selected mode: {{ inputs.orchestration_mode }}.
+      Default to runtime mode and only use docs mode when explicitly requested.
+      If the request is "Implement Docs/<path>.md", treat it as runtime intent and use the document as source requirements.
+      Source design path (optional): {{ inputs.source_design_path }}.
+
+      Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
+      Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
+    skill:
+      id: auto
+      args: {}
+  - title: Create or select Moon Spec
+    instructions: |-
+      For a single-story request, run moonspec-specify unless an active spec.md already passes the specify gate.
+      For a broad technical or declarative design, run moonspec-breakdown first, then select the recommended first generated spec unless the user asked to process all specs.
+      Preserve the original request or source design in spec.md so final verification can compare against it.
+    skill:
+      id: moonspec-specify
+      args: {}
+  - title: Split broad designs when needed
+    instructions: |-
+      Run moonspec-breakdown only when the input is a broad technical or declarative design with multiple independently testable stories.
+      Keep each generated spec isolated and process specs in dependency order when multiple specs are requested.
+    skill:
+      id: auto
+      args: {}
+  - title: Plan selected spec
+    instructions: |-
+      Run moonspec-plan when plan.md or required design artifacts are missing or stale.
+      Verify that plan.md, research.md, quickstart.md, and any required data model or contracts exist before continuing.
+      Keep unit and integration test strategies explicit.
+    skill:
+      id: moonspec-plan
+      args: {}
+  - title: Generate TDD task breakdown
+    instructions: |-
+      Run moonspec-tasks when tasks.md is missing or upstream artifacts changed.
+      Verify tasks.md covers exactly one story and includes red-first unit tests, integration tests, implementation tasks, story validation, and final /moonspec-verify work.
+    skill:
+      id: moonspec-tasks
+      args: {}
+  - title: Align Moon Spec artifacts
+    instructions: |-
+      Run moonspec-align after task generation.
+      Let moonspec-align analyze and remediate artifact drift conservatively without manual analyze prompts, scripted user approvals, or extra Prompt A/Prompt B loops.
+      If alignment changes spec.md, plan.md, design artifacts, or tasks.md, re-check the downstream gates and regenerate only artifacts that are now stale.
+    skill:
+      id: moonspec-align
+      args: {}
+  - title: Implement the task breakdown
+    instructions: |-
+      Run moonspec-implement when implementation work remains.
+      Require TDD evidence: unit and integration tests are written and confirmed failing before production code.
+      Mark completed tasks [X] in tasks.md and preserve the selected story scope.
+    skill:
+      id: moonspec-implement
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Verify completion
+    instructions: |-
+      Run moonspec-verify as the final read-only gate unless an up-to-date verification report already covers the current code and artifacts.
+      If the verdict is ADDITIONAL_WORK_NEEDED, use the report as the remaining-work list and run at most two bounded implementation and verification cycles.
+      If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context.
+      Claim completion only when the verdict is FULLY_IMPLEMENTED.
+    skill:
+      id: moonspec-verify
+      args: {}
+  - title: Return orchestration report and defer publish actions
+    instructions: |-
+      Return a concise MoonSpec Orchestration report with:
+      - Feature path or generated spec list
+      - Stage outcomes for Specify/Breakdown, Plan, Tasks, Align, Implement, and Verify
+      - Files changed
+      - Tests run and status
+      - Remaining risks
+      - Publish handoff status
+
+      Do not push branches or open pull requests from this preset. Publish behavior is handled by the wrapper publish stage when enabled.
+    skill:
+      id: auto
+      args: {}

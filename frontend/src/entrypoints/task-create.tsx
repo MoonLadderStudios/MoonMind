@@ -869,18 +869,24 @@ function scopeLabel(scope: TemplateScope): string {
   return scope === "personal" ? "Personal" : "Global";
 }
 
-function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
+export function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
   const preferredGlobal = items.find(
-    (item) => item.slug === "speckit-orchestrate" && item.scope === "global",
+    (item) => item.slug === "moonspec-orchestrate" && item.scope === "global",
   );
   if (preferredGlobal) {
     return preferredGlobal;
   }
   const preferredAny = items.find(
-    (item) => item.slug === "speckit-orchestrate",
+    (item) => item.slug === "moonspec-orchestrate",
   );
   if (preferredAny) {
     return preferredAny;
+  }
+  const legacyPreferred = items.find(
+    (item) => item.slug === "speckit-orchestrate",
+  );
+  if (legacyPreferred) {
+    return legacyPreferred;
   }
   return items[0] || null;
 }
@@ -4067,7 +4073,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         value={step.skillId}
                         placeholder={
                           isPrimaryStep
-                            ? "auto (default), speckit-orchestrate, ..."
+                            ? "auto (default), moonspec-orchestrate, ..."
                             : "inherit primary step skill"
                         }
                         onChange={(event) =>

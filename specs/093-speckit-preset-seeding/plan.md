@@ -1,11 +1,11 @@
-# Implementation Plan: Seeded Speckit Preset Availability
+# Implementation Plan: Seeded MoonSpec Preset Availability
 
 **Branch**: `093-speckit-preset-seeding` | **Date**: 2026-03-21 | **Spec**: `specs/093-speckit-preset-seeding/spec.md`
 **Input**: Feature specification from `specs/093-speckit-preset-seeding/spec.md`
 
 ## Summary
 
-Restore the default `speckit-orchestrate` Mission Control preset by making the task preset catalog synchronize YAML seeds into the database at API startup. The existing YAML seed remains the source of truth for the MoonMind-native step translation; the new work adds an upsert-style sync path for seeded templates, invokes it from startup, and verifies both catalog behavior and startup integration with tests.
+Restore the default `moonspec-orchestrate` Mission Control preset by making the task preset catalog synchronize YAML seeds into the database at API startup. The existing YAML seed remains the source of truth for the MoonMind-native step translation; the new work adds an upsert-style sync path for seeded templates, invokes it from startup, and verifies both catalog behavior and startup integration with tests. The preset uses MoonSpec skill calls and `moonspec-align` instead of the older analyze remediation sequence.
 
 ## Technical Context
 
@@ -22,7 +22,7 @@ Restore the default `speckit-orchestrate` Mission Control preset by making the t
 - **II. One-Click Agent Deployment**: PASS. Startup seeding reduces manual operator setup for the default preset.
 - **III. Avoid Vendor Lock-In**: PASS. The preset is YAML-backed and runtime-neutral at the catalog layer.
 - **IV. Own Your Data**: PASS. Preset state remains in operator-controlled DB storage.
-- **V. Skills Are First-Class and Easy to Add**: PASS. The seed continues to reference first-class skills such as `speckit-specify`.
+- **V. Skills Are First-Class and Easy to Add**: PASS. The seed continues to reference first-class skills such as `moonspec-specify`.
 - **VI. Design for Deletion / Scientific Method**: PASS. Seed sync is a small adapter around existing catalog contracts.
 - **VII. Powerful Runtime Configurability**: PASS. Behavior is gated by the existing task preset catalog feature flag.
 - **VIII. Modular and Extensible Architecture**: PASS. Changes stay within catalog service and startup composition boundaries.

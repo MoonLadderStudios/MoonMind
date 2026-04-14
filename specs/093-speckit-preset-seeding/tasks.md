@@ -1,4 +1,4 @@
-# Tasks: Seeded Speckit Preset Availability
+# Tasks: Seeded MoonSpec Preset Availability
 
 **Input**: Design documents from `specs/093-speckit-preset-seeding/`
 **Prerequisites**: spec.md, plan.md
@@ -12,5 +12,6 @@
 ## Phase 2: Verification
 
 - [X] T004 Add unit coverage in `tests/unit/api/test_task_step_templates_service.py` for missing-seed creation and existing-seed refresh.
-- [X] T005 Add startup integration coverage in `tests/integration/test_startup_task_template_seeding.py` verifying `speckit-orchestrate` exists after startup.
+- [X] T005 Add startup integration coverage in `tests/integration/test_startup_task_template_seeding.py` verifying `moonspec-orchestrate` exists after startup.
 - [X] T006 Run `./tools/test_unit.sh` and confirm the targeted preset seeding regressions pass.
+- [X] T007 Update the seeded preset payload to use `moonspec-orchestrate`, `moonspec-*` skill calls, and `moonspec-align` instead of analyze remediation prompt loops.
