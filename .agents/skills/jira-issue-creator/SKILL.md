@@ -10,7 +10,7 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 ## Inputs
 
 - Required: Jira project key or enough context to identify one.
-- Required: issue type (`Task`, `Story`, `Bug`, or `Sub-task`). Default to `Task` only when the user does not specify.
+- Required: issue type (`Task`, `Story`, `Bug`, or `Sub-task`). Use `jira.list_create_issue_types` to resolve the name to an `issueTypeId`. Default to `Task` only when the user does not specify.
 - Required: summary/title.
 - Required for creation: authenticated Jira access through a connector, API token, OAuth session, or documented local secret.
 - Optional: description, acceptance criteria, priority, labels, assignee, reporter, parent issue key, sprint, component, due date, linked issues, attachments.
@@ -32,15 +32,15 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 
 3. Validate before creating.
 - Confirm required Jira fields for the project and issue type using the connector/API when possible.
-- Map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs.
+- Map requested fields to Jira field IDs through metadata (using `jira.get_create_fields`) instead of hardcoding custom field IDs.
 - Fail fast if a requested field cannot be set through the available Jira schema.
 - Never print credentials, authorization headers, cookies, or full environment dumps.
 
 4. Create the issue.
-- Use the available Jira connector's create-issue operation when present.
+- Use the available Jira connector's `jira.create_issue` or `jira.create_subtask` operations when present.
 - Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
 - Send only the fields needed for the requested issue.
-- Treat retries carefully: before retrying after an uncertain network failure, search by a stable summary/project/reporter marker to avoid duplicate tickets.
+- Treat retries carefully: before retrying after an uncertain network failure, use `jira.search_issues` to search by a stable summary/project/reporter marker to avoid duplicate tickets.
 
 5. Return the result.
 - Report the created issue key and URL.
