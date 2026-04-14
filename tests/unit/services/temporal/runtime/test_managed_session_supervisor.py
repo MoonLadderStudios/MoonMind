@@ -98,6 +98,64 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_session_supervisor_publishes_output_chunks_to_live_spool(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    spool = Path(record.artifact_spool_path)
+
+    await supervisor.start(record)
+    (spool / "stdout.log").write_text("session started\n", encoding="utf-8")
+    await asyncio.sleep(0.05)
+    with (spool / "stdout.log").open("a", encoding="utf-8") as handle:
+        handle.write("assistant: OK\n")
+    (spool / "stderr.log").write_text("warning: none\n", encoding="utf-8")
+    await asyncio.sleep(0.05)
+
+    live_spool = Path(record.workspace_path) / "live_streams.spool"
+    payloads = [
+        json.loads(line)
+        for line in live_spool.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    stdout_events = [
+        item for item in payloads if item["stream"] == "stdout"
+    ]
+    stderr_events = [
+        item for item in payloads if item["stream"] == "stderr"
+    ]
+
+    assert [item["kind"] for item in stdout_events] == ["stdout_chunk", "stdout_chunk"]
+    assert stdout_events[0]["text"] == "session started\n"
+    assert stdout_events[0]["offset"] == 0
+    assert stdout_events[1]["text"] == "assistant: OK\n"
+    assert stdout_events[1]["offset"] == len("session started\n")
+    assert stderr_events[0]["kind"] == "stderr_chunk"
+    assert stderr_events[0]["text"] == "warning: none\n"
+    assert stderr_events[0]["offset"] == 0
+
+    snapshot = await supervisor.publish_snapshot("sess-1")
+    journal = artifact_storage.resolve_storage_path(snapshot.observability_events_ref)
+    journal_text = journal.read_text(encoding="utf-8")
+    assert '"stream":"stdout"' in journal_text
+    assert '"kind":"stdout_chunk"' in journal_text
+    assert '"stream":"stderr"' in journal_text
+    assert '"kind":"stderr_chunk"' in journal_text
+
+    await supervisor.finalize("sess-1", status="terminated")
+
+
+@pytest.mark.asyncio
 async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None:
     store = ManagedSessionStore(tmp_path / "store")
     artifact_storage = _LocalArtifactStorage(tmp_path / "published")

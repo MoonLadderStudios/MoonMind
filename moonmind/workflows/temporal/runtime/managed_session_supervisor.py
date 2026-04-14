@@ -65,6 +65,96 @@ class ManagedSessionSupervisor:
                 total += path.stat().st_size
         return total
 
+    @staticmethod
+    def _initial_stream_offsets(
+        record: CodexManagedSessionRecord,
+    ) -> dict[str, int]:
+        if not record.last_log_offset:
+            return {"stdout": 0, "stderr": 0}
+        return {
+            "stdout": (
+                ManagedSessionSupervisor._stdout_path(record).stat().st_size
+                if ManagedSessionSupervisor._stdout_path(record).exists()
+                else 0
+            ),
+            "stderr": (
+                ManagedSessionSupervisor._stderr_path(record).stat().st_size
+                if ManagedSessionSupervisor._stderr_path(record).exists()
+                else 0
+            ),
+        }
+
+    def _publish_output_chunk(
+        self,
+        *,
+        record: CodexManagedSessionRecord,
+        stream_name: str,
+        text: str,
+        offset: int,
+    ) -> None:
+        try:
+            self._log_streamer.emit_observability_event(
+                run_id=record.task_run_id,
+                workspace_path=record.workspace_path,
+                stream=stream_name,
+                text=text,
+                kind=f"{stream_name}_chunk",
+                offset=offset,
+                session_id=record.session_id,
+                session_epoch=record.session_epoch,
+                container_id=record.container_id,
+                thread_id=record.thread_id,
+                active_turn_id=record.active_turn_id,
+                metadata={"source": "managed_session_artifact_spool"},
+                preserve_text=True,
+            )
+        except Exception:
+            logger.warning(
+                "Session output publication failed for task run %s session %s stream %s",
+                record.task_run_id,
+                record.session_id,
+                stream_name,
+                exc_info=True,
+            )
+
+    def _publish_new_output_chunks(
+        self,
+        record: CodexManagedSessionRecord,
+        stream_offsets: dict[str, int],
+    ) -> bool:
+        emitted = False
+        for stream_name, path in (
+            ("stdout", self._stdout_path(record)),
+            ("stderr", self._stderr_path(record)),
+        ):
+            try:
+                if not path.exists():
+                    stream_offsets.setdefault(stream_name, 0)
+                    continue
+                current_size = path.stat().st_size
+                previous_offset = stream_offsets.get(stream_name, 0)
+                if current_size < previous_offset:
+                    previous_offset = 0
+                if current_size <= previous_offset:
+                    stream_offsets[stream_name] = current_size
+                    continue
+                with path.open("rb") as handle:
+                    handle.seek(previous_offset)
+                    data = handle.read(current_size - previous_offset)
+                stream_offsets[stream_name] = current_size
+            except OSError:
+                continue
+            if not data:
+                continue
+            self._publish_output_chunk(
+                record=record,
+                stream_name=stream_name,
+                text=data.decode("utf-8", errors="replace"),
+                offset=previous_offset,
+            )
+            emitted = True
+        return emitted
+
     def emit_session_event(
         self,
         *,
@@ -102,12 +192,19 @@ class ManagedSessionSupervisor:
 
     async def _watch(self, session_id: str) -> None:
         stop_event = self._stop_events[session_id]
+        initial_record = self._store.load(session_id)
+        stream_offsets = (
+            self._initial_stream_offsets(initial_record)
+            if initial_record is not None
+            else {"stdout": 0, "stderr": 0}
+        )
         while not stop_event.is_set():
             record = self._store.load(session_id)
             if record is None:
                 return
+            emitted = self._publish_new_output_chunks(record, stream_offsets)
             combined_offset = self._combined_offset(record)
-            if combined_offset != (record.last_log_offset or 0):
+            if emitted or combined_offset != (record.last_log_offset or 0):
                 await self._store.update(
                     session_id,
                     last_log_offset=combined_offset,

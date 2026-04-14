@@ -201,9 +201,11 @@ class RuntimeLogStreamer:
         turn_id: str | None = None,
         active_turn_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        preserve_text: bool = False,
     ) -> None:
         """Emit a structured observability event into the shared live stream."""
-        normalized_text = str(text or "").strip()
+        raw_text = str(text or "")
+        normalized_text = raw_text if preserve_text else raw_text.strip()
         if not normalized_text:
             return
         timestamp = self._current_timestamp()
