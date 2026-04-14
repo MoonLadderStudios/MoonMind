@@ -68,7 +68,7 @@ steps:
       Run moonspec-breakdown only when the input is a broad technical or declarative design with multiple independently testable stories.
       Keep each generated spec isolated and process specs in dependency order when multiple specs are requested.
     skill:
-      id: moonspec-breakdown
+      id: auto
       args: {}
   - title: Plan selected spec
     instructions: |-
@@ -81,7 +81,7 @@ steps:
   - title: Generate TDD task breakdown
     instructions: |-
       Run moonspec-tasks when tasks.md is missing or upstream artifacts changed.
-      Verify tasks.md covers exactly one story and includes red-first unit tests, integration tests, implementation tasks, story validation, and final /speckit.verify work.
+      Verify tasks.md covers exactly one story and includes red-first unit tests, integration tests, implementation tasks, story validation, and final /moonspec-verify work.
     skill:
       id: moonspec-tasks
       args: {}

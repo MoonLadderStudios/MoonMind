@@ -52,4 +52,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-specify" in seeded_skill_ids
         assert "moonspec-align" in seeded_skill_ids
         assert "moonspec-verify" in seeded_skill_ids
+        assert "moonspec-breakdown" not in seeded_skill_ids
         assert "speckit-analyze" not in seeded_skill_ids
+        tasks_step = next(
+            step
+            for step in template.latest_version.steps
+            if step["title"] == "Generate TDD task breakdown"
+        )
+        assert "/moonspec-verify" in tasks_step["instructions"]
+        assert "/speckit.verify" not in tasks_step["instructions"]

@@ -19,6 +19,7 @@ import {
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
+  preferredTemplate,
   resolveObjectiveInstructions,
   TaskCreatePage,
 } from "./task-create";
@@ -1211,6 +1212,41 @@ describe("Task Create Entrypoint", () => {
           text: async () => "Unhandled fetch",
         } as Response);
       });
+  });
+
+  it("prefers the seeded MoonSpec orchestrate template over legacy SpecKit rows", () => {
+    const preferred = preferredTemplate([
+      {
+        slug: "speckit-orchestrate",
+        scope: "global",
+        title: "SpecKit Orchestrate",
+      },
+      {
+        slug: "moonspec-orchestrate",
+        scope: "global",
+        title: "MoonSpec Orchestrate",
+      },
+    ]);
+
+    expect(preferred?.slug).toBe("moonspec-orchestrate");
+    expect(preferred?.scope).toBe("global");
+  });
+
+  it("falls back to the legacy SpecKit orchestrate template when MoonSpec is absent", () => {
+    const preferred = preferredTemplate([
+      {
+        slug: "speckit-orchestrate",
+        scope: "global",
+        title: "SpecKit Orchestrate",
+      },
+      {
+        slug: "other-template",
+        scope: "global",
+        title: "Other Template",
+      },
+    ]);
+
+    expect(preferred?.slug).toBe("speckit-orchestrate");
   });
 
   afterEach(() => {
