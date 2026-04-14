@@ -52,6 +52,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_TASK_EDITING_ENABLED=${TEMPORAL_TASK_EDITING_ENABLED:-true}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
@@ -66,6 +67,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./.agents:/app/.agents:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
+      - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs:ro
       - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
@@ -265,12 +267,14 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs
     entrypoint:
       - /bin/sh
@@ -308,12 +312,14 @@ services:
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
@@ -356,12 +362,14 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
@@ -417,12 +425,14 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
@@ -493,12 +503,14 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
@@ -553,12 +565,14 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
@@ -595,6 +609,7 @@ services:
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
     volumes:
@@ -603,6 +618,7 @@ services:
       - ./api_service:/app/api_service:ro
       - ./model_data:/app/model_data:ro
       - ./api_service:/app/api_service:ro
+      - moonmind_secrets:/app/var/secrets
       - ./init_db:/app/init_db
     command: sh /app/init_db/init_db_entrypoint.sh
     networks:
@@ -749,6 +765,8 @@ volumes:
   workflow_workspaces:
   agent_workspaces:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
+  moonmind_secrets:
+    name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
   unreal_ccache_volume:
     name: unreal_ccache_volume
   unreal_ubt_volume:

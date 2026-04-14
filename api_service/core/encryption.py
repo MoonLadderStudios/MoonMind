@@ -17,8 +17,8 @@ def get_encryption_key() -> str:
     1. settings.security.ENCRYPTION_MASTER_KEY
     2. Docker secret at /run/secrets/moonmind_master_key
     3. Project-local var/secrets/encryption_master_key
-       (If absent and MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=1, a new key is
-       generated and written here; otherwise resolution fails).
+       (If absent, a new key is generated and written here by default. Set
+       MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=0 to disable generation).
     """
     global _ACTIVE_ENCRYPTION_KEY
     if _ACTIVE_ENCRYPTION_KEY is not None:
@@ -55,10 +55,10 @@ def get_encryption_key() -> str:
             logger.error("failed_to_read_local_secret", error=str(e), path=str(local_secret_path))
             raise ValueError("Could not read local encryption master key.") from e
 
-    allow_gen = os.environ.get("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "0")
-    if allow_gen != "1":
+    allow_gen = os.environ.get("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
+    if allow_gen.strip().lower() in {"0", "false", "no", "off"}:
         raise ValueError("Could not resolve or initialize ENCRYPTION_MASTER_KEY. "
-                         "Auto-generation is disabled unless MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=1")
+                         "Auto-generation is disabled by MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=0")
 
     # 4. Generate and persist new key for baseline local-first startup
     try:
