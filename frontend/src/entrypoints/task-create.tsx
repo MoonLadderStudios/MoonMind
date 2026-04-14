@@ -2451,7 +2451,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     setJiraImageImporting(true);
     try {
-      const downloaded = await Promise.all(
+      const downloaded = await Promise.allSettled(
         toDownload.map(async (attachment) => {
           const response = await fetch(attachment.downloadUrl);
           if (!response.ok) {
@@ -2469,7 +2469,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             : file;
         }),
       );
-      const files = downloaded.filter((file): file is File => file !== null);
+      const files = downloaded
+        .filter(
+          (result): result is PromiseFulfilledResult<File | null> =>
+            result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+        .filter((file): file is File => file !== null);
+      const failures = downloaded
+        .filter(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        )
+        .map((result) =>
+          result.reason instanceof Error
+            ? result.reason.message
+            : "Failed to download Jira image.",
+        );
       if (files.length > 0) {
         const combinedFiles = [...selectedAttachmentFiles, ...files];
         const validation = validateAttachmentFiles(combinedFiles, attachmentPolicy);
@@ -2479,10 +2495,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         setSelectedAttachmentFiles(combinedFiles);
       }
+      const messages: string[] = [];
       if (eligible.length > toDownload.length) {
-        setSubmitMessage(
+        messages.push(
           "Some Jira images were skipped because the attachment limit was reached.",
         );
+      }
+      if (failures.length > 0) {
+        const uniqueFailures = Array.from(new Set(failures));
+        messages.push(
+          uniqueFailures.length === 1
+            ? (uniqueFailures[0] ?? "Failed to download Jira image.")
+            : `${failures.length} Jira images failed to download. ${uniqueFailures
+                .slice(0, 3)
+                .join(" ")}`,
+        );
+      }
+      if (messages.length > 0) {
+        setSubmitMessage(messages.join(" "));
       }
     } catch (error) {
       const failure =

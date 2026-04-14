@@ -196,8 +196,9 @@ async def download_issue_attachment(
             issue_key.upper(),
             attachment_id,
         )
-        filename = attachment.filename.replace('"', "")
-        disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+        disposition = (
+            f"attachment; filename*=UTF-8''{quote(attachment.filename, safe='')}"
+        )
         return Response(
             content=payload,
             media_type=content_type or attachment.content_type,

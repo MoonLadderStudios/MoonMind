@@ -37,6 +37,7 @@ class _FakeJiraBrowserService:
         self.calls: list[tuple[str, Any]] = []
         self.raise_error: JiraToolError | None = None
         self.raise_unexpected = False
+        self.attachment_filename = "wireframe.png"
 
     def _maybe_raise(self) -> None:
         if self.raise_unexpected:
@@ -131,7 +132,7 @@ class _FakeJiraBrowserService:
         return (
             JiraIssueAttachment(
                 id=attachment_id,
-                filename="wireframe.png",
+                filename=self.attachment_filename,
                 contentType="image/png",
                 sizeBytes=4,
                 downloadUrl=f"/api/jira/issues/{issue_key}/attachments/{attachment_id}/content",
@@ -258,6 +259,25 @@ async def test_issue_attachment_download_endpoint(
             {"issue_key": "ENG-1", "attachment_id": "100"},
         )
     ]
+
+
+async def test_issue_attachment_download_preserves_quoted_filename(
+    router_app: tuple[FastAPI, _FakeJiraBrowserService],
+) -> None:
+    app, service = router_app
+    service.attachment_filename = 'my "file".png'
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/jira/issues/eng-1/attachments/100/content")
+
+    assert response.status_code == 200
+    assert (
+        response.headers["content-disposition"]
+        == "attachment; filename*=UTF-8''my%20%22file%22.png"
+    )
 
 
 async def test_router_maps_jira_errors_to_safe_details(

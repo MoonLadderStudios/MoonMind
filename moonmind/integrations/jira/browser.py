@@ -887,6 +887,10 @@ class JiraBrowserService:
                 allowed_origins.add((base.scheme, base.netloc))
         if self._settings.atlassian_cloud_id:
             allowed_origins.add(("https", "api.atlassian.com"))
+            if parsed.scheme == "https" and self._is_atlassian_tenant_host(
+                parsed.netloc
+            ):
+                allowed_origins.add((parsed.scheme, parsed.netloc))
         if not allowed_origins or (parsed.scheme, parsed.netloc) not in allowed_origins:
             raise JiraToolError(
                 "Jira attachment download URL is outside the configured Jira origin.",
@@ -898,6 +902,10 @@ class JiraBrowserService:
         if parsed.query:
             path = f"{path}?{parsed.query}"
         return path
+
+    def _is_atlassian_tenant_host(self, host: str) -> bool:
+        normalized = str(host or "").strip().lower()
+        return normalized == "atlassian.net" or normalized.endswith(".atlassian.net")
 
     def _is_image_content_type(self, value: str) -> bool:
         return str(value or "").strip().lower().startswith("image/")

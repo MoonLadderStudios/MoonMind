@@ -667,6 +667,47 @@ async def test_download_issue_image_attachment_validates_membership_and_origin()
     ]
 
 
+async def test_download_issue_image_attachment_allows_tenant_origin_in_scoped_mode() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=AtlassianSettings(
+            atlassian_cloud_id="cloud-123",
+            jira=JiraSettings(
+                jira_allowed_projects="ENG",
+            ),
+        ),
+        responses=[
+            {
+                "key": "ENG-123",
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "10001",
+                            "filename": "wireframe.png",
+                            "mimeType": "image/png",
+                            "size": 128,
+                            "content": "https://example.atlassian.net/secure/attachment/10001/wireframe.png",
+                        }
+                    ]
+                },
+            },
+            (b"image-bytes", "image/png"),
+        ],
+    )
+
+    attachment, payload, content_type = await service.download_issue_image_attachment(
+        "ENG-123",
+        "10001",
+    )
+
+    assert attachment.filename == "wireframe.png"
+    assert payload == b"image-bytes"
+    assert content_type == "image/png"
+    assert [call["path"] for call in service.calls] == [
+        "/issue/ENG-123",
+        "/secure/attachment/10001/wireframe.png",
+    ]
+
+
 async def test_issue_detail_ignores_blank_browse_url_and_falls_back_to_self_url() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
