@@ -63,11 +63,7 @@ export function DashboardAlerts() {
     return null;
   }
 
-  const hasProviderSecret = secretsData.items.some(
-    (s) =>
-      s.status === 'active' &&
-      (PROVIDER_KEY_SLUGS as readonly string[]).includes(s.slug)
-  );
+  const hasProviderSecret = hasActiveSlug(secretsData.items, PROVIDER_KEY_SLUGS);
 
   const hasOauthVolume = profilesData
     ? profilesData.some((p) => p.enabled && p.credential_source === 'oauth_volume')
@@ -77,7 +73,7 @@ export function DashboardAlerts() {
   const hasGithub = hasActiveSlug(secretsData.items, GITHUB_TOKEN_SLUGS);
 
   const needsAiKey = !hasProviderKey;
-  
+
   if (!needsAiKey && hasGithub) {
     return null;
   }

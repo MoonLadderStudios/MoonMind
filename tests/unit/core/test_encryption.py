@@ -59,10 +59,12 @@ def test_get_encryption_key_from_docker_secret(mock_path, mock_settings):
     assert key == "dummy_docker_key"
 
 
-def test_get_encryption_key_from_local_file_generated(mock_settings, tmp_path, monkeypatch):
-    """Test that if no key exists, one is generated securely."""
+def test_get_encryption_key_from_local_file_generated_by_default(
+    mock_settings, tmp_path, monkeypatch
+):
+    """Test that if no key exists, one is generated securely by default."""
     mock_settings.workflow.repo_root = str(tmp_path)
-    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
+    monkeypatch.delenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", raising=False)
     
     key = encryption.get_encryption_key()
     
@@ -81,6 +83,20 @@ def test_get_encryption_key_from_local_file_generated(mock_settings, tmp_path, m
     # Should not be readable by group or others
     assert not bool(st_mode & stat.S_IRGRP)
     assert not bool(st_mode & stat.S_IROTH)
+
+
+def test_get_encryption_key_local_generation_can_be_disabled(
+    mock_settings, tmp_path, monkeypatch
+):
+    """Operators can still fail fast instead of creating a local key."""
+    mock_settings.workflow.repo_root = str(tmp_path)
+    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "0")
+
+    with pytest.raises(ValueError, match="Auto-generation is disabled"):
+        encryption.get_encryption_key()
+
+    local_key_file = tmp_path / "var" / "secrets" / "encryption_master_key"
+    assert not local_key_file.exists()
 
 
 def test_get_encryption_key_from_local_file_reads_existing(mock_settings, tmp_path):

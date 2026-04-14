@@ -85,6 +85,7 @@ from moonmind.factories.storage_context_factory import build_storage_context
 from moonmind.factories.vector_store_factory import build_vector_store
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
+from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
 
@@ -269,10 +270,12 @@ async def _sync_env_managed_secrets() -> int:
     except Exception as exc:
         # Keep startup resilient: this is convenience migration behavior, not a hard
         # startup dependency.
+        redacted_error = SecretRedactor.from_environ(
+            extra_secrets=candidate_env_secrets.values()
+        ).scrub(str(exc))
         logger.warning(
             "Failed to sync managed secrets from environment during startup: %s",
-            exc,
-            exc_info=True,
+            redacted_error,
         )
         return 0
 
@@ -1059,9 +1062,10 @@ async def startup_event():
                         f"Configuration error during default user setup on startup: {ve}"
                     )
                 except Exception as e:
+                    redacted_error = SecretRedactor.from_environ().scrub(str(e))
                     logger.error(
-                        f"Error ensuring default user/profile on startup: {e}",
-                        exc_info=True,
+                        "Error ensuring default user/profile on startup: %s",
+                        redacted_error,
                     )
     else:
         logger.info(

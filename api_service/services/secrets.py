@@ -165,7 +165,10 @@ class SecretsService:
         """
         imported_count = 0
         for key, value in env_dict.items():
-            result = await db.execute(select(ManagedSecret).where(ManagedSecret.slug == key))
+            with db.no_autoflush:
+                result = await db.execute(
+                    select(ManagedSecret).where(ManagedSecret.slug == key)
+                )
             existing = result.scalar_one_or_none()
 
             if existing:
