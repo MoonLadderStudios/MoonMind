@@ -1279,6 +1279,17 @@ async function createInputArtifact(
     );
   }
 
+  await completeArtifactUpload(
+    artifactId,
+    "Failed to finalize task input artifact upload.",
+  );
+  return { artifactId };
+}
+
+async function completeArtifactUpload(
+  artifactId: string,
+  failureMessage: string,
+): Promise<void> {
   const completeUrl = `/api/artifacts/${encodeURIComponent(artifactId)}/complete`;
   let completeError: Error | null = null;
   const completeRetryScheduleMs = [0, ...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
@@ -1316,12 +1327,12 @@ async function createInputArtifact(
       throw error;
     }
     if (completeResponse.ok) {
-      return { artifactId };
+      return;
     }
 
     const detail = await responseErrorDetail(
       completeResponse,
-      "Failed to finalize task input artifact upload.",
+      failureMessage,
     );
     completeError = new Error(detail.message);
     if (
@@ -1334,9 +1345,7 @@ async function createInputArtifact(
     }
   }
 
-  throw (
-    completeError ?? new Error("Failed to finalize task input artifact upload.")
-  );
+  throw completeError ?? new Error(failureMessage);
 }
 
 async function createStepAttachmentArtifact(
@@ -1432,25 +1441,10 @@ async function createStepAttachmentArtifact(
     );
   }
 
-  const completeResponse = await fetch(
-    `/api/artifacts/${encodeURIComponent(artifactId)}/complete`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ parts: [] }),
-    },
+  await completeArtifactUpload(
+    artifactId,
+    `Failed to finalize attachment ${filename}.`,
   );
-  if (!completeResponse.ok) {
-    throw new Error(
-      await responseErrorMessage(
-        completeResponse,
-        `Failed to finalize attachment ${filename}.`,
-      ),
-    );
-  }
 
   return {
     artifactId,
@@ -3557,6 +3551,125 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       Object.keys(primarySkillArgs).length > 0 ||
       taskSkillRequiredCapabilities.length > 0;
 
+    const parsedAdditionalStepInputs: Array<{
+      sourceIndex: number;
+      step: StepState;
+      skillId: string;
+      skillArgsRaw: string;
+      skillArgs: Record<string, unknown>;
+      skillCaps: string[];
+      hasStepContent: boolean;
+    }> = [];
+    for (let index = 1; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (!step) {
+        continue;
+      }
+      const stepSkillId = step.skillId.trim();
+      const stepSkillArgsRaw = shouldShowSkillArgs(step)
+        ? step.skillArgs.trim()
+        : "";
+      const stepSkillCaps = parseCapabilitiesCsv(
+        step.skillRequiredCapabilities,
+      );
+      const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
+      const hasStepContent =
+        Boolean(step.instructions) ||
+        stepAttachmentFiles.length > 0 ||
+        Boolean(stepSkillId) ||
+        Boolean(stepSkillArgsRaw) ||
+        stepSkillCaps.length > 0;
+      let stepSkillArgs: Record<string, unknown> = {};
+      if (stepSkillArgsRaw) {
+        try {
+          const parsed = JSON.parse(stepSkillArgsRaw) as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Step skill args must be an object.");
+          }
+          stepSkillArgs = parsed as Record<string, unknown>;
+        } catch {
+          setSubmitMessage(
+            `Step ${index + 1} Skill Args must be valid JSON object text.`,
+          );
+          return;
+        }
+      }
+      parsedAdditionalStepInputs.push({
+        sourceIndex: index,
+        step,
+        skillId: stepSkillId,
+        skillArgsRaw: stepSkillArgsRaw,
+        skillArgs: stepSkillArgs,
+        skillCaps: stepSkillCaps,
+        hasStepContent,
+      });
+    }
+
+    const additionalStepValidation = validatePrimaryStepSubmission(
+      primaryStep,
+      {
+        additionalStepsCount: parsedAdditionalStepInputs.filter(
+          (entry) => entry.hasStepContent,
+        ).length,
+      },
+    );
+    if (!additionalStepValidation.ok) {
+      setSubmitMessage(additionalStepValidation.error);
+      return;
+    }
+
+    let schedulePayload: Record<string, unknown> | null = null;
+    if (scheduleMode === "once") {
+      if (!scheduledFor.trim()) {
+        setSubmitMessage("Scheduled time is required for deferred scheduling.");
+        return;
+      }
+      const scheduleDate = new Date(scheduledFor);
+      if (Number.isNaN(scheduleDate.getTime()) || scheduleDate <= new Date()) {
+        setSubmitMessage("Scheduled time must be a valid future date.");
+        return;
+      }
+      schedulePayload = {
+        mode: "once",
+        scheduledFor: scheduleDate.toISOString(),
+      };
+    } else if (scheduleMode === "deferred_minutes") {
+      const deferredMinutes = Number(scheduleDeferredMinutes.trim());
+      if (
+        !Number.isFinite(deferredMinutes) ||
+        !Number.isInteger(deferredMinutes) ||
+        deferredMinutes <= 0
+      ) {
+        setSubmitMessage(
+          "A valid positive whole number of minutes is required for deferred scheduling.",
+        );
+        return;
+      }
+      if (deferredMinutes > 525600) {
+        setSubmitMessage("Deferred minutes cannot exceed 525 600 (one year).");
+        return;
+      }
+      schedulePayload = {
+        mode: "once",
+        scheduledFor: new Date(
+          Date.now() + deferredMinutes * 60_000,
+        ).toISOString(),
+      };
+    } else if (scheduleMode === "recurring") {
+      if (!scheduleCron.trim()) {
+        setSubmitMessage(
+          "Cron expression is required for recurring scheduling.",
+        );
+        return;
+      }
+      schedulePayload = {
+        mode: "recurring",
+        cron: scheduleCron.trim(),
+        timezone: scheduleTimezone.trim() || "UTC",
+        name: scheduleName.trim() || "Inline schedule",
+      };
+    }
+
     setIsSubmitting(true);
     let uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     try {
@@ -3611,48 +3724,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       payload: Record<string, unknown>;
     }> = [];
     const stepSkillRequiredCapabilities: string[] = [];
-    for (let index = 1; index < steps.length; index += 1) {
-      const step = steps[index];
-      if (!step) {
-        continue;
-      }
+    for (const {
+      sourceIndex,
+      step,
+      skillId: stepSkillId,
+      skillArgsRaw: stepSkillArgsRaw,
+      skillArgs: stepSkillArgs,
+      skillCaps: stepSkillCaps,
+      hasStepContent: hasPreUploadStepContent,
+    } of parsedAdditionalStepInputs) {
       const stepAttachments = uploadedStepAttachments[step.localId] || [];
       const stepInstructions = appendStepAttachmentInstructions(
         step.instructions,
         stepAttachments,
       );
-      const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw = shouldShowSkillArgs(step)
-        ? step.skillArgs.trim()
-        : "";
-      const stepSkillCaps = parseCapabilitiesCsv(
-        step.skillRequiredCapabilities,
-      );
-      const hasStepContent =
-        Boolean(stepInstructions) ||
-        stepAttachments.length > 0 ||
-        Boolean(stepSkillId) ||
-        Boolean(stepSkillArgsRaw) ||
-        stepSkillCaps.length > 0;
-      if (!hasStepContent) {
+      if (!hasPreUploadStepContent && !stepInstructions) {
         continue;
-      }
-
-      let stepSkillArgs: Record<string, unknown> = {};
-      if (stepSkillArgsRaw) {
-        try {
-          const parsed = JSON.parse(stepSkillArgsRaw) as unknown;
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error("Step skill args must be an object.");
-          }
-          stepSkillArgs = parsed as Record<string, unknown>;
-        } catch {
-          setSubmitMessage(
-            `Step ${index + 1} Skill Args must be valid JSON object text.`,
-          );
-          setIsSubmitting(false);
-          return;
-        }
       }
 
       const stepPayload: Record<string, unknown> = {};
@@ -3684,19 +3771,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         };
         stepSkillRequiredCapabilities.push(...stepSkillCaps);
       }
-      additionalSteps.push({ sourceIndex: index, payload: stepPayload });
-    }
-
-    const additionalStepValidation = validatePrimaryStepSubmission(
-      primaryStep,
-      {
-        additionalStepsCount: additionalSteps.length,
-      },
-    );
-    if (!additionalStepValidation.ok) {
-      setSubmitMessage(additionalStepValidation.error);
-      setIsSubmitting(false);
-      return;
+      additionalSteps.push({ sourceIndex, payload: stepPayload });
     }
 
     const includePrimaryStepForObjectiveOverride =
@@ -3864,60 +3939,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       },
     };
 
-    if (scheduleMode === "once") {
-      if (!scheduledFor.trim()) {
-        setSubmitMessage("Scheduled time is required for deferred scheduling.");
-        setIsSubmitting(false);
-        return;
-      }
-      const scheduleDate = new Date(scheduledFor);
-      if (Number.isNaN(scheduleDate.getTime()) || scheduleDate <= new Date()) {
-        setSubmitMessage("Scheduled time must be a valid future date.");
-        setIsSubmitting(false);
-        return;
-      }
-      (requestBody.payload as Record<string, unknown>).schedule = {
-        mode: "once",
-        scheduledFor: scheduleDate.toISOString(),
-      };
-    } else if (scheduleMode === "deferred_minutes") {
-      const deferredMinutes = Number(scheduleDeferredMinutes.trim());
-      if (
-        !Number.isFinite(deferredMinutes) ||
-        !Number.isInteger(deferredMinutes) ||
-        deferredMinutes <= 0
-      ) {
-        setSubmitMessage(
-          "A valid positive whole number of minutes is required for deferred scheduling.",
-        );
-        setIsSubmitting(false);
-        return;
-      }
-      if (deferredMinutes > 525600) {
-        setSubmitMessage("Deferred minutes cannot exceed 525 600 (one year).");
-        setIsSubmitting(false);
-        return;
-      }
-      (requestBody.payload as Record<string, unknown>).schedule = {
-        mode: "once",
-        scheduledFor: new Date(
-          Date.now() + deferredMinutes * 60_000,
-        ).toISOString(),
-      };
-    } else if (scheduleMode === "recurring") {
-      if (!scheduleCron.trim()) {
-        setSubmitMessage(
-          "Cron expression is required for recurring scheduling.",
-        );
-        setIsSubmitting(false);
-        return;
-      }
-      (requestBody.payload as Record<string, unknown>).schedule = {
-        mode: "recurring",
-        cron: scheduleCron.trim(),
-        timezone: scheduleTimezone.trim() || "UTC",
-        name: scheduleName.trim() || "Inline schedule",
-      };
+    if (schedulePayload) {
+      (requestBody.payload as Record<string, unknown>).schedule =
+        schedulePayload;
     }
 
     try {
@@ -4005,16 +4029,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (inputArtifactRef) {
         await linkInputArtifact(inputArtifactRef, created);
       }
-      await Promise.all(
-        Object.values(uploadedStepAttachments)
-          .flat()
-          .map((attachment) =>
-            linkInputArtifact(attachment.artifactId, created, {
-              linkType: "input.attachment",
-              label: attachment.filename,
-            }),
-          ),
-      );
+      for (const attachment of Object.values(uploadedStepAttachments).flat()) {
+        await linkInputArtifact(attachment.artifactId, created, {
+          linkType: "input.attachment",
+          label: attachment.filename,
+        });
+      }
       const redirectPath =
         String(created.redirectPath || "").trim() ||
         (created.definitionId
