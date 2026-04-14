@@ -11,6 +11,7 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.config.settings import settings
 from moonmind.schemas.managed_session_models import CodexManagedSessionWorkflowInput
+from moonmind.workflows.temporal.workflows import agent_session as agent_session_module
 from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
 )
@@ -73,7 +74,19 @@ async def mock_replay_publish_session_artifacts(payload: dict[str, Any]) -> dict
 
 
 @pytest.mark.asyncio
-async def test_agent_session_terminate_history_replays_deterministically() -> None:
+async def test_agent_session_terminate_history_replays_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "set_current_details",
+        lambda _details: None,
+    )
+    monkeypatch.setattr(
+        agent_session_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
     session_input = CodexManagedSessionWorkflowInput.model_validate(
         {
             "taskRunId": "task-run-session-replay",
