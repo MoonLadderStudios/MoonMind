@@ -343,11 +343,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     fireEvent.click(runtimeDefaultCheckbox);
     const submitButton = screen.getByRole('button', { name: 'Update provider profile' });
-    const form = submitButton.closest('form');
-    if (!form) {
-      throw new Error('Expected provider profile update form');
-    }
-    fireEvent.submit(form);
+    fireEvent.click(submitButton);
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(

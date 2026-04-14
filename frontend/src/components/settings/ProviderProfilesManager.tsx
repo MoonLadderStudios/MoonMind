@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 export interface ProviderProfile {
@@ -59,6 +59,29 @@ interface ProviderProfileFormState {
   priority: string;
   clearEnvKeysText: string;
   accountLabel: string;
+}
+
+interface ProviderProfileSavePayload {
+  profile_id: string;
+  runtime_id: string;
+  provider_id: string;
+  provider_label: string | null;
+  default_model: string | null;
+  credential_source: string;
+  runtime_materialization_mode: string;
+  secret_refs: Record<string, string>;
+  volume_ref: string | null;
+  volume_mount_path: string | null;
+  max_parallel_runs: number;
+  cooldown_after_429_seconds: number;
+  rate_limit_policy: string;
+  enabled: boolean;
+  is_default: boolean;
+  command_behavior: Record<string, unknown> | null;
+  tags: string[] | null;
+  priority: number | null;
+  clear_env_keys: string[] | null;
+  account_label: string | null;
 }
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
@@ -174,6 +197,43 @@ function summarizeSecretRefs(secretRefs: Record<string, string>): string {
   return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
 }
 
+function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePayload {
+  const payload = {
+    profile_id: form.profileId.trim(),
+    runtime_id: form.runtimeId.trim(),
+    provider_id: form.providerId.trim(),
+    provider_label: form.providerLabel.trim() || null,
+    default_model: form.defaultModel.trim() || null,
+    credential_source: form.credentialSource,
+    runtime_materialization_mode: form.runtimeMaterializationMode,
+    secret_refs: parseSecretRefs(form.secretRefsText),
+    volume_ref: form.volumeRef.trim() || null,
+    volume_mount_path: form.volumeMountPath.trim() || null,
+    max_parallel_runs: Number(form.maxParallelRuns),
+    cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
+    rate_limit_policy: form.rateLimitPolicy,
+    enabled: form.enabled,
+    is_default: form.isDefault,
+    command_behavior: parseCommandBehavior(form.commandBehavior),
+    tags: parseTags(form.tagsText),
+    priority: parsePriority(form.priority),
+    clear_env_keys: parseClearEnvKeys(form.clearEnvKeysText),
+    account_label: form.accountLabel.trim() || null,
+  };
+
+  if (!payload.profile_id) {
+    throw new Error('Profile ID is required.');
+  }
+  if (!payload.runtime_id) {
+    throw new Error('Runtime ID is required.');
+  }
+  if (!payload.provider_id) {
+    throw new Error('Provider ID is required.');
+  }
+
+  return payload;
+}
+
 export function ProviderProfilesManager({
   profiles,
   secretSlugs,
@@ -194,42 +254,7 @@ export function ProviderProfilesManager({
   };
 
   const saveMutation = useMutation({
-    mutationFn: async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-
-      const payload = {
-        profile_id: form.profileId.trim(),
-        runtime_id: form.runtimeId.trim(),
-        provider_id: form.providerId.trim(),
-        provider_label: form.providerLabel.trim() || null,
-        default_model: form.defaultModel.trim() || null,
-        credential_source: form.credentialSource,
-        runtime_materialization_mode: form.runtimeMaterializationMode,
-        secret_refs: parseSecretRefs(form.secretRefsText),
-        volume_ref: form.volumeRef.trim() || null,
-        volume_mount_path: form.volumeMountPath.trim() || null,
-        max_parallel_runs: Number(form.maxParallelRuns),
-        cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
-        rate_limit_policy: form.rateLimitPolicy,
-        enabled: form.enabled,
-        is_default: form.isDefault,
-        command_behavior: parseCommandBehavior(form.commandBehavior),
-        tags: parseTags(form.tagsText),
-        priority: parsePriority(form.priority),
-        clear_env_keys: parseClearEnvKeys(form.clearEnvKeysText),
-        account_label: form.accountLabel.trim() || null,
-      };
-
-      if (!payload.profile_id) {
-        throw new Error('Profile ID is required.');
-      }
-      if (!payload.runtime_id) {
-        throw new Error('Runtime ID is required.');
-      }
-      if (!payload.provider_id) {
-        throw new Error('Provider ID is required.');
-      }
-
+    mutationFn: async (payload: ProviderProfileSavePayload) => {
       const endpoint = isEditing
         ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
         : '/api/v1/provider-profiles';
@@ -504,7 +529,20 @@ export function ProviderProfilesManager({
           </div>
         </div>
 
-        <form className="space-y-6" onSubmit={(event) => saveMutation.mutate(event)}>
+        <form
+          className="space-y-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            try {
+              saveMutation.mutate(buildSavePayload(form));
+            } catch (error) {
+              onNotice({
+                level: 'error',
+                text: error instanceof Error ? error.message : 'Invalid provider profile form.',
+              });
+            }
+          }}
+        >
           {/* ── Required: Identity ── */}
           <fieldset className="rounded-2xl border border-amber-200/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-900/10 p-5 space-y-4">
             <legend className="px-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
