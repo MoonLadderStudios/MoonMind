@@ -3345,6 +3345,80 @@ describe("Task Create Entrypoint", () => {
     ).toBeNull();
   });
 
+  it("keeps the Jira browser disabled when endpoint templates are not MoonMind-owned paths", async () => {
+    const payload = withJiraIntegration();
+    const initialData = payload.initialData as {
+      dashboardConfig: {
+        sources?: Record<string, unknown>;
+      };
+    };
+    renderWithClient(
+      <TaskCreatePage
+        payload={{
+          ...payload,
+          initialData: {
+            ...initialData,
+            dashboardConfig: {
+              ...initialData.dashboardConfig,
+              sources: {
+                ...initialData.dashboardConfig.sources,
+                jira: {
+                  ...(initialData.dashboardConfig.sources?.jira as Record<
+                    string,
+                    unknown
+                  >),
+                  projects: "https://jira.example.test/rest/api/3/project",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
+  it("keeps the Jira browser disabled when endpoint templates include padding", async () => {
+    const payload = withJiraIntegration();
+    const initialData = payload.initialData as {
+      dashboardConfig: {
+        sources?: Record<string, unknown>;
+      };
+    };
+    renderWithClient(
+      <TaskCreatePage
+        payload={{
+          ...payload,
+          initialData: {
+            ...initialData,
+            dashboardConfig: {
+              ...initialData.dashboardConfig,
+              sources: {
+                ...initialData.dashboardConfig.sources,
+                jira: {
+                  ...(initialData.dashboardConfig.sources?.jira as Record<
+                    string,
+                    unknown
+                  >),
+                  projects: "/api/jira/projects ",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Browse Jira story/ }),
+    ).toBeNull();
+  });
+
   it("does not restore Jira project or board defaults after a manual clear", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 

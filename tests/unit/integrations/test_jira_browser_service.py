@@ -134,6 +134,41 @@ async def test_browser_service_surfaces_missing_jira_configuration() -> None:
     assert excinfo.value.code == "jira_not_configured"
 
 
+async def test_verify_connection_with_project_uses_allowed_project_boundary() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[{"id": "10000", "key": "ENG", "name": "Engineering"}],
+    )
+
+    result = await service.verify_connection(project_key="eng")
+
+    assert result.ok is True
+    assert result.project_key == "ENG"
+    assert result.project_name == "Engineering"
+    assert service.calls == [
+        {
+            "method": "GET",
+            "path": "/project/ENG",
+            "action": "jira_browser.verify_connection",
+            "params": None,
+            "json_body": None,
+            "context": {"projectKey": "ENG"},
+        }
+    ]
+
+
+async def test_verify_connection_denies_disallowed_project_before_request() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+    )
+
+    with pytest.raises(JiraToolError) as excinfo:
+        await service.verify_connection(project_key="OPS")
+
+    assert excinfo.value.code == "jira_policy_denied"
+    assert service.calls == []
+
+
 async def test_list_projects_fetches_only_allowed_projects() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG,OPS"),
@@ -530,6 +565,28 @@ async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     assert result.acceptance_criteria_text == "Given a board"
     assert "ENG-123: Add Jira browser" in result.recommended_imports.preset_instructions
     assert "Acceptance criteria\nGiven a board" in result.recommended_imports.step_instructions
+
+
+async def test_issue_detail_ignores_blank_browse_url_and_falls_back_to_self_url() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "key": "ENG-123",
+                "browseUrl": "  ",
+                "self": "https://jira.example/rest/api/3/issue/10001",
+                "fields": {
+                    "summary": "Add Jira browser",
+                    "status": {"id": "1", "name": "Open"},
+                    "description": "Do the work",
+                },
+            }
+        ],
+    )
+
+    result = await service.get_issue("ENG-123")
+
+    assert result.url == "https://jira.example/browse/ENG-123"
 
 
 async def test_issue_detail_maps_status_to_board_column_when_board_context_is_provided() -> None:

@@ -1,0 +1,67 @@
+feature: jira-ui-test-coverage
+mode: runtime
+requiredValidation:
+  runtimeConfig:
+    surfaces:
+      - api_service/api/routers/task_dashboard_view_model.py
+      - tests/unit/api/routers/test_task_dashboard_view_model.py
+    assertions:
+      - jira_config_absent_when_disabled
+      - jira_config_present_when_enabled
+      - endpoints_are_moonmind_owned
+      - defaults_are_exposed_when_configured
+  backendBrowserApi:
+    surfaces:
+      - api_service/api/routers/jira_browser.py
+      - tests/unit/api/routers/test_jira_browser.py
+    endpoints:
+      - GET /api/jira/connections/verify
+      - GET /api/jira/projects
+      - GET /api/jira/projects/{projectKey}/boards
+      - GET /api/jira/boards/{boardId}/columns
+      - GET /api/jira/boards/{boardId}/issues
+      - GET /api/jira/issues/{issueKey}
+    assertions:
+      - successful_responses_are_normalized
+      - known_errors_are_structured
+      - unexpected_errors_are_structured
+      - secret_like_messages_are_sanitized
+  backendService:
+    surfaces:
+      - moonmind/integrations/jira/browser.py
+      - tests/unit/integrations/test_jira_browser_service.py
+    assertions:
+      - connection_verify_uses_policy_boundary
+      - allowed_project_fetches_are_scoped
+      - board_columns_preserve_order
+      - issues_group_by_status_mapping
+      - empty_columns_are_renderable
+      - unmapped_statuses_are_safe
+      - issue_detail_returns_plain_text
+      - issue_detail_returns_recommended_imports
+      - invalid_inputs_fail_before_request
+      - policy_denials_prevent_requests
+  frontendCreatePage:
+    surfaces:
+      - frontend/src/entrypoints/task-create.tsx
+      - frontend/src/entrypoints/task-create.test.tsx
+    assertions:
+      - jira_controls_hidden_when_disabled
+      - browser_opens_from_preset_target
+      - browser_opens_from_step_target
+      - board_columns_load_in_order
+      - column_switch_updates_visible_issues
+      - selecting_issue_loads_preview_without_import
+      - replace_import_updates_preset_only
+      - append_import_preserves_preset_text
+      - replace_import_updates_selected_step_only
+      - template_step_import_detaches_identity
+      - preset_import_after_apply_shows_reapply_needed
+      - jira_failures_remain_local
+      - manual_creation_after_jira_failure_still_submits
+      - task_submission_payload_shape_remains_unchanged
+forbidden:
+  - required_live_jira_credentials_in_unit_tests
+  - browser_to_jira_direct_credential_path
+  - jira_specific_required_task_payload_fields
+  - raw_secret_like_error_content_in_browser_responses

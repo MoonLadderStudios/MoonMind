@@ -541,8 +541,12 @@ function readJiraItems<T>(data: unknown): T[] {
 }
 
 function normalizeMoonMindApiPath(value: unknown): string | null {
-  const normalized = String(value || "").trim();
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
   if (
+    value !== normalized ||
     !normalized ||
     !normalized.startsWith("/api/") ||
     normalized.includes("://")
