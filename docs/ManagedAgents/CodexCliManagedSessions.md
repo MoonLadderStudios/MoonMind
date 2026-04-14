@@ -4,6 +4,8 @@ Status: Desired state
 Owners: MoonMind Platform
 Last updated: 2026-04-09
 Related:
+- [`docs/ManagedAgents/SharedManagedAgentAbstractions.md`](./SharedManagedAgentAbstractions.md)
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
@@ -84,7 +86,37 @@ MoonMind maps the managed session plane to Codex App Server concepts:
 
 `codex exec --json` remains a bring-up and smoke-test harness, not the primary long-lived session protocol.
 
-## 4. Session Identity
+## 4. Mapping to Shared Managed Agent Abstractions
+
+This document is the Codex CLI runtime binding of [`SharedManagedAgentAbstractions.md`](./SharedManagedAgentAbstractions.md). It does not define a separate top-level agent model.
+
+| Shared contract | Codex CLI managed-session realization |
+| --- | --- |
+| `ManagedAgentSpec` | Task-scoped desired state for a Codex-backed managed session, including workspace, profile, permissions, observability, and reuse policy. |
+| `reconcile(spec)` | Start, resume, or replace the task-scoped session container and Codex App Server thread as required by the current binding and compatibility hash. |
+| `ManagedSessionBinding` | Binds the task-scoped `session_id` to the current `container_id`, `session_epoch`, and Codex `thread_id`. |
+| `ManagedSessionObservation` | Normalized status derived from supervisor state, App Server turn state, published artifact refs, and bounded workflow metadata. |
+| `ManagedSessionRef` | Opaque reference to the Codex session identity. Higher layers must not parse `thread_id` or container details to infer semantics. |
+| `watch(sessionRef)` | Stream normalized session and turn events from the supervisor and Codex App Server into MoonMind observability records. |
+| `sendInput(sessionRef, input)` | Execute a Codex `send_turn` action for the active thread and epoch. |
+
+Codex-specific action names such as `start_session`, `send_turn`, and `interrupt_turn` are the plane-local control vocabulary. The shared layer should still reason in terms of reconciliation, normalized observation, and opaque session refs.
+
+### 4.1 Normalized phase mapping
+
+| Shared phase | Codex CLI source state |
+| --- | --- |
+| `pending` / `reconciling` | Container launch, App Server startup, thread creation, or compatibility replacement in progress. |
+| `ready` | Session container and Codex thread are bound with no active turn. |
+| `running` | `active_turn_id` is set and Codex App Server is processing a turn. |
+| `waitingForInput` | The thread is idle and ready for the next MoonMind input. |
+| `awaitingApproval` | Codex App Server has emitted an approval or intervention request. |
+| `interrupted` | A turn was interrupted or canceled while preserving the session binding. |
+| `completed` | The task-scoped session reached normal terminal completion. |
+| `failed` | Supervisor, container, App Server, or turn failure prevents successful continuation. |
+| `deleted` | `clear_session`, cancellation cleanup, or retention policy removed the active binding. |
+
+## 5. Session Identity
 
 The canonical bounded session identity is:
 
@@ -102,7 +134,7 @@ Rules:
 4. `thread_id` identifies the active Codex App Server thread for the current epoch.
 5. `active_turn_id` identifies the in-flight Codex turn when one exists.
 
-## 5. Control Actions
+## 6. Control Actions
 
 The canonical Phase 1 control actions are:
 
@@ -117,7 +149,7 @@ The canonical Phase 1 control actions are:
 
 These actions are the stable MoonMind-side vocabulary for the Codex managed session plane. Runtime-specific transport details stay behind the adapter boundary.
 
-## 6. Clear / Reset Semantics
+## 7. Clear / Reset Semantics
 
 `clear_session` is not a terminal slash-command emulation.
 
@@ -136,11 +168,11 @@ Rules:
 - clear/reset requires a new `thread_id`
 - UI and API consumers must present the new epoch boundary explicitly
 
-## 7. Durable State Rule
+## 8. Durable State Rule
 
 The managed session plane has three different truth surfaces.
 
-### 7.1 Operator / Audit Truth
+### 8.1 Operator / Audit Truth
 
 Operator presentation, audit, and continuity review come from:
 
@@ -149,7 +181,7 @@ Operator presentation, audit, and continuity review come from:
 
 These are the authoritative surfaces operators should inspect.
 
-### 7.2 Operational Recovery Index
+### 8.2 Operational Recovery Index
 
 The JSON-backed `ManagedSessionStore` record is allowed to participate in recovery
 and reconciliation as the operational supervision index. It tracks the currently
@@ -158,7 +190,7 @@ controller and supervisor can recover or reconcile after restarts.
 
 It is not the operator/audit source of truth.
 
-### 7.3 Disposable Cache
+### 8.3 Disposable Cache
 
 Container-local runtime state is performance and continuity cache only.
 
@@ -171,7 +203,7 @@ Operator/audit truth must not depend on:
 
 Artifact-backed logs and diagnostics remain authoritative even when live streaming exists.
 
-## 8. Artifact Expectations
+## 9. Artifact Expectations
 
 Every managed Codex step must remain execution-centric even when a container is reused across steps.
 
@@ -184,7 +216,7 @@ refs and related session observability. The transitional in-container
 fallback or bring-up helpers, but they are not the production publication path while
 they return empty publication refs.
 
-## 9. Non-goals for This Contract Slice
+## 10. Non-goals for This Contract Slice
 
 This contract does not define:
 

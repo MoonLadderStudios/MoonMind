@@ -5,7 +5,7 @@ Owners: MoonMind Platform
 Last updated: 2026-04-08
 Related:
 - `docs/ManagedAgents/LiveLogs.md`
-- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/ManagedAgents/CodexCliManagedSessions.md`
 - `docs/tmp/009-LiveLogsPlan.md`
 
 ## 1. Objective

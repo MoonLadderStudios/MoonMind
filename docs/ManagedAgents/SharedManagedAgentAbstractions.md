@@ -314,7 +314,7 @@ managedAgents:
         Run relevant tests before marking work complete.
       references:
         - docs/Architecture/ServiceBoundaries.md
-        - docs/ManagedAgents/CodexManagedSessionPlane.md
+        - docs/ManagedAgents/CodexCliManagedSessions.md
     sessionPolicy:
       reuse: resume-or-create
       retention: keep-history
@@ -497,10 +497,10 @@ Do **not** introduce concepts like:
 - `ClaudeSessionManager` as a new top-level abstraction
 - `GeminiManagedRuntime` as a peer to the shared managed-agent model
 
-Instead, add:
+Instead, add runtime-specific managed session planes documented under the `*ManagedSessions.md` naming convention, for example:
 
-- `ClaudeCodeManagedSessionPlane`
-- `GeminiCliManagedSessionPlane`
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
+- `docs/ManagedAgents/GeminiCliManagedSessions.md`
 
 Both should consume the same `ManagedAgentSpec` shape and return the same shared binding, observation, and event model.
 
@@ -589,14 +589,14 @@ This document is the shared, runtime-neutral abstraction layer.
 
 It should be read together with runtime-specific documents such as:
 
-- `docs\ManagedAgents\CodexManagedSessionPlane.md`
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
 
 Future runtime docs should follow the same pattern:
 
-- `docs\ManagedAgents\ClaudeCodeManagedSessionPlane.md`
-- `docs\ManagedAgents\GeminiCliManagedSessionPlane.md`
+- `docs/ManagedAgents/GeminiCliManagedSessions.md`
 
-Those runtime docs should explain **how** their plane realizes the shared contract, not redefine the shared contract itself.
+Those runtime docs should explain **how** their plane realizes the shared contract, not redefine the shared contract itself. Each runtime doc should include an explicit mapping from `ManagedAgentSpec`, `ManagedSessionBinding`, `ManagedSessionObservation`, normalized phases, and shared plane verbs to that runtime's native concepts.
 
 ## Final desired-state statement
 

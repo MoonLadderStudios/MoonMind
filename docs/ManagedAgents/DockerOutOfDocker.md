@@ -6,7 +6,7 @@
 **Last updated:** 2026-04-09
 
 **Related:**
-- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
 - [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
@@ -77,7 +77,7 @@ This document does **not** define:
 - provider-native managed session protocols
 - a permanent, cross-step workload-service framework beyond the bounded direction noted below
 
-If MoonMind later needs reusable non-agent services with their own lifecycle across multiple steps, that should become a **sibling workload lifecycle**. It should not be forced into `CodexManagedSessionPlane` and should not be mislabeled as `MoonMind.AgentRun`.
+If MoonMind later needs reusable non-agent services with their own lifecycle across multiple steps, that should become a **sibling workload lifecycle**. It should not be forced into the Codex CLI managed session plane and should not be mislabeled as `MoonMind.AgentRun`.
 
 ---
 
@@ -85,7 +85,7 @@ If MoonMind later needs reusable non-agent services with their own lifecycle acr
 
 ### 4.1 Session container
 
-The **session container** is the task-scoped Codex container defined by `CodexManagedSessionPlane`.
+The **session container** is the task-scoped Codex container defined by [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md).
 
 It owns:
 
@@ -149,7 +149,7 @@ MoonMind / Temporal owns:
 
 ### 5.2 Managed session plane
 
-`CodexManagedSessionPlane` owns:
+The Codex CLI managed session plane owns:
 
 - the task-scoped Codex session container
 - thread/turn lifecycle
@@ -187,7 +187,7 @@ The Codex managed session plane remains:
 - one active Codex thread per session epoch
 - continuity reused only within the same task
 
-This role is governed by `CodexManagedSessionPlane.md`, not by this document.
+This role is governed by [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md), not by this document.
 
 ### 6.2 Role B: one-shot workload container
 

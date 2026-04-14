@@ -9,7 +9,7 @@ Related:
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
-- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](../ManagedAgents/CodexManagedSessionPlane.md) — desired-state contract for the Codex task-scoped managed session plane
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md) — desired-state contract for the Codex task-scoped managed session plane
 
 ---
 
@@ -417,6 +417,7 @@ Examples:
 
 * `jules`
 * `openhands`
+* future provider-owned hosted coding agents, if MoonMind coordinates them without supervising the runtime
 * future BYOA integrations
 
 Responsibilities:
@@ -436,7 +437,7 @@ Used for MoonMind-managed runtimes.
 Examples:
 
 * `gemini_cli`
-* `claude_code`
+* `claude_code` local or SDK-hosted runtime
 * `codex_cli`
 
 Responsibilities:
@@ -512,7 +513,7 @@ MoonMind-managed agents are true runtimes launched and supervised by MoonMind, b
 Examples:
 
 * Gemini CLI
-* Claude Code
+* Claude Code local or SDK-hosted sessions supervised by MoonMind
 * Codex CLI
 
 ## 8.1 Key rule
