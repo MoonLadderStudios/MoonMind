@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Generic, TypeVar
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -27,6 +28,7 @@ T = TypeVar("T")
 _JIRA_PROJECT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ISSUE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+-\d+$")
 _BOARD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_JIRA_ATTACHMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _JIRA_BROWSER_PAGE_SIZE = 50
 _ACCEPTANCE_HEADING_RE = re.compile(
     r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
@@ -151,6 +153,14 @@ class JiraIssueRecommendations(JiraBrowserModel):
     step_instructions: str = Field(..., alias="stepInstructions")
 
 
+class JiraIssueAttachment(JiraBrowserModel):
+    id: str
+    filename: str
+    content_type: str = Field(..., alias="contentType")
+    size_bytes: int | None = Field(None, alias="sizeBytes")
+    download_url: str = Field(..., alias="downloadUrl")
+
+
 class JiraIssueDetail(JiraBrowserModel):
     issue_key: str = Field(..., alias="issueKey")
     url: str | None = None
@@ -160,6 +170,7 @@ class JiraIssueDetail(JiraBrowserModel):
     status: JiraIssueStatus | None = None
     description_text: str = Field("", alias="descriptionText")
     acceptance_criteria_text: str = Field("", alias="acceptanceCriteriaText")
+    attachments: list[JiraIssueAttachment] = Field(default_factory=list)
     recommended_imports: JiraIssueRecommendations = Field(..., alias="recommendedImports")
 
 
@@ -368,6 +379,58 @@ class JiraBrowserService:
                 ).columns
         return self._normalize_issue_detail(payload, board_columns=board_columns)
 
+    async def download_issue_image_attachment(
+        self,
+        issue_key: str,
+        attachment_id: str,
+    ) -> tuple[JiraIssueAttachment, bytes, str]:
+        self._ensure_enabled()
+        normalized_issue_key = self._normalize_issue_key(issue_key)
+        normalized_attachment_id = self._normalize_attachment_id(attachment_id)
+        self._ensure_project_allowed(self._project_from_issue_key(normalized_issue_key))
+        payload = await self._request_json(
+            method="GET",
+            path=f"/issue/{normalized_issue_key}",
+            action="jira_browser.get_issue_attachment",
+            params={"fields": "attachment"},
+            context={"issueKey": normalized_issue_key},
+        )
+        fields = payload.get("fields") if isinstance(payload, Mapping) else {}
+        if not isinstance(fields, Mapping):
+            fields = {}
+        attachment, content_url = self._find_issue_image_attachment(
+            fields,
+            issue_key=normalized_issue_key,
+            attachment_id=normalized_attachment_id,
+        )
+        if attachment is None or not content_url:
+            raise JiraToolError(
+                "Jira could not find the requested image attachment on this issue.",
+                code="jira_not_found",
+                status_code=404,
+                action="jira_browser.download_attachment",
+            )
+
+        download_path = self._safe_attachment_download_path(content_url)
+        payload_bytes, response_content_type = await self._request_bytes(
+            method="GET",
+            path=download_path,
+            action="jira_browser.download_attachment",
+            context={
+                "issueKey": normalized_issue_key,
+                "attachmentId": normalized_attachment_id,
+            },
+        )
+        content_type = response_content_type or attachment.content_type
+        if not self._is_image_content_type(content_type):
+            raise JiraToolError(
+                "Jira attachment is not an image.",
+                code="jira_validation_failed",
+                status_code=422,
+                action="jira_browser.download_attachment",
+            )
+        return attachment, payload_bytes, content_type
+
     @asynccontextmanager
     async def _jira_client(self) -> AsyncIterator[JiraClient]:
         connection = await resolve_jira_connection(self._settings)
@@ -417,6 +480,24 @@ class JiraBrowserService:
             json_body=json_body,
             context=context,
         )
+
+    async def _request_bytes(
+        self,
+        *,
+        method: str,
+        path: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
+        async with self._jira_client() as client:
+            return await client.request_bytes(
+                method=method,
+                path=path,
+                action=action,
+                params=params,
+                context=context,
+            )
 
     async def _list_columns_with_client(
         self,
@@ -630,6 +711,7 @@ class JiraBrowserService:
             acceptance_text=acceptance_text,
         )
         url = self._issue_url(payload)
+        attachments = self._normalize_issue_attachments(fields, issue_key=issue_key)
         return JiraIssueDetail(
             issueKey=issue_key,
             url=url,
@@ -642,6 +724,7 @@ class JiraBrowserService:
             ),
             descriptionText=description_text,
             acceptanceCriteriaText=acceptance_text,
+            attachments=attachments,
             recommendedImports=recommended,
         )
 
@@ -711,6 +794,114 @@ class JiraBrowserService:
             return f"{self_url.split(marker, 1)[0]}/browse/{payload.get('key')}"
         return None
 
+    def _normalize_issue_attachments(
+        self,
+        fields: Mapping[str, Any],
+        *,
+        issue_key: str,
+    ) -> list[JiraIssueAttachment]:
+        raw_attachments = fields.get("attachment")
+        if not isinstance(raw_attachments, list):
+            return []
+        attachments: list[JiraIssueAttachment] = []
+        for item in raw_attachments:
+            if not isinstance(item, Mapping):
+                continue
+            attachment = self._normalize_issue_attachment(
+                item,
+                issue_key=issue_key,
+            )
+            if attachment is not None:
+                attachments.append(attachment)
+        return attachments
+
+    def _find_issue_image_attachment(
+        self,
+        fields: Mapping[str, Any],
+        *,
+        issue_key: str,
+        attachment_id: str,
+    ) -> tuple[JiraIssueAttachment | None, str | None]:
+        raw_attachments = fields.get("attachment")
+        if not isinstance(raw_attachments, list):
+            return None, None
+        for item in raw_attachments:
+            if not isinstance(item, Mapping):
+                continue
+            normalized_id = str(item.get("id") or "").strip()
+            if normalized_id != attachment_id:
+                continue
+            attachment = self._normalize_issue_attachment(
+                item,
+                issue_key=issue_key,
+            )
+            return attachment, str(item.get("content") or "").strip() or None
+        return None, None
+
+    def _normalize_issue_attachment(
+        self,
+        item: Mapping[str, Any],
+        *,
+        issue_key: str,
+    ) -> JiraIssueAttachment | None:
+        attachment_id = str(item.get("id") or "").strip()
+        filename = str(item.get("filename") or "").strip()
+        content_type = (
+            str(item.get("mimeType") or item.get("contentType") or "").strip().lower()
+        )
+        content_url = str(item.get("content") or "").strip()
+        if (
+            not attachment_id
+            or not filename
+            or not content_url
+            or not self._is_image_content_type(content_type)
+        ):
+            return None
+        size_value = item.get("size")
+        try:
+            size_bytes = int(size_value) if size_value is not None else None
+        except (TypeError, ValueError):
+            size_bytes = None
+        return JiraIssueAttachment(
+            id=attachment_id,
+            filename=filename,
+            contentType=content_type,
+            sizeBytes=size_bytes,
+            downloadUrl=f"/api/jira/issues/{issue_key}/attachments/{attachment_id}/content",
+        )
+
+    def _safe_attachment_download_path(self, download_url: str) -> str:
+        parsed = urlparse(download_url)
+        if not parsed.scheme and not parsed.netloc:
+            path = parsed.path or download_url
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            return path
+        allowed_origins = set()
+        for raw_base in (
+            self._settings.atlassian_site_url,
+            self._settings.atlassian_url,
+        ):
+            base = urlparse(str(raw_base or ""))
+            if base.scheme and base.netloc:
+                allowed_origins.add((base.scheme, base.netloc))
+        if self._settings.atlassian_cloud_id:
+            allowed_origins.add(("https", "api.atlassian.com"))
+        if not allowed_origins or (parsed.scheme, parsed.netloc) not in allowed_origins:
+            raise JiraToolError(
+                "Jira attachment download URL is outside the configured Jira origin.",
+                code="jira_validation_failed",
+                status_code=422,
+                action="jira_browser.download_attachment",
+            )
+        path = parsed.path
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        return path
+
+    def _is_image_content_type(self, value: str) -> bool:
+        return str(value or "").strip().lower().startswith("image/")
+
     def _normalize_project_key(self, value: object) -> str:
         normalized = str(value or "").strip().upper()
         if not _JIRA_PROJECT_KEY_RE.fullmatch(normalized):
@@ -743,6 +934,17 @@ class JiraBrowserService:
         if not _BOARD_ID_RE.fullmatch(normalized):
             raise JiraToolError(
                 "boardId must be a non-empty Jira board identifier.",
+                code="jira_validation_failed",
+                status_code=422,
+                action="jira_browser.validation",
+            )
+        return normalized
+
+    def _normalize_attachment_id(self, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not _JIRA_ATTACHMENT_ID_RE.fullmatch(normalized):
+            raise JiraToolError(
+                "attachmentId must be a non-empty Jira attachment identifier.",
                 code="jira_validation_failed",
                 status_code=422,
                 action="jira_browser.validation",

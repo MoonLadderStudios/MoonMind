@@ -373,6 +373,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jira/issues/{issue_key}/attachments/{attachment_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Issue Attachment */
+        get: operations["download_issue_attachment_api_jira_issues__issue_key__attachments__attachment_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/manifests": {
         parameters: {
             query?: never;
@@ -3707,6 +3724,19 @@ export interface components {
             /** Projectname */
             projectName?: string | null;
         };
+        /** JiraIssueAttachment */
+        JiraIssueAttachment: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Contenttype */
+            contentType: string;
+            /** Sizebytes */
+            sizeBytes?: number | null;
+            /** Downloadurl */
+            downloadUrl: string;
+        };
         /** JiraIssueColumn */
         JiraIssueColumn: {
             /** Id */
@@ -3736,6 +3766,8 @@ export interface components {
              * @default
              */
             acceptanceCriteriaText: string;
+            /** Attachments */
+            attachments?: components["schemas"]["JiraIssueAttachment"][];
             recommendedImports: components["schemas"]["JiraIssueRecommendations"];
         };
         /** JiraIssueRecommendations */
@@ -6611,6 +6643,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["JiraIssueDetail"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_issue_attachment_api_jira_issues__issue_key__attachments__attachment_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_key: string;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

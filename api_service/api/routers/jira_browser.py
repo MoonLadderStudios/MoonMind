@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
@@ -174,6 +175,34 @@ async def get_issue(
 ) -> JiraIssueDetail:
     try:
         return await service.get_issue(issue_key.upper(), board_id=board_id)
+    except JiraToolError as exc:
+        raise _to_http_exception(exc) from None
+    except Exception:
+        raise _unexpected_http_exception() from None
+
+
+@router.get(
+    "/issues/{issue_key}/attachments/{attachment_id}/content",
+    response_class=Response,
+)
+async def download_issue_attachment(
+    issue_key: str,
+    attachment_id: str,
+    _user: User = Depends(get_current_user()),
+    service: JiraBrowserService = Depends(_get_service),
+) -> Response:
+    try:
+        attachment, payload, content_type = await service.download_issue_image_attachment(
+            issue_key.upper(),
+            attachment_id,
+        )
+        filename = attachment.filename.replace('"', "")
+        disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+        return Response(
+            content=payload,
+            media_type=content_type or attachment.content_type,
+            headers={"content-disposition": disposition},
+        )
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
     except Exception:

@@ -17,6 +17,7 @@ from moonmind.integrations.jira.browser import (
     JiraBoardIssues,
     JiraColumn,
     JiraConnectionVerification,
+    JiraIssueAttachment,
     JiraIssueColumn,
     JiraIssueDetail,
     JiraIssueRecommendations,
@@ -115,6 +116,30 @@ class _FakeJiraBrowserService:
             ),
         )
 
+    async def download_issue_image_attachment(
+        self,
+        issue_key: str,
+        attachment_id: str,
+    ) -> tuple[JiraIssueAttachment, bytes, str]:
+        self.calls.append(
+            (
+                "download_issue_image_attachment",
+                {"issue_key": issue_key, "attachment_id": attachment_id},
+            )
+        )
+        self._maybe_raise()
+        return (
+            JiraIssueAttachment(
+                id=attachment_id,
+                filename="wireframe.png",
+                contentType="image/png",
+                sizeBytes=4,
+                downloadUrl=f"/api/jira/issues/{issue_key}/attachments/{attachment_id}/content",
+            ),
+            b"img\n",
+            "image/png",
+        )
+
 
 @pytest.fixture
 def router_app() -> tuple[FastAPI, _FakeJiraBrowserService]:
@@ -210,6 +235,29 @@ async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
     assert response.json()["recommendedImports"]["stepInstructions"] == "Complete Jira story ENG-1"
     assert response.json()["column"] == {"id": "to-do", "name": "To Do"}
     assert service.calls == [("get_issue", {"issue_key": "ENG-1", "board_id": "42"})]
+
+
+async def test_issue_attachment_download_endpoint(
+    router_app: tuple[FastAPI, _FakeJiraBrowserService],
+) -> None:
+    app, service = router_app
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/jira/issues/eng-1/attachments/100/content")
+
+    assert response.status_code == 200
+    assert response.content == b"img\n"
+    assert response.headers["content-type"] == "image/png"
+    assert "wireframe.png" in response.headers["content-disposition"]
+    assert service.calls == [
+        (
+            "download_issue_image_attachment",
+            {"issue_key": "ENG-1", "attachment_id": "100"},
+        )
+    ]
 
 
 async def test_router_maps_jira_errors_to_safe_details(

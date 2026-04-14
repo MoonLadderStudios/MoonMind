@@ -166,6 +166,114 @@ class JiraClient:
             action=action,
         )
 
+    async def request_bytes(
+        self,
+        *,
+        method: str,
+        path: str,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
+        """Perform one Jira request and return raw bytes plus content type."""
+
+        attempts = max(self._connection.retry_attempts, 1)
+        retry_delay = 1.0
+        request_id: str | None = None
+        safe_context = dict(context or {})
+
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self._client.request(
+                    method=method,
+                    url=self._resolve_request_path(path),
+                    params=params,
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                if attempt < attempts:
+                    logger.info(
+                        "jira_retrying action=%s reason=transport attempt=%s request_id=%s context=%s",
+                        action,
+                        attempt,
+                        request_id,
+                        safe_context,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                raise JiraToolError(
+                    "Jira request could not reach Atlassian.",
+                    code="jira_request_failed",
+                    status_code=502,
+                    action=action,
+                ) from exc
+
+            request_id = (
+                response.headers.get("x-arequestid")
+                or response.headers.get("x-request-id")
+                or response.headers.get("atl-traceid")
+            )
+
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
+                wait_seconds = self._retry_after_seconds(response) or retry_delay
+                logger.info(
+                    "jira_retrying action=%s status=%s attempt=%s request_id=%s context=%s",
+                    action,
+                    response.status_code,
+                    attempt,
+                    request_id,
+                    safe_context,
+                )
+                await asyncio.sleep(wait_seconds)
+                retry_delay = max(wait_seconds * 2, retry_delay * 2)
+                continue
+
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt >= attempts:
+                if response.status_code == 429:
+                    raise JiraToolError(
+                        "Jira rate limited the request after the configured retries were exhausted.",
+                        code="jira_rate_limited",
+                        status_code=429,
+                        action=action,
+                    )
+                raise JiraToolError(
+                    "Jira was temporarily unavailable after the configured retries were exhausted.",
+                    code="jira_request_failed",
+                    status_code=502,
+                    action=action,
+                )
+
+            if response.status_code >= 400:
+                self._log_failure(
+                    action=action,
+                    response=response,
+                    request_id=request_id,
+                    context=safe_context,
+                )
+                raise self._response_error(
+                    action=action,
+                    response=response,
+                )
+
+            logger.info(
+                "jira_request_completed action=%s status=%s request_id=%s context=%s",
+                action,
+                response.status_code,
+                request_id,
+                safe_context,
+            )
+            return (
+                bytes(response.content or b""),
+                response.headers.get("content-type", "").split(";", 1)[0].strip(),
+            )
+
+        raise JiraToolError(
+            "Jira request failed unexpectedly before a response could be returned.",
+            code="jira_request_failed",
+            status_code=502,
+            action=action,
+        )
+
     def _decode_response(self, response: httpx.Response) -> Any:
         if not response.content:
             return {}
