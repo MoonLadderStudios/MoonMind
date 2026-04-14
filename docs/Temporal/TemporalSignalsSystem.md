@@ -28,7 +28,7 @@ The core design rule is:
 
 > Use **Temporal Updates** for request/response mutations that need synchronous acknowledgement, and use **Temporal Signals** for asynchronous events that should be recorded durably and processed inside workflow execution.
 
-In the desired state, Signals are a first-class Temporal contract across `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.AuthProfileManager`, and `MoonMind.OAuthSession`, with clear payload rules, idempotency rules, observability rules, and workflow-state effects.
+In the desired state, Signals are a first-class Temporal contract across `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.ProviderProfileManager`, and `MoonMind.OAuthSession`, with clear payload rules, idempotency rules, observability rules, and workflow-state effects.
 
 ---
 
@@ -171,9 +171,9 @@ These are Signals sent from one workflow to another through `workflow.get_extern
 
 Primary desired-state use:
 
-- `MoonMind.AgentRun` <-> `MoonMind.AuthProfileManager`,
+- `MoonMind.AgentRun` <-> `MoonMind.ProviderProfileManager`,
 - `MoonMind.AgentRun` -> parent `MoonMind.Run`,
-- `MoonMind.AuthProfileManager` -> `MoonMind.AgentRun`.
+- `MoonMind.ProviderProfileManager` -> `MoonMind.AgentRun`.
 
 Rules:
 
@@ -285,7 +285,7 @@ Required behavior:
 
 Purpose:
 
-- notify a managed agent run that a provider/auth profile slot was assigned.
+- notify a managed agent run that a provider profile slot was assigned.
 
 Canonical payload concepts:
 
@@ -300,7 +300,7 @@ Required behavior:
 
 ### Signals sent
 
-#### To `MoonMind.AuthProfileManager`
+#### To `MoonMind.ProviderProfileManager`
 
 - `request_slot`
 - `release_slot`
@@ -322,9 +322,9 @@ Desired-state rule:
 
 ---
 
-## 6.3 `MoonMind.AuthProfileManager`
+## 6.3 `MoonMind.ProviderProfileManager`
 
-`MoonMind.AuthProfileManager` is the singleton coordination workflow for per-runtime profile slot allocation.
+`MoonMind.ProviderProfileManager` is the singleton coordination workflow for per-runtime profile slot allocation.
 
 ### Signals received
 
@@ -508,7 +508,7 @@ Desired-state rules:
 
 - handlers remain lightweight and bounded,
 - awaited handler paths that mutate shared state must guard invariants explicitly,
-- singleton coordinators such as `MoonMind.AuthProfileManager` protect queue and lease state against async interleaving.
+- singleton coordinators such as `MoonMind.ProviderProfileManager` protect queue and lease state against async interleaving.
 
 ---
 
@@ -557,7 +557,7 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 
 To protect in-flight workflow histories during the transition to this desired-state contract without violating the strict "no internal compatibility wrappers" policy:
 
-1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.Run` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `AuthProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
+1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.Run` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `ProviderProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
 2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring safety without polluting the new codebase with backward-compatibility logic.
 
 ---

@@ -57,7 +57,7 @@ def resolve_volume_mount_env(
     Args:
         base_env: The starting environment dictionary.
         runtime_id: The ID of the runtime family (e.g., 'gemini_cli').
-        volume_mount_path: The absolute path where the auth profile is mounted.
+        volume_mount_path: The absolute path where the provider profile is mounted.
         
     Returns:
         A new dictionary with the volume mount environment variables injected.

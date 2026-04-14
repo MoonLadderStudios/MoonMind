@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoonSpec Verify"
+  short_description: "Verify final Moon Spec implementation evidence"
+  default_prompt: "Verify the active Moon Spec implementation"

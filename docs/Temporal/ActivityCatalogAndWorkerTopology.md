@@ -453,6 +453,7 @@ Current implemented activities:
 - `agent_runtime.terminate_session`
 - `agent_runtime.fetch_session_summary`
 - `agent_runtime.publish_session_artifacts`
+- `agent_runtime.reconcile_managed_sessions`
 - `agent_runtime.status`
 - `agent_runtime.fetch_result`
 - `agent_runtime.cancel`
@@ -473,12 +474,15 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.terminate_session(...) -> CodexManagedSessionHandle`
 - `agent_runtime.fetch_session_summary(...) -> CodexManagedSessionSummary`
 - `agent_runtime.publish_session_artifacts(...) -> CodexManagedSessionArtifactsPublication`
+- `agent_runtime.reconcile_managed_sessions(...) -> reconciliation summary payload`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
 
 `agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
 
 The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
+
+The current session-oriented return types are Codex-specific because Codex is the live managed-session implementation. When a second runtime adopts task-scoped managed sessions, introduce a neutral managed-session request/response surface above runtime-specific adapters rather than spreading Codex contracts into the public workflow boundary.
 
 ## 8.10 Proposal and review activities
 

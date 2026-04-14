@@ -6,7 +6,7 @@ functions that check whether the expected credential artifacts exist
 after a user completes the OAuth flow.
 
 Used by the finalize endpoint to confirm that the session actually
-succeeded before committing the auth profile.
+succeeded before committing the provider profile.
 """
 
 from __future__ import annotations

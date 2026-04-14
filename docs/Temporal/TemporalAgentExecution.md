@@ -252,7 +252,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 | `workflow` | `mm.workflow` | workflow orchestration | Lightweight, no side effects |
 | `llm` | `mm.activity.llm` | LLM calls, plan generation | Rate-limited by provider |
 | `sandbox` | `mm.activity.sandbox` | Shell exec, git, builds | CPU/memory heavy |
-| `agent_runtime` | `mm.activity.agent_runtime` | Managed runtime supervision, auth profiles | Provider rate-limited |
+| `agent_runtime` | `mm.activity.agent_runtime` | Managed runtime supervision, provider profiles | Provider rate-limited |
 | `artifacts` | `mm.activity.artifacts` | Artifact storage IO | IO-bound |
 | `integrations` | `mm.activity.integrations` | Jules, webhooks | Rate-limited |
 

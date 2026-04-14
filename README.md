@@ -36,9 +36,9 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 
 ### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box.
-- **Managed Runtimes:** MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure using your existing subscriptions or API keys.
-- **Black-Box Coordination:** Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and closes the feedback loop — whether you control the internals or not.
-- **Sandboxed Execution:** Runtimes run behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
+- **Managed Sessions and Managed Runs:** MoonMind can run owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. The current concrete task-scoped managed-session plane is Codex-first; Claude Code and Gemini CLI remain managed-runtime targets and future adopters of the same session pattern where their adapters support it.
+- **External Delegated Agents:** Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop even when it does not own the provider's runtime envelope.
+- **Sandboxed Execution:** Managed runtime sessions and specialized workload containers run through controlled Docker boundaries with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
 - **Personal-use friendly defaults:** A fresh local install should boot successfully with `docker compose up -d`, then let you enter a small number of secrets in Mission Control instead of forcing enterprise-only secret infrastructure up front.
 
 ### 1️⃣ Orchestration Starts At One
@@ -62,7 +62,10 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | --- | --- |
 | **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
-| **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, and external integrations. |
+| **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, and external integrations. |
+| **Managed Session Plane** | Task-scoped owned runtime sessions. Codex is the current concrete session-plane implementation; future runtime adapters can adopt the same pattern. |
+| **External Agent Adapters** | Provider adapters for delegated external agents such as Jules and Codex Cloud. |
+| **Docker Workload Plane** | Tool-backed specialized workload containers, such as build/test toolchain images, kept separate from managed agent session identity. |
 | **Mission Control** | Operational dashboard for managing tasks, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
 | **Docker Proxy** | Restricted Docker socket access for sandboxed worker containers. |

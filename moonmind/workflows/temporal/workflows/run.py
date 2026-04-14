@@ -171,6 +171,8 @@ def _normalize_agent_runtime_id(agent_id: str) -> str:
 
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
+    # Preserve legacy workflow IDs for in-flight histories. New executions use
+    # provider-profile-manager IDs once the replay patch is active.
     return f"auth-profile-manager:{runtime_id}"
 
 
@@ -3993,7 +3995,7 @@ class MoonMindRunWorkflow:
 
     @workflow.signal
     def profile_assigned(self, payload: dict) -> None:
-        """Record that a child AgentRun has acquired an auth profile slot.
+        """Record that a child AgentRun has acquired a provider-profile slot.
 
         The parent uses this to track which profile slot to release if the
         child exits in a terminal state without releasing it itself.
@@ -4012,7 +4014,7 @@ class MoonMindRunWorkflow:
         self._record_dependency_signal(payload)
 
     def _release_slot_defensive(self) -> None:
-        """Release the auth profile slot defensively when a child exits.
+        """Release the provider-profile slot defensively when a child exits.
 
         This is called when a child AgentRun exits in a terminal state but
         may have failed to release its slot due to cancellation or other issues.
@@ -4024,7 +4026,7 @@ class MoonMindRunWorkflow:
         child_wf_id = self._assigned_child_workflow_id or "unknown"
 
         self._get_logger().warning(
-            "Defensively releasing auth profile slot %s for child %s",
+            "Defensively releasing provider-profile slot %s for child %s",
             profile_id,
             child_wf_id,
         )
@@ -4056,7 +4058,7 @@ class MoonMindRunWorkflow:
     async def _signal_release_slot(
         self, manager_handle: Any, child_workflow_id: str, profile_id: str
     ) -> None:
-        """Send release_slot signal to the auth profile manager."""
+        """Send release_slot signal to the ProviderProfileManager."""
         try:
             await manager_handle.signal(
                 "release_slot",

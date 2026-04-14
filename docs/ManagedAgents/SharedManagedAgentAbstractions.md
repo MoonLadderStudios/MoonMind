@@ -8,7 +8,7 @@ We have Managed Agents support for three runtimes: Gemini CLI, Codex CLI, and Cl
 
 ### Workflow Adapters
 
-`ManagedAgentAdapter` (`moonmind/workflows/adapters/managed_agent_adapter.py`) provides a common execution interface: auth profile resolution, environment shaping (`_shape_environment_for_oauth`, `_shape_environment_for_api_key`), slot leasing, and launcher triggering. **Default** `command_template` and `auth_mode` are taken from the matching strategy when registered; **fallbacks** remain for unregistered `runtime_id` values (auth: api_key; template: `[runtime_id]`).
+`ManagedAgentAdapter` (`moonmind/workflows/adapters/managed_agent_adapter.py`) provides a common execution interface: provider profile resolution, environment shaping (`_shape_environment_for_oauth`, `_shape_environment_for_api_key`), slot leasing, and launcher triggering. **Default** `command_template` and `auth_mode` are taken from the matching strategy when registered; **fallbacks** remain for unregistered `runtime_id` values (auth: api_key; template: `[runtime_id]`).
 
 There are also `JulesAgentAdapter`, `CodexCloudAgentAdapter`, and `OpenClawAgentAdapter` which subclass `BaseExternalAgentAdapter`.
 

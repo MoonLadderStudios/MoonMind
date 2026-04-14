@@ -98,7 +98,7 @@ Execution requests ultimately dispatch into `MoonMind.Run` or another allowed wo
 | Fleet | Task Queue | Capabilities | Purpose |
 |-------|-----------|--------------|---------|
 | `workflow` | `mm.workflow` | Workflow orchestration | Workflow code only; no side effects |
-| `artifacts` | `mm.activity.artifacts` | Artifact I/O, auth profiles | IO-bound artifact storage and metadata |
+| `artifacts` | `mm.activity.artifacts` | Artifact I/O, provider profiles | IO-bound artifact storage and metadata |
 | `llm` | `mm.activity.llm` | LLM calls, plan generation, proposals | Rate-limited by provider quotas |
 | `sandbox` | `mm.activity.sandbox` | Repo checkout, patch, tests, commands | CPU/memory heavy; strict concurrency limits |
 | `integrations` | `mm.activity.integrations` | External provider calls (Jules) | Protected with rate limiting and circuit breakers |

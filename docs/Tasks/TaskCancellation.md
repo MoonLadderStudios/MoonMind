@@ -25,7 +25,7 @@ This document outlines **Task Cancellation** in MoonMind so that:
 2. **Running cancellation**: user requests cancellation for a running workflow → API sends a Temporal Cancellation Request, workflow detects request, stops execution gracefully, and job transitions to `cancelled`.
 3. **Unified surfaces**: UI + REST + MCP all map to the **same API service methods**.
 4. **Auditability**: cancellation actions are visible in workflow history and UI events.
-5. **Resource lease cleanup**: cancellation must release shared resources (auth profile slots, live sessions) so they are not orphaned.
+5. **Resource lease cleanup**: cancellation must release shared resources (provider-profile slots, live sessions) so they are not orphaned.
 
 ### Non-Goals
 
@@ -45,7 +45,7 @@ MoonMind task runs are durably orchestrated by Temporal Workflows (e.g., `MoonMi
 
 * The `MoonMind.Run` workflow receives the Cancellation Request.
 * The workflow must catch the resulting `CancelledError` (in the Python Temporal SDK).
-* The workflow runs compensating actions (uploading incomplete staged artifacts, emitting a final `task.step.failed` event, cleaning up resources, **releasing auth profile slots**).
+* The workflow runs compensating actions (uploading incomplete staged artifacts, emitting a final `task.step.failed` event, cleaning up resources, **releasing provider-profile slots**).
 * The workflow exits.
 * The API/UI observes the `CANCELED` status via the Temporal Visibility index or Webhooks and mirrors the `cancelled` state to the user.
 

@@ -1,4 +1,4 @@
-"""Singleton per-runtime-family auth profile manager workflow.
+"""Singleton per-runtime-family provider profile manager workflow.
 
 Each managed agent runtime family (gemini_cli, claude_code, codex_cli) gets its
 own long-lived ProviderProfileManager workflow instance. The manager owns the truth
@@ -30,6 +30,8 @@ WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 WORKFLOW_ID_PREFIX = "provider-profile-manager"
 
+# Replay patch IDs are durable Temporal history markers. Preserve legacy
+# "auth-profile" spellings in identifiers until a deliberate workflow migration.
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
 
@@ -112,7 +114,7 @@ _MAX_LEASE_DURATION_SECONDS = 5400  # 1.5 hours — safety net for leaked slots
 
 @dataclass
 class ProfileSlotState:
-    """In-workflow tracking of one auth profile's slot availability."""
+    """In-workflow tracking of one provider profile's slot availability."""
 
     profile_id: str
     max_parallel_runs: int
@@ -216,7 +218,7 @@ class PendingRequest:
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindProviderProfileManagerWorkflow:
-    """Per-runtime-family singleton that manages auth profile slot leases.
+    """Per-runtime-family singleton that manages provider profile slot leases.
 
     The manager:
       1. Maintains in-memory slot state for all profiles of its runtime family.
@@ -801,7 +803,7 @@ class MoonMindProviderProfileManagerWorkflow:
         }
 
     async def _load_profiles_from_db(self) -> None:
-        """Load auth profiles for this runtime from the database via activity."""
+        """Load provider profiles for this runtime from the database via activity."""
         try:
             result = await workflow.execute_activity(
                 "provider_profile.list",

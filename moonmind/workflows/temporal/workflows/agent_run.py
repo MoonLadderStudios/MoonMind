@@ -171,6 +171,8 @@ def _request_step_ledger_context(
     return context
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
+    # Preserve legacy workflow IDs for in-flight histories. New executions use
+    # provider-profile-manager IDs once the replay patch is active.
     return f"auth-profile-manager:{runtime_id}"
 
 @activity.defn(name="integration.resolve_adapter_metadata")
@@ -583,7 +585,7 @@ class MoonMindAgentRun:
         execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
-        """Signal the auth-profile-manager; auto-start it on first failure.
+        """Signal the ProviderProfileManager; auto-start it on first failure.
 
         Tries the signal. If the manager workflow doesn't exist, starts it
         via the ``provider_profile.ensure_manager`` activity and retries once.
@@ -663,7 +665,7 @@ class MoonMindAgentRun:
         nondeterminism error or other unrecoverable workflow task failure.
         """
         self._get_logger().warning(
-            "Slot wait timed out — resetting auth-profile-manager %s",
+            "Slot wait timed out — resetting ProviderProfileManager %s",
             manager_id,
         )
         await self._execute_routed_activity(
@@ -706,7 +708,7 @@ class MoonMindAgentRun:
             return len(profiles)
         except Exception:
             self._get_logger().warning(
-                "Failed to sync auth profiles for runtime_id=%s; continuing with manager state",
+                "Failed to sync provider profiles for runtime_id=%s; continuing with manager state",
                 runtime_id,
                 exc_info=True,
             )
@@ -966,7 +968,7 @@ class MoonMindAgentRun:
                     return AgentRunResult(failure_class="execution_error")
 
                 manager_handle = None
-                # Acquire auth slot if managed
+                # Acquire provider-profile slot if managed
                 if request.agent_kind == "managed":
                     runtime_id = self._managed_runtime_id(request.agent_id)
                     manager_id = self._manager_workflow_id(runtime_id)
@@ -985,7 +987,7 @@ class MoonMindAgentRun:
                     )
                     if profile_count == 0:
                         raise ApplicationError(
-                            f"No enabled auth profiles found for runtime_id='{runtime_id}'",
+                            f"No enabled provider profiles found for runtime_id='{runtime_id}'",
                             type="ProfileResolutionError",
                             non_retryable=True,
                         )
@@ -1002,7 +1004,7 @@ class MoonMindAgentRun:
                                 non_retryable=True,
                             )
 
-                    # Wait for an auth profile slot.
+                    # Wait for a provider-profile slot.
                     # Awaiting time does not count against the execution timeout;
                     # overall_start is reset once the slot is acquired.
                     # If the manager is stuck (e.g. nondeterminism error), the
@@ -1020,7 +1022,7 @@ class MoonMindAgentRun:
                         self.run_status = RunStatus.awaiting_slot
                         waiting_reason = (
                             self._awaiting_slot_reason_override
-                            or f"Waiting for auth profile slot on {runtime_id}"
+                            or f"Waiting for provider profile slot on {runtime_id}"
                         )
                         self._awaiting_slot_reason_override = None
                         if parent_info:

@@ -37,7 +37,7 @@ This document defines the **Temporal-side contract**. Public MoonMind APIs and U
    All nondeterminism lives in Activities.
 
 4. **True agent execution is a child-workflow concern.**  
-   `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution.
+   `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution. Task-scoped managed sessions are represented separately by `MoonMind.AgentSession` when a runtime uses the managed-session plane.
 
 5. **Edits are modeled as Updates.**  
    Signals are used for asynchronous events such as approvals, webhooks, and external notifications.
@@ -65,6 +65,8 @@ Current core workflow types:
 - `MoonMind.ManifestIngest`
 - `MoonMind.ProviderProfileManager`
 - `MoonMind.AgentRun`
+- `MoonMind.AgentSession`
+- `MoonMind.ManagedSessionReconcile`
 - `MoonMind.OAuthSession`
 
 Rules:
@@ -111,6 +113,8 @@ Rules:
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
+| `MoonMind.AgentSession` | Own one task-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | Codex managed-session workflow input today; future neutral managed-session input when more runtimes adopt the plane | session handle/state, continuity refs, control/reset refs | minutes → hours |
+| `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one task step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
 | `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
 
 > Note: We intentionally do **not** model “Codex workflow,” “Gemini workflow,” “Jules workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
@@ -200,7 +204,7 @@ Typical `mm_entry` values (currently normalized by the executions API):
 - `manifest`
 - `provider_profile`
 
-*(Note: additional internally-used workflow types like `agent_run` and `oauth_session` are not currently normalized for top-level list filtering by the primary executions API.)*
+*(Note: additional internally-used workflow types like `agent_run`, `agent_session`, `managed_session_reconcile`, and `oauth_session` are not currently normalized for top-level list filtering by the primary executions API.)*
 
 ### Optional Search Attributes
 
@@ -556,7 +560,46 @@ Key notes:
 * external runs may use polling or streaming-gateway orchestration branches
 * workflow code should receive canonical runtime contracts from activities, not provider-native dicts
 
-## 11.4 `MoonMind.ProviderProfileManager` lifecycle
+## 11.4 `MoonMind.AgentSession` lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> initializing
+  initializing --> active : session launched or recovered
+  active --> active : send/steer/interrupt turns
+  active --> clearing : clear requested
+  clearing --> active : new epoch established
+  active --> terminating : cancel or teardown requested
+  clearing --> terminating
+  terminating --> terminated
+  initializing --> failed
+  active --> failed
+  clearing --> failed
+  terminating --> failed
+```
+
+Key notes:
+
+* this workflow owns one task-scoped managed runtime session, currently Codex-backed
+* the workflow carries bounded session identity and refs, not large transcripts or logs
+* turn execution and session controls call `agent_runtime.*` activities on `mm.activity.agent_runtime`
+* clear/reset creates a new `session_epoch` and publishes explicit continuity artifacts
+* future Claude/Gemini session adoption should use a neutral managed-session contract rather than making Codex-specific types the permanent public surface
+
+## 11.5 `MoonMind.ManagedSessionReconcile` lifecycle
+
+This workflow is a bounded support workflow for managed-session supervision.
+
+Representative lifecycle concerns:
+
+* invoke `agent_runtime.reconcile_managed_sessions`
+* classify stale or orphaned managed-session supervision records
+* trigger bounded cleanup or status repair through activity-owned side effects
+* finish quickly and rely on schedule/API triggering for future reconciliation passes
+
+It is not a task workflow and should not appear as a normal user task.
+
+## 11.6 `MoonMind.ProviderProfileManager` lifecycle
 
 This workflow is long-lived and coordination-oriented.
 
@@ -571,7 +614,7 @@ Representative lifecycle concerns:
 
 Its UI-facing state should stay compact; it is primarily an internal coordination workflow.
 
-## 11.5 `MoonMind.OAuthSession` lifecycle
+## 11.7 `MoonMind.OAuthSession` lifecycle
 
 Representative lifecycle:
 
@@ -608,7 +651,7 @@ This document is “done” when:
 4. Update and Signal names and payload shapes are finalized
 5. Continue-As-New triggers are defined
 6. cancellation semantics are unambiguous
-7. `MoonMind.AgentRun` and `MoonMind.ProviderProfileManager` are reflected as first-class workflow types
+7. `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, and `MoonMind.ProviderProfileManager` are reflected as first-class workflow types
 8. canonical runtime contract boundaries are reflected in workflow expectations
 
 ---
@@ -620,7 +663,7 @@ This document is “done” when:
 3. For `RequestRerun`, when do we use Continue-As-New vs a brand-new Workflow ID?
 4. Do we need `Pause/Resume` in v1?
 5. Should `mm_updated_at` track any state transition, progress updates, or both under a bounded policy?
-6. How much of `MoonMind.ProviderProfileManager` and `MoonMind.OAuthSession` should be directly visible in product-facing surfaces vs remaining internal/operator-facing?
+6. How much of `MoonMind.ProviderProfileManager`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, and `MoonMind.OAuthSession` should be directly visible in product-facing surfaces vs remaining internal/operator-facing?
 
 ---
 

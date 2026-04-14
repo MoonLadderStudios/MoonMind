@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoonSpec Orchestrate"
+  short_description: "Run the Moon Spec lifecycle end to end"
+  default_prompt: "Run the Moon Spec workflow for this feature"
