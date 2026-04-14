@@ -15,7 +15,7 @@ Complete and harden the Jira Create-page rollout as a runtime feature, not a doc
 **Testing**: `./tools/test_unit.sh` for Python and dashboard unit tests, targeted `pytest`, targeted Vitest via `node_modules/.bin/vitest`, TypeScript typecheck, ESLint  
 **Target Platform**: MoonMind API service and Mission Control web UI in the existing Docker Compose deployment  
 **Project Type**: Web application with Python API service, shared MoonMind integration layer, and React dashboard frontend  
-**Performance Goals**: Jira browser interactions should remain responsive for ordinary Jira boards; issue list pagination should be bounded and failures should return promptly through existing Jira timeout/retry settings  
+**Performance Goals**: Jira browser interactions should remain responsive for boards with up to 10 columns and 100 issues in the first loaded issue page; issue list pagination must stay bounded and failures should return promptly through existing Jira timeout/retry settings
 **Constraints**: Browser clients must only call MoonMind endpoints; Jira credentials and SecretRefs stay server-side; Jira UI remains hidden unless explicitly enabled; manual task creation must remain available when Jira is disabled or failing; task submission payload shape remains unchanged  
 **Scale/Scope**: One Create-page Jira browser MVP covering connection verification, projects, boards, columns, issue lists, issue detail, import into preset/step fields, reapply/provenance UX, and focused validation tests
 

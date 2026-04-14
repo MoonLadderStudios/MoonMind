@@ -136,7 +136,7 @@ An operator can enable the Jira Create-page browser independently from backend J
 
 ### Measurable Outcomes
 
-- **SC-001**: With Jira integration enabled and configured, an operator can browse from project to board to column to issue preview and import into a selected target in one Create-page session.
+- **SC-001**: With Jira integration enabled and configured, an operator can browse from project to board to column to issue preview and import into a selected target in one Create-page session for a board with up to 10 columns and 100 issues in the first loaded issue page.
 - **SC-002**: With Jira integration disabled, existing Create-page manual task creation scenarios remain unchanged and Jira controls are absent.
 - **SC-003**: 100% of Jira browser endpoint responses exposed to the UI are MoonMind-owned paths and contain no raw credential material.
 - **SC-004**: Jira unavailable, empty, and policy-denied states are visible inside the Jira browser without preventing manual task submission.
