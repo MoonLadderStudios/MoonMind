@@ -2,7 +2,7 @@
 
 Status: Active
 Owners: MoonMind Engineering
-Last Updated: 2026-03-28
+Last Updated: 2026-04-14
 Canonical source: `docs/Tasks/TaskProposalSystem.md`
 Related spec work: `specs/029-task-proposal-phase2/`, `specs/037-task-proposal-update/`
 
@@ -18,7 +18,7 @@ behavior lives in the source doc above.
 
 ---
 
-## 2. Current Implementation State (as of 2026-03-28)
+## 2. Current Implementation State (as of 2026-04-14)
 
 ### Confirmed working
 
@@ -32,17 +32,25 @@ behavior lives in the source doc above.
 - Promotion creates a new `MoonMind.Run` via `TemporalExecutionService.create_execution()`
 - Proposal targeting policy (spec 037) is largely implemented; all code tasks complete,
   only manual smoke test (T024) remains
+- Workflow proposal-stage submission consumes nested `task.proposalPolicy`, including
+  `defaultRuntime`, and ignores flattened proposal-policy fields for new behavior
+- Core `/api/executions` task submission preserves `task.proposeTasks`,
+  `task.proposalPolicy`, `task.skills`, and `step.skills` into
+  `initialParameters.task`
 
 ### Still in progress
 
-- Workflow proposal stage uses **flattened** policy fields (`proposalTargets`,
-  `proposalMaxItems`, `proposalDefaultRuntime`) rather than canonical
-  `task.proposalPolicy` object in `initialParameters`
-- Global enable switch enforced via `proposeTasks` but not via a workflow-level
-  proposal policy switch separate from task-level opt-in
+- Codex managed-session-created task paths still need end-to-end verification that
+  proposal intent is normalized into canonical `initialParameters.task.*` fields
+  before `MoonMind.Run` starts
+- Migration-only read fallbacks may still exist for in-flight workflows, but new
+  task-creation paths must not write root-level/session-local proposal flags as
+  the only durable source
 - Activity-boundary separation between LLM fleet and control-plane writes not yet
   formally audited
 - UI status normalization (`proposals -> running`) not yet verified across all surfaces
+- Proposal promotion returns the created workflow ID but does not yet persist the
+  promoted execution/workflow linkage on the proposal record
 
 ### Related specs
 
@@ -70,7 +78,7 @@ The finished system must provide:
 
 ### Phase 1. Contract Alignment
 
-**Status: NOT DONE** (workflow still uses flattened policy fields)
+**Status: PARTIAL** (core path aligned; managed-session-created tasks and storage/UI surfaces remain)
 
 Goal: make proposal data model, API contract, and workflow inputs agree on one
 canonical proposal shape.
@@ -82,10 +90,14 @@ Tasks:
 2. Standardize proposal payloads on the Temporal submit contract used by
    `/api/executions`.
 3. Remove `agent_runtime` as the documented proposal payload tool type.
-4. **[REMAINING]** Preserve raw `task.proposalPolicy` in run `initialParameters`
-   instead of flattened `proposalTargets`/`proposalMaxItems`/`proposalDefaultRuntime`.
-5. Normalize origin metadata to snake_case and `origin.source = "workflow"`.
-6. Update proposal API schemas to expose promotion linkage and returned execution
+4. Preserve raw `task.proposalPolicy` in run `initialParameters`
+   instead of flattened `proposalTargets`/`proposalMaxItems`/`proposalDefaultRuntime`. ✅
+5. Preserve `task.proposeTasks`, `task.skills`, and `step.skills` through the
+   core `/api/executions` submit path. ✅
+6. **[REMAINING]** Verify Codex managed-session-created tasks normalize proposal
+   intent into canonical nested `task.*` fields before starting `MoonMind.Run`.
+7. Normalize origin metadata to snake_case and `origin.source = "workflow"`.
+8. Update proposal API schemas to expose promotion linkage and returned execution
    metadata cleanly.
 
 Exit criteria:
@@ -93,10 +105,11 @@ Exit criteria:
 1. one canonical proposal payload shape exists
 2. one canonical proposal policy shape exists
 3. docs, models, and API payloads no longer disagree on origin or runtime names
+4. Codex managed-session-created tasks follow the same canonical nested submit contract
 
 ### Phase 2. Temporal-Native Promotion
 
-**Status: DONE** (promotion creates Temporal execution via `execution_service.create_execution()`)
+**Status: PARTIAL** (promotion creates Temporal execution; persisted linkage/response metadata still need cleanup)
 
 Goal: make proposal promotion create real new work again.
 
@@ -109,19 +122,20 @@ Tasks:
 4. Validate the merged payload against the canonical task contract. ✅
 5. Route promotion through the same Temporal-backed create flow used by
    `/api/executions`. ✅
-6. Persist the created workflow or execution identifier on the proposal record. ✅
-7. Return both the updated proposal and the created execution metadata from the
-   promote API. ✅
+6. **[REMAINING]** Persist the created workflow or execution identifier on the
+   proposal record.
+7. **[REMAINING]** Return both the updated proposal and richer created execution
+   metadata from the promote API.
 
 Exit criteria:
 
 1. promoting a proposal creates a new `MoonMind.Run` ✅
-2. proposal detail shows the promoted execution linkage ✅
+2. proposal detail shows the promoted execution linkage
 3. no legacy queue create path remains in proposal promotion ✅
 
 ### Phase 3. Proposal Stage Hardening
 
-**Status: NOT DONE** (flattened fields still used, global enable switch partially done)
+**Status: PARTIAL** (nested policy and global gate covered; managed-session normalization still needs verification)
 
 Goal: make the workflow proposal stage carry the correct policy and obey global
 operator control.
@@ -129,15 +143,17 @@ operator control.
 Tasks:
 
 1. Enforce the workflow-level global proposal enable switch in the run workflow or
-   submit path.
+   submit path. ✅
 2. Stop relying on flattened `proposalTargets`, `proposalMaxItems`, and
-   `proposalDefaultRuntime` as the primary proposal-stage contract.
+   `proposalDefaultRuntime` as the primary proposal-stage contract. ✅
 3. Resolve proposal defaults plus per-task overrides inside the proposal stage or
-   `proposal.submit`.
+   `proposal.submit`. ✅
 4. Stamp `defaultRuntime` onto candidate payloads only when the candidate omits a
-   runtime.
+   runtime. ✅
 5. Ensure finish summary data records requested, generated, submitted, and error
-   outcomes consistently. (partially done - counts are recorded)
+   outcomes consistently. ✅
+6. **[REMAINING]** Remove or retire compatibility read fallbacks when no in-flight
+   workflow safety window requires them.
 
 Exit criteria:
 

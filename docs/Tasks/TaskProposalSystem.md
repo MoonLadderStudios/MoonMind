@@ -1,10 +1,10 @@
 # Task Proposal System
 
-Status: Active  
-Owners: MoonMind Engineering  
-Last Updated: 2026-03-30
+Status: Active
+Owners: MoonMind Engineering
+Last Updated: 2026-04-14
 Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
-Implementation tracking: `docs/tmp/TaskProposalSystemPlan.md`
+Implementation tracking: `docs/tmp/015-TaskProposalSystemPlan.md`
 
 ---
 
@@ -80,6 +80,39 @@ The canonical direction is:
    inside `proposal.submit`.
 3. Do not rely on a parallel flattened proposal-policy contract for new work.
 
+### 3.1.1 Canonical submission-path normalization
+
+All new task submission paths must normalize proposal intent into the same
+canonical nested task payload accepted by `/api/executions` before
+`MoonMind.Run` starts.
+
+Codex managed sessions do not define a parallel proposal contract. They are the
+highest-risk producer because session containers may create additional MoonMind
+tasks through the internal API path, but the rule also applies to ordinary API
+submission, proposal promotion, schedules, and any future task-creation surface.
+
+Required mapping:
+
+1. session-level or adapter-level proposal opt-in becomes
+   `initialParameters.task.proposeTasks`
+2. session-level or adapter-level proposal routing overrides become
+   `initialParameters.task.proposalPolicy`
+3. task/runtime/repository metadata continues to flow through the canonical task
+   payload instead of a Codex-only side channel
+
+Non-canonical locations such as root-level `initialParameters.proposeTasks`,
+turn metadata, session binding metadata, container environment, or adapter-local
+state are not the durable write contract for new work.
+
+Workflow code may temporarily read root-level `initialParameters.proposeTasks`
+or older policy shapes for replay and in-flight migration safety. New
+submission paths must still write the nested `task.*` fields so future behavior
+does not depend on compatibility fallbacks.
+
+For Codex, this applies both when a user submits a task targeting a managed
+Codex runtime and when a Codex managed session creates additional MoonMind tasks
+through the internal API path.
+
 ### 3.2 Run states
 
 For proposal-capable runs, the relevant state vocabulary is:
@@ -113,6 +146,10 @@ The `proposals` stage runs only when both conditions are true:
 
 This gives operators a real global off switch while still allowing task-level
 opt-in when the feature is enabled system-wide.
+
+For Codex managed-session originated runs, the durable gate is the canonical
+nested value preserved in `initialParameters.task.proposeTasks`; session-local
+flags alone must not determine whether the workflow enters `proposals`.
 
 ### 3.4 Proposal generation
 
@@ -303,6 +340,7 @@ That means:
    contract before execution starts.
 6. If `task.skills` or `step.skills` are present, they must validate against the canonical agent-skill contract. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.
 7. Proposals should preserve execution intent, not raw runtime materialization state. Proposal payloads must **not** store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.
+8. Proposal-capable work originating from a Codex managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload. Proposal generation must not reconstruct this intent from session-local metadata.
 
 ---
 
@@ -454,7 +492,7 @@ control-plane writes must not share an undifferentiated activity boundary.
 ## 10. Current Implementation Snapshot
 
 This feature is partially implemented. Phase tracking lives in
-`docs/tmp/TaskProposalSystemPlan.md`.
+`docs/tmp/015-TaskProposalSystemPlan.md`.
 
 ### 10.1 Already implemented
 
@@ -465,25 +503,36 @@ This feature is partially implemented. Phase tracking lives in
 3. The workflow records proposal counts and errors in the finish summary during
    finalization.
 4. Proposal APIs and Mission Control review surfaces already exist.
+5. Promotion creates a new `MoonMind.Run` through the Temporal execution service.
+6. `TaskProposalPolicy.defaultRuntime` is modeled and `proposal.submit` stamps it
+   onto candidates that omit `task.runtime.mode`.
+7. The workflow proposal stage consumes nested `task.proposalPolicy` and ignores
+   flattened proposal-policy fields for new behavior.
+8. Core `/api/executions` task submission preserves nested `task.proposeTasks`,
+   `task.proposalPolicy`, `task.skills`, and `step.skills` into
+   `initialParameters.task`.
 
 ### 10.2 Partially implemented
 
-1. task submission already preserves `task.proposeTasks`, but proposal policy is
-   not yet carried end-to-end in its canonical desired-state form
-2. the workflow proposal stage currently expects flattened policy fields instead
-   of a canonical raw `proposalPolicy` object
+1. Codex managed-session-created task paths still need end-to-end verification
+   that proposal intent is normalized into canonical `initialParameters.task.*`
+   fields before `MoonMind.Run` starts.
+2. migration-only read fallbacks may still exist for in-flight workflows, but new
+   managed-session work must not depend on root-level or session-local proposal
+   flags as the only durable source.
 3. the workflow has a `proposals` state, but related UI and execution mappings
    are not yet fully aligned everywhere
-4. the workflow proposal stage runs from task-level opt-in, but the desired
-   global enable switch is not yet enforced consistently at runtime
+4. promotion returns the created execution identifier, but the proposal storage
+   model does not yet persist a promoted execution/workflow linkage field
 
 ### 10.3 Still missing
 
-1. promotion through a Temporal-native create path
-2. persisted promotion linkage from proposal to created execution
-3. `proposalPolicy.defaultRuntime` as a fully modeled end-to-end contract field
-4. fully standardized origin naming and metadata shape across workflow, storage,
+1. persisted promotion linkage from proposal to created execution
+2. fully standardized origin naming and metadata shape across workflow, storage,
    API, and UI
-5. proposal payloads do not yet model `task.skills` / `step.skills` end-to-end
-6. proposal UI does not yet expose skill-related execution context clearly
-7. end-to-end preservation and validation of explicit agent-skill selection through proposal storage and promotion
+3. proposal payloads do not yet model `task.skills` / `step.skills` end-to-end
+   across every generator, storage, promotion, and UI surface
+4. proposal UI does not yet expose skill-related execution context clearly
+5. end-to-end preservation and validation of explicit agent-skill selection through proposal storage and promotion
+6. fully standardized Codex managed-session normalization for `task.proposeTasks`
+   and `task.proposalPolicy` before Temporal run creation

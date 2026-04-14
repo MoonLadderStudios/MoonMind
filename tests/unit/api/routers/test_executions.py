@@ -545,6 +545,101 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     }
 
 
+def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "instructions": "Improve managed-session proposals.",
+                    "runtime": {"mode": "codex"},
+                    "proposeTasks": True,
+                    "proposalPolicy": {
+                        "targets": ["project", "moonmind"],
+                        "maxItems": {"project": 2, "moonmind": 1},
+                        "minSeverityForMoonMind": "medium",
+                        "defaultRuntime": "gemini_cli",
+                    },
+                    "skills": {
+                        "sets": ["deployment-default", "proposal-quality"],
+                        "include": [
+                            {"name": "moonmind-doc-writer", "version": "2.3.0"}
+                        ],
+                        "exclude": ["legacy-proposer"],
+                        "materializationMode": "hybrid",
+                    },
+                    "steps": [
+                        {
+                            "id": "review",
+                            "instructions": "Review the proposal contract.",
+                            "skills": {
+                                "sets": ["docs-review"],
+                                "include": [{"name": "architecture-review"}],
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+
+    assert initial_parameters["proposeTasks"] is True
+    assert initial_parameters["task"]["proposeTasks"] is True
+    assert initial_parameters["task"]["proposalPolicy"] == {
+        "targets": ["project", "moonmind"],
+        "maxItems": {"project": 2, "moonmind": 1},
+        "minSeverityForMoonMind": "medium",
+        "defaultRuntime": "gemini_cli",
+    }
+    assert initial_parameters["task"]["skills"] == {
+        "sets": ["deployment-default", "proposal-quality"],
+        "include": [{"name": "moonmind-doc-writer", "version": "2.3.0"}],
+        "exclude": ["legacy-proposer"],
+        "materializationMode": "hybrid",
+    }
+    assert initial_parameters["task"]["steps"][0]["skills"] == {
+        "sets": ["docs-review"],
+        "include": [{"name": "architecture-review"}],
+    }
+
+
+def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Improve managed-session proposals.",
+                    "proposalPolicy": {
+                        "targets": ["side-channel"],
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "task.proposalPolicy.targets" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     app = FastAPI()
     app.include_router(router)

@@ -73,6 +73,11 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.tasks.task_contract import (
+    TaskContractError,
+    TaskProposalPolicy,
+    TaskSkillSelectors,
+)
 from api_service.api.schemas import CreateJobRequest
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
@@ -1222,6 +1227,36 @@ def _coerce_step_count(value: Any) -> int:
     return len(value)
 
 
+def _normalize_task_skill_selectors(
+    raw: Any, *, field_name: str
+) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise _invalid_task_request(f"{field_name} must be an object.")
+    try:
+        return TaskSkillSelectors.model_validate(dict(raw)).model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+    except (TaskContractError, ValidationError, ValueError) as exc:
+        raise _invalid_task_request(str(exc)) from exc
+
+
+def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise _invalid_task_request("payload.task.proposalPolicy must be an object.")
+    try:
+        return TaskProposalPolicy.model_validate(dict(raw)).model_dump(
+            by_alias=True,
+            exclude_none=True,
+        )
+    except (TaskContractError, ValidationError, ValueError) as exc:
+        raise _invalid_task_request(str(exc)) from exc
+
+
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_steps = task_payload.get("steps")
     if raw_steps is None:
@@ -1266,6 +1301,13 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(value, str) and value.strip():
                 normalized_step[key] = value.strip()
 
+        normalized_skills = _normalize_task_skill_selectors(
+            step_payload.get("skills"),
+            field_name=f"payload.task.steps[{index}].skills",
+        )
+        if normalized_skills is not None:
+            normalized_step["skills"] = normalized_skills
+
         raw_skill = (
             step_payload.get("skill")
             if isinstance(step_payload.get("skill"), Mapping)
@@ -1302,6 +1344,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "title",
                 "instructions",
                 "skill",
+                "skills",
                 "tool",
             }:
                 continue
@@ -1586,12 +1629,25 @@ async def _create_execution_from_task_request(
     )
     publish_payload = _normalize_publish_payload(task_payload.get("publish"))
     normalized_tool = _normalize_task_tool(task_payload)
+    normalized_task_skills = _normalize_task_skill_selectors(
+        task_payload.get("skills"),
+        field_name="payload.task.skills",
+    )
+    normalized_proposal_policy = _normalize_task_proposal_policy(
+        task_payload.get("proposalPolicy")
+    )
+    propose_tasks = _coerce_bool(task_payload.get("proposeTasks"), default=False)
     normalized_task_for_planner: dict[str, Any] = {}
     instructions = str(task_payload.get("instructions") or "").strip()
     if depends_on:
         normalized_task_for_planner["dependsOn"] = depends_on
     if instructions:
         normalized_task_for_planner["instructions"] = instructions
+    normalized_task_for_planner["proposeTasks"] = propose_tasks
+    if normalized_proposal_policy is not None:
+        normalized_task_for_planner["proposalPolicy"] = normalized_proposal_policy
+    if normalized_task_skills is not None:
+        normalized_task_for_planner["skills"] = normalized_task_skills
     if normalized_tool is not None:
         normalized_task_for_planner["tool"] = normalized_tool
         # Keep legacy shape for compatibility while tool is canonical.
@@ -1713,7 +1769,7 @@ async def _create_execution_from_task_request(
         "profileId": raw_profile_id if _provider_profile is not None else None,
         "effort": runtime_payload.get("effort"),
         "publishMode": ((task_payload.get("publish") or {}).get("mode")),
-        "proposeTasks": _coerce_bool(task_payload.get("proposeTasks"), default=False),
+        "proposeTasks": propose_tasks,
         "stepCount": step_count,
     }
     if instructions:
