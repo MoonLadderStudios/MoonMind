@@ -1510,6 +1510,10 @@ button.secondary:hover {
   margin-top: 0;
 }
 
+.queue-advanced-settings-body {
+  margin-top: 0.75rem;
+}
+
 .queue-step-header {
   display: flex;
   justify-content: space-between;

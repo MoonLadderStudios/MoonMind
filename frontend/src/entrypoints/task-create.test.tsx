@@ -2375,6 +2375,64 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("keeps manual skill capability routing in advanced settings", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /skill required capabilities/i,
+      ),
+    ).toBeNull();
+
+    const advancedSettings = screen
+      .getByText("Advanced Settings")
+      .closest("details") as HTMLDetailsElement | null;
+    expect(advancedSettings).not.toBeNull();
+    expect(advancedSettings?.open).toBe(false);
+
+    fireEvent.click(screen.getByText("Advanced Settings"));
+    fireEvent.change(
+      screen.getByLabelText("Step 1 skill required capabilities (optional CSV)"),
+      {
+        target: { value: "docker, qdrant" },
+      },
+    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Run advanced routing regression flow." },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.tool.requiredCapabilities).toEqual([
+      "docker",
+      "qdrant",
+    ]);
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+      "docker",
+      "qdrant",
+    ]);
+  });
+
   it("uploads a step attachment and includes it with the step instructions", async () => {
     renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
 
