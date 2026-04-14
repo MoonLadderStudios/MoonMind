@@ -31,14 +31,18 @@ Use this skill when the task requires changing an existing Jira issue's workflow
 2. Discover available tools and issue state.
    - If runtime-native Jira tools are available, use them directly.
    - Otherwise, if the MoonMind API is reachable and authenticated, call `GET /mcp/tools` and `POST /mcp/tools/call`.
-   - Confirm `jira.get_issue`, `jira.edit_issue`, `jira.get_transitions`, and `jira.transition_issue` are registered before relying on them.
+   - Confirm only the tools needed for the requested action are registered before relying on them.
+   - For description updates, require `jira.edit_issue`; also require `jira.get_issue` when preserving current description text for an append, and `jira.get_edit_metadata` when editable field shape is unclear.
+   - For status updates, require `jira.get_transitions` and `jira.transition_issue`; use `jira.get_issue` when current status or final verification is needed.
+   - If one requested action is unavailable because its tools are disabled by policy, skip that action with a reason instead of blocking other requested actions whose tools are available.
    - Fetch the issue with `jira.get_issue` when current fields or status are needed.
 
 3. Update the description when requested.
    - Use `jira.get_edit_metadata` first if the editable field shape is unclear.
    - Use `jira.edit_issue` with the `description` field for replacement updates.
    - Preserve existing description text when the user asks to append; fetch the current description first and build the combined value.
-   - Send plain text unless Jira metadata or local code requires a ready-made Atlassian Document Format payload.
+   - Use Atlassian Document Format (ADF) for the `description` field when calling `jira.edit_issue` on Jira Cloud; the tool passes fields through and does not convert plain text for edit actions.
+   - Send plain text only when Jira metadata or local code confirms the edit action accepts plain text for the target field.
 
 Example tool payload:
 
@@ -48,7 +52,21 @@ Example tool payload:
   "arguments": {
     "issueKey": "ENG-123",
     "fields": {
-      "description": "Updated implementation notes..."
+      "description": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "Updated implementation notes..."
+              }
+            ]
+          }
+        ]
+      }
     }
   }
 }
