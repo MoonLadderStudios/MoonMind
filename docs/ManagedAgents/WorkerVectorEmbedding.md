@@ -1,99 +1,203 @@
 # Managed Agent Vector Embedding Workflow
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-WorkerVectorEmbedding.md`](../tmp/remaining-work/ManagedAgents-WorkerVectorEmbedding.md)
-
-Status: Draft
+Status: Desired state
 Owners: MoonMind Engineering
-Last Updated: 2026-03-14
+Last Updated: 2026-04-14
+Related:
+- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
+- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
+- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+- [`docs/Temporal/WorkflowArtifactSystemDesign.md`](../Temporal/WorkflowArtifactSystemDesign.md)
 
-## Objective
+## Purpose
 
-Define the best way for Temporal Managed Agents (e.g., OpenHands workers) to read/write MoonMind's vector database (Qdrant) while keeping security, observability, and performance sane.
+This document defines the desired-state approach for managed agent access to
+MoonMind vector search and embedding services.
 
-## Current Baseline in MoonMind
+It is compatible with the Codex managed session plane:
 
-- Workflow coordination and worker lifecycle are managed by **Temporal**:
-  - Temporal Server orchestrates all `AgentTaskWorkflows`.
-  - Artifact uploads are recorded via Temporal Activity results or directly to artifact blob stores.
-- Vector storage is Qdrant (Docker service `qdrant`, default port `6333`).
-- Embedding provider defaults to Google `gemini-embedding-2-preview` in app settings.
-- Embeddings are created in-process by MoonMind API Activities or directly by tools within the sandbox.
+- Codex is the concrete managed-session runtime.
+- Each task has one task-scoped Codex session container.
+- Session continuity is a performance and context cache, not durable truth.
+- Temporal and MoonMind activities remain the orchestration control plane.
+- Artifacts and bounded workflow metadata remain the operator/audit source of
+  truth.
+- Workload containers launched by control-plane tools remain outside managed
+  session identity.
 
-## Do All Vector Requests Need to Go Through the API Server?
+The vector system is a context data plane. It must improve retrieval and memory
+without turning workflow history, session-local storage, or runtime home
+directories into durable vector truth.
 
-No. They do not all need to go through the FastAPI control plane.
+## Baseline
 
-Two workflows are feasible:
+- Vector storage is Qdrant, exposed as a MoonMind-managed infrastructure service.
+- Embedding generation is provider-backed and configured through MoonMind runtime
+  settings.
+- Temporal workflows coordinate work, retries, cancellation, and policy routing.
+- Managed Codex sessions execute task steps through Codex App Server inside a
+  task-scoped Docker container.
+- Durable operator evidence is published through artifacts and bounded workflow
+  metadata.
 
-1. Temporal Activity-proxied vector access:
-   - Worker Sandbox asks Temporal to schedule an `EmbedAndUpsertActivity` (executed by a trusted API worker).
-   - Strongest central policy and audit.
-   - Highest Activity invocation overhead for very large batches.
+## Recommended Access Model
 
-2. Direct sandbox-to-Qdrant access:
-   - Managed Agent sandbox runs tools that talk to Qdrant directly using `qdrant-client` targeting the host proxy.
-   - Worker generates embeddings directly using an injected embedding model URL/key.
-   - Lower latency and removes the API/Temporal Server as a data-plane bottleneck.
+Use a three-surface model.
 
-## Recommended Workflow (Best Fit)
+### 1. Control-Plane Vector Service
 
-Use a hybrid split:
+MoonMind-owned activities and API services own:
 
-- Temporal Server as control plane:
-  - Workflow creation, activity scheduling, cancellation, retries, policy routing.
-- Worker sandbox direct data plane for vector ops:
-  - Embed content via sandboxed scripts.
-  - Query/upsert directly to Qdrant via the internal Docker network or `docker-proxy`.
+- collection creation and validation
+- embedding provider selection
+- embedding dimension checks
+- Qdrant credentials and endpoint policy
+- tenant, repository, task, and run scoping
+- write authorization
+- quota and rate enforcement
+- audit summaries and artifact publication
 
-This gives you:
+This is the default surface for writes, embedding generation, and policy-sensitive
+queries. Provider API keys should stay in MoonMind-owned service or activity
+contexts unless a runtime has been explicitly authorized to receive a scoped
+credential.
 
-- High throughput for codebase retrieval/indexing workloads.
-- Lower Temporal history overhead (no base64 embedding vectors saved into the Workflow History).
-- Existing approval/audit model stays intact at the workflow boundaries.
+### 2. Managed Session Vector Tools
 
-## Guardrails for Direct Vector Access
+The Codex session container may receive bounded tools for vector retrieval. Those
+tools should call the MoonMind control-plane vector surface by default, rather
+than requiring the Codex process to know Qdrant topology or embedding-provider
+secrets.
 
-1. Keep worker auth separate from user auth:
-   - Use dedicated Qdrant credential scopes for agent sandbox vector operations.
+Session-visible vector tools should expose task-oriented operations such as:
 
-2. Enforce embedding consistency:
-   - Every worker must use the same embedding model and dimensions for a target collection.
-   - Validate collection vector size before first upsert/query, handled upstream in `PrepareWorkspaceActivity`.
+- search indexed repository context
+- search task memory
+- request indexing for the active workspace
+- report vector operation progress
 
-3. Keep observability centralized:
-   - Sandbox scripts emit Temporal Activity heartbeats with progress details for key vector actions:
-     - `embedding_started`
-     - `qdrant_upsert_completed`
-     - `qdrant_query_completed`
-   - Include counts/timings in heartbeat payloads.
+The session container may cache short-lived query results for step continuity.
+That cache is disposable and must not be treated as operator/audit truth.
 
-4. Namespace data:
-   - Use collection-per-domain or metadata filters (e.g., repository, tenant, run_id).
-   - Avoid unscoped global writes from workers.
+### 3. Specialized Workload Containers
 
-## When API-Mediated Vector Access Is Better (Temporal Activities)
+Large indexing jobs may run in separate workload containers launched through
+control-plane tools, as described by the Docker-out-of-Docker model. These
+containers can batch file parsing, chunking, embedding, and upsert work without
+becoming part of managed session identity.
 
-Use a dedicated Python/Node.js Temporal worker (running outside the sandbox) to execute `EmbedActivity` when you need:
+Rules:
 
-- Strict tenant isolation and row-level policy enforcement in one place.
-- Provider secrets never exposed to the agent sandboxes.
-- Centralized request shaping, quotas, and governance.
-- *This is the default for centralized Manifest Data Ingestion jobs.*
+- Workload containers do not create a new managed session.
+- Workload container IDs do not replace `session_id`, `session_epoch`,
+  `container_id`, `thread_id`, or `active_turn_id`.
+- Workload outputs are summarized through artifacts and bounded metadata.
+- Raw vectors and large chunk payloads are stored in Qdrant or blob artifacts, not
+  Temporal workflow history.
 
-## Minimal Implementation Plan
+## Direct Qdrant Access
 
-1. Keep current Temporal workflow scheduling unchanged.
-2. Add a sandbox-side vector client module:
-   - `moonmind rag search` CLI wrapper for direct reads/writes.
-   - Shared embedding config injected via sandbox env.
-3. Add startup validation in `PrepareWorkspaceActivity`:
-   - Confirm Qdrant reachable.
-   - Confirm collection vector size matches embedding dimensions.
-4. Emit Activity heartbeats for vector actions and include summary metrics.
+Direct container-to-Qdrant access is not the default managed-session contract.
 
-## Suggested Runtime Environment for Sandboxes
+It is allowed only for an explicitly authorized high-throughput runtime path where
+all of the following are true:
 
-- `GOOGLE_API_KEY` (or equivalent provider key) mapped for embedding calls.
-- `GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview`
-- `QDRANT_HOST` / `QDRANT_PORT` (or `QDRANT_URL`) set to reachable internal endpoint.
-- Existing Temporal Worker configuration to stream progress.
+- the container receives a narrow service credential, not user credentials
+- collection, tenant, repository, and run scopes are enforced before access
+- embedding model and vector dimension compatibility are validated before query
+  or upsert
+- writes are idempotent or de-duplicated by stable chunk identifiers
+- operation summaries are published as artifacts or bounded workflow metadata
+- no embedding vectors or large document chunks are recorded in workflow history
+
+For Codex managed sessions, direct Qdrant access should be rare. The preferred
+shape is that Codex invokes a MoonMind vector tool, and that tool either serves
+the request through the control plane or launches a separate workload container
+for heavy batch work.
+
+## Temporal Boundary
+
+Temporal remains the orchestration control plane, not the vector data plane.
+
+Workflow and activity payloads may carry:
+
+- vector operation intent
+- collection names or refs
+- repository/task/run scope
+- chunk counts and timing summaries
+- artifact refs
+- failure classification
+
+Workflow and activity payloads must not carry:
+
+- raw embedding arrays
+- large chunk bodies
+- full repository indexes
+- provider secrets
+- unbounded query result sets
+
+Activities may heartbeat progress for long-running vector work, but heartbeat
+details should remain compact. Full diagnostics belong in artifacts.
+
+## Artifact Expectations
+
+Every managed vector operation that affects task execution should leave durable
+evidence through the artifact system.
+
+Recommended artifact types include:
+
+- vector operation summary
+- indexing manifest
+- query summary
+- degraded retrieval diagnostic
+- collection validation report
+
+Artifacts should include counts, timings, scope, collection refs, model identity,
+dimension, and failure summaries. They should not include raw provider secrets or
+unbounded vector payloads.
+
+## Security And Policy
+
+Vector access must keep runtime identity, user identity, and service identity
+separate.
+
+Requirements:
+
+- Session containers do not receive broad Qdrant admin credentials.
+- Provider embedding credentials are not exposed to Codex by default.
+- Runtime-visible tools enforce task and repository scope before access.
+- Collection names or filters encode tenant/project boundaries where applicable.
+- Unsupported embedding model or dimension values fail fast.
+- Logs, artifacts, and diagnostics redact secret-like values.
+
+## Operational Semantics
+
+Vector retrieval is allowed to influence agent context, but it is not durable
+session state.
+
+Rules:
+
+- A `clear_session` resets Codex thread continuity but does not delete persisted
+  vector collections.
+- A `cancel_session` or `terminate_session` stops in-flight vector work through
+  normal Temporal cancellation or workload-container termination.
+- Reused task-scoped session containers may retain disposable local retrieval
+  caches, but those caches must be safe to lose.
+- Recovery after worker restart uses workflow metadata, artifacts, vector service
+  state, and the managed-session supervision index, not container-local vector
+  cache state.
+
+## Minimal Runtime Contract
+
+A managed Codex session or workload vector tool needs only bounded configuration:
+
+- MoonMind API endpoint for control-plane vector operations.
+- Run, task, repository, and tenant scope.
+- A scoped service token or adapter-issued capability, when required.
+- Optional Qdrant endpoint and credential only for approved direct-access paths.
+- Embedding model identity and expected vector dimension, supplied by MoonMind
+  configuration or collection metadata.
+
+This keeps vector search compatible with the Codex managed session plane while
+preserving Temporal as the orchestrator, artifacts as durable evidence, and
+session containers as replaceable runtime envelopes.
