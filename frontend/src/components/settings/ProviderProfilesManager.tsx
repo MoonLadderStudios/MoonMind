@@ -254,7 +254,8 @@ export function ProviderProfilesManager({
   };
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: ProviderProfileSavePayload) => {
+    mutationFn: async (formState: ProviderProfileFormState) => {
+      const payload = buildSavePayload(formState);
       const endpoint = isEditing
         ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
         : '/api/v1/provider-profiles';
@@ -276,12 +277,12 @@ export function ProviderProfilesManager({
       }
       return response.json() as Promise<ProviderProfile>;
     },
-    onSuccess: (savedProfile) => {
+    onSuccess: (savedProfile, submittedForm) => {
       onNotice({
         level: 'ok',
         text: isEditing
           ? `Provider profile "${editingProfileId}" updated.`
-          : `Provider profile "${form.profileId.trim()}" created.`,
+          : `Provider profile "${submittedForm.profileId.trim()}" created.`,
       });
       setEditingProfileId(null);
       setForm(defaultFormState());
@@ -533,14 +534,7 @@ export function ProviderProfilesManager({
           className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
-            try {
-              saveMutation.mutate(buildSavePayload(form));
-            } catch (error) {
-              onNotice({
-                level: 'error',
-                text: error instanceof Error ? error.message : 'Invalid provider profile form.',
-              });
-            }
+            saveMutation.mutate(form);
           }}
         >
           {/* ── Required: Identity ── */}
