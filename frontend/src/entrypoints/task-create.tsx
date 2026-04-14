@@ -218,6 +218,7 @@ type JiraWriteMode = "replace" | "append";
 interface JiraImportProvenance {
   issueKey: string;
   boardId: string;
+  columnId: string;
   importMode: JiraImportMode;
   targetType: JiraImportTarget["kind"];
 }
@@ -664,9 +665,22 @@ function createJiraProvenance(
   return {
     issueKey,
     boardId: String(boardId || "").trim(),
+    columnId: String(issue.column?.id || "").trim(),
     importMode,
     targetType: target.kind,
   };
+}
+
+function jiraProjectKeyFromIssueKey(issueKey: string): string {
+  return (
+    String(issueKey || "")
+      .trim()
+      .split("-")
+      .slice(0, -1)
+      .join("-")
+      .trim()
+      .toUpperCase() || ""
+  );
 }
 
 function JiraProvenanceChip({
@@ -686,6 +700,7 @@ function JiraProvenanceChip({
       title={[
         `Jira issue ${provenance.issueKey}`,
         provenance.boardId ? `board ${provenance.boardId}` : "",
+        provenance.columnId ? `column ${provenance.columnId}` : "",
         `mode ${provenance.importMode}`,
         `target ${provenance.targetType}`,
       ]
@@ -2290,7 +2305,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const jiraImportWillCustomizeTemplateStep =
     isTemplateBoundStepForInstructions(jiraTargetStep);
 
+  function jiraProvenanceForTarget(
+    target: JiraImportTarget,
+  ): JiraImportProvenance | null {
+    if (target.kind === "preset") {
+      return presetJiraProvenance;
+    }
+    return stepJiraProvenance[target.localId] || null;
+  }
+
   function openJiraBrowser(target: JiraImportTarget) {
+    const provenance = jiraProvenanceForTarget(target);
     const rememberedProjectKey =
       jiraIntegration?.rememberLastBoardInSession && !selectedJiraProjectKey
         ? readSessionPreference(JIRA_LAST_PROJECT_SESSION_KEY)
@@ -2299,22 +2324,40 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       jiraIntegration?.rememberLastBoardInSession && !selectedJiraBoardId
         ? readSessionPreference(JIRA_LAST_BOARD_SESSION_KEY)
         : "";
-    if (rememberedProjectKey) {
-      setSelectedJiraProjectKey(rememberedProjectKey);
+    const provenanceProjectKey = jiraProjectKeyFromIssueKey(
+      provenance?.issueKey || "",
+    );
+    const nextProjectKey =
+      provenanceProjectKey ||
+      rememberedProjectKey ||
+      selectedJiraProjectKey ||
+      jiraIntegration?.defaultProjectKey ||
+      "";
+    const nextBoardId =
+      provenance?.boardId ||
+      rememberedBoardId ||
+      selectedJiraBoardId ||
+      jiraIntegration?.defaultBoardId ||
+      "";
+    if (nextProjectKey) {
+      setSelectedJiraProjectKey(nextProjectKey);
     }
-    if (rememberedBoardId) {
-      setSelectedJiraBoardId(rememberedBoardId);
+    if (nextBoardId) {
+      setSelectedJiraBoardId(nextBoardId);
+    }
+    if (provenance?.columnId) {
+      setActiveJiraColumnId(provenance.columnId);
     }
     jiraProjectSelectionInitializedRef.current = Boolean(
-      selectedJiraProjectKey || rememberedProjectKey,
+      nextProjectKey,
     );
     jiraBoardSelectionInitializedRef.current = Boolean(
-      selectedJiraBoardId || rememberedBoardId,
+      nextBoardId,
     );
     setJiraImportTarget(target);
-    setJiraImportMode(defaultJiraImportMode(target));
+    setJiraImportMode(provenance?.importMode || defaultJiraImportMode(target));
     setJiraBrowserOpen(true);
-    setSelectedJiraIssueKey("");
+    setSelectedJiraIssueKey(provenance?.issueKey || "");
   }
 
   function closeJiraBrowser() {

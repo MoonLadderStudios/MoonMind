@@ -1058,6 +1058,7 @@ describe("Task Create Entrypoint", () => {
               items: [
                 { key: "OPS", name: "Operations" },
                 { key: "ENG", name: "Engineering" },
+                { key: "MY-PROJ", name: "Hyphenated Project" },
               ],
             }),
           } as Response);
@@ -1073,6 +1074,16 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/jira/projects/MY-PROJ/boards") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { id: "84", name: "Hyphenated Delivery", projectKey: "MY-PROJ" },
+              ],
+            }),
+          } as Response);
+        }
         if (url === "/api/jira/boards/42/columns") {
           return Promise.resolve({
             ok: true,
@@ -1082,6 +1093,15 @@ describe("Task Create Entrypoint", () => {
                 { id: "todo", name: "To Do", count: 1 },
                 { id: "doing", name: "Doing", count: 1 },
               ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/boards/84/columns") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              board: { id: "84", name: "Hyphenated Delivery", projectKey: "MY-PROJ" },
+              columns: [{ id: "selected", name: "Selected", count: 1 }],
             }),
           } as Response);
         }
@@ -1119,6 +1139,27 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/jira/boards/84/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "84",
+              columns: [{ id: "selected", name: "Selected" }],
+              itemsByColumn: {
+                selected: [
+                  {
+                    issueKey: "MY-PROJ-123",
+                    summary: "Handle hyphenated project keys",
+                    issueType: "Story",
+                    statusName: "Selected",
+                    assignee: "Lin",
+                    updatedAt: "2026-04-12T19:30:00Z",
+                  },
+                ],
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/jira/issues/ENG-202") {
           return Promise.resolve({
             ok: true,
@@ -1137,6 +1178,28 @@ describe("Task Create Entrypoint", () => {
                   "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
                 stepInstructions:
                   "Complete Jira story ENG-202: Build browser shell",
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/jira/issues/MY-PROJ-123") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "MY-PROJ-123",
+              url: "https://jira.example.test/browse/MY-PROJ-123",
+              summary: "Handle hyphenated project keys",
+              issueType: "Story",
+              column: { id: "selected", name: "Selected" },
+              status: { id: "1", name: "Selected" },
+              descriptionText: "Keep the full Jira project key.",
+              acceptanceCriteriaText:
+                "Given a hyphenated project key, reopening keeps the project selected.",
+              recommendedImports: {
+                presetInstructions:
+                  "MY-PROJ-123: Handle hyphenated project keys\n\nKeep the full Jira project key.",
+                stepInstructions:
+                  "Complete Jira story MY-PROJ-123: Handle hyphenated project keys",
               },
             }),
           } as Response);
@@ -4109,6 +4172,95 @@ describe("Task Create Entrypoint", () => {
       screen.getByLabelText("Jira import provenance for Step 1 instructions")
         .textContent,
     ).toBe("Jira: ENG-202");
+  });
+
+  it("reopens Jira from an imported field with the prior issue selected", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Replace target text" }),
+    ).toBeTruthy();
+    expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe(
+      "ENG",
+    );
+    expect((screen.getByLabelText("Board") as HTMLSelectElement).value).toBe(
+      "42",
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Doing 1" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("reopens Jira from an imported field with a hyphenated project key selected", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    await screen.findByText("Hyphenated Project (MY-PROJ)");
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "MY-PROJ" },
+    });
+    await screen.findByText("Hyphenated Delivery");
+    fireEvent.change(screen.getByLabelText("Board"), {
+      target: { value: "84" },
+    });
+    await waitFor(() => {
+      expect((screen.getByLabelText("Board") as HTMLSelectElement).value).toBe(
+        "84",
+      );
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Selected 1" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /MY-PROJ-123/ }),
+    );
+    expect(await screen.findByText("Keep the full Jira project key."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Replace target text" }),
+    ).toBeTruthy();
+    expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe(
+      "MY-PROJ",
+    );
+    expect((screen.getByLabelText("Board") as HTMLSelectElement).value).toBe(
+      "84",
+    );
   });
 
   it("clears Jira provenance chips when imported text is manually edited", async () => {
