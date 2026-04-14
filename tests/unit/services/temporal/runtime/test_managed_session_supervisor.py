@@ -82,6 +82,8 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
 
     assert watched is not None
     assert watched.last_log_offset == len("session started\nassistant: OK\nwarning: none\n")
+    assert watched.stdout_log_offset == len("session started\nassistant: OK\n")
+    assert watched.stderr_log_offset == len("warning: none\n")
     assert watched.last_log_at is not None
     assert finalized.status == "terminated"
     assert finalized.stdout_artifact_ref == "sess-1/stdout.log"
@@ -90,6 +92,8 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     assert finalized.latest_summary_ref == "sess-1/session.summary.json"
     assert finalized.latest_checkpoint_ref == "sess-1/session.step_checkpoint.json"
     assert finalized.last_log_offset == len("session started\nassistant: OK\nwarning: none\n")
+    assert finalized.stdout_log_offset == len("session started\nassistant: OK\n")
+    assert finalized.stderr_log_offset == len("warning: none\n")
     assert finalized.last_log_at is not None
     assert artifact_storage.resolve_storage_path("sess-1/stdout.log").read_text(encoding="utf-8") == "session started\nassistant: OK\n"
     assert artifact_storage.resolve_storage_path("sess-1/stderr.log").read_text(encoding="utf-8") == "warning: none\n"
@@ -151,6 +155,134 @@ async def test_session_supervisor_publishes_output_chunks_to_live_spool(
     assert '"kind":"stdout_chunk"' in journal_text
     assert '"stream":"stderr"' in journal_text
     assert '"kind":"stderr_chunk"' in journal_text
+
+    await supervisor.finalize("sess-1", status="terminated")
+
+
+@pytest.mark.asyncio
+async def test_session_supervisor_resumes_from_persisted_stream_offsets(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    spool = Path(record.artifact_spool_path)
+    stdout_prefix = b"old stdout\n"
+    stderr_prefix = b"old stderr\n"
+    (spool / "stdout.log").write_bytes(stdout_prefix)
+    (spool / "stderr.log").write_bytes(stderr_prefix)
+    store.save(
+        record.model_copy(
+            update={
+                "last_log_offset": len(stdout_prefix) + len(stderr_prefix),
+                "stdout_log_offset": len(stdout_prefix),
+                "stderr_log_offset": len(stderr_prefix),
+            }
+        )
+    )
+
+    await supervisor.start(record)
+    with (spool / "stdout.log").open("ab") as handle:
+        handle.write(b"new stdout\n")
+    with (spool / "stderr.log").open("ab") as handle:
+        handle.write(b"new stderr\n")
+    await asyncio.sleep(0.05)
+
+    live_spool = Path(record.workspace_path) / "live_streams.spool"
+    payloads = [
+        json.loads(line)
+        for line in live_spool.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [(item["stream"], item["text"], item["offset"]) for item in payloads] == [
+        ("stdout", "new stdout\n", len(stdout_prefix)),
+        ("stderr", "new stderr\n", len(stderr_prefix)),
+    ]
+    watched = store.load("sess-1")
+    assert watched is not None
+    assert watched.stdout_log_offset == len(stdout_prefix) + len(b"new stdout\n")
+    assert watched.stderr_log_offset == len(stderr_prefix) + len(b"new stderr\n")
+    assert watched.last_log_offset == watched.stdout_log_offset + watched.stderr_log_offset
+
+    await supervisor.finalize("sess-1", status="terminated")
+
+
+@pytest.mark.asyncio
+async def test_session_supervisor_conservatively_replays_without_stream_offsets(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    spool = Path(record.artifact_spool_path)
+    (spool / "stdout.log").write_text("missed while down\n", encoding="utf-8")
+    store.save(record.model_copy(update={"last_log_offset": 123}))
+
+    await supervisor.start(record)
+    await asyncio.sleep(0.05)
+
+    live_spool = Path(record.workspace_path) / "live_streams.spool"
+    payloads = [
+        json.loads(line)
+        for line in live_spool.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [(item["stream"], item["text"], item["offset"]) for item in payloads] == [
+        ("stdout", "missed while down\n", 0),
+    ]
+
+    await supervisor.finalize("sess-1", status="terminated")
+
+
+@pytest.mark.asyncio
+async def test_session_supervisor_waits_for_complete_utf8_sequences(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    spool = Path(record.artifact_spool_path)
+
+    await supervisor.start(record)
+    (spool / "stdout.log").write_bytes("€".encode("utf-8")[:1])
+    await asyncio.sleep(0.05)
+    assert not (Path(record.workspace_path) / "live_streams.spool").exists()
+
+    with (spool / "stdout.log").open("ab") as handle:
+        handle.write("€\n".encode("utf-8")[1:])
+    await asyncio.sleep(0.05)
+
+    live_spool = Path(record.workspace_path) / "live_streams.spool"
+    payloads = [
+        json.loads(line)
+        for line in live_spool.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [(item["stream"], item["text"], item["offset"]) for item in payloads] == [
+        ("stdout", "€\n", 0),
+    ]
+    watched = store.load("sess-1")
+    assert watched is not None
+    assert watched.stdout_log_offset == len("€\n".encode("utf-8"))
 
     await supervisor.finalize("sess-1", status="terminated")
 

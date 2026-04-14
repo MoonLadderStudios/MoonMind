@@ -353,6 +353,8 @@ class CodexManagedSessionRecord(BaseModel):
     latest_reset_boundary_ref: str | None = Field(None, alias="latestResetBoundaryRef")
     active_turn_id: str | None = Field(None, alias="activeTurnId")
     last_log_offset: int | None = Field(None, alias="lastLogOffset", ge=0)
+    stdout_log_offset: int | None = Field(None, alias="stdoutLogOffset", ge=0)
+    stderr_log_offset: int | None = Field(None, alias="stderrLogOffset", ge=0)
     last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
     started_at: datetime = Field(..., alias="startedAt")
