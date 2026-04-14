@@ -422,59 +422,64 @@ def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
     settings.temporal_dashboard.temporal_task_editing_enabled = True
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page()
+            with p.chromium.launch() as browser:
+                page = browser.new_page()
 
-            def _mock_editable_detail(route):
-                url = route.request.url
-                if url.endswith("/artifacts"):
+                def _mock_editable_detail(route):
+                    url = route.request.url
+                    if url.endswith("/artifacts"):
+                        route.fulfill(
+                            status=200,
+                            content_type="application/json",
+                            body=json.dumps({"artifacts": []}),
+                        )
+                        return
                     route.fulfill(
                         status=200,
                         content_type="application/json",
-                        body=json.dumps({"artifacts": []}),
+                        body=json.dumps(
+                            {
+                                "taskId": "mm:editable",
+                                "workflowId": "mm:editable",
+                                "runId": "run-editable",
+                                "temporalRunId": "run-editable",
+                                "namespace": "moonmind",
+                                "workflowType": "MoonMind.Run",
+                                "title": "Editable Temporal task",
+                                "summary": "Ready for edit.",
+                                "status": "running",
+                                "state": "executing",
+                                "rawState": "executing",
+                                "temporalStatus": "running",
+                                "createdAt": "2026-04-14T10:00:00Z",
+                                "updatedAt": "2026-04-14T10:01:00Z",
+                                "actions": {
+                                    "canSetTitle": True,
+                                    "canUpdateInputs": True,
+                                    "canRerun": False,
+                                },
+                            }
+                        ),
                     )
-                    return
-                route.fulfill(
-                    status=200,
-                    content_type="application/json",
-                    body=json.dumps(
-                        {
-                            "taskId": "mm:editable",
-                            "workflowId": "mm:editable",
-                            "runId": "run-editable",
-                            "temporalRunId": "run-editable",
-                            "namespace": "moonmind",
-                            "workflowType": "MoonMind.Run",
-                            "title": "Editable Temporal task",
-                            "summary": "Ready for edit.",
-                            "status": "running",
-                            "state": "executing",
-                            "rawState": "executing",
-                            "temporalStatus": "running",
-                            "createdAt": "2026-04-14T10:00:00Z",
-                            "updatedAt": "2026-04-14T10:01:00Z",
-                            "actions": {
-                                "canSetTitle": True,
-                                "canUpdateInputs": True,
-                                "canRerun": False,
-                            },
-                        }
-                    ),
+
+                page.route(
+                    f"{base_url}/api/executions/mm:editable*",
+                    _mock_editable_detail,
+                )
+                page.route(
+                    f"{base_url}/api/executions/moonmind/mm:editable/run-editable/artifacts",
+                    _mock_editable_detail,
                 )
 
-            page.route(f"{base_url}/api/executions/mm:editable*", _mock_editable_detail)
-            page.route(
-                f"{base_url}/api/executions/moonmind/mm:editable/run-editable/artifacts",
-                _mock_editable_detail,
-            )
+                page.goto(f"{base_url}/tasks/mm:editable?source=temporal")
+                page.wait_for_selector("text=Editable Temporal task")
 
-            page.goto(f"{base_url}/tasks/mm:editable?source=temporal")
-            page.wait_for_selector("text=Editable Temporal task")
-
-            edit_link = page.get_by_role("link", name="Edit")
-            assert edit_link.is_visible()
-            assert edit_link.get_attribute("href") == "/tasks/new?editExecutionId=mm%3Aeditable"
-            browser.close()
+                edit_link = page.get_by_role("link", name="Edit")
+                assert edit_link.is_visible()
+                assert (
+                    edit_link.get_attribute("href")
+                    == "/tasks/new?editExecutionId=mm%3Aeditable"
+                )
     finally:
         settings.temporal_dashboard.temporal_task_editing_enabled = previous_enabled
 

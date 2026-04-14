@@ -91,7 +91,10 @@ def test_local_compose_enables_temporal_task_editing_readiness():
     )
 
     env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
-    assert "TEMPORAL_TASK_EDITING_ENABLED=true" in env_template
+    assert any(
+        line.strip() == "TEMPORAL_TASK_EDITING_ENABLED=true"
+        for line in env_template.splitlines()
+    )
 
 
 def test_visibility_schema_rehearsal_service_is_wired():
