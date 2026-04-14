@@ -189,6 +189,11 @@ interface JiraIssueSummary {
   updatedAt?: string | null;
 }
 
+interface JiraBoardIssues {
+  columns: JiraColumn[];
+  itemsByColumn: Record<string, JiraIssueSummary[]>;
+}
+
 interface JiraIssueDetail extends JiraIssueSummary {
   url?: string | null;
   column?: JiraColumn | null;
@@ -2250,7 +2255,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     enabled: Boolean(
       jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
     ),
-    queryFn: async (): Promise<Record<string, JiraIssueSummary[]>> => {
+    queryFn: async (): Promise<JiraBoardIssues> => {
       const endpoint = withQueryParams(
         interpolatePath(jiraIntegration?.endpoints.issues || "", {
           boardId: selectedJiraBoardId,
@@ -2266,9 +2271,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       const data = (await response.json()) as {
+        columns?: unknown;
         itemsByColumn?: Record<string, JiraIssueSummary[]>;
       } | null;
-      return data?.itemsByColumn || {};
+      return {
+        columns: Array.isArray(data?.columns) ? (data.columns as JiraColumn[]) : [],
+        itemsByColumn: data?.itemsByColumn || {},
+      };
     },
   });
 
@@ -2308,6 +2317,35 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return (await response.json()) as JiraIssueDetail;
     },
   });
+
+  const jiraBrowserColumns = useMemo(() => {
+    const configuredColumns = jiraColumnsQuery.data || [];
+    const countedColumns = jiraIssuesQuery.data?.columns || [];
+    if (countedColumns.length === 0) {
+      return configuredColumns;
+    }
+    const countedById = new Map(
+      countedColumns.map((column) => [column.id, column]),
+    );
+    const mergedColumns =
+      configuredColumns.length > 0
+        ? configuredColumns.map((column) => {
+            const counted = countedById.get(column.id);
+            if (!counted) {
+              return column;
+            }
+            return {
+              ...column,
+              count: counted.count ?? column.count ?? 0,
+            };
+          })
+        : countedColumns;
+    const mergedIds = new Set(mergedColumns.map((column) => column.id));
+    return [
+      ...mergedColumns,
+      ...countedColumns.filter((column) => !mergedIds.has(column.id)),
+    ];
+  }, [jiraColumnsQuery.data, jiraIssuesQuery.data?.columns]);
 
   const templateItems = templateOptionsQuery.data?.items || [];
 
@@ -2393,7 +2431,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!jiraBrowserOpen) {
       return;
     }
-    const columns = jiraColumnsQuery.data || [];
+    const columns = jiraBrowserColumns;
     const activeStillExists = columns.some(
       (column) => column.id === activeJiraColumnId,
     );
@@ -2401,7 +2439,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     setActiveJiraColumnId(columns[0]?.id || "");
-  }, [activeJiraColumnId, jiraBrowserOpen, jiraColumnsQuery.data]);
+  }, [activeJiraColumnId, jiraBrowserOpen, jiraBrowserColumns]);
 
   useEffect(() => {
     if (!taskTemplateCatalogEnabled || templateItems.length === 0) {
@@ -2431,7 +2469,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
 
   const activeJiraIssues =
-    (activeJiraColumnId && jiraIssuesQuery.data?.[activeJiraColumnId]) || [];
+    (activeJiraColumnId &&
+      jiraIssuesQuery.data?.itemsByColumn[activeJiraColumnId]) ||
+    [];
   const selectedJiraIssue = jiraIssueDetailQuery.isError
     ? null
     : jiraIssueDetailQuery.data || null;
@@ -4235,7 +4275,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   className="jira-column-tabs"
                   aria-label="Jira board columns"
                 >
-                  {(jiraColumnsQuery.data || []).map((column) => (
+                  {jiraBrowserColumns.map((column) => (
                     <button
                       key={column.id}
                       type="button"

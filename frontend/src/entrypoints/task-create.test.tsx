@@ -1119,8 +1119,8 @@ describe("Task Create Entrypoint", () => {
             json: async () => ({
               board: { id: "42", name: "Delivery", projectKey: "ENG" },
               columns: [
-                { id: "todo", name: "To Do", count: 1 },
-                { id: "doing", name: "Doing", count: 1 },
+                { id: "todo", name: "To Do", count: 0 },
+                { id: "doing", name: "Doing", count: 0 },
               ],
             }),
           } as Response);
@@ -1140,8 +1140,8 @@ describe("Task Create Entrypoint", () => {
             json: async () => ({
               boardId: "42",
               columns: [
-                { id: "todo", name: "To Do" },
-                { id: "doing", name: "Doing" },
+                { id: "todo", name: "To Do", count: 1 },
+                { id: "doing", name: "Doing", count: 1 },
               ],
               itemsByColumn: {
                 todo: [
