@@ -382,6 +382,37 @@ def test_skills_api_returns_available_skill_ids(
     }
 
 
+def test_skills_api_include_content_reads_legacy_skill_markdown(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_root = tmp_path / "local"
+    legacy_root = tmp_path / "legacy"
+    skill_dir = legacy_root / "speckit-orchestrate"
+    skill_dir.mkdir(parents=True)
+    skill_markdown = "# Speckit Orchestrate\n\nRun the full Moon Spec lifecycle."
+    (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(local_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_legacy_mirror_root",
+        str(legacy_root),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.list_available_skill_names",
+        lambda: ("speckit-orchestrate",),
+    )
+
+    response = client.get("/api/tasks/skills?includeContent=true")
+
+    assert response.status_code == 200
+    assert response.json()["legacyItems"] == [
+        {"id": "speckit-orchestrate", "markdown": skill_markdown},
+    ]
+
+
 
 
 def test_create_dashboard_skill_success(

@@ -34,7 +34,7 @@ describe('Skills Entrypoint', () => {
           json: async () => ({
             items: { worker: ['speckit-orchestrate', 'pr-resolver', ...(listCallCount > 1 ? ['fresh-skill'] : [])] },
             legacyItems: [
-              { id: 'speckit-orchestrate', markdown: '# Speckit\n\nExisting worker skill.' },
+              { id: 'speckit-orchestrate', markdown: '# Speckit\n\nExisting **worker** skill.\n\n- Plans\n- Tests' },
               { id: 'pr-resolver', markdown: '# PR Resolver\n\nResolves pull requests.' },
               ...(listCallCount > 1
                 ? [{ id: 'fresh-skill', markdown: '# Fresh Skill\n\nCreated from the UI.' }]
@@ -68,7 +68,9 @@ describe('Skills Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Speckit')).toBeTruthy();
-      expect(screen.getByText('Existing worker skill.')).toBeTruthy();
+      expect(screen.getByText('worker')).toBeTruthy();
+      expect(screen.getByText('Plans')).toBeTruthy();
+      expect(document.querySelector('strong')?.textContent).toBe('worker');
     });
   });
 
@@ -109,7 +111,7 @@ describe('Skills Entrypoint', () => {
     });
   });
 
-  it('sanitizes rendered markdown before injecting preview HTML', async () => {
+  it('renders markdown without unsafe HTML or links', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/tasks/skills?includeContent=true')) {
@@ -147,7 +149,7 @@ describe('Skills Entrypoint', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'unsafe-skill' }));
 
     await waitFor(() => {
-      const preview = document.querySelector('[class*="leading-7"]');
+      const preview = screen.getByTestId('skill-markdown-preview');
       expect(preview?.innerHTML).not.toContain('onerror');
       expect(preview?.innerHTML).not.toContain('javascript:alert(1)');
       expect(preview?.innerHTML).not.toContain('<img');

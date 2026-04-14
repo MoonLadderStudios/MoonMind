@@ -24,6 +24,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,
+    resolve_skill_markdown_path,
     resolve_skills_local_mirror_root,
     validate_skill_name,
 )
@@ -464,14 +465,12 @@ async def list_dashboard_skills(
     legacy_sorted = sorted(set(worker_skills), key=str)
 
     legacy_items = []
-    skills_root = resolve_skills_local_mirror_root()
 
     for skill_id in legacy_sorted:
         markdown_content = None
         if include_content:
-            skill_dir = skills_root / skill_id
-            skill_file = skill_dir / "SKILL.md"
-            if skill_file.exists():
+            skill_file = resolve_skill_markdown_path(skill_id)
+            if skill_file is not None:
                 markdown_content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
         legacy_items.append(DashboardSkillOption(id=skill_id, markdown=markdown_content))
 
