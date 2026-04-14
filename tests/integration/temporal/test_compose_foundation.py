@@ -81,6 +81,22 @@ def test_temporal_persistence_and_visibility_environment_defaults():
     )
 
 
+def test_local_compose_enables_temporal_task_editing_readiness():
+    compose = _load_compose()
+    services = compose["services"]
+
+    api_env = _env_map(services["api"]["environment"])
+    assert api_env["TEMPORAL_TASK_EDITING_ENABLED"] == (
+        "${TEMPORAL_TASK_EDITING_ENABLED:-true}"
+    )
+
+    env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
+    assert any(
+        line.strip() == "TEMPORAL_TASK_EDITING_ENABLED=true"
+        for line in env_template.splitlines()
+    )
+
+
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
     services = compose["services"]
