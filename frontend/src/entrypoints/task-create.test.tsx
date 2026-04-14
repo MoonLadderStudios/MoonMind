@@ -116,6 +116,33 @@ function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          attachmentPolicy: {
+            enabled: true,
+            maxCount: 4,
+            maxBytes: 1024 * 1024,
+            totalBytes: 2 * 1024 * 1024,
+            allowedContentTypes: ["image/png", "application/pdf"],
+          },
+        },
+      },
+    },
+  };
+}
+
 function withJiraSessionMemory(
   rememberLastBoardInSession: boolean,
   payload: BootPayload = mockPayload,
@@ -2345,6 +2372,87 @@ describe("Task Create Entrypoint", () => {
         "/tasks/mm:workflow-123?source=temporal",
       );
     });
+  });
+
+  it("uploads a step attachment and includes it with the step instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review the provided screenshot." },
+    });
+    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    const file = new File(["fake image"], "wireframe.png", {
+      type: "image/png",
+    });
+    fireEvent.change(attachmentInput, {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/artifacts",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/artifacts" &&
+        String(init?.body || "").includes("task-dashboard-step-attachment"),
+    );
+    expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
+      content_type: "image/png",
+      size_bytes: file.size,
+      metadata: {
+        filename: "wireframe.png",
+        source: "task-dashboard-step-attachment",
+        stepLabel: "Step 1",
+      },
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.instructions).toContain(
+      "Review the provided screenshot.",
+    );
+    expect(request.payload.task.instructions).toContain(
+      "Step input attachments:",
+    );
+    expect(request.payload.task.instructions).toContain(
+      "wireframe.png (image/png",
+    );
+    expect(request.payload.task.inputAttachments).toEqual([
+      {
+        artifactId: "art-001",
+        filename: "wireframe.png",
+        contentType: "image/png",
+        sizeBytes: file.size,
+      },
+    ]);
+    expect(request.payload.task.steps[0].inputAttachments).toEqual(
+      request.payload.task.inputAttachments,
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/artifacts/art-001/links",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining("input.attachment"),
+      }),
+    );
   });
 
   it("submits selected task dependencies from the picker", async () => {

@@ -1494,6 +1494,15 @@ button.secondary:hover {
   min-height: 90px;
 }
 
+.queue-step-attachments {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.queue-step-attachments-list {
+  margin-top: 0;
+}
+
 .queue-step-header {
   display: flex;
   justify-content: space-between;
