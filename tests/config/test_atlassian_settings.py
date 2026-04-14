@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -18,8 +20,12 @@ _ATLASSIAN_ENV_KEYS = (
     "ATLASSIAN_SITE_URL",
     "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
     "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
+    "FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED",
+    "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
     "JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
     "JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
+    "JIRA_CREATE_PAGE_ENABLED",
+    "JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
 )
 
 
@@ -97,3 +103,15 @@ def test_jira_create_page_default_project_rejects_invalid_key(
 
     with pytest.raises(ValidationError):
         FeatureFlagsSettings(_env_file=None)
+
+
+def test_env_template_documents_jira_create_page_rollout_settings() -> None:
+    env_template = Path(".env-template").read_text(encoding="utf-8")
+
+    assert 'JIRA_CREATE_PAGE_ENABLED="false"' in env_template
+    assert 'JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY=""' in env_template
+    assert 'JIRA_CREATE_PAGE_DEFAULT_BOARD_ID=""' in env_template
+    assert (
+        'JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION="true"'
+        in env_template
+    )
