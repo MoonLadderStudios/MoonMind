@@ -2110,10 +2110,11 @@ class MoonMindRunWorkflow:
                         and story_output_status == "jira_created"
                     ):
                         require_pull_request_url = False
-                        self._publish_status = "skipped"
+                        self._publish_status = "published"
                         self._publish_reason = (
                             "Jira issue output succeeded; no PR output required"
                         )
+                        self._publish_context["storyOutputMode"] = "jira"
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
@@ -2901,6 +2902,9 @@ class MoonMindRunWorkflow:
                 self._publish_reason,
                 True,
             )
+
+        if self._publish_status == "published":
+            return ("success", "Workflow completed successfully", False)
 
         if (
             publish_mode == "pr"

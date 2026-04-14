@@ -1395,6 +1395,8 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
     mode = str(
         story_output.get("mode") or story_output.get("target") or ""
     ).strip().lower()
+    if not mode:
+        mode = "jira" if _coerce_mapping(story_output.get("jira")) else "docs_tmp"
     if mode not in {"jira", "docs_tmp", "docs"}:
         raise _invalid_task_request(
             "payload.task.storyOutput.mode must be one of: jira, docs_tmp, docs."

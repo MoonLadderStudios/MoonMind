@@ -756,6 +756,42 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
     assert initial_parameters["task"]["storyOutput"] == initial_parameters["storyOutput"]
 
 
+def test_create_task_shaped_execution_defaults_partial_story_output_mode(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "title": "Break down task proposal design",
+                    "instructions": "Extract stories from docs/Tasks/TaskProposalSystem.md.",
+                    "storyOutput": {
+                        "jira": {
+                            "projectKey": "MM",
+                            "issueTypeId": "10001",
+                        },
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert initial_parameters["storyOutput"] == {
+        "mode": "jira",
+        "jira": {
+            "projectKey": "MM",
+            "issueTypeId": "10001",
+        },
+    }
+
+
 def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,

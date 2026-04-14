@@ -5,16 +5,23 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import re
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 import httpx
 
-from moonmind.integrations.jira.models import CreateIssueRequest
+from moonmind.integrations.jira.models import (
+    CreateIssueRequest,
+    CreateSubtaskRequest,
+    SearchIssuesRequest,
+)
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 
 JIRA_STORY_TOOL_NAMES = frozenset({"jira-issue-creator", "story.create_jira_issues"})
+JIRA_DESCRIPTION_MAX_CHARS = 32767
+JIRA_DESCRIPTION_TRUNCATION_SUFFIX = "\n\n[Truncated by MoonMind before Jira export]"
 
 StoryFetcher = Callable[
     [str, str, str],
@@ -94,10 +101,108 @@ def _story_description(story: Mapping[str, Any]) -> str:
     return (description + "".join(sections)).strip() or _story_summary(story, index=1)
 
 
+def _truncate_jira_description(description: str) -> str:
+    if len(description) <= JIRA_DESCRIPTION_MAX_CHARS:
+        return description
+    limit = JIRA_DESCRIPTION_MAX_CHARS - len(JIRA_DESCRIPTION_TRUNCATION_SUFFIX)
+    return description[:limit].rstrip() + JIRA_DESCRIPTION_TRUNCATION_SUFFIX
+
+
+def _parent_issue_key(
+    *,
+    story: Mapping[str, Any],
+    jira_payload: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+) -> str:
+    for source in (story, jira_payload, inputs):
+        value = source.get("parentIssueKey") or source.get("parent_issue_key")
+        if isinstance(value, Mapping):
+            value = value.get("key")
+        normalized = _string(value)
+        if normalized:
+            return normalized
+    parent = story.get("parent") or jira_payload.get("parent") or inputs.get("parent")
+    if isinstance(parent, Mapping):
+        return _string(parent.get("key") or parent.get("issueKey"))
+    return _string(parent)
+
+
+def _workflow_marker_label(
+    *,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    for source in (inputs, context or {}):
+        for key in (
+            "workflowId",
+            "workflow_id",
+            "runId",
+            "run_id",
+            "executionId",
+            "execution_id",
+            "taskRunId",
+            "task_run_id",
+        ):
+            value = _string(source.get(key))
+            if value:
+                sanitized = re.sub(r"[^A-Za-z0-9_-]+", "-", value).strip("-_")
+                if sanitized:
+                    return f"moonmind-workflow-{sanitized}"[:255]
+    return ""
+
+
+def _issue_matches_summary(issue: Mapping[str, Any], summary: str) -> bool:
+    fields = issue.get("fields")
+    if isinstance(fields, Mapping):
+        return _string(fields.get("summary")) == summary
+    return _string(issue.get("summary")) == summary
+
+
+def _extract_search_issues(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, Mapping):
+        candidates = payload.get("issues") or payload.get("items") or []
+    else:
+        candidates = payload
+    return [dict(issue) for issue in _list(candidates) if isinstance(issue, Mapping)]
+
+
+async def _find_existing_issue_for_story(
+    *,
+    service: JiraToolService,
+    project_key: str,
+    marker_label: str,
+    summary: str,
+) -> dict[str, Any] | None:
+    if not marker_label or not hasattr(service, "search_issues"):
+        return None
+    try:
+        payload = await service.search_issues(
+            SearchIssuesRequest(
+                projectKey=project_key,
+                jql=f'labels = "{marker_label}"',
+                fields=["summary", "labels"],
+                maxResults=50,
+            )
+        )
+    except Exception:
+        return None
+    for issue in _extract_search_issues(payload):
+        if _issue_matches_summary(issue, summary):
+            return {
+                "created": False,
+                "existing": True,
+                "issueKey": issue.get("key") or issue.get("issueKey"),
+                "issueId": issue.get("id") or issue.get("issueId"),
+                "self": issue.get("self"),
+            }
+    return None
+
+
 def _merge_fields(
     *,
     story: Mapping[str, Any],
     jira_payload: Mapping[str, Any],
+    marker_label: str = "",
 ) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for value in (jira_payload.get("fields"), story.get("fields")):
@@ -106,6 +211,8 @@ def _merge_fields(
     labels = []
     for value in (jira_payload.get("labels"), story.get("labels")):
         labels.extend(_string(item) for item in _list(value) if _string(item))
+    if marker_label:
+        labels.append(marker_label)
     if labels:
         fields["labels"] = list(dict.fromkeys(labels))
     return fields
@@ -135,20 +242,32 @@ def _fallback_result(
     reason: str,
     inputs: Mapping[str, Any],
     story_count: int = 0,
+    created: Sequence[Mapping[str, Any]] = (),
 ) -> ToolResult:
     branch = _string(inputs.get("targetBranch") or inputs.get("branch"))
     base_ref = _string(inputs.get("startingBranch") or inputs.get("baseBranch"))
+    created_issues = [dict(issue) for issue in created]
+    story_output: dict[str, Any] = {
+        "mode": "docs_tmp",
+        "status": "fallback",
+        "reason": reason,
+        "storyCount": story_count,
+        "path": _string(inputs.get("storyBreakdownPath")),
+    }
+    jira_output: dict[str, Any] = {}
+    if created_issues:
+        story_output["createdCount"] = len(created_issues)
+        jira_output = {
+            "createdCount": len(created_issues),
+            "createdIssues": created_issues,
+            "partial": True,
+        }
     return ToolResult(
         status="COMPLETED",
         outputs={
-            "storyOutput": {
-                "mode": "docs_tmp",
-                "status": "fallback",
-                "reason": reason,
-                "storyCount": story_count,
-                "path": _string(inputs.get("storyBreakdownPath")),
-            },
-            "push_status": "pushed" if branch else "",
+            "storyOutput": story_output,
+            "jira": jira_output,
+            "push_status": "",
             "push_branch": branch,
             "push_base_ref": base_ref,
             "repository": _string(inputs.get("repository") or inputs.get("repo")),
@@ -235,17 +354,50 @@ async def create_jira_issues_from_stories(
 
     service = jira_service_factory()
     created: list[dict[str, Any]] = []
+    marker_label = _workflow_marker_label(inputs=inputs, context=_context)
     try:
         for index, story in enumerate(stories, start=1):
-            result = await service.create_issue(
-                CreateIssueRequest(
+            summary = _story_summary(story, index=index)
+            existing_issue = await _find_existing_issue_for_story(
+                service=service,
+                project_key=project_key,
+                marker_label=marker_label,
+                summary=summary,
+            )
+            if existing_issue:
+                created.append(existing_issue)
+                continue
+
+            fields = _merge_fields(
+                story=story,
+                jira_payload=jira_payload,
+                marker_label=marker_label,
+            )
+            description = _truncate_jira_description(_story_description(story))
+            parent_issue_key = _parent_issue_key(
+                story=story,
+                jira_payload=jira_payload,
+                inputs=inputs,
+            )
+            if parent_issue_key:
+                request = CreateSubtaskRequest(
                     projectKey=project_key,
                     issueTypeId=issue_type_id,
-                    summary=_story_summary(story, index=index),
-                    description=_story_description(story),
-                    fields=_merge_fields(story=story, jira_payload=jira_payload),
+                    summary=summary,
+                    description=description,
+                    parentIssueKey=parent_issue_key,
+                    fields=fields,
                 )
-            )
+                result = await service.create_subtask(request)
+            else:
+                request = CreateIssueRequest(
+                    projectKey=project_key,
+                    issueTypeId=issue_type_id,
+                    summary=summary,
+                    description=description,
+                    fields=fields,
+                )
+                result = await service.create_issue(request)
             created.append(dict(result))
     except Exception as exc:
         if fallback_on_failure:
@@ -253,6 +405,7 @@ async def create_jira_issues_from_stories(
                 reason=f"Jira issue creation failed: {exc}",
                 inputs=inputs,
                 story_count=len(stories),
+                created=created,
             )
         raise
 
