@@ -271,7 +271,7 @@ async def _sync_env_managed_secrets() -> int:
         # Keep startup resilient: this is convenience migration behavior, not a hard
         # startup dependency.
         redacted_error = SecretRedactor.from_environ(
-            extra_secrets=candidate_env_secrets.values()
+            extra_secrets=list(candidate_env_secrets.values())
         ).scrub(str(exc))
         logger.warning(
             "Failed to sync managed secrets from environment during startup: %s",

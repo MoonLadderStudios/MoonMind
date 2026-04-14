@@ -11,6 +11,7 @@ from api_service.services.secrets import SecretsService
 def mock_db_session():
     """Mock an AsyncSession for testing."""
     session = MagicMock(spec=AsyncSession)
+    session.sync_session = MagicMock()
     
     # Mock commit, refresh, add to return awaitable objects
     async def mock_commit(): pass
