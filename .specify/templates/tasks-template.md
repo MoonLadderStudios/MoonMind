@@ -1,6 +1,5 @@
 ---
-
-description: "Task list template for feature implementation"
+description: "Task list template for single-story Moon Spec implementation"
 ---
 
 # Tasks: [FEATURE NAME]
@@ -12,10 +11,19 @@ description: "Task list template for feature implementation"
 
 **Organization**: Tasks are grouped by phase around a single user story so the work stays focused, traceable, and independently testable.
 
+**Source Traceability**: Each task should reference the relevant `FR-*`, acceptance scenario, success criterion, or `DESIGN-REQ-*`/`DOC-REQ-*` source mapping from `spec.md` when applicable.
+
+**Test Commands**:
+
+- Unit tests: `[UNIT TEST COMMAND]`
+- Integration tests: `[INTEGRATION TEST COMMAND]`
+- Final verification: `/speckit.verify`
+
 ## Format: `[ID] [P?] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
 - Include exact file paths in descriptions
+- Include requirement, scenario, or source IDs when the task implements or validates behavior
 
 ## Path Conventions
 
@@ -30,12 +38,16 @@ description: "Task list template for feature implementation"
 
   The /speckit.tasks command MUST replace these with actual tasks based on:
   - The single user story from spec.md
+  - The original request/design preserved in spec.md Input
+  - Source design mappings such as DESIGN-REQ-* or DOC-REQ-*
   - Feature requirements from plan.md
   - Entities from data-model.md
   - Endpoints from contracts/
 
   Tasks MUST be organized so the story can be:
   - Implemented with a test-first workflow
+  - Covered by both unit tests and integration tests
+  - Traced back to source requirements
   - Tested independently
   - Delivered as a complete vertical slice
 
@@ -47,9 +59,11 @@ description: "Task list template for feature implementation"
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create project structure per implementation plan
-- [ ] T002 Initialize [language] project with [framework] dependencies
-- [ ] T003 [P] Configure linting and formatting tools
+- [ ] T001 Create project structure in src/ and tests/ per implementation plan
+- [ ] T002 Initialize [language] project with [framework] dependencies in [config file]
+- [ ] T003 [P] Configure linting and formatting tools in [config file]
+- [ ] T004 [P] Configure unit test tooling for `[UNIT TEST COMMAND]` in [test config file]
+- [ ] T005 [P] Configure integration test tooling for `[INTEGRATION TEST COMMAND]` in [test config file]
 
 ---
 
@@ -61,12 +75,13 @@ description: "Task list template for feature implementation"
 
 Examples of foundational tasks (include only what the story truly depends on):
 
-- [ ] T004 Setup database schema and migrations framework
-- [ ] T005 [P] Implement authentication/authorization framework
-- [ ] T006 [P] Setup API routing and middleware structure
-- [ ] T007 Create base models/entities that the story depends on
-- [ ] T008 Configure error handling and logging infrastructure
-- [ ] T009 Setup environment configuration management
+- [ ] T006 Setup database schema and migrations framework in [schema/migrations path]
+- [ ] T007 [P] Implement authentication/authorization framework in src/[auth path]
+- [ ] T008 [P] Setup API routing and middleware structure in src/[routing path]
+- [ ] T009 Create base models/entities that the story depends on in src/models/
+- [ ] T010 Configure error handling and logging infrastructure in src/[infrastructure path]
+- [ ] T011 Setup environment configuration management in [config path]
+- [ ] T012 Configure integration test fixtures, service containers, or emulators needed by SCN-* in tests/integration/
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin
 
@@ -78,27 +93,37 @@ Examples of foundational tasks (include only what the story truly depends on):
 
 **Independent Test**: [How to verify this story works on its own]
 
+**Traceability**: [FR-001, FR-002, SCN-001, SC-001, DESIGN-REQ-001]
+
+**Test Plan**:
+
+- Unit: [domain rules, validation, edge cases, failure modes]
+- Integration: [acceptance scenarios, contracts, persistence, external interfaces, workflows]
+
 ### Unit Tests (write first) ⚠️
 
 > **NOTE: Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.**
 
-- [ ] T010 [P] Add failing unit test for [domain behavior] in tests/unit/test_[name].py
-- [ ] T011 [P] Add failing unit test for [service or edge case] in tests/unit/test_[name].py
+- [ ] T013 [P] Add failing unit test for [domain behavior] covering FR-001 in tests/unit/test_[name].py
+- [ ] T014 [P] Add failing unit test for [edge case] covering FR-002 in tests/unit/test_[name].py
+- [ ] T015 Run `[UNIT TEST COMMAND]` for tests/unit/test_[name].py to confirm T013-T014 fail for the expected reason
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T012 [P] Add failing integration test for [user journey] in tests/integration/test_[name].py
-- [ ] T013 [P] Add failing integration test for [system interaction] in tests/integration/test_[name].py
+- [ ] T016 [P] Add failing integration test for [user journey] covering SCN-001 in tests/integration/test_[name].py
+- [ ] T017 [P] Add failing integration test for [system interaction or contract] covering DESIGN-REQ-001 in tests/integration/test_[name].py
+- [ ] T018 Run `[INTEGRATION TEST COMMAND]` for tests/integration/test_[name].py to confirm T016-T017 fail for the expected reason
 
 ### Implementation
 
-- [ ] T014 [P] Create or update [Entity1] in src/models/[entity1].py
-- [ ] T015 [P] Create or update [Entity2] in src/models/[entity2].py
-- [ ] T016 Implement [Service] in src/services/[service].py (depends on T014, T015)
-- [ ] T017 Implement [endpoint/feature] in src/[location]/[file].py
-- [ ] T018 Add validation and error handling in src/[location]/[file].py
-- [ ] T019 Add logging/observability for the story flow
-- [ ] T020 Run unit and integration test suites, fix failures, and verify the story passes end-to-end
+- [ ] T019 [P] Create or update [Entity1] for FR-001 in src/models/[entity1].py
+- [ ] T020 [P] Create or update [Entity2] for FR-002 in src/models/[entity2].py
+- [ ] T021 Implement [Service] for FR-001/FR-002 in src/services/[service].py (depends on T019, T020)
+- [ ] T022 Implement [endpoint/feature/UI/CLI] for SCN-001 in src/[location]/[file].py
+- [ ] T023 Add validation, error handling, and non-goal guardrails for FR-003 in src/[location]/[file].py
+- [ ] T024 Wire integration boundary for DESIGN-REQ-001 in src/[location]/[file].py
+- [ ] T025 Add logging/observability for the story flow in src/[location]/[file].py
+- [ ] T026 Run `[UNIT TEST COMMAND]` and `[INTEGRATION TEST COMMAND]` for tests/unit/ and tests/integration/, fix failures, and verify the story passes end-to-end
 
 **Checkpoint**: The story is fully functional, covered by unit and integration tests, and testable independently
 
@@ -132,9 +157,11 @@ Examples of foundational tasks (include only what the story truly depends on):
 
 - Unit tests MUST be written and FAIL before implementation
 - Integration tests MUST be written and FAIL before implementation
+- Red-first confirmation tasks MUST complete before production code tasks
 - Models before services
 - Services before endpoints
-- Core implementation before integration
+- Contracts and public boundaries before integration wiring
+- Core implementation before full story validation
 - Story complete before polish work
 
 ### Parallel Opportunities
@@ -168,11 +195,12 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 
 1. Complete Phase 1: Setup
 2. Complete Phase 2: Foundational (CRITICAL - blocks story work)
-3. Write unit tests for the story and confirm they fail
-4. Write integration tests for the story and confirm they fail
-5. Implement the story until all new tests pass
-6. Validate the story independently
-7. Complete Phase 4: Polish and final verification with `/speckit.verify`
+3. Build the story traceability inventory from `spec.md`
+4. Write unit tests for the story and confirm they fail
+5. Write integration tests for the story and confirm they fail
+6. Implement the story until all new tests pass
+7. Validate the story independently with unit, integration, and quickstart checks
+8. Complete Phase 4: Polish and final verification with `/speckit.verify`
 
 ---
 
@@ -181,8 +209,9 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 - [P] tasks = different files, no dependencies
 - The task list should cover one story only
 - The story should be independently completable and testable
+- Each in-scope requirement, scenario, success criterion, and source design mapping should have task coverage
 - Verify unit and integration tests fail before implementing
 - Run `/speckit.verify` after implementation to check the final result against the original request
 - Commit after each task or logical group
 - Stop at the checkpoint to validate the story independently
-- Avoid: vague tasks, optional testing, same file conflicts, or hidden scope beyond the story
+- Avoid: vague tasks, optional testing, same file conflicts, multi-story phases, or hidden scope beyond the story

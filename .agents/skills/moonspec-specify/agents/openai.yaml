@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoonSpec Specify"
+  short_description: "Create Moon Spec specs from requests or designs."
+  default_prompt: "Use $moonspec-specify to create a one-story Moon Spec feature specification from this request or design:"
