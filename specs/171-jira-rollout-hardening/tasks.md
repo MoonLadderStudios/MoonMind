@@ -16,11 +16,11 @@
 
 **Purpose**: Establish rollout configuration and validation scaffolding used by all stories.
 
-- [ ] T001 Confirm Jira Create-page settings names, defaults, and config-template entries in `moonmind/config/settings.py` and `api_service/config.template.toml`
-- [ ] T002 [P] Confirm Jira browser router registration remains wired through `api_service/main.py`
-- [ ] T003 [P] Confirm OpenAPI generated types include Jira browser schemas in `frontend/src/generated/openapi.ts`
-- [ ] T004 [P] Confirm quickstart validation commands are current in `specs/171-jira-rollout-hardening/quickstart.md`
-- [ ] T005 Run baseline focused validation before implementation using `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py`
+- [X] T001 Confirm Jira Create-page settings names, defaults, and config-template entries in `moonmind/config/settings.py` and `api_service/config.template.toml`
+- [X] T002 [P] Confirm Jira browser router registration remains wired through `api_service/main.py`
+- [X] T003 [P] Confirm OpenAPI generated types include Jira browser schemas in `frontend/src/generated/openapi.ts`
+- [X] T004 [P] Confirm quickstart validation commands are current in `specs/171-jira-rollout-hardening/quickstart.md`
+- [X] T005 Run baseline focused validation before implementation using `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py`
 
 ---
 
@@ -30,15 +30,15 @@
 
 **CRITICAL**: No user-story implementation should begin until this phase is complete.
 
-- [ ] T006 Add or update runtime-config contract tests for Jira disabled/enabled/default values in `tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [ ] T007 Add or update settings normalization tests for Jira Create-page flags and defaults in `tests/unit/config/test_settings.py`
-- [ ] T008 Add or update backend browser contract tests for all Jira browser routes in `tests/unit/api/routers/test_jira_browser.py`
-- [ ] T009 Add or update Jira browser service model/normalization tests in `tests/unit/integrations/test_jira_browser_service.py`
-- [ ] T010 Implement or update Jira Create-page runtime config source and system blocks in `api_service/api/routers/task_dashboard_view_model.py`
-- [ ] T011 Implement or update Jira Create-page feature flag/default settings in `moonmind/config/settings.py`
-- [ ] T012 Implement or update Jira browser response models and service boundaries in `moonmind/integrations/jira/browser.py`
-- [ ] T013 Implement or update MoonMind-owned Jira browser routes and safe error mapping in `api_service/api/routers/jira_browser.py`
-- [ ] T014 Verify foundational backend/runtime work using `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/config/test_settings.py tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py`
+- [X] T006 Add or update runtime-config contract tests for Jira disabled/enabled/default values in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T007 Add or update settings normalization tests for Jira Create-page flags and defaults in `tests/unit/config/test_settings.py`
+- [X] T008 Add or update backend browser contract tests for all Jira browser routes in `tests/unit/api/routers/test_jira_browser.py`
+- [X] T009 Add or update Jira browser service model/normalization tests in `tests/unit/integrations/test_jira_browser_service.py`
+- [X] T010 Implement or update Jira Create-page runtime config source and system blocks in `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T011 Implement or update Jira Create-page feature flag/default settings in `moonmind/config/settings.py`
+- [X] T012 Implement or update Jira browser response models and service boundaries in `moonmind/integrations/jira/browser.py`
+- [X] T013 Implement or update MoonMind-owned Jira browser routes and safe error mapping in `api_service/api/routers/jira_browser.py`
+- [X] T014 Verify foundational backend/runtime work using `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/config/test_settings.py tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_browser_service.py`
 
 **Checkpoint**: Runtime config, trusted Jira browser routes, service models, and safe errors are ready for UI story work.
 
@@ -52,24 +52,24 @@
 
 ### Tests for User Story 1
 
-- [ ] T015 [P] [US1] Add or update frontend test for hidden Jira controls when disabled in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T016 [P] [US1] Add or update frontend tests for opening Jira browser from preset and step targets in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T017 [P] [US1] Add or update frontend tests for project, board, column ordering, column switching, and issue preview loading in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T018 [P] [US1] Add or update frontend tests for Jira load failures and empty states remaining local to the browser in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T019 [P] [US1] Add or update frontend tests for session-only last project/board restoration when `rememberLastBoardInSession` is enabled, disabled, and browser storage is unavailable in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T015 [P] [US1] Add or update frontend test for hidden Jira controls when disabled in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T016 [P] [US1] Add or update frontend tests for opening Jira browser from preset and step targets in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T017 [P] [US1] Add or update frontend tests for project, board, column ordering, column switching, and issue preview loading in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T018 [P] [US1] Add or update frontend tests for Jira load failures and empty states remaining local to the browser in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T019 [P] [US1] Add or update frontend tests for session-only last project/board restoration when `rememberLastBoardInSession` is enabled, disabled, and browser storage is unavailable in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 1
 
-- [ ] T020 [US1] Implement or update Jira integration config parsing and endpoint-template validation in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T021 [US1] Implement or update Jira browser state for project, board, active column, issue list, selected issue, target, loading, and error state in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T022 [US1] Implement or update sessionStorage-backed last project/board persistence gated by `rememberLastBoardInSession`, with safe no-op behavior when browser storage is unavailable, in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T023 [US1] Implement or update TanStack Query fetchers for Jira projects, boards, columns, issues, and issue detail in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T024 [US1] Implement or update one shared Jira browser dialog with project/board selectors, column tabs, issue list, preview panel, and close control in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T025 [US1] Implement or update local Jira failure and empty-state copy so manual task creation remains available in `frontend/src/entrypoints/task-create.tsx`
+- [X] T020 [US1] Implement or update Jira integration config parsing and endpoint-template validation in `frontend/src/entrypoints/task-create.tsx`
+- [X] T021 [US1] Implement or update Jira browser state for project, board, active column, issue list, selected issue, target, loading, and error state in `frontend/src/entrypoints/task-create.tsx`
+- [X] T022 [US1] Implement or update sessionStorage-backed last project/board persistence gated by `rememberLastBoardInSession`, with safe no-op behavior when browser storage is unavailable, in `frontend/src/entrypoints/task-create.tsx`
+- [X] T023 [US1] Implement or update TanStack Query fetchers for Jira projects, boards, columns, issues, and issue detail in `frontend/src/entrypoints/task-create.tsx`
+- [X] T024 [US1] Implement or update one shared Jira browser dialog with project/board selectors, column tabs, issue list, preview panel, and close control in `frontend/src/entrypoints/task-create.tsx`
+- [X] T025 [US1] Implement or update local Jira failure and empty-state copy so manual task creation remains available in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 1
 
-- [ ] T026 [US1] Verify User Story 1 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
+- [X] T026 [US1] Verify User Story 1 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Jira browser can be safely opened and navigated without mutating draft fields or blocking manual task creation.
 
@@ -83,23 +83,23 @@
 
 ### Tests for User Story 2
 
-- [ ] T027 [P] [US2] Add or update frontend tests for replace import into preset objective and resolved objective precedence in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T028 [P] [US2] Add or update frontend tests for append import into preset objective with separator preservation in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T029 [P] [US2] Add or update frontend tests for replace import into a selected step without changing other steps in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T030 [P] [US2] Add or update frontend tests for import modes including preset brief, execution brief, description only, and acceptance criteria only in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T031 [P] [US2] Add or update frontend tests proving Jira import does not add Jira provenance or issue metadata to task submission payloads in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T027 [P] [US2] Add or update frontend tests for replace import into preset objective and resolved objective precedence in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T028 [P] [US2] Add or update frontend tests for append import into preset objective with separator preservation in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T029 [P] [US2] Add or update frontend tests for replace import into a selected step without changing other steps in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T030 [P] [US2] Add or update frontend tests for import modes including preset brief, execution brief, description only, and acceptance criteria only in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T031 [P] [US2] Add or update frontend tests proving Jira import does not add Jira provenance or issue metadata to task submission payloads in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 2
 
-- [ ] T032 [US2] Implement or update target-aware import-mode selection and preview text derivation in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T033 [US2] Implement or update explicit replace and append import actions for preset and step targets in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T034 [US2] Implement or update preset objective import behavior so objective resolution prefers imported preset text in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T035 [US2] Implement or update step import behavior through the existing step update path so only the selected step changes in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T036 [US2] Implement or update task submission construction to keep Jira provenance out of the request payload in `frontend/src/entrypoints/task-create.tsx`
+- [X] T032 [US2] Implement or update target-aware import-mode selection and preview text derivation in `frontend/src/entrypoints/task-create.tsx`
+- [X] T033 [US2] Implement or update explicit replace and append import actions for preset and step targets in `frontend/src/entrypoints/task-create.tsx`
+- [X] T034 [US2] Implement or update preset objective import behavior so objective resolution prefers imported preset text in `frontend/src/entrypoints/task-create.tsx`
+- [X] T035 [US2] Implement or update step import behavior through the existing step update path so only the selected step changes in `frontend/src/entrypoints/task-create.tsx`
+- [X] T036 [US2] Implement or update task submission construction to keep Jira provenance out of the request payload in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 2
 
-- [ ] T037 [US2] Verify User Story 2 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
+- [X] T037 [US2] Verify User Story 2 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Jira imports update exactly one selected field and do not alter the Create-page submission contract.
 
@@ -113,23 +113,23 @@
 
 ### Tests for User Story 3
 
-- [ ] T038 [P] [US3] Add or update frontend tests for preset reapply-needed messaging after Jira import changes an applied preset in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T039 [P] [US3] Add or update frontend tests proving Jira import into template-derived steps detaches template instruction identity in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T040 [P] [US3] Add or update frontend tests for provenance chips after preset and step imports in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T041 [P] [US3] Add or update frontend tests for reopening Jira from an imported field with prior issue context selected in `frontend/src/entrypoints/task-create.test.tsx`
-- [ ] T042 [P] [US3] Add or update frontend tests for clearing provenance when imported text is manually edited or a step is removed in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T038 [P] [US3] Add or update frontend tests for preset reapply-needed messaging after Jira import changes an applied preset in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T039 [P] [US3] Add or update frontend tests proving Jira import into template-derived steps detaches template instruction identity in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T040 [P] [US3] Add or update frontend tests for provenance chips after preset and step imports in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T041 [P] [US3] Add or update frontend tests for reopening Jira from an imported field with prior issue context selected in `frontend/src/entrypoints/task-create.test.tsx`
+- [X] T042 [P] [US3] Add or update frontend tests for clearing provenance when imported text is manually edited or a step is removed in `frontend/src/entrypoints/task-create.test.tsx`
 
 ### Implementation for User Story 3
 
-- [ ] T043 [US3] Implement or update preset reapply-needed state and message when Jira changes applied preset objective text in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T044 [US3] Implement or update template-derived step customization warning and identity detachment on Jira import in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T045 [US3] Implement or update local Jira provenance state and field-level provenance chips in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T046 [US3] Implement or update Jira browser reopen behavior to prefer prior issue, board, column, and import mode from provenance in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T047 [US3] Implement or update provenance clearing for manual field edits and removed steps in `frontend/src/entrypoints/task-create.tsx`
+- [X] T043 [US3] Implement or update preset reapply-needed state and message when Jira changes applied preset objective text in `frontend/src/entrypoints/task-create.tsx`
+- [X] T044 [US3] Implement or update template-derived step customization warning and identity detachment on Jira import in `frontend/src/entrypoints/task-create.tsx`
+- [X] T045 [US3] Implement or update local Jira provenance state and field-level provenance chips in `frontend/src/entrypoints/task-create.tsx`
+- [X] T046 [US3] Implement or update Jira browser reopen behavior to prefer prior issue, board, column, and import mode from provenance in `frontend/src/entrypoints/task-create.tsx`
+- [X] T047 [US3] Implement or update provenance clearing for manual field edits and removed steps in `frontend/src/entrypoints/task-create.tsx`
 
 ### Validation for User Story 3
 
-- [ ] T048 [US3] Verify User Story 3 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
+- [X] T048 [US3] Verify User Story 3 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-create.test.tsx`
 
 **Checkpoint**: Preset reapply and provenance behavior are visible, explicit, and reversible without hidden task draft rewrites.
 
@@ -143,22 +143,22 @@
 
 ### Tests for User Story 4
 
-- [ ] T049 [P] [US4] Add or update runtime config tests proving Jira UI remains separate from backend Jira tooling in `tests/unit/api/routers/test_task_dashboard_view_model.py`
-- [ ] T050 [P] [US4] Add or update Jira browser service tests for project allowlist denial before provider requests in `tests/unit/integrations/test_jira_browser_service.py`
-- [ ] T051 [P] [US4] Add or update Jira browser router tests for structured safe errors and secret-like message redaction in `tests/unit/api/routers/test_jira_browser.py`
-- [ ] T052 [P] [US4] Add or update Jira client tests for Agile REST path resolution and sanitized request failures in `tests/unit/integrations/test_jira_client.py`
+- [X] T049 [P] [US4] Add or update runtime config tests proving Jira UI remains separate from backend Jira tooling in `tests/unit/api/routers/test_task_dashboard_view_model.py`
+- [X] T050 [P] [US4] Add or update Jira browser service tests for project allowlist denial before provider requests in `tests/unit/integrations/test_jira_browser_service.py`
+- [X] T051 [P] [US4] Add or update Jira browser router tests for structured safe errors and secret-like message redaction in `tests/unit/api/routers/test_jira_browser.py`
+- [X] T052 [P] [US4] Add or update Jira client tests for Agile REST path resolution and sanitized request failures in `tests/unit/integrations/test_jira_client.py`
 
 ### Implementation for User Story 4
 
-- [ ] T053 [US4] Implement or update Jira Create-page rollout gate so backend Jira tool enablement does not expose UI config in `api_service/api/routers/task_dashboard_view_model.py`
-- [ ] T054 [US4] Implement or update project allowlist checks and validation fail-fast behavior in `moonmind/integrations/jira/browser.py`
-- [ ] T055 [US4] Implement or update router-level safe error shaping and secret-like message sanitization in `api_service/api/routers/jira_browser.py`
-- [ ] T056 [US4] Implement or update Jira client Agile path routing and redacted logging support in `moonmind/integrations/jira/client.py`
-- [ ] T057 [US4] Update generated OpenAPI types after route/schema changes using `npm run generate` and verify `frontend/src/generated/openapi.ts`
+- [X] T053 [US4] Implement or update Jira Create-page rollout gate so backend Jira tool enablement does not expose UI config in `api_service/api/routers/task_dashboard_view_model.py`
+- [X] T054 [US4] Implement or update project allowlist checks and validation fail-fast behavior in `moonmind/integrations/jira/browser.py`
+- [X] T055 [US4] Implement or update router-level safe error shaping and secret-like message sanitization in `api_service/api/routers/jira_browser.py`
+- [X] T056 [US4] Implement or update Jira client Agile path routing and redacted logging support in `moonmind/integrations/jira/client.py`
+- [X] T057 [US4] Update generated OpenAPI types after route/schema changes using `npm run generate` and verify `frontend/src/generated/openapi.ts`
 
 ### Validation for User Story 4
 
-- [ ] T058 [US4] Verify User Story 4 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/integrations/test_jira_browser_service.py tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_client.py`
+- [X] T058 [US4] Verify User Story 4 with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_task_dashboard_view_model.py tests/unit/integrations/test_jira_browser_service.py tests/unit/api/routers/test_jira_browser.py tests/unit/integrations/test_jira_client.py`
 
 **Checkpoint**: Jira UI rollout remains explicit, trusted, policy-enforced, and secret-safe.
 
@@ -168,14 +168,14 @@
 
 **Purpose**: Final hardening, validation, and documentation alignment across all user stories.
 
-- [ ] T059 [P] Review Create-page accessibility labels, modal semantics, button labels, and keyboard-safe close behavior in `frontend/src/entrypoints/task-create.tsx`
-- [ ] T060 [P] Review Jira browser copy against desired-state wording in `docs/UI/CreatePage.md`
-- [ ] T061 [P] Review contract drift between planned OpenAPI and runtime models in `specs/171-jira-rollout-hardening/contracts/jira-browser.openapi.yaml` and `moonmind/integrations/jira/browser.py`
-- [ ] T062 Run full focused Python validation from `specs/171-jira-rollout-hardening/quickstart.md`
-- [ ] T063 Run targeted Create-page dashboard validation from `specs/171-jira-rollout-hardening/quickstart.md`
-- [ ] T064 Run frontend typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
-- [ ] T065 Run frontend lint with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src`
-- [ ] T066 Run final repository status check with `git status --short`
+- [X] T059 [P] Review Create-page accessibility labels, modal semantics, button labels, and keyboard-safe close behavior in `frontend/src/entrypoints/task-create.tsx`
+- [X] T060 [P] Review Jira browser copy against desired-state wording in `docs/UI/CreatePage.md`
+- [X] T061 [P] Review contract drift between planned OpenAPI and runtime models in `specs/171-jira-rollout-hardening/contracts/jira-browser.openapi.yaml` and `moonmind/integrations/jira/browser.py`
+- [X] T062 Run full focused Python validation from `specs/171-jira-rollout-hardening/quickstart.md`
+- [X] T063 Run targeted Create-page dashboard validation from `specs/171-jira-rollout-hardening/quickstart.md`
+- [X] T064 Run frontend typecheck with `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json`
+- [X] T065 Run frontend lint with `./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src`
+- [X] T066 Run final repository status check with `git status --short`
 
 ---
 
