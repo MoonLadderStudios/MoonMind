@@ -109,6 +109,15 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.getByRole('button', { name: 'Next page' })).toBeTruthy();
   });
 
+  it('marks mobile card details links as the only full-width card action', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    const detailsLink = await screen.findByRole('button', { name: 'View details' });
+
+    expect(detailsLink.classList.contains('queue-card-details-action')).toBe(true);
+    expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
+  });
+
   it('keeps the previous-page button enabled on empty pages after pagination', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

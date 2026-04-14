@@ -626,10 +626,13 @@ tr[data-proposal-id].proposal-consuming td {
   flex-wrap: wrap;
 }
 
-.queue-card-actions .button,
-.button {
-  flex: 1 1 auto;
+.queue-card-actions .button {
+  flex: 0 0 auto;
   text-align: center;
+}
+
+.queue-card-actions .queue-card-details-action {
+  flex: 1 0 100%;
 }
 
 @media (min-width: 768px) {
