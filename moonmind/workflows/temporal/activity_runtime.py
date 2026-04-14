@@ -711,6 +711,46 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if is_dood_tool(name):
         return build_dood_tool_definition_payload(name=name, version=version)
 
+    if name in {"jira-issue-creator", "story.create_jira_issues"}:
+        return {
+            "name": name,
+            "version": version,
+            "description": "Create Jira issues from Moon Spec story breakdown output.",
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "stories": {"type": "array"},
+                        "storyOutput": {"type": "object"},
+                        "storyBreakdownPath": {"type": "string"},
+                        "storyBreakdownJson": {"type": "string"},
+                        "repository": {"type": "string"},
+                        "targetBranch": {"type": "string"},
+                        "branch": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["integration:jira"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 300,
+                    "schedule_to_close_seconds": 600,
+                },
+                "retries": {"max_attempts": 1},
+            },
+        }
+
     description = (
         "Execute generic runtime CLI instructions."
         if name == "auto"

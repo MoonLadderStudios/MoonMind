@@ -1056,6 +1056,7 @@ def build_default_activity_catalog(
             task_queues=(cfg.activity_integrations_task_queue,),
             capabilities=(
                 "integration:jules",
+                "integration:jira",
                 "integration:codex_cloud",
                 "integration:openclaw",
             ),

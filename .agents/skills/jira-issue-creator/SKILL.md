@@ -13,6 +13,7 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - Required: issue type (`Task`, `Story`, `Bug`, or `Sub-task`). Use `jira.list_create_issue_types` to resolve the name to an `issueTypeId`. Default to `Task` only when the user does not specify.
 - Required: summary/title.
 - Required for creation: authenticated Jira access through a connector, API token, OAuth session, or documented local secret.
+- Optional for workflow handoff: `storyBreakdownPath`, `stories`, or `storyOutput` from `moonspec-breakdown`.
 - Optional: description, acceptance criteria, priority, labels, assignee, reporter, parent issue key, sprint, component, due date, linked issues, attachments.
 
 ## Workflow
@@ -38,9 +39,20 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 
 4. Create the issue.
 - Use the available Jira connector's `jira.create_issue` or `jira.create_subtask` operations when present.
+- In MoonMind workflow plans, prefer the first-party `jira-issue-creator`/`story.create_jira_issues` tool path. It reads `stories` directly or reads `storyBreakdownPath` from the breakdown handoff and creates one Jira issue per story.
 - Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
 - Send only the fields needed for the requested issue.
 - Treat retries carefully: before retrying after an uncertain network failure, use `jira.search_issues` to search by a stable summary/project/reporter marker to avoid duplicate tickets.
+
+## Breakdown Handoff Behavior
+
+When invoked after `moonspec-breakdown`:
+
+- Read story candidates from the provided JSON breakdown, not from `spec.md`.
+- Do not create or rename `spec.md`.
+- If Jira issue creation succeeds, return Jira keys/URLs and do not request another output format.
+- If Jira is not configured, missing required Jira fields, or issue creation fails, return fallback metadata pointing at the existing `docs/tmp/story-breakdowns/...` handoff instead of fabricating Jira success.
+- The fallback file must not be named `spec.md`.
 
 5. Return the result.
 - Report the created issue key and URL.

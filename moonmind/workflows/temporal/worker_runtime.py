@@ -98,6 +98,9 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.temporal.story_output_tools import (
+    register_story_output_tool_handlers,
+)
 from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
@@ -225,6 +228,79 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
     if not normalized:
         return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
     return normalized
+
+
+_JIRA_STORY_OUTPUT_TOOLS = frozenset(
+    {"jira-issue-creator", "story.create_jira_issues"}
+)
+_MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
+
+
+def _slug_for_story_breakdown(value: Any) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug[:48] or "story-breakdown"
+
+
+def _story_breakdown_paths(*, title: str, existing: Mapping[str, Any]) -> dict[str, str]:
+    json_path = str(
+        existing.get("storyBreakdownPath")
+        or existing.get("story_breakdown_path")
+        or existing.get("storiesJsonPath")
+        or ""
+    ).strip()
+    markdown_path = str(
+        existing.get("storyBreakdownMarkdownPath")
+        or existing.get("story_breakdown_markdown_path")
+        or existing.get("storiesMarkdownPath")
+        or ""
+    ).strip()
+    if not json_path:
+        story_slug = _slug_for_story_breakdown(title)
+        folder = f"docs/tmp/story-breakdowns/{story_slug}-{str(uuid.uuid4())[:8]}"
+        json_path = f"{folder}/stories.json"
+    if not markdown_path:
+        markdown_path = (
+            json_path[:-5] + ".md"
+            if json_path.endswith(".json")
+            else f"{json_path}.md"
+        )
+    return {
+        "storyBreakdownPath": json_path,
+        "storyBreakdownMarkdownPath": markdown_path,
+    }
+
+
+def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
+    step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
+        step_entry.get("skill")
+    )
+    return str(step_tool.get("name") or step_tool.get("id") or "").strip()
+
+
+def _selected_step_tool_type(tool_name: str) -> str:
+    if tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS:
+        return "skill"
+    return "agent_runtime"
+
+
+def _append_story_breakdown_instructions(
+    instructions: str,
+    *,
+    story_breakdown_path: str,
+    story_breakdown_markdown_path: str,
+    story_output_mode: str,
+) -> str:
+    if story_breakdown_path in instructions:
+        return instructions
+    return (
+        instructions.rstrip()
+        + "\n\nStory breakdown output contract:\n"
+        + f"- Write machine-readable stories to `{story_breakdown_path}`.\n"
+        + f"- Write a human-readable summary to `{story_breakdown_markdown_path}`.\n"
+        + "- Do not create or modify any `spec.md` files during breakdown.\n"
+        + "- Do not create directories under `specs/`; that happens only during specify.\n"
+        + f"- The requested story output mode is `{story_output_mode or 'docs_tmp'}`."
+    )
 
 
 def _build_runtime_planner():
@@ -456,6 +532,19 @@ def _build_runtime_planner():
         if failure_mode not in {"FAIL_FAST", "CONTINUE"}:
             failure_mode = "FAIL_FAST"
 
+        story_output_payload = _coerce_mapping(
+            task_payload.get("storyOutput")
+            or task_payload.get("story_output")
+            or parameter_payload.get("storyOutput")
+            or parameter_payload.get("story_output")
+        )
+        story_output_mode = str(
+            story_output_payload.get("mode")
+            or story_output_payload.get("target")
+            or ""
+        ).strip().lower()
+        should_prepare_story_breakdown = bool(story_output_payload)
+
         # --- Expand task.steps[] or stepCount into multiple plan nodes ---
         raw_steps = task_payload.get("steps")
         has_multi_steps = (
@@ -463,6 +552,40 @@ def _build_runtime_planner():
             and len(raw_steps) > 1
             and all(isinstance(s, Mapping) for s in raw_steps)
         )
+        if has_multi_steps:
+            step_tool_names = {
+                _selected_step_tool_name(step).lower()
+                for step in raw_steps
+                if isinstance(step, Mapping)
+            }
+            should_prepare_story_breakdown = should_prepare_story_breakdown or bool(
+                step_tool_names & (_JIRA_STORY_OUTPUT_TOOLS | _MOONSPEC_BREAKDOWN_TOOLS)
+            )
+        elif selected_skill_name:
+            should_prepare_story_breakdown = (
+                should_prepare_story_breakdown
+                or selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS
+            )
+
+        if should_prepare_story_breakdown:
+            story_paths = _story_breakdown_paths(
+                title=title,
+                existing={**story_output_payload, **node_inputs},
+            )
+            node_inputs.update(story_paths)
+            if story_output_mode == "jira" and not (
+                node_inputs.get("targetBranch") or node_inputs.get("branch")
+            ):
+                prefix = _derive_pr_branch_prefix(
+                    task_payload=task_payload,
+                    publish_payload=publish_payload,
+                    selected_skill_name=selected_skill_name,
+                ) or "story-breakdown"
+                node_inputs["targetBranch"] = f"{prefix}-{str(uuid.uuid4())[:8]}"
+            story_output_payload = dict(story_output_payload)
+            story_output_payload.setdefault("mode", story_output_mode or "docs_tmp")
+            story_output_payload.update(story_paths)
+            node_inputs["storyOutput"] = story_output_payload
 
         # If no explicit steps but stepCount > 1, synthesise N identical
         # nodes for runtimes that still execute sequentially step-by-step.
@@ -490,25 +613,44 @@ def _build_runtime_planner():
                 step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
                 step_node_inputs: dict[str, Any] = {
                     **node_inputs,
-                    **{k: v for k, v in step_entry.items() if k not in {"id", "tool", "skill", "instructions"}},
+                    **{
+                        k: v
+                        for k, v in step_entry.items()
+                        if k not in {"id", "tool", "skill", "instructions"}
+                    },
                     "instructions": step_instructions,
                 }
 
                 # Per-step tool/skill override
-                step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
-                    step_entry.get("skill")
-                )
-                step_tool_name = str(
-                    step_tool.get("name") or step_tool.get("id") or ""
-                ).strip()
+                step_tool_name = _selected_step_tool_name(step_entry)
                 step_runtime = runtime_mode
+                tool_type = _selected_step_tool_type(step_tool_name)
                 if step_tool_name:
                     step_runtime = step_tool_name
+                    step_node_inputs["selectedSkill"] = step_tool_name
+                if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
+                    if story_output_mode == "jira" and not step_node_inputs.get(
+                        "publishMode"
+                    ):
+                        step_node_inputs["publishMode"] = "branch"
+                    step_node_inputs["instructions"] = (
+                        _append_story_breakdown_instructions(
+                            step_node_inputs["instructions"],
+                            story_breakdown_path=str(
+                                step_node_inputs.get("storyBreakdownPath") or ""
+                            ),
+                            story_breakdown_markdown_path=str(
+                                step_node_inputs.get("storyBreakdownMarkdownPath")
+                                or ""
+                            ),
+                            story_output_mode=story_output_mode,
+                        )
+                    )
 
                 nodes.append({
                     "id": step_id,
                     "tool": {
-                        "type": "agent_runtime",
+                        "type": tool_type,
                         "name": step_runtime,
                         "version": "1.0",
                     },
@@ -523,6 +665,24 @@ def _build_runtime_planner():
             # instructions for runtimes that still execute step-by-step.
             prev_step_id = None
             for idx in range(effective_step_count):
+                expanded_inputs = dict(node_inputs)
+                if selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
+                    if story_output_mode == "jira" and not expanded_inputs.get(
+                        "publishMode"
+                    ):
+                        expanded_inputs["publishMode"] = "branch"
+                    expanded_inputs["instructions"] = (
+                        _append_story_breakdown_instructions(
+                            str(expanded_inputs.get("instructions") or ""),
+                            story_breakdown_path=str(
+                                expanded_inputs.get("storyBreakdownPath") or ""
+                            ),
+                            story_breakdown_markdown_path=str(
+                                expanded_inputs.get("storyBreakdownMarkdownPath") or ""
+                            ),
+                            story_output_mode=story_output_mode,
+                        )
+                    )
                 step_id = f"node-{idx + 1}"
                 nodes.append({
                     "id": step_id,
@@ -531,18 +691,39 @@ def _build_runtime_planner():
                         "name": runtime_mode,
                         "version": "1.0",
                     },
-                    "inputs": dict(node_inputs),
+                    "inputs": expanded_inputs,
                 })
                 if prev_step_id:
                     edges.append({"from": prev_step_id, "to": step_id})
                 prev_step_id = step_id
         else:
             node_id = str(task_payload.get("id") or "node-1").strip() or "node-1"
+            if selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
+                if story_output_mode == "jira" and not node_inputs.get("publishMode"):
+                    node_inputs["publishMode"] = "branch"
+                node_inputs["instructions"] = _append_story_breakdown_instructions(
+                    str(node_inputs.get("instructions") or ""),
+                    story_breakdown_path=str(
+                        node_inputs.get("storyBreakdownPath") or ""
+                    ),
+                    story_breakdown_markdown_path=str(
+                        node_inputs.get("storyBreakdownMarkdownPath") or ""
+                    ),
+                    story_output_mode=story_output_mode,
+                )
+            node_tool_type = (
+                "skill"
+                if selected_skill_name.lower() in _JIRA_STORY_OUTPUT_TOOLS
+                else "agent_runtime"
+            )
+            node_tool_name = (
+                selected_skill_name if node_tool_type == "skill" else runtime_mode
+            )
             nodes.append({
                 "id": node_id,
                 "tool": {
-                    "type": "agent_runtime",
-                    "name": runtime_mode,
+                    "type": node_tool_type,
+                    "name": node_tool_name,
                     "version": "1.0",
                 },
                 "inputs": node_inputs,
@@ -553,16 +734,37 @@ def _build_runtime_planner():
         # Skip Jules: session creation uses Jules API ``automationMode`` =
         # ``AUTO_CREATE_PR`` when ``publishMode`` is ``pr`` or ``branch``
         # (see ``JulesAgentAdapter.do_start``), not shell instructions.
-        if isinstance(publish_mode, str) and publish_mode.strip().lower() in ("pr", "branch"):
-            last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
-            if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
+        publish_requested = (
+            isinstance(publish_mode, str)
+            and publish_mode.strip().lower() in ("pr", "branch")
+        )
+        if publish_requested or story_output_mode == "jira":
+            publish_node = next(
+                (
+                    node
+                    for node in reversed(nodes)
+                    if str(node.get("tool", {}).get("type") or "").strip().lower()
+                    == "agent_runtime"
+                ),
+                nodes[-1],
+            )
+            publish_tool = str(
+                publish_node.get("tool", {}).get("name") or ""
+            ).strip().lower()
+            if publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
+                publish_inputs = publish_node["inputs"]
+                if story_output_mode == "jira" and not publish_inputs.get(
+                    "publishMode"
+                ):
+                    publish_inputs["publishMode"] = "branch"
                 commit_suffix = (
                     "\n\nAfter completing the changes above, commit your work "
                     "(`git add -A && git commit -m '<summary>'`). "
                     "Do NOT push or create a pull request — that is handled automatically."
                 )
-                last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + commit_suffix
+                publish_inputs["instructions"] = (
+                    publish_inputs["instructions"] + commit_suffix
+                )
 
         return {
             "plan_version": "1.0",
@@ -757,6 +959,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
+        register_story_output_tool_handlers(dispatcher)
 
         run_store = None
         run_supervisor = None

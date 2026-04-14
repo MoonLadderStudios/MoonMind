@@ -1387,6 +1387,45 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
+    story_output = _coerce_mapping(raw_story_output)
+    if not story_output:
+        return {}
+
+    mode = str(
+        story_output.get("mode") or story_output.get("target") or ""
+    ).strip().lower()
+    if mode not in {"jira", "docs_tmp", "docs"}:
+        raise _invalid_task_request(
+            "payload.task.storyOutput.mode must be one of: jira, docs_tmp, docs."
+        )
+
+    normalized: dict[str, Any] = {"mode": "docs_tmp" if mode == "docs" else mode}
+    for key in (
+        "storyBreakdownPath",
+        "storyBreakdownMarkdownPath",
+        "fallback",
+        "onFailure",
+    ):
+        value = story_output.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized[key] = value.strip()
+
+    jira_payload = _coerce_mapping(story_output.get("jira"))
+    if jira_payload:
+        normalized_jira: dict[str, Any] = {}
+        for key in ("projectKey", "issueTypeId"):
+            value = jira_payload.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized_jira[key] = value.strip()
+        for key in ("labels", "fields"):
+            if key in jira_payload:
+                normalized_jira[key] = jira_payload[key]
+        normalized["jira"] = normalized_jira
+
+    return normalized
+
+
 def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     tool_payload = (
         task_payload.get("tool") if isinstance(task_payload.get("tool"), dict) else {}
@@ -1628,6 +1667,9 @@ async def _create_execution_from_task_request(
         else {}
     )
     publish_payload = _normalize_publish_payload(task_payload.get("publish"))
+    story_output_payload = _normalize_story_output_payload(
+        task_payload.get("storyOutput") or task_payload.get("story_output")
+    )
     normalized_tool = _normalize_task_tool(task_payload)
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
@@ -1668,6 +1710,8 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["title"] = task_title
     if publish_payload:
         normalized_task_for_planner["publish"] = dict(publish_payload)
+    if story_output_payload:
+        normalized_task_for_planner["storyOutput"] = dict(story_output_payload)
     git_payload = (
         task_payload.get("git") if isinstance(task_payload.get("git"), dict) else {}
     )
@@ -1772,6 +1816,8 @@ async def _create_execution_from_task_request(
         "proposeTasks": propose_tasks,
         "stepCount": step_count,
     }
+    if story_output_payload:
+        initial_parameters["storyOutput"] = dict(story_output_payload)
     if instructions:
         initial_parameters["instructions"] = instructions
     if normalized_task_for_planner:

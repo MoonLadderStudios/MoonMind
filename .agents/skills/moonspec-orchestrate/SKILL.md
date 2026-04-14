@@ -12,7 +12,7 @@ Use this skill to coordinate the Moon Spec workflow end to end.
 Orchestrate downstream Moon Spec skills instead of reimplementing their detailed workflows:
 
 - `moonspec-specify`: create one-story specs from a single feature request.
-- `moonspec-breakdown`: split broad technical or declarative designs into one-story specs.
+- `moonspec-breakdown`: split broad technical or declarative designs into one-story candidates under `docs/tmp`.
 - `moonspec-plan`: create implementation planning artifacts.
 - `moonspec-tasks`: create a TDD-first executable task breakdown.
 - `moonspec-align`: analyze and remediate artifact drift before implementation.
@@ -32,7 +32,7 @@ Default intent is `runtime`: production code plus tests must be delivered. Use `
 ## Core Rules
 
 - Moon Spec uses one independently testable story per `spec.md`.
-- Broad designs must go through `moonspec-breakdown` before planning.
+- Broad designs must go through `moonspec-breakdown` before planning, but breakdown does not create `spec.md`.
 - Single-story requests go through `moonspec-specify`.
 - TDD is the default strategy.
 - Unit tests and integration tests are both expected.
@@ -74,9 +74,10 @@ Use these gates before advancing:
   - The original request or source design is preserved in `**Input**`.
   - Requirements are testable and contain no unresolved story-critical clarification.
 - Breakdown gate:
-  - `specs/breakdown.md` exists when a broad design was split.
-  - Each generated `spec.md` contains one story.
-  - Each generated spec preserves the source design in `**Input**`.
+  - A breakdown handoff exists under `docs/tmp/story-breakdowns/`.
+  - The handoff is not named `spec.md`.
+  - It contains ordered one-story candidates.
+  - It preserves the source design for later `/speckit.specify`.
   - Source design coverage IDs such as `DESIGN-REQ-*` are mapped.
 - Plan gate:
   - `plan.md` exists.
@@ -127,8 +128,9 @@ For a broad design:
 
 1. Run `moonspec-breakdown`.
 2. Verify the breakdown gate.
-3. Select the recommended first spec unless the user asked to implement all generated specs.
-4. For "all specs", process each generated spec in dependency order, one spec at a time.
+3. Select the recommended first story unless the user asked to process all stories.
+4. Run `moonspec-specify` for the selected story to create its `spec.md`.
+5. For "all stories", run specify and downstream stages in dependency order, one story at a time.
 
 ### 3. Plan
 
@@ -172,10 +174,11 @@ This replaces the old manual analyze remediation flow. Do not provide scripted "
 
 ## Multi-Spec Designs
 
-When `moonspec-breakdown` creates multiple specs:
+When `moonspec-breakdown` creates multiple stories:
 
-- Process specs in dependency order from `specs/breakdown.md`.
-- Keep each spec isolated through plan, tasks, align, implement, and verify.
+- Process stories in dependency order from the `docs/tmp/story-breakdowns/` handoff.
+- Create each `spec.md` with `moonspec-specify` only when that story reaches the specify stage.
+- Keep each resulting spec isolated through plan, tasks, align, implement, and verify.
 - Do not merge multiple stories into one `tasks.md`.
 - After each spec, report its verification verdict before moving to the next.
 - Stop if a dependency spec fails verification and blocks later specs.
@@ -194,7 +197,7 @@ Return a concise report:
 ## MoonSpec Orchestration
 
 Feature:
-- [spec path or generated spec list]
+- [active spec path or breakdown handoff path]
 
 Stages:
 - Specify/Breakdown: PASS/FAIL/SKIPPED
