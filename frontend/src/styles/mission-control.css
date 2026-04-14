@@ -79,10 +79,12 @@ samp {
 }
 
 .dashboard-root {
+  --dashboard-pt: 0.9rem;
+
   margin: 0 auto;
   max-width: none;
   width: 100%;
-  padding: 0.9rem 1rem 2.75rem;
+  padding: var(--dashboard-pt) 1rem 2.75rem;
   box-sizing: border-box;
   container-type: inline-size;
 }
@@ -109,7 +111,7 @@ samp {
   content: "";
   position: absolute;
   z-index: -1;
-  top: -0.9rem;
+  top: calc(-1 * var(--dashboard-pt, 0.9rem));
   left: 0;
   right: 0;
   bottom: 0;
@@ -206,7 +208,7 @@ samp {
 }
 
 h1 {
-  margin: 0.25rem 0 0.1rem;
+  margin: 0.25rem 0 0.25rem;
   font-family: var(--mm-font-headline);
   font-weight: 700;
   letter-spacing: 0;
