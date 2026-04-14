@@ -582,7 +582,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     <div className="queue-card-actions">
                       <a
                         href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}
-                        className="button secondary"
+                        className="button secondary queue-card-details-action"
                         role="button"
                       >
                         View details
