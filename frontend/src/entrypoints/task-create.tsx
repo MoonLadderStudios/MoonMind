@@ -202,6 +202,15 @@ interface JiraIssueDetail extends JiraIssueSummary {
     presetInstructions?: string | null;
     stepInstructions?: string | null;
   } | null;
+  attachments?: JiraIssueAttachment[];
+}
+
+interface JiraIssueAttachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes?: number | null;
+  downloadUrl: string;
 }
 
 type JiraImportTarget =
@@ -938,6 +947,25 @@ function validateAttachmentFiles(
   return { ok: errors.length === 0, errors, totalBytes };
 }
 
+function validateJiraImageAttachment(
+  attachment: JiraIssueAttachment,
+  policy: AttachmentPolicy,
+): string | null {
+  const type = String(attachment.contentType || "")
+    .trim()
+    .toLowerCase();
+  if (!policy.allowedContentTypes.includes(type)) {
+    return `${attachment.filename || "Jira image"} uses an unsupported image type.`;
+  }
+  const sizeBytes = Math.max(0, Number(attachment.sizeBytes) || 0);
+  if (sizeBytes > policy.maxBytes) {
+    return `${attachment.filename || "Jira image"} exceeds ${formatAttachmentBytes(
+      policy.maxBytes,
+    )}.`;
+  }
+  return null;
+}
+
 function deriveRequiredCapabilities(args: {
   runtimeMode: string;
   publishMode: string;
@@ -1609,6 +1637,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedAttachmentFiles, setSelectedAttachmentFiles] = useState<
     File[]
   >([]);
+  const [jiraImageImporting, setJiraImageImporting] = useState(false);
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2399,7 +2428,111 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     setSelectedJiraIssueKey("");
   }
 
-  function importSelectedJiraIssue(writeMode: JiraWriteMode) {
+  async function importSelectedJiraImages(issue: JiraIssueDetail): Promise<void> {
+    const attachments = Array.isArray(issue.attachments) ? issue.attachments : [];
+    if (!attachmentPolicy.enabled || attachments.length === 0) {
+      return;
+    }
+    const eligible = attachments.filter(
+      (attachment) => !validateJiraImageAttachment(attachment, attachmentPolicy),
+    );
+    if (eligible.length === 0) {
+      setSubmitMessage(
+        "Jira images are not supported by the current attachment policy.",
+      );
+      return;
+    }
+    const existingKeys = new Set(
+      selectedAttachmentFiles.map(
+        (file) => `${file.name}:${file.size}:${file.type}`,
+      ),
+    );
+    const room = Math.max(
+      0,
+      attachmentPolicy.maxCount - selectedAttachmentFiles.length,
+    );
+    const toDownload = eligible.slice(0, room);
+    if (toDownload.length === 0) {
+      setSubmitMessage("Attachment limit reached before Jira images could be added.");
+      return;
+    }
+    setJiraImageImporting(true);
+    try {
+      const downloaded = await Promise.allSettled(
+        toDownload.map(async (attachment) => {
+          const response = await fetch(attachment.downloadUrl);
+          if (!response.ok) {
+            throw new Error(
+              await responseErrorMessage(response, "Failed to download Jira image."),
+            );
+          }
+          const blob = await response.blob();
+          const type = String(
+            blob.type || attachment.contentType || "",
+          ).toLowerCase();
+          const file = new File([blob], attachment.filename, { type });
+          return existingKeys.has(`${file.name}:${file.size}:${file.type}`)
+            ? null
+            : file;
+        }),
+      );
+      const files = downloaded
+        .filter(
+          (result): result is PromiseFulfilledResult<File | null> =>
+            result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+        .filter((file): file is File => file !== null);
+      const failures = downloaded
+        .filter(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        )
+        .map((result) =>
+          result.reason instanceof Error
+            ? result.reason.message
+            : "Failed to download Jira image.",
+        );
+      if (files.length > 0) {
+        const combinedFiles = [...selectedAttachmentFiles, ...files];
+        const validation = validateAttachmentFiles(combinedFiles, attachmentPolicy);
+        if (!validation.ok) {
+          setSubmitMessage(validation.errors.join(" "));
+          return;
+        }
+        setSelectedAttachmentFiles(combinedFiles);
+      }
+      const messages: string[] = [];
+      if (eligible.length > toDownload.length) {
+        messages.push(
+          "Some Jira images were skipped because the attachment limit was reached.",
+        );
+      }
+      if (failures.length > 0) {
+        const uniqueFailures = Array.from(new Set(failures));
+        messages.push(
+          uniqueFailures.length === 1
+            ? (uniqueFailures[0] ?? "Failed to download Jira image.")
+            : `${failures.length} Jira images failed to download. ${uniqueFailures
+                .slice(0, 3)
+                .join(" ")}`,
+        );
+      }
+      if (messages.length > 0) {
+        setSubmitMessage(messages.join(" "));
+      }
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error("Failed to download Jira images.");
+      setSubmitMessage(failure.message);
+    } finally {
+      setJiraImageImporting(false);
+    }
+  }
+
+  async function importSelectedJiraIssue(writeMode: JiraWriteMode) {
     if (!selectedJiraIssue || !jiraImportTarget) {
       return;
     }
@@ -2427,6 +2560,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (appliedTemplates.length > 0) {
         setPresetReapplyNeeded(true);
       }
+      await importSelectedJiraImages(selectedJiraIssue);
       return;
     }
 
@@ -2462,6 +2596,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [jiraImportTarget.localId]: _removed, ...rest } = current;
       return rest;
     });
+    await importSelectedJiraImages(selectedJiraIssue);
   }
 
   function handleTemplateFeatureRequestChange(value: string) {
@@ -3883,6 +4018,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         </p>
                       </section>
                     ) : null}
+                    {Array.isArray(selectedJiraIssue.attachments) &&
+                    selectedJiraIssue.attachments.length > 0 ? (
+                      <section>
+                        <strong>Images</strong>
+                        <ul className="list">
+                          {selectedJiraIssue.attachments.map((attachment) => (
+                            <li key={attachment.id}>
+                              {attachment.filename}
+                              {attachment.sizeBytes
+                                ? ` (${formatAttachmentBytes(attachment.sizeBytes)})`
+                                : ""}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="small">
+                          {attachmentPolicy.enabled
+                            ? "Imported text will add supported Jira images to task attachments."
+                            : "Jira images are available, but image attachments are disabled for this runtime."}
+                        </p>
+                      </section>
+                    ) : null}
                     <label>
                       Import mode
                       <select
@@ -3908,14 +4064,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <div className="actions">
                       <button
                         type="button"
-                        onClick={() => importSelectedJiraIssue("replace")}
+                        disabled={jiraImageImporting}
+                        onClick={() => void importSelectedJiraIssue("replace")}
                       >
                         Replace target text
                       </button>
                       <button
                         type="button"
                         className="secondary"
-                        onClick={() => importSelectedJiraIssue("append")}
+                        disabled={jiraImageImporting}
+                        onClick={() => void importSelectedJiraIssue("append")}
                       >
                         Append to target text
                       </button>

@@ -72,6 +72,25 @@ class _StubJiraBrowserService(JiraBrowserService):
             context=context,
         )
 
+    async def _request_bytes(
+        self,
+        *,
+        method: str,
+        path: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[bytes, str]:
+        response = await self._pop_response(
+            method=method,
+            path=path,
+            action=action,
+            params=params,
+            json_body=None,
+            context=context,
+        )
+        return response
+
     async def _pop_response(
         self,
         *,
@@ -565,6 +584,128 @@ async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     assert result.acceptance_criteria_text == "Given a board"
     assert "ENG-123: Add Jira browser" in result.recommended_imports.preset_instructions
     assert "Acceptance criteria\nGiven a board" in result.recommended_imports.step_instructions
+
+
+async def test_issue_detail_exposes_only_image_attachments() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "key": "ENG-123",
+                "fields": {
+                    "summary": "Add Jira browser",
+                    "description": "Do the work",
+                    "attachment": [
+                        {
+                            "id": "10001",
+                            "filename": "wireframe.png",
+                            "mimeType": "image/png",
+                            "size": 128,
+                            "content": "https://example.atlassian.net/secure/attachment/10001/wireframe.png",
+                        },
+                        {
+                            "id": "10002",
+                            "filename": "notes.txt",
+                            "mimeType": "text/plain",
+                            "size": 20,
+                            "content": "https://example.atlassian.net/secure/attachment/10002/notes.txt",
+                        },
+                    ],
+                },
+            }
+        ],
+    )
+
+    result = await service.get_issue("ENG-123")
+
+    assert len(result.attachments) == 1
+    assert result.attachments[0].filename == "wireframe.png"
+    assert result.attachments[0].content_type == "image/png"
+    assert result.attachments[0].download_url == (
+        "/api/jira/issues/ENG-123/attachments/10001/content"
+    )
+
+
+async def test_download_issue_image_attachment_validates_membership_and_origin() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=AtlassianSettings(
+            atlassian_site_url="https://example.atlassian.net",
+            jira=JiraSettings(
+                jira_allowed_projects="ENG",
+            ),
+        ),
+        responses=[
+            {
+                "key": "ENG-123",
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "10001",
+                            "filename": "wireframe.png",
+                            "mimeType": "image/png",
+                            "size": 128,
+                            "content": "https://example.atlassian.net/secure/attachment/10001/wireframe.png",
+                        }
+                    ]
+                },
+            },
+            (b"image-bytes", "image/png"),
+        ],
+    )
+
+    attachment, payload, content_type = await service.download_issue_image_attachment(
+        "ENG-123",
+        "10001",
+    )
+
+    assert attachment.filename == "wireframe.png"
+    assert payload == b"image-bytes"
+    assert content_type == "image/png"
+    assert [call["path"] for call in service.calls] == [
+        "/issue/ENG-123",
+        "/secure/attachment/10001/wireframe.png",
+    ]
+
+
+async def test_download_issue_image_attachment_allows_tenant_origin_in_scoped_mode() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=AtlassianSettings(
+            atlassian_cloud_id="cloud-123",
+            jira=JiraSettings(
+                jira_allowed_projects="ENG",
+            ),
+        ),
+        responses=[
+            {
+                "key": "ENG-123",
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "10001",
+                            "filename": "wireframe.png",
+                            "mimeType": "image/png",
+                            "size": 128,
+                            "content": "https://example.atlassian.net/secure/attachment/10001/wireframe.png",
+                        }
+                    ]
+                },
+            },
+            (b"image-bytes", "image/png"),
+        ],
+    )
+
+    attachment, payload, content_type = await service.download_issue_image_attachment(
+        "ENG-123",
+        "10001",
+    )
+
+    assert attachment.filename == "wireframe.png"
+    assert payload == b"image-bytes"
+    assert content_type == "image/png"
+    assert [call["path"] for call in service.calls] == [
+        "/issue/ENG-123",
+        "/secure/attachment/10001/wireframe.png",
+    ]
 
 
 async def test_issue_detail_ignores_blank_browse_url_and_falls_back_to_self_url() -> None:
