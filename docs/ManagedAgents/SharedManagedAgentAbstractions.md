@@ -1,218 +1,228 @@
 # Shared Managed Agent Abstractions
 
-## Status
+- **Status:** Desired state
+- **Audience:** Runtime authors, workflow authors, adapter authors, and Mission Control authors
+- **Purpose:** Runtime-neutral contract layer underneath the managed-agent architecture entrypoint
+- **Last updated:** 2026-04-14
 
-This document describes the **new desired state** for managed agents.
+**Related:**
+- [`docs/ManagedAgents/ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md)
+- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
+- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
+- [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
+- [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
+- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 
-- **Codex runtime:** implemented in the project and is the reference implementation for this model.
-- **Claude Code runtime:** not yet implemented, but should fit the same abstraction.
-- **Gemini CLI runtime:** not yet implemented, but should fit the same abstraction.
+## 1. Summary
 
-This document supersedes the older, more imperative framing where a “managed agent” was treated as a runtime-specific thing to start, stop, and hold directly. The new model is **declarative** and **session-plane based**.
+This document defines the shared, runtime-neutral contract for MoonMind managed agents.
 
-## Executive summary
+The subsystem architecture is defined by [`ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md). This document sits directly underneath that entrypoint and defines the common abstractions that runtime-specific managed session planes must implement.
 
-A managed agent is no longer the runtime object.
+The core model is:
 
-A managed agent is now the **declarative intent** that some long-lived, resumable, observable work session should exist for a given runtime, workspace, role, and policy.
+- a **managed agent** is declarative desired state,
+- a **managed session** is the runtime-owned realization of that desired state,
+- a **managed session plane** reconciles desired state into observed runtime state,
+- higher layers store and exchange bindings, observations, events, and artifact refs,
+- runtime-native process, thread, container, transcript, and session identifiers remain opaque outside the owning plane.
 
-The runtime-specific owner of that session is a **managed session plane**.
+Codex is the current concrete reference implementation. Claude Code, Gemini CLI, and future managed runtimes should implement the same shared contract through their own runtime-specific planes.
 
-A managed session plane is responsible for:
+---
 
-- reconciling desired state into actual runtime sessions,
-- resuming or adopting existing sessions when appropriate,
-- creating new sessions when necessary,
-- observing session lifecycle and streamed events,
-- surfacing normalized status back to the rest of the system,
-- handling runtime-specific control operations such as interrupt, resume, steer, or delete.
+## 2. Contract boundary
 
-This gives us one shared abstraction for Codex now and for Claude Code and Gemini CLI later, without forcing higher layers to care about runtime-specific session mechanics.
+### 2.1 Shared layer owns
 
-## Why the abstraction changed
+The shared managed-agent layer owns the runtime-neutral vocabulary and payload shapes for:
 
-The earlier abstraction worked only as long as the project effectively had one concrete runtime model in mind.
+- managed-agent desired state,
+- managed-session references and bindings,
+- normalized observations,
+- phases, readiness, and conditions,
+- runtime capability flags,
+- normalized event envelopes,
+- input and control command envelopes,
+- reconciliation semantics,
+- compatibility and replacement signaling.
 
-That model breaks down when we want to support multiple agent runtimes that differ in how they:
+Workflow code, Mission Control, and cross-runtime orchestration should depend on these shared surfaces first.
 
-- start and resume sessions,
-- persist transcripts and state,
-- expose streaming events,
-- request approvals,
-- support workspace isolation,
-- handle subagents or delegated work,
-- represent interruption, completion, and failure.
+### 2.2 Managed session planes own
 
-Trying to model all of that directly in a top-level “managed agent” abstraction causes three problems:
+A managed session plane owns runtime-specific realization, including:
 
-1. **Runtime leakage**
-   Higher layers become full of Codex-specific, Claude-specific, or Gemini-specific branching.
+- creating, resuming, adopting, suspending, resetting, and deleting sessions,
+- mapping shared policy into runtime-native launch or control settings,
+- attaching workspace, provider profile, resolved skill, and context materialization inputs,
+- interpreting runtime-native session and turn identifiers,
+- subscribing to runtime-native streams,
+- translating runtime events into normalized MoonMind events,
+- deciding whether spec drift is in-place, deferred, or replacement-requiring.
 
-2. **Imperative coupling**
-   The system starts reasoning in terms of “launch this agent process now” instead of “reconcile this desired capability into an owned session.”
+The plane may delegate concrete CLI/API calls to lower-level adapters. Those adapters are implementation details, not shared architecture concepts.
 
-3. **Poor portability**
-   Every new runtime needs a new family of top-level concepts instead of one shared contract.
+### 2.3 Outside this contract
 
-The session-plane model fixes this by making the shared layer own **intent, policy, identity, and status**, while each runtime plane owns **session realization and runtime control**.
+This document does not own:
 
-## The new conceptual model
+- the top-level managed-agent subsystem architecture,
+- the Codex-specific session protocol,
+- Provider Profile schemas and auth flows,
+- secret backend schemas and resolver implementations,
+- the skill-resolution algorithm,
+- the Docker workload-container contract,
+- external delegated agent execution.
 
-There are four key concepts:
+Those details belong in the related subsystem documents. Shared managed-agent payloads may reference those systems, but they must not inline their large bodies or raw secret values.
 
-### 1. Managed agent
+---
 
-A **managed agent** is a logical, durable workload identity.
+## 3. Normative terms
 
-It describes:
+### 3.1 Managed agent
 
-- who or what the session is for,
-- which runtime should back it,
-- which workspace and profile it should use,
-- what policies apply,
-- what state is desired.
+A **managed agent** is a stable logical identity plus desired state for an owned runtime work session.
 
-A managed agent is **not** a process handle, thread handle, CLI process id, or runtime session id.
+A managed agent is not:
 
-### 2. Managed session
+- a process handle,
+- a container id,
+- a CLI session id,
+- a provider thread id,
+- a transcript path,
+- an always-live runtime object.
 
-A **managed session** is the concrete runtime-owned session that does the work.
+Higher layers request that a managed agent be reconciled. They do not directly launch runtime processes.
 
-Examples:
+### 3.2 Managed session
 
-- a Codex thread/session bound to a workspace and agent profile,
-- a future Claude Code session,
-- a future Gemini CLI session.
+A **managed session** is the concrete runtime-owned work session that satisfies a managed-agent spec.
 
-A managed session is always owned by exactly one session plane.
+A managed session may have runtime-native state, local caches, transcripts, thread ids, or container state. Those details are owned by the plane. Durable MoonMind truth remains in workflow state, artifacts, bounded metadata, and read models.
 
-### 3. Managed session plane
+### 3.3 Managed session plane
 
 A **managed session plane** is the runtime-specific control and reconciliation layer.
 
-It is responsible for translating a shared managed-agent spec into runtime-native session operations.
+Each runtime kind has exactly one owning plane for a given managed session. The plane is the only component that may interpret native session identifiers or decide how shared operations map to runtime-native behavior.
 
-A plane owns:
+### 3.4 Desired state and observed state
 
-- create / resume / adopt decisions,
-- session binding,
-- event subscription,
-- status observation,
-- lifecycle control,
-- runtime capability reporting.
+Managed-agent execution is reconciliation-based:
 
-### 4. Desired state + observed state
-
-The system should think in terms of reconciliation:
-
-- **desired state** says what should exist,
+- **desired state** says what MoonMind wants to exist,
 - **observed state** says what the runtime currently has,
-- the plane closes the gap.
+- the plane closes the gap and reports a normalized observation.
 
-That means higher layers stop asking “how do I launch Codex?” and instead ask “ensure this managed agent is present and healthy.”
+Reconciliation must be idempotent. Repeating the same reconcile request without meaningful spec drift must converge on the same binding rather than creating duplicate sessions.
 
-## Shared abstraction boundaries
+---
 
-### Shared layer responsibilities
+## 4. Core contract objects
 
-The shared abstraction layer owns:
+The names below are the normative documentation names for the shared model. Implementation type names may vary while Codex remains the only concrete runtime, but their semantics must stay aligned with this contract.
 
-- the managed-agent identity model,
-- desired-state shape,
-- normalized status and conditions,
-- reconciliation contract,
-- runtime capability contract,
-- opaque session references,
-- event normalization model,
-- policy surfaces that higher layers care about.
+### 4.1 `ManagedAgentSpec`
 
-### Session-plane responsibilities
-
-A runtime plane owns:
-
-- runtime-specific session creation and resumption,
-- adoption/import of existing sessions when supported,
-- mapping shared policies to runtime-native settings,
-- streaming and event translation,
-- handling runtime quirks,
-- determining whether a change is in-place, deferred, or replacement-requiring.
-
-### Runtime adapter responsibilities
-
-Inside a plane, a lower-level adapter may still exist for concrete API or CLI calls. That is an implementation detail.
-
-The rest of the system should depend on the plane contract, not on raw runtime adapters.
-
-## Core shared abstractions
-
-The names below are conceptual. Exact type names can vary, but the shape should remain the same.
-
-### ManagedAgentSpec
-
-A managed agent spec is the desired-state object.
+`ManagedAgentSpec` is the desired-state object.
 
 ```text
 ManagedAgentSpec
   id
   runtime
-  desiredState            # present | suspended | absent
+  desiredState
   workspace
-  profile
-  bootstrap
+  providerProfileRef
+  agentProfileRef
+  contextRefs
+  resolvedSkillSetRef
   sessionPolicy
   permissions
   observability
   metadata
 ```
 
-Recommended contents:
+Field requirements:
 
-- `id`: stable logical identity.
-- `runtime`: `codex`, `claude-code`, `gemini-cli`, or another supported runtime kind.
-- `desiredState`:
-  - `present` means a session should exist and be available for work.
-  - `suspended` means no active session is required, but resumable state may be retained.
-  - `absent` means the binding should be removed and retention policy applied.
-- `workspace`: repo root, worktree, sandbox root, or equivalent scope.
-- `profile`: role, skill bundle, template, or policy profile.
-- `bootstrap`: initial instructions, attachments, references, or setup guidance.
-- `sessionPolicy`: reuse, retention, replacement, isolation, resume, and steering policies.
-- `permissions`: approval, sandbox, network, filesystem, and escalation defaults.
-- `observability`: whether to retain transcripts, stream events, publish deltas, etc.
-- `metadata`: labels and non-runtime business metadata.
+- `id` is the stable logical managed-agent identity. It must not be derived from a runtime-native session id.
+- `runtime` selects the managed session plane, such as `codex`, `claude-code`, or `gemini-cli`. Unsupported runtime values must fail fast.
+- `desiredState` is one of `present`, `suspended`, or `absent`.
+- `workspace` defines the repo, worktree, sandbox root, or equivalent scope to bind into the session.
+- `providerProfileRef` references the Provider Profile used for runtime/provider selection and launch shaping. It must not contain raw credentials.
+- `agentProfileRef` references role, behavior, or task-template policy when applicable.
+- `contextRefs` references context packs, attachments, memory snapshots, retrieval results, or instruction artifacts. Large context bodies belong behind refs.
+- `resolvedSkillSetRef` references the immutable resolved skill snapshot selected for the run or step.
+- `sessionPolicy` defines reuse, retention, reset, replacement, isolation, resume, and steering behavior.
+- `permissions` defines approval, sandbox, network, filesystem, and escalation defaults.
+- `observability` defines event publishing, transcript retention, diagnostic capture, and live-follow policy.
+- `metadata` is non-secret business metadata for routing, display, and correlation.
 
-### ManagedSessionRef
+### 4.2 Desired-state values
 
-A managed session ref is an **opaque reference** to a concrete runtime session.
+`present` means a compatible session should exist and be usable for work.
+
+The plane may create, resume, or adopt a session. The resulting observation should make readiness explicit.
+
+`suspended` means no active execution is required, but resumable state may be retained according to policy.
+
+The plane may unload, detach, stop polling, or preserve runtime-native state. Resume behavior remains plane-specific.
+
+`absent` means the managed session binding should be removed and retention policy applied.
+
+The plane should delete, archive, or detach runtime-native state according to policy and report a terminal observation.
+
+### 4.3 `ManagedSessionRef`
+
+`ManagedSessionRef` is an opaque reference to a runtime-owned session.
 
 ```text
 ManagedSessionRef
   runtime
   planeId
-  nativeSessionId
+  sessionId
+  sessionEpoch
+  nativeRef
 ```
 
-Important rule: higher layers may store and pass this reference around, but should not depend on the structure or semantics of `nativeSessionId`.
+Rules:
 
-### ManagedSessionBinding
+- `runtime` and `planeId` identify the owning plane.
+- `sessionId` is the logical MoonMind session identity visible to shared systems.
+- `sessionEpoch` identifies the current continuity interval.
+- `nativeRef` is an opaque plane-owned reference. Higher layers may store and pass it back to the same plane, but must not parse it or depend on its structure.
 
-A binding connects a logical managed agent to a concrete session.
+### 4.4 `ManagedSessionBinding`
+
+`ManagedSessionBinding` connects a logical managed agent to a concrete session.
 
 ```text
 ManagedSessionBinding
   managedAgentId
   sessionRef
-  bindingMode             # created | resumed | adopted
+  bindingMode
+  compatibilityFingerprint
   createdAt
   updatedAt
-  compatibilityHash
+  expiresAt
+  retentionPolicy
 ```
 
-The compatibility hash is useful when deciding whether an existing session still satisfies the current desired state.
+`bindingMode` is one of:
 
-### ManagedSessionObservation
+- `created`,
+- `resumed`,
+- `adopted`.
 
-This is the normalized snapshot of what the plane currently knows.
+The `compatibilityFingerprint` is the plane-computed value used to detect whether an existing session still satisfies the current spec. It must not include raw secrets or large context bodies.
+
+### 4.5 `ManagedSessionObservation`
+
+`ManagedSessionObservation` is the normalized snapshot of what the plane currently knows.
 
 ```text
 ManagedSessionObservation
@@ -221,13 +231,14 @@ ManagedSessionObservation
   readiness
   conditions
   lastActivityAt
-  lastTurnSummary
+  activeTurnRef
   pendingApproval
+  continuityRefs
   terminalReason
   runtimeDetails
 ```
 
-Recommended normalized phases:
+Shared phases:
 
 - `pending`
 - `reconciling`
@@ -238,13 +249,42 @@ Recommended normalized phases:
 - `interrupted`
 - `completed`
 - `failed`
+- `suspended`
 - `deleted`
 
-Planes can retain richer runtime-native detail under `runtimeDetails`, but the shared layer should prefer the normalized fields.
+`runtimeDetails` may contain bounded runtime-native diagnostic metadata. It must not contain raw credentials, full transcripts, large skill bodies, or large prompt/context payloads.
 
-### ManagedSessionPlaneCapabilities
+### 4.6 `ManagedSessionCondition`
 
-Capabilities are how runtimes differ **without** changing the top-level abstraction.
+Conditions provide stable cross-runtime status details.
+
+```text
+ManagedSessionCondition
+  type
+  status
+  reason
+  message
+  lastTransitionAt
+```
+
+Recommended shared condition types:
+
+- `Bound`
+- `Ready`
+- `Compatible`
+- `DriftDetected`
+- `RequiresReplacement`
+- `AwaitingApproval`
+- `Suspended`
+- `Terminal`
+- `Recoverable`
+- `Degraded`
+
+Runtime-specific conditions may be added when needed, but shared consumers should be able to make normal routing and display decisions from shared condition types.
+
+### 4.7 `ManagedSessionPlaneCapabilities`
+
+Capabilities describe runtime differences without changing the top-level abstraction.
 
 ```text
 ManagedSessionPlaneCapabilities
@@ -252,19 +292,23 @@ ManagedSessionPlaneCapabilities
   supportsAdoptExisting
   supportsInterrupt
   supportsSteer
+  supportsReset
   supportsStructuredEvents
   supportsApprovalCallbacks
   supportsWorkspaceOverride
   supportsFork
   supportsSubagents
   supportsEphemeralSessions
+  supportsLiveFollow
 ```
 
-This is the main extension mechanism for runtime differences.
+Capability flags are descriptive contract data. They must not create silent fallback behavior. If a caller requests an unsupported operation, the plane should fail fast with a normalized error and observation update.
 
-### ManagedSessionPlane
+---
 
-This is the core runtime-owned contract.
+## 5. Plane contract
+
+A managed session plane exposes the runtime-owned reconciliation and control surface.
 
 ```text
 ManagedSessionPlane
@@ -274,162 +318,162 @@ ManagedSessionPlane
   reconcile(spec) -> ManagedSessionBinding + ManagedSessionObservation
   get(sessionRef) -> ManagedSessionObservation
   watch(sessionRef) -> stream<ManagedSessionEvent>
-  sendInput(sessionRef, input)
-  interrupt(sessionRef)
-  suspend(spec or sessionRef)
-  delete(spec or sessionRef)
+  sendInput(sessionRef, input) -> ManagedSessionObservation
+  steer(sessionRef, input) -> ManagedSessionObservation
+  interrupt(sessionRef, control) -> ManagedSessionObservation
+  resolveApproval(sessionRef, approval) -> ManagedSessionObservation
+  reset(sessionRef, control) -> ManagedSessionBinding + ManagedSessionObservation
+  suspend(spec or sessionRef) -> ManagedSessionObservation
+  delete(spec or sessionRef) -> ManagedSessionObservation
 ```
 
-Exact method names are not important. The important thing is that the shared layer talks to a plane in terms of **reconciliation and observation**, not raw process management.
+Exact method names can vary, but the shared boundary must remain reconciliation and observation based. Shared callers should not depend on raw process control operations.
 
-## Desired-state examples
+Plane operations must:
 
-### Minimal example
+- validate the runtime kind before acting,
+- authorize workspace, context, skill, and credential materialization,
+- keep raw secrets out of durable payloads,
+- publish normalized observations after meaningful state changes,
+- preserve idempotency for retryable workflow activity execution,
+- report unsupported operations explicitly.
 
-```yaml
-managedAgents:
-  - id: backend-implementer
-    runtime: codex
-    desiredState: present
-    workspace:
-      root: ./src/MyService
-    profile: implementation
-```
+---
 
-### More complete example
+## 6. Reconciliation semantics
 
-```yaml
-managedAgents:
-  - id: backend-implementer
-    runtime: codex
-    desiredState: present
-    workspace:
-      root: ./src/MyService
-      isolation: worktree
-    profile: implementation
-    bootstrap:
-      instructions: |
-        Work only in the service and tests projects.
-        Keep diffs scoped.
-        Run relevant tests before marking work complete.
-      references:
-        - docs/Architecture/ServiceBoundaries.md
-        - docs/ManagedAgents/CodexCliManagedSessions.md
-    sessionPolicy:
-      reuse: resume-or-create
-      retention: keep-history
-      replacement: compatible-only
-    permissions:
-      approvalPolicy: project-default
-      sandboxPolicy: workspace-write
-      networkPolicy: restricted
-    observability:
-      publishEvents: true
-      retainTranscript: true
-    metadata:
-      team: payments
-      purpose: feature-delivery
-```
+### 6.1 Reconcile flow
 
-This same shape should remain valid when `runtime` becomes `claude-code` or `gemini-cli`.
-
-That is the point of the abstraction.
-
-## Reconciliation model
-
-The shared system should treat session management as a reconciliation loop.
-
-### Reconcile algorithm at a high level
-
-For a given `ManagedAgentSpec`:
+For a `ManagedAgentSpec`, reconciliation follows this shape:
 
 1. Select the plane using `spec.runtime`.
-2. Check whether a compatible binding already exists.
-3. If a compatible session exists:
-   - reuse it,
-   - resume or attach if necessary,
-   - refresh observation.
-4. Otherwise, if the plane supports adoption and an adoptable session exists:
-   - adopt it,
-   - record binding mode as `adopted`.
-5. Otherwise:
-   - create a new runtime-native session,
-   - bind it,
-   - publish observation.
-6. Subscribe to runtime events and normalize them.
-7. Persist updated binding and status.
+2. Load any existing binding for `spec.id`.
+3. Compare the binding compatibility fingerprint with the current spec.
+4. If the binding is compatible, resume, attach, or refresh observation.
+5. If no compatible binding exists and adoption is supported, adopt an eligible runtime-native session.
+6. If adoption is unavailable or unsuitable, create a new runtime-native session.
+7. Persist the binding and normalized observation.
+8. Publish normalized events and artifact refs for operator visibility.
 
-### Idempotency requirement
+### 6.2 Idempotency
 
-`reconcile(spec)` must be safe to call repeatedly.
+`reconcile(spec)` must be safe under workflow retries.
 
-Repeated reconciliation with no meaningful spec drift should not create duplicate sessions.
+Repeated reconcile calls for the same desired state must not:
 
-### Compatibility and replacement
+- create duplicate runtime sessions,
+- leak duplicate auth or workspace mounts,
+- duplicate durable artifacts except where append-only event capture intentionally records a retry,
+- advance session epochs without an explicit reset or replacement boundary.
 
-Some spec changes can be applied in place. Others require replacement.
+### 6.3 Compatibility and replacement
 
-Typical examples:
+Some spec drift may be applied in place. Other drift requires a replacement session.
 
-- **Usually replacement-requiring**
-  - runtime kind
-  - workspace root or isolation mode
-  - identity-defining profile changes
-- **Potentially in-place or next-turn only**
-  - approval policy
-  - model or reasoning defaults
-  - steering instructions
-  - observability toggles
+Usually replacement-requiring changes include:
 
-Each plane decides this using its runtime semantics, but the result should be surfaced consistently through shared conditions.
+- runtime kind,
+- workspace root or isolation mode,
+- identity-defining Provider Profile changes,
+- incompatible resolved skill set materialization policy,
+- incompatible permission or sandbox policy.
 
-Suggested shared conditions:
+Potentially in-place or next-turn changes include:
 
-- `Bound`
-- `Compatible`
-- `RequiresReplacement`
-- `AwaitingApproval`
-- `Suspended`
-- `Terminal`
-- `DriftDetected`
+- steering instructions,
+- approval policy refinements,
+- observability toggles,
+- model or reasoning defaults when the runtime supports them without changing provider identity.
 
-## Session lifecycle semantics
+The plane decides using runtime semantics, but it must surface the outcome through `Compatible`, `DriftDetected`, and `RequiresReplacement` conditions.
 
-The shared layer should reason about lifecycle in a runtime-neutral way.
+### 6.4 Reset and session epochs
 
-### Present
+A reset or clear operation starts a new continuity interval.
 
-The session should exist and be available.
+When a plane resets a session, it must:
 
-- The plane may create, resume, or adopt.
-- The session may be idle or active.
-- Higher layers care that it is bound and usable.
+- record an explicit reset boundary,
+- increment `sessionEpoch`,
+- preserve or replace `sessionId` according to policy,
+- publish an observation that makes the new continuity interval visible,
+- keep durable context, artifacts, and read models authoritative outside the runtime container.
 
-### Suspended
+---
 
-The session does not need to be actively loaded or executing.
+## 7. Input and control envelopes
 
-- Binding and transcript may be retained.
-- The plane may unload, detach, or simply mark the session as not expected to be active.
-- Resume semantics remain runtime-specific.
+### 7.1 `ManagedSessionInput`
 
-### Absent
+Input sent to a session should be artifact-first.
 
-The session should no longer be managed.
+```text
+ManagedSessionInput
+  turnId
+  instructions
+  instructionRef
+  contextRefs
+  attachmentRefs
+  resolvedSkillSetRef
+  permissions
+  metadata
+```
 
-- The plane removes the binding.
-- Runtime-native deletion, archival, or transcript retention is controlled by policy.
+Rules:
 
-## Normalized event model
+- Inline `instructions` should remain bounded.
+- Large prompt, context, attachment, or skill bodies should use refs.
+- Secret values must not appear in input envelopes.
+- Runtime-specific input details belong in the plane or adapter, not in shared workflow logic.
 
-Planes should translate runtime-specific streams into a shared event surface where possible.
+### 7.2 Control operations
 
-Suggested normalized events:
+Shared control operations include:
+
+- `steer`,
+- `interrupt`,
+- `resolveApproval`,
+- `reset`,
+- `suspend`,
+- `delete`.
+
+Control operations should be surfaced as explicit workflow signals, updates, or activity calls. Live Logs remains an observation surface; it must not become the authority for interventions.
+
+---
+
+## 8. Normalized event model
+
+Planes translate runtime-native streams into normalized events.
+
+```text
+ManagedSessionEvent
+  eventId
+  sessionRef
+  sequence
+  timestamp
+  type
+  severity
+  turnRef
+  payload
+  payloadRef
+  redactionState
+  runtimeDetails
+```
+
+Rules:
+
+- Events must be ordered per session where the runtime exposes enough ordering information.
+- Large payloads should be stored as artifacts and referenced through `payloadRef`.
+- Secret-like values must be redacted before events are stored or published.
+- Runtime-native details may be attached only as bounded diagnostics.
+
+Recommended shared event types:
 
 - `SessionCreated`
 - `SessionResumed`
 - `SessionAdopted`
 - `SessionReady`
+- `SessionReset`
 - `TurnStarted`
 - `MessageDelta`
 - `ToolCallStarted`
@@ -437,174 +481,123 @@ Suggested normalized events:
 - `ApprovalRequested`
 - `ApprovalResolved`
 - `SessionInterrupted`
+- `SessionSuspended`
 - `SessionCompleted`
 - `SessionFailed`
 - `SessionDeleted`
 
-Raw runtime-native events can still be attached as extended details for diagnostics.
+Runtime-specific events may be projected as diagnostics, but shared consumers should prefer normalized event types.
 
-## Codex as the reference implementation
+---
 
-Codex is the first implemented runtime for this model and should be treated as the reference session-plane implementation, not as a special-case top-level abstraction.
+## 9. Durability and payload discipline
 
-### Codex mapping
+The shared contract must keep durable workflow payloads compact.
 
-In the Codex runtime, the plane maps the shared abstractions to Codex-native session and turn concepts.
+Durable shared state may include:
 
-Conceptually:
+- `ManagedAgentSpec` with refs,
+- `ManagedSessionBinding`,
+- `ManagedSessionObservation`,
+- normalized event metadata,
+- artifact refs,
+- continuity refs,
+- bounded runtime diagnostics.
 
-- the managed agent becomes desired state for a Codex-backed session,
-- the plane owns create / resume / attach decisions,
-- a bound session is represented by a Codex-native session or thread reference,
-- user-visible work is driven through turns,
-- streaming runtime activity is normalized into shared observation and events,
-- interrupt, steer, approval, and completion flow through the plane contract.
+Durable shared state must not include:
 
-### What the Codex plane should own
+- raw provider credentials,
+- full auth homes,
+- private keys or tokens,
+- full transcripts by default,
+- large skill bodies,
+- large context packs,
+- runtime-native cache directories,
+- broad worker environment dumps.
 
-The Codex plane should own all Codex-specific concerns, including:
+When a runtime needs files, credentials, context, or skills, materialization happens at a controlled activity or adapter boundary. Workflow history carries refs and bounded metadata only.
 
-- how a session is created or resumed,
-- how workspace and policy settings are mapped,
-- how event streams are subscribed to,
-- how approval and interruption are bridged,
-- how compatibility is determined,
-- how runtime-native ids are persisted and recovered.
+---
 
-Higher layers should not need to know whether Codex realizes this through app-server threads, CLI session artifacts, or another Codex-specific substrate.
+## 10. Skill, context, auth, and secret references
 
-### Subagents in Codex
+Shared managed-agent contracts reference adjacent systems without taking ownership of them.
 
-Codex has runtime-native support for delegated or parallel agent work. That does **not** change the top-level abstraction.
+### 10.1 Skills
 
-The shared model should treat runtime-native subagents as one of two things:
+`resolvedSkillSetRef` points to an immutable resolved active skill snapshot.
 
-1. **internal runtime behavior** of a managed session, or
-2. **explicit child sessions** only if the plane intentionally projects them outward.
+The runtime adapter may materialize that snapshot into the stable runtime-visible path defined by the skill subsystem, such as `.agents/skills`, but the shared managed-agent contract carries the ref rather than embedding skill file contents.
 
-Do not make subagents part of the base shared managed-agent abstraction.
+### 10.2 Context
 
-## Planned Claude Code and Gemini CLI support
+`contextRefs` and `attachmentRefs` point to artifact-backed or retrieval-backed context selected by MoonMind.
 
-Claude Code and Gemini CLI should be added by implementing new planes, not by inventing new top-level managed-agent abstractions.
+Managed sessions consume context assembled by MoonMind. Runtime-local memory is a continuity cache, not the durable context source of truth.
 
-### Required design rule
+### 10.3 Provider profiles and auth
 
-Do **not** introduce concepts like:
+`providerProfileRef` points to the Provider Profile used for runtime/provider selection, launch shaping, capacity coordination, and credential source selection.
 
-- `ClaudeManagedAgent`
-- `GeminiManagedAgent`
-- `ClaudeSessionManager` as a new top-level abstraction
-- `GeminiManagedRuntime` as a peer to the shared managed-agent model
+OAuth volumes, generated runtime configs, environment bundles, and other auth materialization details stay behind Provider Profile and runtime adapter boundaries.
 
-Instead, add:
+### 10.4 Secrets
 
-- `ClaudeCodeManagedSessionPlane`
-- `GeminiCliManagedSessionPlane`
+Secret values are never part of the shared managed-agent contract.
 
-Both should consume the same `ManagedAgentSpec` shape and return the same shared binding, observation, and event model.
+Shared payloads may carry `SecretRef` values only where a downstream controlled resolver boundary requires them. Resolution must happen late and materialize only the minimum runtime-required surface.
 
-### What is allowed to vary by runtime
+---
 
-Claude Code and Gemini CLI will vary in:
+## 11. Runtime extension rules
 
-- how sessions are started and resumed,
-- what can be controlled mid-session,
-- what event structure is available,
-- how approvals and permissions behave,
-- whether adoption or fork is possible,
-- how persistent state is stored locally or remotely.
+New managed runtimes must extend the shared model by adding a runtime-specific managed session plane.
 
-Those differences belong behind the plane contract and capability flags.
+They must not introduce:
 
-### Declarative-first requirement
+- runtime-specific managed-agent root concepts,
+- runtime-specific peer architectures,
+- direct shared dependencies on native session ids,
+- workflow branches that bypass the shared binding, observation, and event model,
+- special top-level orchestration paths for one runtime.
 
-For future runtimes, implementation should start from the same desired-state workflow:
+Runtime differences belong in:
 
-1. define a shared spec,
-2. select a plane,
-3. reconcile to a runtime session,
-4. normalize observation,
-5. expose runtime-specific gaps through capabilities and conditions.
+- the plane implementation,
+- capability flags,
+- conditions,
+- bounded `runtimeDetails`,
+- runtime-specific docs.
 
-That is the intended long-term architecture.
+Codex-specific behavior belongs in Codex-managed-session docs. Claude Code, Gemini CLI, and future runtime docs should describe how their planes realize this contract rather than redefining it.
 
-## What should no longer be modeled at the shared layer
+---
 
-The following patterns are now considered the wrong abstraction direction:
+## 12. Required invariants
 
-- treating a managed agent as a directly launched runtime process,
-- exposing runtime-native session ids as first-class shared identifiers,
-- baking Codex-specific lifecycle calls into top-level abstractions,
-- requiring separate orchestration paths for each runtime,
-- coupling shared policy code to runtime-specific event payloads,
-- assuming one managed agent must always equal one always-live process.
+The following invariants must hold across managed session planes:
 
-## Recommended invariants
+1. Managed agents are declarative desired state, not runtime handles.
+2. Runtime realization belongs to exactly one owning plane per session.
+3. Native session identifiers are opaque outside the owning plane.
+4. Reconciliation is idempotent under workflow retries.
+5. Session replacement and reset boundaries are explicit.
+6. Normalized observations are available for shared routing and UI display.
+7. Runtime differences are exposed through capabilities and conditions, not forked abstractions.
+8. Large bodies and raw secrets stay out of workflow history and shared durable payloads.
+9. Context and skills are referenced and materialized at controlled boundaries.
+10. Managed session containers remain continuity caches, not durable truth.
 
-These invariants should hold across all implementations.
+---
 
-1. **Managed agents are declarative.**
-   They describe desired capability, not runtime handles.
+## 13. Document relationship
 
-2. **Planes own runtime realization.**
-   Create, resume, adopt, attach, interrupt, and delete are plane responsibilities.
+Use the managed-agent docs as follows:
 
-3. **Bindings are opaque.**
-   Only the owning plane interprets native session ids.
+- [`ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md) is the subsystem architecture entrypoint.
+- [`SharedManagedAgentAbstractions.md`](./SharedManagedAgentAbstractions.md) is this runtime-neutral shared contract layer.
+- [`CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md) is the current Codex runtime-specific architecture entrypoint.
+- [`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md) defines Codex-specific session details.
+- [`LiveLogs.md`](./LiveLogs.md) defines session-aware observability.
 
-4. **Reconciliation is idempotent.**
-   Repeated reconcile calls should converge, not duplicate work.
-
-5. **Status is normalized.**
-   Higher layers consume shared phases and conditions first.
-
-6. **Runtime differences use capabilities, not forks in the abstraction model.**
-   New runtimes should extend the same contract.
-
-7. **Replacement is explicit.**
-   Incompatible drift should surface clearly rather than silently mutating sessions in undefined ways.
-
-## Migration guidance from the previous model
-
-When updating code or docs that still use the older framing, apply the following rewrite mentally:
-
-### Old framing
-
-- “A managed agent is a runtime-specific managed process or session.”
-- “The manager launches the agent.”
-- “The system stores the agent handle.”
-- “Supporting a new runtime needs a new top-level abstraction.”
-
-### New framing
-
-- “A managed agent is declarative desired state.”
-- “A session plane reconciles that desired state into a runtime-owned session.”
-- “The system stores a binding and normalized observation.”
-- “Supporting a new runtime means implementing a new plane.”
-
-## Relationship to other docs
-
-This document is the shared, runtime-neutral abstraction layer.
-
-It should be read together with runtime-specific documents such as:
-
-- `docs\ManagedAgents\CodexCliManagedSessions.md`
-
-Future runtime docs should follow the same pattern:
-
-- `docs\ManagedAgents\ClaudeCodeManagedSessionPlane.md`
-- `docs\ManagedAgents\GeminiCliManagedSessionPlane.md`
-
-Those runtime docs should explain **how** their plane realizes the shared contract, not redefine the shared contract itself.
-
-## Final desired-state statement
-
-The project’s desired state is:
-
-- **managed agents are modeled declaratively,**
-- **managed sessions are owned by runtime-specific managed session planes,**
-- **Codex is the first concrete implementation of that model,**
-- **Claude Code and Gemini CLI should be added by implementing additional planes against the same shared abstractions.**
-
-That is the architecture this document defines.
+Canonical docs should stay focused on target architecture and contracts. Migration notes, rollout sequencing, and incomplete implementation checklists belong under `docs/tmp/`.
