@@ -62,6 +62,7 @@ from .resolver import (
     SkillResolutionError,
     list_available_skill_names,
     resolve_run_skill_selection,
+    resolve_skill_markdown_path,
 )
 from .runner import execute_stage
 from .skill_dispatcher import (
@@ -141,6 +142,7 @@ __all__ = [
     "SkillResolutionError",
     "list_available_skill_names",
     "resolve_run_skill_selection",
+    "resolve_skill_markdown_path",
     "MaterializedSkill",
     "MaterializedSkillWorkspace",
     "SkillMaterializationError",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 
@@ -16,28 +16,28 @@ interface SkillsResponse {
   legacyItems?: SkillItem[];
 }
 
-const ALLOWED_MARKDOWN_TAGS = new Set([
-  'a',
-  'blockquote',
-  'br',
-  'code',
-  'em',
-  'h1',
-  'h2',
-  'h3',
-  'h4',
-  'h5',
-  'h6',
-  'hr',
-  'li',
-  'ol',
-  'p',
-  'pre',
-  'strong',
-  'ul',
-]);
+type MarkdownToken = {
+  type: string;
+  text?: string;
+  tokens?: MarkdownToken[];
+  depth?: number;
+  ordered?: boolean;
+  items?: MarkdownListItem[];
+  lang?: string;
+  href?: string;
+  title?: string;
+};
 
-function isSafeHref(value: string): boolean {
+type MarkdownListItem = {
+  text?: string;
+  tokens?: MarkdownToken[];
+};
+
+function markdownTokens(markdown: string): MarkdownToken[] {
+  return marked.lexer(markdown) as unknown as MarkdownToken[];
+}
+
+function isSafeMarkdownHref(value: string): boolean {
   if (!value) {
     return false;
   }
@@ -53,44 +53,108 @@ function isSafeHref(value: string): boolean {
   }
 }
 
-function sanitizeHtml(html: string): string {
-  const template = document.createElement('template');
-  template.innerHTML = html;
-
-  for (const element of Array.from(template.content.querySelectorAll('*'))) {
-    const tagName = element.tagName.toLowerCase();
-    if (!ALLOWED_MARKDOWN_TAGS.has(tagName)) {
-      element.replaceWith(document.createTextNode(element.textContent || ''));
-      continue;
-    }
-
-    for (const attribute of Array.from(element.attributes)) {
-      const attributeName = attribute.name.toLowerCase();
-      if (attributeName.startsWith('on')) {
-        element.removeAttribute(attribute.name);
-        continue;
+function renderInlineTokens(tokens: MarkdownToken[] | undefined, fallback: string | undefined, keyPrefix: string): ReactNode {
+  const effectiveTokens = tokens && tokens.length > 0 ? tokens : fallback ? [{ type: 'text', text: fallback }] : [];
+  return effectiveTokens.map((token, index) => {
+    const key = `${keyPrefix}-${index}`;
+    switch (token.type) {
+      case 'strong':
+        return <strong key={key}>{renderInlineTokens(token.tokens, token.text, key)}</strong>;
+      case 'em':
+        return <em key={key}>{renderInlineTokens(token.tokens, token.text, key)}</em>;
+      case 'codespan':
+        return <code key={key}>{token.text || ''}</code>;
+      case 'br':
+        return <br key={key} />;
+      case 'link': {
+        const children = renderInlineTokens(token.tokens, token.text, key);
+        if (!token.href || !isSafeMarkdownHref(token.href)) {
+          return <Fragment key={key}>{children}</Fragment>;
+        }
+        return (
+          <a key={key} href={token.href} title={token.title} rel="noopener noreferrer nofollow">
+            {children}
+          </a>
+        );
       }
-      if (tagName === 'a' && (attributeName === 'href' || attributeName === 'title')) {
-        continue;
-      }
-      element.removeAttribute(attribute.name);
+      case 'image':
+      case 'html':
+        return null;
+      default:
+        return <Fragment key={key}>{token.text || ''}</Fragment>;
     }
-
-    if (tagName === 'a') {
-      const href = element.getAttribute('href');
-      if (!href || !isSafeHref(href)) {
-        element.removeAttribute('href');
-      } else {
-        element.setAttribute('rel', 'noopener noreferrer nofollow');
-      }
-    }
-  }
-
-  return template.innerHTML;
+  });
 }
 
-function renderMarkdown(markdown: string): string {
-  return sanitizeHtml(marked.parse(markdown, { async: false }));
+function renderBlockToken(token: MarkdownToken, key: string): ReactNode {
+  switch (token.type) {
+    case 'heading': {
+      const depth = Math.min(Math.max(token.depth || 2, 1), 6) as 1 | 2 | 3 | 4 | 5 | 6;
+      const HeadingTag = `h${depth}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+      return (
+        <HeadingTag key={key} className="mt-5 font-semibold text-slate-950 first:mt-0 dark:text-white">
+          {renderInlineTokens(token.tokens, token.text, key)}
+        </HeadingTag>
+      );
+    }
+    case 'paragraph':
+      return (
+        <p key={key} className="mt-3 first:mt-0">
+          {renderInlineTokens(token.tokens, token.text, key)}
+        </p>
+      );
+    case 'blockquote':
+      return (
+        <blockquote key={key} className="mt-4 border-l-4 border-mm-border pl-4 text-slate-600 dark:text-slate-400">
+          {renderMarkdownBlocks(token.tokens || [], key)}
+        </blockquote>
+      );
+    case 'list': {
+      const ListTag = token.ordered ? 'ol' : 'ul';
+      return (
+        <ListTag key={key} className="mt-3 list-outside space-y-2 pl-6">
+          {(token.items || []).map((item, index) => (
+            <li key={`${key}-${index}`} className={token.ordered ? 'list-decimal' : 'list-disc'}>
+              {item.tokens && item.tokens.length > 0
+                ? renderMarkdownBlocks(item.tokens, `${key}-${index}`)
+                : renderInlineTokens(undefined, item.text, `${key}-${index}`)}
+            </li>
+          ))}
+        </ListTag>
+      );
+    }
+    case 'code':
+      return (
+        <pre key={key} className="mt-4 overflow-x-auto rounded-lg bg-slate-950 p-4 text-slate-100">
+          <code className={token.lang ? `language-${token.lang}` : undefined}>{token.text || ''}</code>
+        </pre>
+      );
+    case 'text':
+      return <Fragment key={key}>{renderInlineTokens(token.tokens, token.text, key)}</Fragment>;
+    case 'hr':
+      return <hr key={key} className="my-5 border-mm-border" />;
+    case 'space':
+    case 'html':
+      return null;
+    default:
+      return token.text || (token.tokens && token.tokens.length > 0) ? (
+        <p key={key} className="mt-3 first:mt-0">
+          {renderInlineTokens(token.tokens, token.text, key)}
+        </p>
+      ) : null;
+  }
+}
+
+function renderMarkdownBlocks(tokens: MarkdownToken[], keyPrefix: string): ReactNode {
+  return tokens.map((token, index) => renderBlockToken(token, `${keyPrefix}-${index}`));
+}
+
+function MarkdownRenderer({ markdown }: { markdown: string }) {
+  const tokens = useMemo(() => markdownTokens(markdown), [markdown]);
+  if (tokens.length === 0) {
+    return <p className="text-sm text-slate-500 dark:text-slate-400">No markdown content is available for this skill.</p>;
+  }
+  return <>{renderMarkdownBlocks(tokens, 'skill-markdown')}</>;
 }
 
 export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
@@ -262,11 +326,11 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   </h3>
                 </div>
                 <div
-                  className="space-y-3 text-sm leading-7 text-slate-700 dark:text-slate-300"
-                  dangerouslySetInnerHTML={{
-                    __html: renderMarkdown(selectedSkill.markdown || ''),
-                  }}
-                />
+                  className="text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:text-mm-accent [&_a]:underline [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-slate-900 dark:[&_code]:bg-slate-900 dark:[&_code]:text-slate-100"
+                  data-testid="skill-markdown-preview"
+                >
+                  <MarkdownRenderer markdown={selectedSkill.markdown || ''} />
+                </div>
               </div>
             ) : (
               <p className="text-sm text-slate-500 dark:text-slate-400">
