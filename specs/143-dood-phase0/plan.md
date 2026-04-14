@@ -37,7 +37,7 @@ Implement Phase 0 of the Docker-out-of-Docker rollout by locking the canonical a
 ## Research
 
 - `docs/ManagedAgents/DockerOutOfDocker.md` already contains the target glossary (`session container`, `workload container`, `runner profile`, `session-assisted workload`) and already states that one-shot workload containers are the initial emphasis.
-- `docs/ManagedAgents/CodexManagedSessionPlane.md` currently links to the DooD doc but does not explicitly say that session-plane steps may invoke control-plane workload tools whose containers remain outside session identity.
+- `docs/ManagedAgents/CodexCliManagedSessions.md` currently links to the DooD doc but does not explicitly say that session-plane steps may invoke control-plane workload tools whose containers remain outside session identity.
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` currently defines `MoonMind.AgentRun` for true agent runtimes and excludes generic executable tools, but it does not yet name Docker-backed workload tools as ordinary executable tools distinct from managed agent runs.
 - `docs/tmp/remaining-work/README.md` lists active trackers but there is no DooD rollout tracker yet, even though `docs/ManagedAgents/DockerOutOfDocker.md` already links to one.
 - The repo does not already contain a documentation-contract unit test for this DooD boundary, so the fastest durable guard is a focused pytest file that asserts the required phrases and tracker path exist.
@@ -45,7 +45,7 @@ Implement Phase 0 of the Docker-out-of-Docker rollout by locking the canonical a
 ## Project Structure
 
 - Update `docs/ManagedAgents/DockerOutOfDocker.md` to ensure the tracker link and Phase 0 contract wording stay aligned.
-- Update `docs/ManagedAgents/CodexManagedSessionPlane.md` with a short cross-reference for session-assisted workload tools.
+- Update `docs/ManagedAgents/CodexCliManagedSessions.md` with a short cross-reference for session-assisted workload tools.
 - Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` with a short note that Docker-backed workload tools are ordinary executable tools unless they launch a true managed runtime.
 - Add `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` as the DooD rollout tracker and list it in `docs/tmp/remaining-work/README.md`.
 - Add `tests/unit/docs/test_dood_phase0_contract.py` for automated validation.

@@ -26,7 +26,7 @@ This document is intentionally downstream of the broader Temporal architecture. 
   - Owns execution identity, list/detail query semantics, and task compatibility rules.
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
   - Owns canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`) and execution-model boundaries.
-- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/ManagedAgents/CodexCliManagedSessions.md`
   - Owns the desired-state contract for Codex task-scoped session identity, control actions, and clear/reset semantics.
 - `docs/ManagedAgents/LiveLogs.md`
   - Owns live-log and observability APIs, artifact-backed tails, live streaming, and diagnostics presentation for managed runs.

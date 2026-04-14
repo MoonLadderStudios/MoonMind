@@ -9,7 +9,7 @@ Last updated: 2026-04-08
 - `specs/084-live-log-tailing/spec.md`
 
 **Related:**
-- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 - [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md)

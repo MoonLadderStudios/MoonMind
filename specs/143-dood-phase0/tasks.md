@@ -38,7 +38,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T005 [US1] Add the session-assisted workload cross-reference and outside-session-identity wording to `docs/ManagedAgents/CodexManagedSessionPlane.md`.
+- [X] T005 [US1] Add the session-assisted workload cross-reference and outside-session-identity wording to `docs/ManagedAgents/CodexCliManagedSessions.md`.
 - [X] T006 [US1] Tighten glossary/tracker wording in `docs/ManagedAgents/DockerOutOfDocker.md` so the canonical doc remains the clear desired-state source for Phase 0.
 
 **Checkpoint**: The session-plane doc and canonical DooD doc tell the same glossary and identity story.

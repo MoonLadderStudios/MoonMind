@@ -16,7 +16,7 @@
 **Independent Test**: `./.venv/bin/pytest -q tests/unit/schemas/test_managed_session_models.py tests/unit/schemas/test_agent_runtime_models.py`
 
 ## T003 — Freeze the desired-state documentation [P]
-- [X] T003a [P] Add `docs/ManagedAgents/CodexManagedSessionPlane.md` as the canonical desired-state contract.
+- [X] T003a [P] Add `docs/ManagedAgents/CodexCliManagedSessions.md` as the canonical desired-state contract.
 - [X] T003b [P] Cross-link the new contract from `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
 - [X] T003c [P] Cross-link the new contract from `docs/Temporal/ArtifactPresentationContract.md`.
 - [X] T003d [P] Add spec artifacts under `specs/129-codex-managed-session-plane-phase1/`.

@@ -170,7 +170,7 @@
 
 - [X] T070 [P] Update cross-story managed-session lifecycle validation commands in `specs/165-agent-session-deployment-safety/quickstart.md`
 - [X] T071 [P] Remove obsolete or indefinite legacy managed-session bridge paths after replay/cutover conditions are satisfied in `moonmind/workflows/temporal/workflows/agent_session.py`
-- [X] T072 [P] Update affected managed-session architecture notes while keeping desired-state docs separate from migration backlog in `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- [X] T072 [P] Update affected managed-session architecture notes while keeping desired-state docs separate from migration backlog in `docs/ManagedAgents/CodexCliManagedSessions.md`
 - [X] T073 Run full required unit validation with `./tools/test_unit.sh`
 - [X] T074 Run hermetic integration validation with `./tools/test_integration.sh` if implementation changed an `integration_ci` seam
 - [X] T075 Run `git diff --check` and `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime`

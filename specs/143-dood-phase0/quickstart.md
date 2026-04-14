@@ -3,7 +3,7 @@
 ## Verify the canonical docs
 
 1. Read `docs/ManagedAgents/DockerOutOfDocker.md`.
-2. Read `docs/ManagedAgents/CodexManagedSessionPlane.md`.
+2. Read `docs/ManagedAgents/CodexCliManagedSessions.md`.
 3. Read `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
 4. Confirm the three docs share the same glossary and preserve the tool-path boundary for Docker-backed workloads.
 

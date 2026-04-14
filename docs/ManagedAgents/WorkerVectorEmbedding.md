@@ -4,7 +4,7 @@ Status: Desired state
 Owners: MoonMind Engineering
 Last Updated: 2026-04-14
 Related:
-- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/WorkflowArtifactSystemDesign.md`](../Temporal/WorkflowArtifactSystemDesign.md)

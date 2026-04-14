@@ -9,7 +9,7 @@ Related:
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
-- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](../ManagedAgents/CodexManagedSessionPlane.md) — desired-state contract for the Codex task-scoped managed session plane
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md) — desired-state contract for the Codex task-scoped managed session plane
 
 ---
 
