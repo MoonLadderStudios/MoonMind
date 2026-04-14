@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira Issue Creator"
+  short_description: "Create Jira tasks, stories, bugs, and subtasks"
+  default_prompt: "Use $jira-issue-creator to create a Jira task, story, bug, or subtask from my request and return the issue link."

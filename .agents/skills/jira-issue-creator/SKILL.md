@@ -1,0 +1,70 @@
+---
+name: jira-issue-creator
+description: Create Jira issues such as tasks, stories, bugs, or subtasks from user intent. Use when a user asks to open, file, draft, or create a Jira ticket and needs fields validated, issue text composed, Jira API or connector calls made, and the created issue link returned.
+---
+
+# Jira Issue Creator
+
+Create a Jira task, story, bug, or subtask from the user's request. Prefer an available Jira MCP connector or first-party integration. If no connector is available, use the Jira REST API only when the user or environment provides the Jira base URL and credentials.
+
+## Inputs
+
+- Required: Jira project key or enough context to identify one.
+- Required: issue type (`Task`, `Story`, `Bug`, or `Sub-task`). Default to `Task` only when the user does not specify.
+- Required: summary/title.
+- Required for creation: authenticated Jira access through a connector, API token, OAuth session, or documented local secret.
+- Optional: description, acceptance criteria, priority, labels, assignee, reporter, parent issue key, sprint, component, due date, linked issues, attachments.
+
+## Workflow
+
+1. Resolve the Jira target.
+- Identify the project key, issue type, and Jira site/base URL.
+- If the issue type is a subtask, require a parent issue key.
+- If multiple Jira connections or projects are possible, inspect available connector metadata first. If ambiguity remains, ask for the missing target instead of guessing.
+
+2. Compose the issue fields.
+- Use the user's wording as the source of truth.
+- Keep the summary concise and action-oriented.
+- For bugs, include sections for observed behavior, expected behavior, reproduction steps, impact, and environment when the information is available.
+- For stories, include sections for user story, acceptance criteria, notes, and out-of-scope items when the information is available.
+- For tasks, include sections for objective, requirements, implementation notes, and verification when the information is available.
+- Do not invent business requirements, acceptance criteria, assignees, priorities, or deadlines.
+
+3. Validate before creating.
+- Confirm required Jira fields for the project and issue type using the connector/API when possible.
+- Map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs.
+- Fail fast if a requested field cannot be set through the available Jira schema.
+- Never print credentials, authorization headers, cookies, or full environment dumps.
+
+4. Create the issue.
+- Use the available Jira connector's create-issue operation when present.
+- Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
+- Send only the fields needed for the requested issue.
+- Treat retries carefully: before retrying after an uncertain network failure, search by a stable summary/project/reporter marker to avoid duplicate tickets.
+
+5. Return the result.
+- Report the created issue key and URL.
+- Summarize the issue type, project, summary, and any important fields that were set.
+- If creation failed, report the exact missing input, validation error, permission issue, or Jira API error without exposing secrets.
+
+## Outputs
+
+- Created issue key.
+- Created issue URL.
+- Short summary of fields set.
+- Failure reason and recommended operator action when creation is blocked.
+
+## External Dependencies
+
+- Jira connector, MCP tool, or REST API access.
+- Jira credentials with permission to create issues in the target project.
+- Network access to the Jira site.
+- Project metadata access for issue types and required/custom fields.
+
+## Failure Modes
+
+- Missing or ambiguous project, issue type, parent issue, or Jira connection: ask for the specific missing value.
+- Authentication or authorization failure: state that Jira access is unavailable or insufficient and identify the target project/operation.
+- Required Jira field missing: list the field name Jira requires and ask for its value.
+- Unsupported issue type or field: explain which value is unsupported for the selected project.
+- Uncertain retry state: search for a matching recently created issue before creating another one.
