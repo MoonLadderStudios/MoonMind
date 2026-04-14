@@ -126,18 +126,20 @@ function renderBlockToken(token: MarkdownToken, key: string): ReactNode {
     case 'code':
       return (
         <pre key={key} className="mt-4 overflow-x-auto rounded-lg bg-slate-950 p-4 text-slate-100">
-          <code>{token.text || ''}</code>
+          <code className={token.lang ? `language-${token.lang}` : undefined}>{token.text || ''}</code>
         </pre>
       );
+    case 'text':
+      return <Fragment key={key}>{renderInlineTokens(token.tokens, token.text, key)}</Fragment>;
     case 'hr':
       return <hr key={key} className="my-5 border-mm-border" />;
     case 'space':
     case 'html':
       return null;
     default:
-      return token.text ? (
+      return token.text || (token.tokens && token.tokens.length > 0) ? (
         <p key={key} className="mt-3 first:mt-0">
-          {token.text}
+          {renderInlineTokens(token.tokens, token.text, key)}
         </p>
       ) : null;
   }

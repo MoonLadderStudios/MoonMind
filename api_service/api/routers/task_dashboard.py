@@ -464,15 +464,17 @@ async def list_dashboard_skills(
     worker_skills = list(list_available_skill_names())
     legacy_sorted = sorted(set(worker_skills), key=str)
 
-    legacy_items = []
-
-    for skill_id in legacy_sorted:
+    async def _get_skill_option(skill_id: str) -> DashboardSkillOption:
         markdown_content = None
         if include_content:
             skill_file = resolve_skill_markdown_path(skill_id)
             if skill_file is not None:
                 markdown_content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
-        legacy_items.append(DashboardSkillOption(id=skill_id, markdown=markdown_content))
+        return DashboardSkillOption(id=skill_id, markdown=markdown_content)
+
+    legacy_items = await asyncio.gather(
+        *(_get_skill_option(skill_id) for skill_id in legacy_sorted)
+    )
 
     return DashboardSkillListResponse(
         items={

@@ -74,6 +74,52 @@ describe('Skills Entrypoint', () => {
     });
   });
 
+  it('renders inline markdown inside list items and preserves code language classes', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/tasks/skills?includeContent=true')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ['markdown-skill'] },
+            legacyItems: [
+              {
+                id: 'markdown-skill',
+                markdown: '- **bold** item with [docs](/docs)\n\n```ts\nconst ok = true;\n```',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/tasks/skills')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ['markdown-skill'] },
+            legacyItems: [],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'markdown-skill' }));
+
+    await waitFor(() => {
+      const preview = screen.getByTestId('skill-markdown-preview');
+      const listItem = preview.querySelector('li');
+      expect(listItem?.querySelector('strong')?.textContent).toBe('bold');
+      expect(listItem?.querySelector('a')?.getAttribute('href')).toBe('/docs');
+      expect(preview.querySelector('code.language-ts')?.textContent).toBe('const ok = true;');
+    });
+  });
+
   it('creates a new skill, refreshes the list, and selects the created skill', async () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 
