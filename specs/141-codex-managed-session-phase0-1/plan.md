@@ -36,7 +36,7 @@ Implement the Phase 0 and Phase 1 slice of the Codex managed-session rollout by:
 
 ## Research
 
-- `docs/ManagedAgents/CodexManagedSessionPlane.md` currently says Temporal is the control plane and system of record, but it does not explicitly describe the current operational role of `ManagedSessionStore`.
+- `docs/ManagedAgents/CodexCliManagedSessions.md` currently says Temporal is the control plane and system of record, but it does not explicitly describe the current operational role of `ManagedSessionStore`.
 - `moonmind/workflows/temporal/workflows/agent_session.py` still initializes binding state from `run()`, exposes a generic mutating `control_action` signal, and only provides `SendFollowUp` plus `ClearSession` updates.
 - `moonmind/workflows/adapters/codex_session_adapter.py`, `moonmind/workflows/temporal/workflows/agent_run.py`, `moonmind/workflows/temporal/workflows/run.py`, and `api_service/api/routers/task_runs.py` still assume the older signal/update names.
 - The controller and activity surfaces already support `agent_runtime.interrupt_turn`, so Phase 1 can wire a real workflow-level `InterruptTurn` without waiting on the later steer-runtime implementation.
@@ -44,7 +44,7 @@ Implement the Phase 0 and Phase 1 slice of the Codex managed-session rollout by:
 
 ## Project Structure
 
-- Update `docs/ManagedAgents/CodexManagedSessionPlane.md` for Phase 0 truth-surface alignment.
+- Update `docs/ManagedAgents/CodexCliManagedSessions.md` for Phase 0 truth-surface alignment.
 - Extend `moonmind/schemas/managed_session_models.py` with typed update request contracts for the workflow boundary.
 - Refactor `moonmind/workflows/temporal/workflows/agent_session.py` to use `@workflow.init`, typed updates, and validators.
 - Update `moonmind/workflows/adapters/codex_session_adapter.py`, `moonmind/workflows/temporal/workflows/agent_run.py`, `moonmind/workflows/temporal/workflows/run.py`, and `api_service/api/routers/task_runs.py` to target the typed update names.
@@ -76,6 +76,6 @@ Implement the Phase 0 and Phase 1 slice of the Codex managed-session rollout by:
 
 ### Manual Validation
 
-1. Read `docs/ManagedAgents/CodexManagedSessionPlane.md` and confirm the production publication/recovery roles are explicit and non-contradictory.
+1. Read `docs/ManagedAgents/CodexCliManagedSessions.md` and confirm the production publication/recovery roles are explicit and non-contradictory.
 2. Inspect `MoonMind.AgentSession` and confirm only `attach_runtime_handles` remains as a signal while mutations use typed updates with validators.
 3. Inspect the parent workflow, session adapter, and task-run router to confirm they call the new typed update names.

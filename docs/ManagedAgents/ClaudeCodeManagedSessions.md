@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Audience:** Managed Agents platform, runtime integration, client surfaces, security, and enterprise administration
-**Related:** `docs/ManagedAgents/CodexManagedSessionPlane.md`
+**Related:** `docs/ManagedAgents/CodexCliManagedSessions.md`
 
 ## 1. Executive summary
 

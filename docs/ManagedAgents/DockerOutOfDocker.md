@@ -6,7 +6,7 @@
 **Last updated:** 2026-04-09
 
 **Related:**
-- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
 - [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
@@ -187,7 +187,7 @@ The Codex managed session plane remains:
 - one active Codex thread per session epoch
 - continuity reused only within the same task
 
-This role is governed by `CodexManagedSessionPlane.md`, not by this document.
+This role is governed by `CodexCliManagedSessions.md`, not by this document.
 
 ### 6.2 Role B: one-shot workload container
 

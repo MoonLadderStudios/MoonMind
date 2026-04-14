@@ -7,7 +7,7 @@ Define the exact documentation assertions that Phase 0 must lock before Phase 1 
 ## Required canonical surfaces
 
 1. `docs/ManagedAgents/DockerOutOfDocker.md`
-2. `docs/ManagedAgents/CodexManagedSessionPlane.md`
+2. `docs/ManagedAgents/CodexCliManagedSessions.md`
 3. `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 4. `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
 

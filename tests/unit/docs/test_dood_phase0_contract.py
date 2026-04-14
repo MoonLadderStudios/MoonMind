@@ -3,7 +3,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOOD_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerOutOfDocker.md"
-SESSION_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "CodexManagedSessionPlane.md"
+SESSION_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "CodexCliManagedSessions.md"
 EXECUTION_DOC = (
     REPO_ROOT / "docs" / "Temporal" / "ManagedAndExternalAgentExecutionModel.md"
 )

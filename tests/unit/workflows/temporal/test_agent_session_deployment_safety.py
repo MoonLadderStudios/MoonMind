@@ -173,7 +173,7 @@ def test_active_feature_override_requires_complete_artifact_set(tmp_path) -> Non
 
 def test_agent_session_deployment_safety_gate_passes_for_non_sensitive_changes() -> None:
     report = validate_agent_session_deployment_safety(
-        changed_paths=["docs/ManagedAgents/CodexManagedSessionPlane.md"],
+        changed_paths=["docs/ManagedAgents/CodexCliManagedSessions.md"],
         repo_paths=[],
         cutover_playbook_text="",
     )

@@ -13,7 +13,7 @@ MoonMind engineers need the canonical Docker-out-of-Docker documentation set to 
 
 **Why this priority**: Phase 0 exists specifically to freeze terminology and boundary rules before launcher and tool-path code spreads in multiple directions.
 
-**Independent Test**: Read `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/ManagedAgents/CodexManagedSessionPlane.md`, and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` and confirm they use the same glossary for `session container`, `workload container`, `runner profile`, and `session-assisted workload`.
+**Independent Test**: Read `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` and confirm they use the same glossary for `session container`, `workload container`, `runner profile`, and `session-assisted workload`.
 
 **Acceptance Scenarios**:
 
@@ -61,8 +61,8 @@ MoonMind maintainers need a temporary implementation tracker plus an automated t
 ### Functional Requirements
 
 - **FR-001**: `docs/ManagedAgents/DockerOutOfDocker.md` MUST remain the canonical desired-state document for MoonMind's Docker-backed specialized workload-container architecture.
-- **FR-002**: `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/ManagedAgents/CodexManagedSessionPlane.md`, and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` MUST use one consistent glossary for `session container`, `workload container`, `runner profile`, and `session-assisted workload`.
-- **FR-003**: `docs/ManagedAgents/CodexManagedSessionPlane.md` MUST state that the managed session plane may invoke control-plane tools that launch separate workload containers, but those workload containers remain outside session identity.
+- **FR-002**: `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` MUST use one consistent glossary for `session container`, `workload container`, `runner profile`, and `session-assisted workload`.
+- **FR-003**: `docs/ManagedAgents/CodexCliManagedSessions.md` MUST state that the managed session plane may invoke control-plane tools that launch separate workload containers, but those workload containers remain outside session identity.
 - **FR-004**: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` MUST state that Docker-backed workload launches are ordinary executable tools and MUST NOT be treated as new `MoonMind.AgentRun` instances unless the launched runtime is itself a true managed agent runtime.
 - **FR-005**: The canonical documentation set MUST state that the initial DooD implementation scope for Phases 1 through 4 is one-shot workload containers and that bounded helper containers remain a later phase.
 - **FR-006**: The canonical documentation set MUST state that `tool.type = "skill"` is the initial execution primitive for Docker-backed workload launches and MUST preserve `tool.type = "agent_runtime"` for true long-lived agent runtimes only.
