@@ -2093,6 +2093,28 @@ class MoonMindRunWorkflow:
                 parameters=parameters,
                 execution_result=execution_result,
             )
+            outputs_for_story_output = self._get_from_result(
+                execution_result, "outputs"
+            )
+            if isinstance(outputs_for_story_output, Mapping):
+                story_output_result = outputs_for_story_output.get("storyOutput")
+                if isinstance(story_output_result, Mapping):
+                    story_output_status = str(
+                        story_output_result.get("status") or ""
+                    ).strip()
+                    story_output_mode = str(
+                        story_output_result.get("mode") or ""
+                    ).strip()
+                    if (
+                        story_output_mode == "jira"
+                        and story_output_status == "jira_created"
+                    ):
+                        require_pull_request_url = False
+                        self._publish_status = "published"
+                        self._publish_reason = (
+                            "Jira issue output succeeded; no PR output required"
+                        )
+                        self._publish_context["storyOutputMode"] = "jira"
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
 
@@ -2880,6 +2902,9 @@ class MoonMindRunWorkflow:
                 self._publish_reason,
                 True,
             )
+
+        if self._publish_status == "published":
+            return ("success", "Workflow completed successfully", False)
 
         if (
             publish_mode == "pr"

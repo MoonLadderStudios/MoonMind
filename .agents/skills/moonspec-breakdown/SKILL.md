@@ -1,6 +1,6 @@
 ---
 name: moonspec-breakdown
-description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and create one spec per story. Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story specs, preserve the original design for later verification, or build a coverage matrix from design requirements to generated specs.
+description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write a breakdown handoff under docs/tmp. Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
 ---
 
 # MoonSpec Breakdown
@@ -9,7 +9,7 @@ Use this skill to perform the Moon Spec breakdown workflow.
 
 ## When To Use
 
-Use this skill when the user wants to turn a broad technical or declarative design into multiple Moon Spec feature specs.
+Use this skill when the user wants to turn a broad technical or declarative design into multiple independently testable story candidates.
 
 Good inputs include:
 
@@ -25,8 +25,8 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 - Treat the user's request text as the source design unless it names a readable file path.
 - If a file path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
 - If no design text or readable design path is provided, stop with: `ERROR "No technical design provided"`.
-- Preserve the original design text verbatim. Every generated `spec.md` must keep it in the `**Input**` field so `/speckit.verify` can compare final behavior to the source design.
-- Do not implement, plan, generate tasks, or create issues.
+- Preserve the original design text verbatim in the breakdown handoff so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
+- Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
 
 ## Pre-Breakdown Hooks
 
@@ -150,59 +150,47 @@ Do not write specs until the gate result is exactly:
 PASS - every major design point is owned by at least one story.
 ```
 
-## Create Specs
+## Write Breakdown Output
 
-Create one spec directory per story after the coverage gate passes.
+After the coverage gate passes, write story candidates under `docs/tmp/story-breakdowns/`.
 
-Rules:
+Use the explicit `storyBreakdownPath` and `storyBreakdownMarkdownPath` values from the prompt when present. If they are not present, create a timestamped folder under `docs/tmp/story-breakdowns/<short-name>-<YYYYMMDD-HHMMSS>/` and write:
 
-- Specs live under `specs/`.
-- Use sequential numbering based on existing `specs/` directories unless `.specify/init-options.json` sets `branch_numbering` to `"timestamp"`.
-- Sequential directory prefix is the next available 3-digit number.
-- Timestamp directory prefix is `YYYYMMDD-HHMMSS`.
-- Directory format is `<prefix>-<short-name>`.
-- Copy `templates/spec-template.md` to each directory as `spec.md`.
-- Do not create P1/P2/P3 sections inside a spec; create another spec instead.
+- `stories.json`: machine-readable handoff for Jira issue creation or later specify.
+- `stories.md`: human-readable summary.
 
-Fill each generated `spec.md` with exactly one `## User Story - ...` section.
+Never name any breakdown output `spec.md`. Never write to `specs/` during breakdown.
 
-Include:
+The JSON file must be an object with:
 
-- Story-specific Summary.
-- Goal.
-- Independent Test.
-- Acceptance Scenarios.
-- Edge Cases.
-- Functional Requirements.
-- Key Entities when relevant.
-- Assumptions when assumptions are used.
-- Success Criteria.
+- `source`: title or path, plus the original design text.
+- `extractedAt`: ISO-8601 timestamp.
+- `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
+- `stories`: ordered list of story objects.
+- `coverageMatrix`: mapping from `DESIGN-REQ-*` points to story IDs.
 
-Under `## Requirements`, add a `### Source Design Coverage` subsection listing the `DESIGN-REQ-*` points owned by the spec, with short explanations of how the story covers each point.
+Each story object must include:
 
-Guidelines:
+- `id`: stable story ID, such as `STORY-001`.
+- `summary`: concise title suitable for a Jira issue summary.
+- `description`: user-story or task narrative.
+- `independentTest`: how this story can be validated independently.
+- `acceptanceCriteria`: concrete acceptance criteria.
+- `requirements`: functional requirements owned by the story.
+- `sourceDesignCoverage`: `DESIGN-REQ-*` points with short ownership explanations.
+- `dependencies`: story IDs this story truly depends on.
+- `assumptions`: only when assumptions are used.
+- `needsClarification`: story-critical unresolved choices, max 3 per story.
 
-- Preserve the source design verbatim in the `**Input**` field.
-- Keep requirements technology-agnostic unless the source design explicitly mandates a technology, protocol, persistence, or deployment constraint.
-- Acceptance scenarios must describe behavior that can drive integration tests.
-- Functional requirements and edge cases must be specific enough to drive unit tests where applicable.
-- Include both unit-testable rules and integration-testable workflows when the design implies both.
-- Record cross-story dependencies under Assumptions or Requirements when they affect validation.
-- Mark unclear story-critical choices with `[NEEDS CLARIFICATION: ...]`; do not exceed 3 markers per spec.
-
-## Breakdown Summary
-
-Write `specs/breakdown.md` if it does not already exist. If it exists, append a new dated section.
-
-Include:
+The markdown file must include the same substance for human review:
 
 - Source design title or path.
 - Story extraction date.
 - Design summary.
 - Coverage points.
-- Ordered list of generated specs and their independent test criteria.
-- Coverage matrix mapping `DESIGN-REQ-*` points to specs.
-- Dependencies between specs.
+- Ordered list of story candidates and their independent test criteria.
+- Coverage matrix mapping `DESIGN-REQ-*` points to stories.
+- Dependencies between stories.
 - Out-of-scope items and rationale.
 - Coverage gate result.
 
@@ -216,12 +204,12 @@ PASS - every major design point is owned by at least one story.
 
 Report completion with:
 
-- Each generated spec path.
-- The recommended first spec to run through `/speckit.plan`.
-- Any specs with unresolved `[NEEDS CLARIFICATION]` markers.
-- Confirmation that each generated spec contains one story only.
+- The JSON and markdown breakdown paths.
+- The recommended first story to run through `/speckit.specify`.
+- Any stories with unresolved `[NEEDS CLARIFICATION]` markers.
+- Confirmation that no `spec.md` files or `specs/` directories were created.
 - Confirmation that TDD remains the default strategy for downstream `/speckit.plan`, `/speckit.tasks`, and `/speckit.implement`.
-- Confirmation that `/speckit.verify` should be run after implementation to compare final behavior against the original design preserved in each spec.
+- Confirmation that `/speckit.verify` should be run after implementation to compare final behavior against the original design preserved through specify.
 
 ## Post-Breakdown Hooks
 
@@ -254,12 +242,12 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 ## Key Rules
 
-- One generated spec equals one user story.
-- Preserve the original technical or declarative design verbatim in every generated spec.
+- One breakdown story candidate equals one future `spec.md`.
+- Preserve the original technical or declarative design verbatim in the breakdown handoff for later specify.
 - Prefer vertical user or operational outcomes over technical-layer slices.
-- Extract stable `DESIGN-REQ-*` coverage points before drafting specs.
-- Do not write specs until the coverage gate passes.
-- Every major design point, constraint, and non-goal must be explicitly owned by at least one spec.
+- Extract stable `DESIGN-REQ-*` coverage points before drafting story candidates.
+- Do not write specs in this skill.
+- Every major design point, constraint, and non-goal must be explicitly owned by at least one story candidate.
 - Acceptance scenarios must support downstream integration tests; functional requirements and edge cases must support downstream unit tests.
 - Do not generate tasks, implementation plans, code, or issues from this skill.
 - Final implementation alignment is checked later with `/speckit.verify`.

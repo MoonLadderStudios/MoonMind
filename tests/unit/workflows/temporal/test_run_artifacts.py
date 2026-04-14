@@ -1508,6 +1508,21 @@ def test_activity_result_failure_message_prefers_stderr_tail_over_progress_detai
     assert message == "gemini quota exceeded"
 
 
+def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._publish_status = "published"
+    workflow._publish_reason = "Jira issue output succeeded; no PR output required"
+    workflow._pull_request_url = None
+
+    status, reason, failed = workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "success"
+    assert reason == "Workflow completed successfully"
+    assert failed is False
+
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,

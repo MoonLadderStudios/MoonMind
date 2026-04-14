@@ -346,7 +346,37 @@ All failures normalize to:
 
 ### 5.3 Worker capability model
 
-Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). ToolDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
+Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `integration:jira`). ToolDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
+
+### 5.4 Story Output Tools
+
+Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `docs/tmp/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
+
+When a task requests Jira story output, the planner may add a first-party executable tool step:
+
+```json
+{
+  "tool": {
+    "type": "skill",
+    "name": "jira-issue-creator",
+    "version": "1.0"
+  },
+  "inputs": {
+    "storyOutput": {
+      "mode": "jira",
+      "jira": {
+        "projectKey": "MM",
+        "issueTypeId": "10001"
+      }
+    },
+    "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json"
+  }
+}
+```
+
+`jira-issue-creator` and `story.create_jira_issues` are executable tool names backed by `mm.tool.execute` and require `integration:jira`. They create one Jira issue per story from inline `stories` or from `storyBreakdownPath`.
+
+If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `docs/tmp/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 
 ---
 

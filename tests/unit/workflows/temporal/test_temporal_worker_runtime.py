@@ -228,6 +228,69 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     assert node_inputs["selectedSkill"] == "pr-resolver"
 
 
+def test_runtime_planner_routes_jira_issue_creator_as_integration_skill_step():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Break down proposal workflow",
+                "instructions": "Break down docs/Tasks/TaskProposalSystem.md.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "storyOutput": {
+                    "mode": "jira",
+                    "jira": {"projectKey": "MM", "issueTypeId": "10001"},
+                },
+                "steps": [
+                    {
+                        "id": "breakdown",
+                        "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                        "instructions": "Extract the stories.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {"type": "skill", "name": "jira-issue-creator"},
+                        "instructions": "Create Jira issues for each story.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    breakdown = plan["nodes"][0]
+    jira = plan["nodes"][1]
+
+    assert breakdown["tool"]["type"] == "agent_runtime"
+    assert breakdown["tool"]["name"] == "moonspec-breakdown"
+    assert breakdown["inputs"]["selectedSkill"] == "moonspec-breakdown"
+    assert "Do not create or modify any `spec.md`" in breakdown["inputs"]["instructions"]
+    assert breakdown["inputs"]["storyBreakdownPath"].startswith(
+        "docs/tmp/story-breakdowns/"
+    )
+    assert breakdown["inputs"]["storyBreakdownPath"].endswith("/stories.json")
+    assert "commit your work" in breakdown["inputs"]["instructions"]
+
+    assert jira["tool"] == {
+        "type": "skill",
+        "name": "jira-issue-creator",
+        "version": "1.0",
+    }
+    assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
+    assert "commit your work" not in jira["inputs"]["instructions"]
+    assert jira["inputs"]["storyOutput"]["mode"] == "jira"
+    assert (
+        jira["inputs"]["storyBreakdownPath"]
+        == breakdown["inputs"]["storyBreakdownPath"]
+    )
+
+
 def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
     """When pr-resolver has no inputs.pr but git.startingBranch is set,
     the auto-generated instruction must include the branch as the pr selector
