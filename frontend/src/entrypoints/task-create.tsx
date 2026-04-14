@@ -163,8 +163,9 @@ interface JiraIntegrationConfig {
 type JiraEndpointTemplates = JiraIntegrationConfig["endpoints"];
 
 interface JiraProject {
-  key: string;
+  projectKey: string;
   name: string;
+  id?: string | null;
 }
 
 interface JiraBoard {
@@ -2126,7 +2127,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const projects = jiraProjectsQuery.data || [];
     if (selectedJiraProjectKey) {
       const selectedProjectExists = projects.some(
-        (project) => project.key === selectedJiraProjectKey,
+        (project) => project.projectKey === selectedJiraProjectKey,
       );
       if (jiraProjectsQuery.data && !selectedProjectExists) {
         if (jiraIntegration.rememberLastBoardInSession) {
@@ -2148,9 +2149,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     const configured = projects.find(
-      (project) => project.key === jiraIntegration.defaultProjectKey,
+      (project) => project.projectKey === jiraIntegration.defaultProjectKey,
     );
-    setSelectedJiraProjectKey((configured || projects[0])?.key || "");
+    setSelectedJiraProjectKey((configured || projects[0])?.projectKey || "");
     jiraProjectSelectionInitializedRef.current = true;
     jiraBoardSelectionInitializedRef.current = false;
   }, [
@@ -3741,10 +3742,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 >
                   <option value="">Select project...</option>
                   {(jiraProjectsQuery.data || []).map((project) => (
-                    <option key={project.key} value={project.key}>
+                    <option key={project.projectKey} value={project.projectKey}>
                       {project.name
-                        ? `${project.name} (${project.key})`
-                        : project.key}
+                        ? `${project.name} (${project.projectKey})`
+                        : project.projectKey}
                     </option>
                   ))}
                 </select>
