@@ -583,7 +583,7 @@ This is simpler and more first-party than `docker exec` polling for tmate endpoi
 WebSocket attach should require:
 
 * authenticated MoonMind session
-* explicit authorization to manage auth profiles
+* explicit authorization to manage provider profiles
 * session-scoped token or one-time attach token
 * expiry enforcement
 

@@ -8,7 +8,7 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
   - ``oauth_session.mark_failed``         — mark session as failed with reason
   - ``oauth_session.update_terminal_session`` — store terminal session refs in DB
   - ``oauth_session.verify_volume``       — call provider volume verifier
-  - ``oauth_session.register_profile``    — create or update auth profile
+  - ``oauth_session.register_profile``    — create or update provider profile
 """
 
 from __future__ import annotations
@@ -303,7 +303,7 @@ async def oauth_session_update_status(
 async def oauth_session_register_profile(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Create or update auth profile from session data."""
+    """Create or update provider profile from session data."""
     session_id = request.get("session_id", "")
 
     if not session_id:

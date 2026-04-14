@@ -1,6 +1,6 @@
-"""Tests for auth profile slot waiting behavior in MoonMind.AgentRun.
+"""Tests for provider-profile slot waiting behavior in MoonMind.AgentRun.
 
-The awaiting state (waiting for an auth profile slot) must not consume the
+The awaiting state (waiting for a provider-profile slot) must not consume the
 execution timeout budget.  ``overall_start`` is reset after slot acquisition
 so the full timeout is available for actual execution.
 

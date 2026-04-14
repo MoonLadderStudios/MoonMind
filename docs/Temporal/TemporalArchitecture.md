@@ -341,6 +341,8 @@ Current core catalog includes:
 - `MoonMind.ManifestIngest`
 - `MoonMind.ProviderProfileManager`
 - `MoonMind.AgentRun`
+- `MoonMind.AgentSession`
+- `MoonMind.ManagedSessionReconcile`
 - `MoonMind.OAuthSession`
 
 `MoonMind.Run` is the general entry point and may orchestrate:
@@ -353,6 +355,10 @@ Current core catalog includes:
 - long-lived waiting and callback/poll handling
 
 `MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution.
+
+`MoonMind.AgentSession` is the durable task-scoped managed-session wrapper, currently backed by Codex session contracts. It is separate from `MoonMind.AgentRun` so a session can span multiple step-scoped agent runs without making container-local state the source of truth.
+
+`MoonMind.ManagedSessionReconcile` is a bounded support workflow that invokes managed-session reconciliation activities; it is not a product-facing task workflow.
 
 `MoonMind.ProviderProfileManager` is the durable coordinator for provider-profile slots and cooldowns.
 
@@ -678,6 +684,8 @@ MoonMind is not pretending migration is either unfinished everywhere or complete
 - Temporal is the durable orchestration substrate
 - `MoonMind.Run` is the general root execution workflow
 - `MoonMind.AgentRun` is the durable lifecycle wrapper for true agent runs
+- `MoonMind.AgentSession` is the task-scoped managed-session wrapper, with Codex as the current concrete session implementation
+- `MoonMind.ManagedSessionReconcile` is the support workflow for managed-session reconciliation
 - `MoonMind.ProviderProfileManager` is the durable coordinator for managed-runtime provider-profile slots and cooldowns
 - activity fleets are split by capability and secret boundary
 - the dedicated `agent_runtime` fleet is canonical

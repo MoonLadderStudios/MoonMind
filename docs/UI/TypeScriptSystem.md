@@ -40,7 +40,7 @@ This is intentionally **not** a move to a separately deployed SPA. It is a move 
 ### 2.2 Secondary Goals
 
 1. Reduce frontend regressions caused by implicit data shapes and untyped DOM interactions.
-2. Make it easier to split UI work across features such as tasks, proposals, schedules, settings, and auth profiles.
+2. Make it easier to split UI work across features such as tasks, proposals, schedules, settings, and provider profiles.
 3. Prepare the frontend for future growth without requiring a second deployment surface today.
 4. Preserve deep links, bookmarkable routes, and server-controlled access checks.
 
@@ -681,7 +681,7 @@ Prioritize tests for:
 - API client normalization
 - polling pause/resume logic
 - task/proposal/schedule mutation hooks
-- settings and auth profile forms
+- settings and provider profile forms
 - route param parsing
 
 ## 16.3 Browser E2E

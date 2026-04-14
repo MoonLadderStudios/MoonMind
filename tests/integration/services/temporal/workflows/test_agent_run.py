@@ -685,9 +685,9 @@ async def test_agent_run_external_agent_workflow():
     strict=False,
 )
 async def test_cancellation_releases_provider_profile_slot():
-    """Verify that cancelling a managed AgentRun releases its auth profile slot.
+    """Verify that cancelling a managed AgentRun releases its provider-profile slot.
 
-    Regression test for the auth profile slot leak bug where `CancelledError`
+    Regression test for the provider-profile slot leak bug where `CancelledError`
     handler wrapped the release_slot signal in `asyncio.shield()`, which does not
     work with Temporal's workflow-level cancellation.
 

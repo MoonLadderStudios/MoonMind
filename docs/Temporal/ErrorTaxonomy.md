@@ -149,7 +149,7 @@ The following are generally non-retryable:
 - invalid configuration for the requested runtime/provider
 - unsupported or unknown provider lifecycle status values
 - canonical contract-shape violations
-- missing required auth profiles
+- missing required provider profiles
 - impossible execution mode combinations
 - unsupported runtime/provider IDs
 - deterministic validation failures that require a new request

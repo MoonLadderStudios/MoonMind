@@ -4,7 +4,7 @@
 
 MiniMax provides an Anthropic-compatible API endpoint that lets you run Claude Code against the **MiniMax-M2.7** model using a MiniMax API key. Because Claude Code speaks the Anthropic wire protocol, it works out of the box — the only configuration needed is pointing the `ANTHROPIC_BASE_URL` at `https://api.minimax.io/anthropic` and supplying your MiniMax key.
 
-MoonMind integrates this as a dedicated auth profile (`claude_minimax`) layered on the existing `claude_code` runtime. When `MINIMAX_API_KEY` is set in the worker environment, the profile is auto-seeded on first startup alongside the default profiles.
+MoonMind integrates this as a dedicated provider profile (`claude_minimax`) layered on the existing `claude_code` runtime. When `MINIMAX_API_KEY` is set in the worker environment, the profile is auto-seeded on first startup alongside the default profiles.
 
 ---
 

@@ -2300,8 +2300,8 @@ class TemporalArtifactActivities:
     ) -> dict[str, Any]:
         """Ensure the ProviderProfileManager workflow is running for *runtime_id*.
 
-        Starts the singleton ``auth-profile-manager:<runtime_id>`` workflow if
-        it is not already running.  Handles ``WorkflowAlreadyStartedError``
+        Starts the singleton ``provider-profile-manager:<runtime_id>`` workflow if
+        it is not already running. Handles ``WorkflowAlreadyStartedError``
         gracefully so this activity is safe to call repeatedly.
         """
         from temporalio.exceptions import WorkflowAlreadyStartedError

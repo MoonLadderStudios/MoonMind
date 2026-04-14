@@ -4,9 +4,11 @@
 **Audience:** Contributors, operators, runtime authors, and integration authors
 **Purpose:** Top-level architectural overview for MoonMind's Temporal-native, task-scoped session-container model
 
-MoonMind is an open-source platform that orchestrates leading AI agents — Claude Code, Codex CLI, Gemini CLI, external agent systems, and future runtimes — while adding resiliency, safety, and observability.
+MoonMind is an open-source platform that orchestrates leading AI agents — Codex CLI, Claude Code, Gemini CLI, external agent systems, and future runtimes — while adding resiliency, safety, and observability.
 
 This document describes the **desired-state architecture**.
+
+> **Current maturity note:** The desired architecture is runtime-extensible, but the current concrete task-scoped managed-session implementation is **Codex-first**. `MoonMind.AgentSession` and the live session activities use Codex managed-session contracts today. Claude Code and Gemini CLI are managed-runtime targets and future adopters of this session-plane pattern, not current peer implementations of `MoonMind.AgentSession`.
 
 > **Core rule:** MoonMind keeps **Temporal** as the durable outer orchestrator and treats managed agent runtimes as **task-scoped session containers** launched from independently versioned runtime images. Those images do **not** need to be built from a MoonMind base image. A runtime image is compatible when MoonMind can drive it through a runtime adapter plus a defined control, observability, and artifact contract.
 
@@ -41,17 +43,26 @@ flowchart LR
     INT[Integrations Worker]
   end
 
-  subgraph ManagedSessionPlane["Managed Session Plane"]
+  subgraph ContainerLaunchBoundary["Container Launch Boundary"]
     DP[Docker Socket Proxy]
+  end
+
+  subgraph ManagedSessionPlane["Managed Session Plane"]
     subgraph SessionContainers["Task-Scoped Session Containers"]
-      COD[Codex CLI Image]
-      CLA[Claude Code Image]
-      GEM[Gemini CLI Image]
+      COD["Codex CLI Image<br/>Current concrete implementation"]
+      CLA["Claude Code Image<br/>Future session adopter"]
+      GEM["Gemini CLI Image<br/>Future session adopter"]
       FUT[Future Runtime Images]
     end
     WV[(Workspace Volumes)]
     HV[(Runtime Home / Auth Volumes)]
     SV[(Task Session Scratch / Spool)]
+  end
+
+  subgraph DockerWorkloadPlane["Docker Workload Plane"]
+    RP[Approved Runner Profiles]
+    WLC["Specialized Workload Containers<br/>Build / Test / Toolchain"]
+    WCV[(Workspace / Cache Mounts)]
   end
 
   subgraph ExternalAgentSystems["External Agent Systems"]
@@ -74,11 +85,14 @@ flowchart LR
   AO --> DP
   AO --> EXT
   INT --> EXT
+  SB --> DP
 
   DP --> COD
   DP --> CLA
   DP --> GEM
   DP --> FUT
+  DP --> WLC
+  RP --> WLC
 
   COD --- WV
   CLA --- WV
@@ -94,6 +108,8 @@ flowchart LR
   CLA --- SV
   GEM --- SV
   FUT --- SV
+  WLC --- WV
+  WLC --- WCV
 
   COD --> API
   CLA --> API
@@ -106,7 +122,8 @@ flowchart LR
 - **Control Plane** — API plus Mission Control. Starts tasks, resolves runtime intent, serves intervention and observability surfaces, exposes artifact and continuity APIs, and serves MoonMind MCP/context capabilities.
 - **Temporal Plane** — Workflows orchestrate. Activities perform side effects. Temporal remains the durable source of truth for task state, retries, timers, schedules, cancellation, signals, updates, and visibility.
 - **Agent Orchestration Layer** — MoonMind-owned workflows, workers, adapters, and policies that orchestrate **all** agent execution: managed session runtimes and external delegated agents. This layer does **not** embed Codex CLI, Claude Code, Gemini CLI, or future runtime binaries.
-- **Managed Session Plane** — Task-scoped containers launched from runtime-specific images. Each container holds a managed runtime's native session loop, local config, auth state, caches, and session-local working state for the duration of the task or session policy.
+- **Managed Session Plane** — Task-scoped containers launched from runtime-specific images. Each container holds a managed runtime's native session loop, local config, auth state, caches, and session-local working state for the duration of the task or session policy. Codex is the current concrete implementation.
+- **Docker Workload Plane** — Separate tool-backed containers for specialized non-agent work, such as build/test/toolchain jobs. These containers are not managed sessions and are not `MoonMind.AgentRun` executions unless the launched workload is itself a true agent runtime.
 - **Data Plane** — Postgres for durable metadata and read models, MinIO for artifacts and observability blobs, and Qdrant for retrieval and memory systems.
 
 ---
@@ -147,6 +164,8 @@ Instead:
 - each managed runtime runs in its own **runtime image**
 - MoonMind launches those images on demand as **task-scoped session containers**
 - MoonMind service and worker images remain generic and lightweight
+
+Today, Codex CLI is the concrete managed-session implementation. Claude Code and Gemini CLI should converge on this pattern when their session-backed adapters exist, but docs and code should not present them as already equivalent `MoonMind.AgentSession` implementations.
 
 ### 4. Runtime compatibility is adapter-defined, not image-base-defined
 
@@ -304,6 +323,7 @@ MoonMind keeps a small workflow catalog.
 | `MoonMind.Run` | Root workflow for one task. Owns the task envelope, plan execution, step ordering, task-level cancellation, and final task summary. |
 | `MoonMind.AgentSession` | Task-scoped child workflow that owns one managed runtime session container, including launch, reuse, clear/reset, epoch changes, reconciliation, and final teardown. |
 | `MoonMind.AgentRun` | Step-scoped child workflow for one true agent execution step. For managed runtimes it attaches to or requests an `AgentSession`; for external agents it owns delegated execution lifecycle directly. |
+| `MoonMind.ManagedSessionReconcile` | Bounded support workflow that reconciles managed-session supervision records and container state. |
 | `MoonMind.ProviderProfileManager` | Owns slot acquisition, release, cooldown, and policy coordination for provider profiles. |
 | `MoonMind.OAuthSession` | Owns interactive OAuth/browser auth flows where required by managed runtimes. |
 | `MoonMind.ManifestIngest` | Owns manifest-driven ingestion and related background graph compilation flows. |
@@ -318,6 +338,8 @@ For managed session runtimes, the desired execution shape is:
 4. The session container continues running across steps unless policy requires reset, new epoch, or teardown.
 5. Outputs, logs, diagnostics, and continuity artifacts are persisted and surfaced through canonical contracts and read models.
 
+Current implementation scope: Codex is the live task-scoped session plane. The `MoonMind.AgentSession` workflow and session activities currently carry Codex-specific request/response contracts behind the activity boundary. A runtime-neutral `ManagedSession*` contract should be extracted when a second managed-session runtime becomes real; until then, the top-level architecture remains the extensible target and the Codex session doc remains the concrete implementation slice.
+
 ### External execution shape
 
 For external agents:
@@ -325,6 +347,18 @@ For external agents:
 1. `MoonMind.Run` starts `MoonMind.AgentRun` for the delegated execution step.
 2. `MoonMind.AgentRun` uses an external-agent adapter to start, track, and finalize the remote run.
 3. MoonMind persists canonical result artifacts and observability evidence just as it does for managed runs, even though it does not own the remote runtime envelope.
+
+### Specialized workload shape
+
+For non-agent Docker workloads:
+
+1. A plan step or session-assisted step invokes an executable tool, normally `tool.type = "skill"`.
+2. MoonMind resolves the tool and routes it to a Docker-capable worker fleet.
+3. The worker launches an approved workload container through the controlled Docker boundary.
+4. The workload writes outputs under approved workspace/artifact paths.
+5. MoonMind returns a normal tool result and durable artifacts to the producing step.
+
+These workload containers are a sibling plane to managed sessions. They do not own `session_id`, `session_epoch`, `thread_id`, or `active_turn_id`, and they do not become `MoonMind.AgentRun` child workflows unless the launched workload is itself a true managed or external agent runtime.
 
 ### Temporal-to-runtime control mapping
 
@@ -337,12 +371,18 @@ The mapping is:
 - `MoonMind.AgentSession` invokes canonical control actions through `mm.activity.agent_runtime`
 - the managed runtime adapter translates those actions into the runtime image's native control surface
 
-Examples:
+Current session-control vocabulary is intentionally split into three layers:
 
-- operator approve → workflow update → `approve`
-- operator clear/reset session → workflow signal/update → `clear_context` and epoch increment
-- operator cancel → workflow cancellation + best-effort `cancel_run` / `terminate_session`
-- operator message → workflow update → `send_followup`
+| Operator intent | Canonical MoonMind session verb | Current activity / Codex transport |
+|---|---|---|
+| Start or recover a task-scoped session | `start_session` / `resume_session` | `agent_runtime.launch_session` / `agent_runtime.session_status`, backed by the Codex managed-session controller and Codex App Server |
+| Send the next objective or operator message | `send_turn` | `agent_runtime.send_turn`, backed by a Codex App Server turn |
+| Steer an active turn | `steer_turn` | `agent_runtime.steer_turn`, backed by Codex turn steering |
+| Interrupt an active turn | `interrupt_turn` | `agent_runtime.interrupt_turn`, backed by Codex turn interruption |
+| Clear context and begin a new continuity epoch | `clear_session` | `agent_runtime.clear_session`, which writes control/reset artifacts, increments `session_epoch`, and starts a new Codex thread |
+| Cancel or tear down the session | `cancel_session` / `terminate_session` | `agent_runtime.interrupt_turn` for active-turn cancellation and `agent_runtime.terminate_session` for session teardown |
+| Fetch session state or continuity summary | `fetch_status` / `fetch_result` | `agent_runtime.session_status` / `agent_runtime.fetch_session_summary` |
+| Approve or reject a runtime request | `approve` / `reject` | Adapter-specific approval transport when supported; no generic approval activity is currently in the live session catalog |
 
 Runtime images do **not** need to understand Temporal directly. They only need to be controllable through an adapter that honors MoonMind's canonical actions.
 
@@ -364,6 +404,8 @@ MoonMind's execution model remains plan-driven.
 
 - **`skill`** — executed as a Temporal activity
 - **`agent_runtime`** — executed through `MoonMind.AgentRun`, optionally backed by a persistent `MoonMind.AgentSession`
+
+Docker-backed specialized workloads use the tool path by default. A build/test/toolchain container may run on the same Docker-capable fleet used by managed-runtime supervision, but its product contract remains a tool result plus artifacts, not managed-session identity.
 
 Plans remain **data, not code**.
 
@@ -403,7 +445,7 @@ The Agent Orchestration Layer is the MoonMind-owned execution layer for all agen
 
 It includes:
 
-- `MoonMind.Run`, `MoonMind.AgentRun`, and `MoonMind.AgentSession`
+- `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, and `MoonMind.ManagedSessionReconcile`
 - managed and external agent adapters
 - launcher and supervisor components
 - provider-profile coordination
@@ -443,9 +485,9 @@ Examples:
 
 | Runtime | Runtime Image | Notes |
 |---|---|---|
-| Codex CLI | runtime-specific image | Holds native Codex session state, config, auth, and workspace bindings. |
-| Claude Code | runtime-specific image | Holds native Claude Code session state, config, auth, and workspace bindings. |
-| Gemini CLI | runtime-specific image | Holds native Gemini CLI session state, config, auth, and workspace bindings. |
+| Codex CLI | runtime-specific image | Current concrete task-scoped managed-session implementation. Holds native Codex session state, config, auth, and workspace bindings. |
+| Claude Code | runtime-specific image | Future session-plane adopter. Do not describe it as a peer `MoonMind.AgentSession` implementation until the adapter and contracts exist. |
+| Gemini CLI | runtime-specific image | Future session-plane adopter. Do not describe it as a peer `MoonMind.AgentSession` implementation until the adapter and contracts exist. |
 | Future Runtime | runtime-specific image | Any runtime image that satisfies the MoonMind compatibility contract through an adapter. |
 
 MoonMind owns:
@@ -490,21 +532,21 @@ The desired-state session container shape includes:
 
 MoonMind treats the following as first-class canonical control actions:
 
-- `launch_session`
-- `attach_session`
-- `send_message`
-- `send_followup`
+- `start_session`
+- `resume_session`
+- `send_turn`
+- `steer_turn`
+- `interrupt_turn`
+- `clear_session`
+- `cancel_session`
+- `terminate_session`
 - `approve`
 - `reject`
-- `interrupt`
-- `clear_context`
 - `snapshot_session`
-- `cancel_run`
-- `terminate_session`
 - `fetch_status`
 - `fetch_result`
 
-The exact transport is adapter-specific. The contract is MoonMind-specific and canonical.
+The exact transport is adapter-specific. The contract is MoonMind-specific and canonical. The current Codex implementation maps these verbs to the `agent_runtime.*_session` and turn activities listed in the Temporal activity catalog.
 
 ### Session continuity rule
 
@@ -520,6 +562,35 @@ The normal durable continuity surface is artifact-based and includes a suitable 
 - optional `session.recovery_bundle`
 
 Those continuity artifacts remain execution-linked even when a session spans multiple steps.
+
+---
+
+## Docker Workload Plane
+
+Specialized Docker workloads are sibling execution resources, not managed sessions.
+
+Use this plane for bounded non-agent work such as:
+
+- Unreal or Unity build/test jobs
+- SDK-specific compile or test images
+- GPU- or driver-constrained validation
+- short-lived helper services that support a bounded step
+
+Default routing:
+
+1. The plan or session-assisted step invokes an executable tool, normally `tool.type = "skill"`.
+2. The tool resolves to a curated runner profile or equivalent approved workload definition.
+3. A Docker-capable worker launches the workload container through the Docker proxy.
+4. Outputs are captured as tool results and artifacts attached to the producing execution step.
+
+Identity rules:
+
+- workload containers are not `MoonMind.AgentSession`
+- workload containers are not `MoonMind.AgentRun` unless they are themselves true agent runtimes
+- workload artifacts are step outputs, not session-continuity artifacts by default
+- optional `session_id` and `session_epoch` fields are association metadata only
+
+The detailed workload-container contract lives in [`docs/ManagedAgents/DockerOutOfDocker.md`](./ManagedAgents/DockerOutOfDocker.md).
 
 ---
 
@@ -784,16 +855,18 @@ MoonMind's desired-state architecture is:
 In this model:
 
 - `MoonMind.Run` remains the root task workflow
-- `MoonMind.AgentSession` owns persistent task-scoped managed runtime sessions
+- `MoonMind.AgentSession` owns persistent task-scoped managed runtime sessions, with Codex as the current concrete implementation
+- `MoonMind.ManagedSessionReconcile` handles bounded managed-session reconciliation work
 - `MoonMind.AgentRun` owns one true agent execution step
 - the **Agent Orchestration Layer** spans managed and external agents
 - the **Managed Session Plane** hosts runtime-specific session containers for managed runtimes
+- the **Docker Workload Plane** hosts separate tool-backed workload containers without conflating them with session identity
 - managed runtimes run as independently versioned containers from runtime-specific images
 - MoonMind workers stay lightweight and generic
 - runtime compatibility is defined by adapters and control, observability, and artifact contracts rather than MoonMind-specific base images
 - session continuity is presented through artifact-backed projections rather than container-local state
 
-That is the architecture that best supports Codex CLI, Claude Code, Gemini CLI, external agents, and future runtimes without giving up Temporal's strengths or the artifact-first evidence model.
+That is the architecture that supports Codex CLI today, gives Claude Code and Gemini CLI a clear future session-adoption path, and keeps external agents and specialized workload containers from being collapsed into one misleading runtime category.
 
 ---
 
