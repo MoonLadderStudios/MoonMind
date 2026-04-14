@@ -8,11 +8,31 @@ This file records cutover gates for deployment-sensitive managed-session workflo
 
 ## Shared Prerequisites
 
-- Replay-safe rollout gates or an explicit cutover plan are approved for incompatible workflow-shape changes.
+- replay-safe rollout gates or an explicit cutover plan are approved for incompatible workflow-shape changes.
 - Representative `AgentSessionWorkflow` histories replay successfully.
 - Fault-injected lifecycle tests pass for termination cleanup, cancel semantics, race/idempotency, Continue-As-New carry-forward, and reconcile outcomes.
 - Bounded workflow metadata, Search Attributes, activity summaries, telemetry dimensions, schedule metadata, and replay fixtures are checked for sensitive or unbounded content.
 - `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` passes before broad rollout.
+
+## Extending Managed Session Record Metadata
+
+Prerequisites:
+
+- New optional record fields are added as bounded metadata only; workflow history continues to carry compact refs and identities rather than raw logs or transcripts.
+- Existing records that lack the new fields have a deterministic replay-safe rollout path. For log offset metadata, reattached supervisors resume from persisted per-stream offsets when present and conservatively replay from the beginning of the spool when only the legacy combined offset exists.
+- Activity and service boundaries persist the new metadata before any dependent UI or observability behavior assumes it is populated.
+
+Validation gates:
+
+- `tests/unit/services/temporal/runtime/test_managed_session_supervisor.py`
+- `tests/unit/services/temporal/runtime/test_managed_session_store.py`
+- `tests/unit/schemas/test_managed_session_models.py`
+- `tests/unit/workflows/temporal/test_agent_session_replayer.py`
+
+Rollback/removal:
+
+- Stop depending on the new metadata fields before removing them from stored records or schema contracts.
+- Keep the conservative replay path until representative active-session records with missing metadata are no longer expected to be reattached.
 
 ## Enabling `SteerTurn`
 

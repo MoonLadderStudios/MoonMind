@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import logging
 from datetime import UTC, datetime
@@ -15,6 +16,8 @@ from .log_streamer import RuntimeLogStreamer
 from .managed_session_store import ManagedSessionStore
 
 logger = logging.getLogger(__name__)
+
+_LOG_READ_CHUNK_BYTES = 64 * 1024
 
 
 class ArtifactStorageWriter(Protocol):
@@ -55,15 +58,102 @@ class ManagedSessionSupervisor:
         return Path(record.artifact_spool_path) / "stderr.log"
 
     @staticmethod
-    def _combined_offset(record: CodexManagedSessionRecord) -> int:
-        total = 0
-        for path in (
-            ManagedSessionSupervisor._stdout_path(record),
-            ManagedSessionSupervisor._stderr_path(record),
+    def _initial_stream_offsets(
+        record: CodexManagedSessionRecord,
+    ) -> dict[str, int]:
+        return {
+            "stdout": record.stdout_log_offset or 0,
+            "stderr": record.stderr_log_offset or 0,
+        }
+
+    def _publish_output_chunk(
+        self,
+        *,
+        record: CodexManagedSessionRecord,
+        stream_name: str,
+        text: str,
+        offset: int,
+    ) -> None:
+        try:
+            self._log_streamer.emit_observability_event(
+                run_id=record.task_run_id,
+                workspace_path=record.workspace_path,
+                stream=stream_name,
+                text=text,
+                kind=f"{stream_name}_chunk",
+                offset=offset,
+                session_id=record.session_id,
+                session_epoch=record.session_epoch,
+                container_id=record.container_id,
+                thread_id=record.thread_id,
+                active_turn_id=record.active_turn_id,
+                metadata={"source": "managed_session_artifact_spool"},
+                preserve_text=True,
+            )
+        except Exception:
+            logger.warning(
+                "Session output publication failed for task run %s session %s stream %s",
+                record.task_run_id,
+                record.session_id,
+                stream_name,
+                exc_info=True,
+            )
+
+    def _publish_new_output_chunks(
+        self,
+        record: CodexManagedSessionRecord,
+        stream_offsets: dict[str, int],
+        stream_decoders: dict[str, codecs.IncrementalDecoder],
+    ) -> bool:
+        emitted = False
+        for stream_name, path in (
+            ("stdout", self._stdout_path(record)),
+            ("stderr", self._stderr_path(record)),
         ):
-            if path.exists():
-                total += path.stat().st_size
-        return total
+            try:
+                if not path.exists():
+                    stream_offsets.setdefault(stream_name, 0)
+                    continue
+                current_size = path.stat().st_size
+                previous_offset = stream_offsets.get(stream_name, 0)
+                if current_size < previous_offset:
+                    previous_offset = 0
+                    stream_decoders.pop(stream_name, None)
+                if current_size <= previous_offset:
+                    stream_offsets[stream_name] = current_size
+                    continue
+                decoder = stream_decoders.setdefault(
+                    stream_name,
+                    codecs.getincrementaldecoder("utf-8")(errors="replace"),
+                )
+                committed_offset = previous_offset
+                with path.open("rb") as handle:
+                    handle.seek(previous_offset)
+                    remaining = current_size - previous_offset
+                    while remaining > 0:
+                        chunk = handle.read(min(_LOG_READ_CHUNK_BYTES, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        text = decoder.decode(chunk, final=False)
+                        buffered_bytes = len(decoder.getstate()[0])
+                        decoded_offset = handle.tell() - buffered_bytes
+                        if not text:
+                            continue
+                        self._publish_output_chunk(
+                            record=record,
+                            stream_name=stream_name,
+                            text=text,
+                            offset=committed_offset,
+                        )
+                        committed_offset = decoded_offset
+                        emitted = True
+                if decoder.getstate()[0]:
+                    decoder.reset()
+                stream_offsets[stream_name] = committed_offset
+            except OSError:
+                continue
+        return emitted
 
     def emit_session_event(
         self,
@@ -102,15 +192,29 @@ class ManagedSessionSupervisor:
 
     async def _watch(self, session_id: str) -> None:
         stop_event = self._stop_events[session_id]
+        initial_record = self._store.load(session_id)
+        stream_offsets = (
+            self._initial_stream_offsets(initial_record)
+            if initial_record is not None
+            else {"stdout": 0, "stderr": 0}
+        )
+        stream_decoders: dict[str, codecs.IncrementalDecoder] = {}
         while not stop_event.is_set():
             record = self._store.load(session_id)
             if record is None:
                 return
-            combined_offset = self._combined_offset(record)
-            if combined_offset != (record.last_log_offset or 0):
+            emitted = self._publish_new_output_chunks(
+                record,
+                stream_offsets,
+                stream_decoders,
+            )
+            combined_offset = sum(stream_offsets.values())
+            if emitted or combined_offset != (record.last_log_offset or 0):
                 await self._store.update(
                     session_id,
                     last_log_offset=combined_offset,
+                    stdout_log_offset=stream_offsets.get("stdout", 0),
+                    stderr_log_offset=stream_offsets.get("stderr", 0),
                     last_log_at=datetime.now(tz=UTC),
                 )
             try:
@@ -307,6 +411,8 @@ class ManagedSessionSupervisor:
             latest_summary_ref=summary_ref,
             latest_checkpoint_ref=checkpoint_ref,
             last_log_offset=len(stdout_bytes) + len(stderr_bytes),
+            stdout_log_offset=len(stdout_bytes),
+            stderr_log_offset=len(stderr_bytes),
             last_log_at=now,
             updated_at=now,
             error_message=error_message,

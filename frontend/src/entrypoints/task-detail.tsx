@@ -1838,8 +1838,7 @@ function LiveLogsPanel({
 
     let cancelled = false;
 
-    const nextSince = lastSeqRef.current != null ? lastSeqRef.current + 1 : null;
-    const since = nextSince != null ? `?since=${nextSince}` : '';
+    const since = lastSeqRef.current != null ? `?since=${lastSeqRef.current}` : '';
     const streamUrl = taskRunRoute(
       apiBase,
       routes.logsStream,

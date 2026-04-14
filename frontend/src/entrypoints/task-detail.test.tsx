@@ -2673,6 +2673,7 @@ describe('LiveLogsPanel', () => {
 
     await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
+    expect(es.url).toContain('since=1');
 
     act(() => es.triggerOpen());
     act(() => es.triggerLogChunk({ sequence: 0, stream: 'stdout', text: 'live line\n' }));
