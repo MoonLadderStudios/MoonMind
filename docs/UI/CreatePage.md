@@ -371,6 +371,7 @@ Rules:
 - the MoonMind API must resolve columns from Jira board configuration
 - the MoonMind API, not the browser, is responsible for translating Jira status-to-column mapping into a board-column model
 - the browser must render board columns in board order
+- board-scoped column requests may include the selected `projectKey` query parameter; when present, the API verifies the board is listed for that project instead of relying only on Jira board location metadata
 
 Representative column response:
 
@@ -422,11 +423,15 @@ Rules:
 
 - the browser must not infer column membership from raw issue status text
 - the issue list may optionally support `q=` filtering by issue key or summary
+- the issue list may include the selected `projectKey` query parameter, and the server filters returned stories to that selected project and configured project allowlist
 - empty columns must still be renderable
 
 ### 15.3 Issue-detail contract
 
 The issue-detail endpoint must return normalized story content suitable for preview and import.
+When a board context is present, the browser may send both `boardId` and selected
+`projectKey` query parameters so the server can preserve project policy context
+while resolving the story's board column.
 
 Representative response:
 

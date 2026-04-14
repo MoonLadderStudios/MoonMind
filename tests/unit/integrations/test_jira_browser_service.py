@@ -124,6 +124,20 @@ def _settings(
     allowed_projects: str | None = None,
 ) -> AtlassianSettings:
     return AtlassianSettings(
+        atlassian_api_key=None,
+        atlassian_api_key_secret_ref=None,
+        atlassian_auth_mode=None,
+        atlassian_auth_mode_secret_ref=None,
+        atlassian_cloud_id=None,
+        atlassian_cloud_id_secret_ref=None,
+        atlassian_email=None,
+        atlassian_email_secret_ref=None,
+        atlassian_service_account_email=None,
+        atlassian_service_account_email_secret_ref=None,
+        atlassian_site_url=None,
+        atlassian_site_url_secret_ref=None,
+        atlassian_username=None,
+        atlassian_url=None,
         jira=JiraSettings(jira_allowed_projects=allowed_projects),
     )
 
@@ -362,6 +376,81 @@ async def test_board_columns_preserve_order_and_status_mapping() -> None:
     ]
 
 
+async def test_board_columns_use_selected_project_scope_when_board_location_differs() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Shared Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "OPS"},
+            },
+            {
+                "values": [
+                    {
+                        "id": 42,
+                        "name": "Shared Delivery",
+                        "type": "kanban",
+                        "location": {"projectKey": "OPS"},
+                    }
+                ],
+                "total": 1,
+            },
+            {
+                "location": {"projectKey": "OPS"},
+                "columnConfig": {
+                    "columns": [
+                        {
+                            "name": "Selected",
+                            "statuses": [{"id": "1", "name": "Selected"}],
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+
+    result = await service.list_columns("42", project_key="ENG")
+
+    assert result.board.project_key == "ENG"
+    assert [column.id for column in result.columns] == ["selected"]
+    assert [call["path"] for call in service.calls] == [
+        "agile:/board/42",
+        "agile:/board",
+        "agile:/board/42/configuration",
+    ]
+    assert service.calls[1]["params"] == {
+        "projectKeyOrId": "ENG",
+        "maxResults": 50,
+        "startAt": 0,
+    }
+
+
+async def test_board_columns_deny_selected_project_scope_when_board_is_not_listed() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Shared Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "OPS"},
+            },
+            {"values": [], "total": 0},
+        ],
+    )
+
+    with pytest.raises(JiraToolError) as excinfo:
+        await service.list_columns("42", project_key="ENG")
+
+    assert excinfo.value.code == "jira_policy_denied"
+    assert [call["path"] for call in service.calls] == [
+        "agile:/board/42",
+        "agile:/board",
+    ]
+
+
 async def test_board_columns_returns_empty_columns_when_configuration_has_no_columns() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -441,6 +530,56 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
         "maxResults": 50,
         "startAt": 0,
     }
+
+
+async def test_board_issues_filter_to_selected_project_scope() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG,OPS"),
+        responses=[
+            {
+                "id": 42,
+                "name": "Shared Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "OPS"},
+            },
+            {
+                "values": [
+                    {
+                        "id": 42,
+                        "name": "Shared Delivery",
+                        "type": "kanban",
+                        "location": {"projectKey": "OPS"},
+                    }
+                ],
+                "total": 1,
+            },
+            {
+                "location": {"projectKey": "OPS"},
+                "columnConfig": {
+                    "columns": [
+                        {"name": "Selected", "statuses": [{"id": "1"}]},
+                    ]
+                },
+            },
+            {
+                "issues": [
+                    {
+                        "key": "ENG-1",
+                        "fields": {"summary": "Allowed", "status": {"id": "1"}},
+                    },
+                    {
+                        "key": "OPS-2",
+                        "fields": {"summary": "Other project", "status": {"id": "1"}},
+                    },
+                ],
+                "total": 2,
+            },
+        ],
+    )
+
+    result = await service.list_issues("42", project_key="ENG")
+
+    assert [item.issue_key for item in result.items_by_column["selected"]] == ["ENG-1"]
 
 
 async def test_board_issues_returns_empty_column_buckets_when_jira_has_no_issues() -> None:

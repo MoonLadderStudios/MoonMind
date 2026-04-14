@@ -293,12 +293,25 @@ class JiraBrowserService:
         ]
         return JiraListResponse[JiraBoard](projectKey=normalized_project, items=boards)
 
-    async def list_columns(self, board_id: str) -> JiraBoardColumns:
+    async def list_columns(
+        self,
+        board_id: str,
+        project_key: str | None = None,
+    ) -> JiraBoardColumns:
         self._ensure_enabled()
         normalized_board_id = self._normalize_board_id(board_id)
+        normalized_project = self._normalize_project_key_optional(project_key)
         async with self._jira_client() as client:
-            board = await self._fetch_board(normalized_board_id, client=client)
-            config = await self._fetch_board_configuration(normalized_board_id, client=client)
+            board = await self._fetch_board(
+                normalized_board_id,
+                client=client,
+                policy_project_key=normalized_project,
+            )
+            config = await self._fetch_board_configuration(
+                normalized_board_id,
+                client=client,
+                policy_project_key=normalized_project,
+            )
         columns = self._normalize_columns(config)
         return JiraBoardColumns(board=board, columns=columns)
 
@@ -306,13 +319,16 @@ class JiraBrowserService:
         self,
         board_id: str,
         q: str | None = None,
+        project_key: str | None = None,
     ) -> JiraBoardIssues:
         self._ensure_enabled()
         normalized_board_id = self._normalize_board_id(board_id)
+        normalized_project = self._normalize_project_key_optional(project_key)
         async with self._jira_client() as client:
             columns_response = await self._list_columns_with_client(
                 normalized_board_id,
                 client=client,
+                policy_project_key=normalized_project,
             )
             issues_payload = await self._fetch_board_issues(
                 normalized_board_id,
@@ -330,6 +346,8 @@ class JiraBrowserService:
         unmapped_items: list[JiraIssueSummary] = []
         filter_text = str(q or "").strip().lower()
         for raw_issue in issues_payload:
+            if not self._issue_matches_policy_scope(raw_issue, normalized_project):
+                continue
             summary = self._normalize_issue_summary(raw_issue, status_to_column)
             if (
                 filter_text
@@ -357,10 +375,22 @@ class JiraBrowserService:
         self,
         issue_key: str,
         board_id: str | None = None,
+        project_key: str | None = None,
     ) -> JiraIssueDetail:
         self._ensure_enabled()
         normalized_issue_key = self._normalize_issue_key(issue_key)
-        self._ensure_project_allowed(self._project_from_issue_key(normalized_issue_key))
+        issue_project = self._project_from_issue_key(normalized_issue_key)
+        normalized_project = self._normalize_project_key_optional(project_key)
+        self._ensure_project_allowed(issue_project)
+        if normalized_project is not None:
+            self._ensure_project_allowed(normalized_project)
+            if issue_project != normalized_project:
+                raise JiraToolError(
+                    "Project is not allowed by Jira policy.",
+                    code="jira_policy_denied",
+                    status_code=403,
+                    action="jira_browser.policy",
+                )
         normalized_board_id = (
             self._normalize_board_id(board_id) if board_id is not None else None
         )
@@ -381,6 +411,7 @@ class JiraBrowserService:
                     await self._list_columns_with_client(
                         normalized_board_id,
                         client=client,
+                        policy_project_key=normalized_project,
                     )
                 ).columns
         return self._normalize_issue_detail(payload, board_columns=board_columns)
@@ -510,13 +541,28 @@ class JiraBrowserService:
         board_id: str,
         *,
         client: JiraClient,
+        policy_project_key: str | None = None,
     ) -> JiraBoardColumns:
-        board = await self._fetch_board(board_id, client=client)
-        config = await self._fetch_board_configuration(board_id, client=client)
+        board = await self._fetch_board(
+            board_id,
+            client=client,
+            policy_project_key=policy_project_key,
+        )
+        config = await self._fetch_board_configuration(
+            board_id,
+            client=client,
+            policy_project_key=policy_project_key,
+        )
         columns = self._normalize_columns(config)
         return JiraBoardColumns(board=board, columns=columns)
 
-    async def _fetch_board(self, board_id: str, *, client: JiraClient) -> JiraBoard:
+    async def _fetch_board(
+        self,
+        board_id: str,
+        *,
+        client: JiraClient,
+        policy_project_key: str | None = None,
+    ) -> JiraBoard:
         payload = await self._request_json_with_client(
             client,
             method="GET",
@@ -525,6 +571,14 @@ class JiraBrowserService:
             context={"boardId": board_id},
         )
         board = self._normalize_board(payload)
+        if policy_project_key is not None:
+            self._ensure_project_allowed(policy_project_key)
+            await self._ensure_board_listed_for_project(
+                board_id,
+                policy_project_key,
+                client=client,
+            )
+            return board.model_copy(update={"project_key": policy_project_key})
         if board.project_key:
             self._ensure_project_allowed(board.project_key)
         return board
@@ -534,6 +588,7 @@ class JiraBrowserService:
         board_id: str,
         *,
         client: JiraClient,
+        policy_project_key: str | None = None,
     ) -> Mapping[str, Any]:
         payload = await self._request_json_with_client(
             client,
@@ -547,9 +602,55 @@ class JiraBrowserService:
         location = payload.get("location")
         if isinstance(location, Mapping):
             project_key = str(location.get("projectKey") or "").strip().upper()
-            if project_key:
+            if policy_project_key is not None:
+                self._ensure_project_allowed(policy_project_key)
+            elif project_key:
                 self._ensure_project_allowed(project_key)
         return payload
+
+    async def _ensure_board_listed_for_project(
+        self,
+        board_id: str,
+        project_key: str,
+        *,
+        client: JiraClient,
+    ) -> None:
+        start_at = 0
+        while True:
+            payload = await self._request_json_with_client(
+                client,
+                method="GET",
+                path="agile:/board",
+                action="jira_browser.list_boards",
+                params={
+                    "projectKeyOrId": project_key,
+                    "maxResults": _JIRA_BROWSER_PAGE_SIZE,
+                    "startAt": start_at,
+                },
+                context={"projectKey": project_key},
+            )
+            values = payload.get("values", []) if isinstance(payload, Mapping) else []
+            page_items = values if isinstance(values, list) else []
+            if any(
+                str(item.get("id") or "").strip() == board_id
+                for item in page_items
+                if isinstance(item, Mapping)
+            ):
+                return
+
+            total = payload.get("total") if isinstance(payload, Mapping) else None
+            returned = len(page_items)
+            start_at += returned
+            if returned < _JIRA_BROWSER_PAGE_SIZE:
+                break
+            if isinstance(total, int) and start_at >= total:
+                break
+        raise JiraToolError(
+            "Project is not allowed by Jira policy.",
+            code="jira_policy_denied",
+            status_code=403,
+            action="jira_browser.policy",
+        )
 
     async def _fetch_board_issues(
         self,
@@ -608,6 +709,18 @@ class JiraBrowserService:
                 status_code=403,
                 action="jira_browser.policy",
             )
+
+    def _issue_matches_policy_scope(
+        self,
+        payload: Mapping[str, Any],
+        policy_project_key: str | None,
+    ) -> bool:
+        issue_key = str(payload.get("key") or "").strip().upper()
+        issue_project = self._project_from_issue_key(issue_key) if "-" in issue_key else ""
+        if policy_project_key is not None and issue_project != policy_project_key:
+            return False
+        allowed = self._allowed_projects()
+        return not allowed or issue_project in allowed
 
     def _normalize_project(
         self,
