@@ -4609,47 +4609,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     ) : null}
                   </div>
 
-                  <div className="grid-2">
-                    <label>
-                      Skill (optional)
-                      <input
-                        data-step-field="skillId"
-                        data-step-index={String(index)}
-                        list={SKILL_OPTIONS_DATALIST_ID}
-                        value={step.skillId}
-                        placeholder={
-                          isPrimaryStep
-                            ? "auto (default), moonspec-orchestrate, ..."
-                            : "inherit primary step skill"
-                        }
-                        onChange={(event) =>
-                          updateStep(step.localId, {
-                            skillId: event.target.value,
-                          })
-                        }
-                      />
-                      <span className="small">
-                        {isPrimaryStep
-                          ? "Primary step must include instructions or an explicit skill."
-                          : "Leave skill blank to inherit primary step defaults."}
-                      </span>
-                    </label>
-
-                    <label>
-                      Skill Required Capabilities (optional CSV)
-                      <input
-                        data-step-field="skillRequiredCapabilities"
-                        data-step-index={String(index)}
-                        value={step.skillRequiredCapabilities}
-                        placeholder="docker,qdrant,unity"
-                        onChange={(event) =>
-                          updateStep(step.localId, {
-                            skillRequiredCapabilities: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
+                  <label>
+                    Skill (optional)
+                    <input
+                      data-step-field="skillId"
+                      data-step-index={String(index)}
+                      list={SKILL_OPTIONS_DATALIST_ID}
+                      value={step.skillId}
+                      placeholder={
+                        isPrimaryStep
+                          ? "auto (default), moonspec-orchestrate, ..."
+                          : "inherit primary step skill"
+                      }
+                      onChange={(event) =>
+                        updateStep(step.localId, {
+                          skillId: event.target.value,
+                        })
+                      }
+                    />
+                    <span className="small">
+                      {isPrimaryStep
+                        ? "Primary step must include instructions or an explicit skill."
+                        : "Leave skill blank to inherit primary step defaults."}
+                    </span>
+                  </label>
 
                   <label
                     className={
@@ -4684,6 +4667,36 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         </section>
+
+        <details className="card stack" id="queue-advanced-settings">
+          <summary>
+            <strong>Advanced Settings</strong>
+          </summary>
+          <div className="stack queue-advanced-settings-body">
+            <div>
+              <strong>Skill Required Capabilities</strong>
+              <p className="small">
+                Optional worker routing overrides. Runtime, publish mode, skills, and presets already add the common capabilities automatically.
+              </p>
+            </div>
+            {steps.map((step, index) => (
+              <label key={step.localId}>
+                {`Step ${index + 1} skill required capabilities (optional CSV)`}
+                <input
+                  data-step-field="skillRequiredCapabilities"
+                  data-step-index={String(index)}
+                  value={step.skillRequiredCapabilities}
+                  placeholder="docker,qdrant,unity"
+                  onChange={(event) =>
+                    updateStep(step.localId, {
+                      skillRequiredCapabilities: event.target.value,
+                    })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        </details>
 
         {taskTemplateCatalogEnabled ? (
           <div className="card stack">

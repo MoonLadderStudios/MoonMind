@@ -146,7 +146,6 @@ Each step card must expose:
 
 - `Instructions`
 - `Skill (optional)`
-- `Skill Required Capabilities (optional CSV)`
 - `Skill Args (optional JSON object)` when a non-empty explicit skill is selected
 
 Rules:
@@ -156,7 +155,17 @@ Rules:
 - non-primary steps may omit instructions to continue from the task objective
 - non-primary steps may omit skill to inherit the primary-step skill defaults
 
-### 7.3 Template-bound steps
+### 7.3 Advanced settings
+
+The page must expose `Skill Required Capabilities (optional CSV)` behind a collapsed Advanced Settings section outside the step-list region.
+
+Rules:
+
+- each step may still author optional skill required capabilities
+- required capabilities remain an advanced routing override, not part of the default visible Create Task flow
+- runtime, publish mode, selected skills, and presets derive the common capability set automatically
+
+### 7.4 Template-bound steps
 
 Preset-expanded steps may carry template step identity.
 
