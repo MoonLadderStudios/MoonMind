@@ -188,9 +188,13 @@ samp {
   font-family: var(--mm-font-mono);
   font-size: 0.62rem;
   font-weight: 400;
-  color: rgb(var(--mm-muted) / 0.98);
+  color: rgb(var(--mm-muted));
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
+}
+
+.dark .version-badge-value {
+  color: #fff;
 }
 
 .theme-toggle {
