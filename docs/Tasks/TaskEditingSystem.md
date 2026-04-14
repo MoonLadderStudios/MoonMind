@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Owners:** MoonMind Engineering
-**Last Updated:** 2026-04-12
+**Last Updated:** 2026-04-13
 
 ## 1. Purpose
 
@@ -15,7 +15,7 @@ The core idea is simple:
 - `/tasks/new` remains the single task submission surface.
 - Existing Temporal executions become the editable object.
 - The task details page regains an **Edit** action for executions that support in-place input updates.
-- Terminal executions gain a **Rerun** action that reuses the same prefilled submit experience.
+- Terminal executions, including failed and canceled executions, gain a **Rerun** action that reuses the same prefilled submit experience and allows the operator to edit the draft before submitting it again.
 
 This keeps create, edit, and rerun on one form while making Temporal the source of truth.
 
@@ -56,6 +56,8 @@ Editing should feel like reopening a familiar task form with the same fields, va
 
 Active executions can be edited only when the backend exposes that capability. Terminal executions cannot be “edited in place”; they can only be rerun.
 
+Failed and canceled terminal executions are first-class rerun candidates. When the backend exposes rerun capability for one of these executions, the operator must be able to reopen its task inputs as an editable draft, change the relevant fields, and submit the updated draft as a new rerun request.
+
 ### 3.5 Preserve auditability
 
 The system must preserve operator-visible lineage between the original execution, any new artifacts created during editing, and any rerun request.
@@ -90,12 +92,14 @@ Any other workflow type is out of scope until explicitly added.
 |---|---|---|
 | Create | No edit/rerun query parameter present | Starts a brand-new execution |
 | Edit | `editExecutionId` points to an active execution that supports updates | Sends `UpdateInputs` to the existing workflow |
-| Rerun | `rerunExecutionId` points to a terminal execution that supports rerun | Sends `RequestRerun` |
+| Rerun | `rerunExecutionId` points to a terminal execution that supports rerun | Reconstructs an editable draft and sends `RequestRerun` |
 
 ### 4.4 Lifecycle model
 
 - **Edit** is for non-terminal executions only.
 - **Rerun** is for terminal executions only.
+- Failed and canceled executions are terminal, but they must be eligible for rerun when `actions.canRerun` is `true`.
+- Rerun mode must allow the operator to edit reconstructed task inputs before submitting the rerun request.
 - UI availability is determined by backend capability flags, not frontend guesses.
 
 ## 5. Route model
@@ -296,6 +300,8 @@ A helper such as `buildTemporalArtifactEditUpdatePayload(...)` may be used to as
 
 Rerun mode uses the same prefilled form but requests a rerun instead of mutating the original terminal execution.
 
+For failed or canceled executions, rerun mode is the supported way to edit the prior task and submit it again. The original execution remains immutable and terminal; the shared form reconstructs the previous input state, allows the operator to change instructions, runtime options, repository or branch fields, skills, templates, and other supported inputs, and then sends those edited values through `RequestRerun`.
+
 Canonical request:
 
 ```http
@@ -347,6 +353,8 @@ At minimum, the detail payload should make available:
 - referenced input artifacts
 - capability flags such as `actions.canUpdateInputs` and `actions.canRerun`
 - any template, runtime, model, repository, and publish information required to reconstruct the form
+
+For failed and canceled `MoonMind.Run` executions, the read contract must expose enough input state for the submit page to build an editable rerun draft whenever `actions.canRerun` is `true`.
 
 ### 11.2 Update contract requirements
 
@@ -439,10 +447,11 @@ This design is considered implemented when all of the following are true:
 3. `/tasks/new?rerunExecutionId=<workflowId>` opens the same shared form in rerun mode.
 4. Edit submissions call `UpdateInputs`.
 5. Rerun submissions call `RequestRerun`.
-6. Edited input content creates new artifact refs rather than mutating old artifacts.
-7. Operators return to the Temporal detail experience after success.
-8. Canonical documentation and UI no longer rely on queue-era route params or terminology.
-9. Regression tests cover the detail-page entry point, prefill reconstruction, submit behavior, and redirect flow.
+6. Failed and canceled executions with `actions.canRerun = true` open an editable prefilled rerun draft and can be submitted again with changed inputs.
+7. Edited input content creates new artifact refs rather than mutating old artifacts.
+8. Operators return to the Temporal detail experience after success.
+9. Canonical documentation and UI no longer rely on queue-era route params or terminology.
+10. Regression tests cover the detail-page entry point, prefill reconstruction, submit behavior, failed/canceled rerun editing, and redirect flow.
 
 ## 18. Implementation tracking
 
