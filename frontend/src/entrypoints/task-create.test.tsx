@@ -3587,6 +3587,68 @@ describe("Task Create Entrypoint", () => {
     expect(screen.queryByText("ENG-101")).toBeNull();
   });
 
+  it("uses validated Jira issue columns as the count source of truth", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/boards/42/columns") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            board: { id: "42", name: "Delivery", projectKey: "ENG" },
+            columns: [
+              { id: "todo", name: "To Do", count: 7 },
+              { id: "doing", name: "Doing", count: 9 },
+              { id: "", count: 3 },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/boards/42/issues") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            boardId: "42",
+            columns: [
+              { id: "todo", name: "To Do" },
+              { id: "doing", name: "Doing", count: 2 },
+              { id: 17, name: "Invalid" },
+              { id: "missing-name", count: 1 },
+            ],
+            itemsByColumn: {
+              todo: [
+                {
+                  issueKey: "ENG-101",
+                  summary: "Plan controls",
+                  issueType: "Story",
+                  statusName: "Selected",
+                  assignee: "Ada",
+                },
+              ],
+              doing: [],
+            },
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "To Do 0" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Doing 2" })).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: "Invalid 0" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "missing-name 1" })).toBeNull();
+  });
+
   it("sends the selected Jira project scope with board and story requests", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -4654,7 +4716,7 @@ describe("Task Create Entrypoint", () => {
         "84",
       );
     });
-    fireEvent.click(await screen.findByRole("button", { name: "Selected 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Selected 0" }));
     fireEvent.click(
       await screen.findByRole("button", { name: /MY-PROJ-123/ }),
     );

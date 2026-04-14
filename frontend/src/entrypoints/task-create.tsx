@@ -194,6 +194,24 @@ interface JiraBoardIssues {
   itemsByColumn: Record<string, JiraIssueSummary[]>;
 }
 
+function isJiraColumn(value: unknown): value is JiraColumn {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const column = value as Record<string, unknown>;
+  return (
+    typeof column.id === "string" &&
+    typeof column.name === "string" &&
+    (column.count === undefined ||
+      column.count === null ||
+      typeof column.count === "number")
+  );
+}
+
+function parseJiraColumns(value: unknown): JiraColumn[] {
+  return Array.isArray(value) ? value.filter(isJiraColumn) : [];
+}
+
 interface JiraIssueDetail extends JiraIssueSummary {
   url?: string | null;
   column?: JiraColumn | null;
@@ -2239,7 +2257,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         );
       }
       const data = (await response.json()) as { columns?: unknown } | null;
-      return Array.isArray(data?.columns) ? (data.columns as JiraColumn[]) : [];
+      return parseJiraColumns(data?.columns);
     },
   });
 
@@ -2275,7 +2293,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         itemsByColumn?: Record<string, JiraIssueSummary[]>;
       } | null;
       return {
-        columns: Array.isArray(data?.columns) ? (data.columns as JiraColumn[]) : [],
+        columns: parseJiraColumns(data?.columns),
         itemsByColumn: data?.itemsByColumn || {},
       };
     },
@@ -2336,7 +2354,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             }
             return {
               ...column,
-              count: counted.count ?? column.count ?? 0,
+              count: counted.count ?? 0,
             };
           })
         : countedColumns;
