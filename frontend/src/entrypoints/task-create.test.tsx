@@ -1056,9 +1056,9 @@ describe("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               items: [
-                { key: "OPS", name: "Operations" },
-                { key: "ENG", name: "Engineering" },
-                { key: "MY-PROJ", name: "Hyphenated Project" },
+                { projectKey: "OPS", name: "Operations" },
+                { projectKey: "ENG", name: "Engineering" },
+                { projectKey: "MY-PROJ", name: "Hyphenated Project" },
               ],
             }),
           } as Response);
