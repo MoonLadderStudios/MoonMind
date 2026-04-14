@@ -79,10 +79,12 @@ samp {
 }
 
 .dashboard-root {
+  --dashboard-pt: 0.9rem;
+
   margin: 0 auto;
   max-width: none;
   width: 100%;
-  padding: 1.25rem 1rem 2.75rem;
+  padding: var(--dashboard-pt) 1rem 2.75rem;
   box-sizing: border-box;
   container-type: inline-size;
 }
@@ -102,14 +104,14 @@ samp {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.4rem 1rem;
+  padding: 1rem 1rem 0.95rem;
 }
 
 .masthead::before {
   content: "";
   position: absolute;
   z-index: -1;
-  top: -1.25rem;
+  top: calc(-1 * var(--dashboard-pt, 0.9rem));
   left: 0;
   right: 0;
   bottom: 0;
@@ -206,11 +208,11 @@ samp {
 }
 
 h1 {
-  margin: 0.35rem 0 0.2rem;
+  margin: 0.25rem 0 0.25rem;
   font-family: var(--mm-font-headline);
   font-weight: 700;
   letter-spacing: 0;
-  font-size: clamp(1.7rem, 3vw, 2.55rem);
+  font-size: clamp(1.55rem, 2.55vw, 2.2rem);
   line-height: 1;
 }
 
@@ -624,10 +626,13 @@ tr[data-proposal-id].proposal-consuming td {
   flex-wrap: wrap;
 }
 
-.queue-card-actions .button,
-.button {
-  flex: 1 1 auto;
+.queue-card-actions .button {
+  flex: 0 0 auto;
   text-align: center;
+}
+
+.queue-card-actions .queue-card-details-action {
+  flex: 1 0 100%;
 }
 
 @media (min-width: 768px) {
@@ -1490,6 +1495,15 @@ button.secondary:hover {
 
 .queue-step-skill-args {
   min-height: 90px;
+}
+
+.queue-step-attachments {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.queue-step-attachments-list {
+  margin-top: 0;
 }
 
 .queue-step-header {

@@ -36,7 +36,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         result = await session.execute(
             select(TaskStepTemplate)
             .where(
-                TaskStepTemplate.slug == "speckit-orchestrate",
+                TaskStepTemplate.slug == "moonspec-orchestrate",
                 TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
                 TaskStepTemplate.scope_ref.is_(None),
             )
@@ -46,4 +46,18 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert template is not None
         assert template.latest_version is not None
         assert template.latest_version.release_status.value == "active"
-        assert template.latest_version.steps[1]["skill"]["id"] == "speckit-specify"
+        seeded_skill_ids = [
+            step["skill"]["id"] for step in template.latest_version.steps
+        ]
+        assert "moonspec-specify" in seeded_skill_ids
+        assert "moonspec-align" in seeded_skill_ids
+        assert "moonspec-verify" in seeded_skill_ids
+        assert "moonspec-breakdown" not in seeded_skill_ids
+        assert "speckit-analyze" not in seeded_skill_ids
+        tasks_step = next(
+            step
+            for step in template.latest_version.steps
+            if step["title"] == "Generate TDD task breakdown"
+        )
+        assert "/moonspec-verify" in tasks_step["instructions"]
+        assert "/speckit.verify" not in tasks_step["instructions"]

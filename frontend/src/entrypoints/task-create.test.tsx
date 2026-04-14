@@ -19,6 +19,7 @@ import {
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
+  preferredTemplate,
   resolveObjectiveInstructions,
   TaskCreatePage,
 } from "./task-create";
@@ -108,6 +109,33 @@ function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
             defaultProjectKey: "ENG",
             defaultBoardId: "42",
             rememberLastBoardInSession: true,
+          },
+        },
+      },
+    },
+  };
+}
+
+function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          attachmentPolicy: {
+            enabled: true,
+            maxCount: 4,
+            maxBytes: 1024 * 1024,
+            totalBytes: 2 * 1024 * 1024,
+            allowedContentTypes: ["image/png", "application/pdf"],
           },
         },
       },
@@ -1056,9 +1084,9 @@ describe("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               items: [
-                { key: "OPS", name: "Operations" },
-                { key: "ENG", name: "Engineering" },
-                { key: "MY-PROJ", name: "Hyphenated Project" },
+                { projectKey: "OPS", name: "Operations" },
+                { projectKey: "ENG", name: "Engineering" },
+                { projectKey: "MY-PROJ", name: "Hyphenated Project" },
               ],
             }),
           } as Response);
@@ -1211,6 +1239,57 @@ describe("Task Create Entrypoint", () => {
           text: async () => "Unhandled fetch",
         } as Response);
       });
+  });
+
+  it("prefers the seeded MoonSpec orchestrate template over legacy SpecKit rows", () => {
+    const preferred = preferredTemplate([
+      {
+        key: "global::::speckit-orchestrate",
+        slug: "speckit-orchestrate",
+        scope: "global",
+        title: "SpecKit Orchestrate",
+        description: "Legacy preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+      {
+        key: "global::::moonspec-orchestrate",
+        slug: "moonspec-orchestrate",
+        scope: "global",
+        title: "MoonSpec Orchestrate",
+        description: "MoonSpec preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+    ]);
+
+    expect(preferred?.slug).toBe("moonspec-orchestrate");
+    expect(preferred?.scope).toBe("global");
+  });
+
+  it("falls back to the legacy SpecKit orchestrate template when MoonSpec is absent", () => {
+    const preferred = preferredTemplate([
+      {
+        key: "global::::speckit-orchestrate",
+        slug: "speckit-orchestrate",
+        scope: "global",
+        title: "SpecKit Orchestrate",
+        description: "Legacy preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+      {
+        key: "global::::other-template",
+        slug: "other-template",
+        scope: "global",
+        title: "Other Template",
+        description: "Other preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+    ]);
+
+    expect(preferred?.slug).toBe("speckit-orchestrate");
   });
 
   afterEach(() => {
@@ -2294,6 +2373,250 @@ describe("Task Create Entrypoint", () => {
       );
     });
   });
+
+  it("uploads a step attachment and includes it with the step instructions", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review the provided screenshot." },
+    });
+    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    const file = new File(["fake image"], "wireframe.png", {
+      type: "image/png",
+    });
+    fireEvent.change(attachmentInput, {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/artifacts",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/artifacts" &&
+        String(init?.body || "").includes("task-dashboard-step-attachment"),
+    );
+    expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
+      content_type: "image/png",
+      size_bytes: file.size,
+      metadata: {
+        filename: "wireframe.png",
+        source: "task-dashboard-step-attachment",
+        stepLabel: "Step 1",
+      },
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.instructions).toContain(
+      "Review the provided screenshot.",
+    );
+    expect(request.payload.task.instructions).toContain(
+      "Step input attachments:",
+    );
+    expect(request.payload.task.instructions).toContain(
+      "wireframe.png (image/png",
+    );
+    expect(request.payload.task.inputAttachments).toEqual([
+      {
+        artifactId: "art-001",
+        filename: "wireframe.png",
+        contentType: "image/png",
+        sizeBytes: file.size,
+      },
+    ]);
+    expect(request.payload.task.steps[0].inputAttachments).toEqual(
+      request.payload.task.inputAttachments,
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/artifacts/art-001/links",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining("input.attachment"),
+      }),
+    );
+  });
+
+  it("does not upload step attachments when later client validation fails", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review the provided screenshot." },
+    });
+    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    fireEvent.change(attachmentInput, {
+      target: {
+        files: [
+          new File(["fake image"], "wireframe.png", { type: "image/png" }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+
+    const additionalStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    );
+    expect(additionalStep).not.toBeNull();
+    fireEvent.change(
+      within(additionalStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "pr-resolver" },
+      },
+    );
+    await waitFor(() => {
+      expect(
+        within(additionalStep as HTMLElement).getByLabelText(
+          /Skill Args \(optional JSON object\)/,
+        ),
+      ).not.toBeNull();
+    });
+    fireEvent.change(
+      within(additionalStep as HTMLElement).getByLabelText(
+        /Skill Args \(optional JSON object\)/,
+      ),
+      {
+        target: { value: '{"broken":' },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Step 2 Skill Args must be valid JSON object text."),
+      ).not.toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
+    ).toBe(false);
+  });
+
+  it("does not upload step attachments when schedule validation fails", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review the provided screenshot." },
+    });
+    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    fireEvent.change(attachmentInput, {
+      target: {
+        files: [
+          new File(["fake image"], "wireframe.png", { type: "image/png" }),
+        ],
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), {
+      target: { value: "deferred_minutes" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "A valid positive whole number of minutes is required for deferred scheduling.",
+        ),
+      ).not.toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
+    ).toBe(false);
+  });
+
+  it(
+    "retries transient step attachment completion conflicts before creating the task",
+    async () => {
+      let completeAttempts = 0;
+      const originalRetryDelays = [...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
+      const defaultFetch = fetchSpy.getMockImplementation();
+
+      try {
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+          0,
+          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+          1,
+          1,
+        );
+        fetchSpy.mockImplementation(
+          (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            if (url === "/api/artifacts/art-001/complete") {
+              completeAttempts += 1;
+              if (completeAttempts < 3) {
+                return Promise.resolve({
+                  ok: false,
+                  status: 409,
+                  text: async () =>
+                    JSON.stringify({
+                      detail: {
+                        code: "artifact_state_error",
+                        message: "artifact upload is not complete",
+                      },
+                    }),
+                } as Response);
+              }
+            }
+            return (
+              defaultFetch?.(input, init) ??
+              Promise.reject(new Error("Unhandled fetch"))
+            );
+          },
+        );
+
+        renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+        fireEvent.change(await screen.findByLabelText("Instructions"), {
+          target: { value: "Review the provided screenshot." },
+        });
+        const attachmentInput =
+          await screen.findByLabelText("Step 1 attachments");
+        fireEvent.change(attachmentInput, {
+          target: {
+            files: [
+              new File(["fake image"], "wireframe.png", { type: "image/png" }),
+            ],
+          },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+        await waitFor(
+          () => {
+            expect(completeAttempts).toBe(3);
+            expect(fetchSpy).toHaveBeenCalledWith(
+              "/api/executions",
+              expect.objectContaining({ method: "POST" }),
+            );
+          },
+          { timeout: 9000 },
+        );
+      } finally {
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+          0,
+          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+          ...originalRetryDelays,
+        );
+      }
+    },
+    10000,
+  );
 
   it("submits selected task dependencies from the picker", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);

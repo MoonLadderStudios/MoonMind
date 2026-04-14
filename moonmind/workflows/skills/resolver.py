@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from moonmind.config.settings import settings
 
@@ -189,6 +190,25 @@ def resolve_skills_local_mirror_root() -> Path:
     """Resolve the configured local skills mirror root to an absolute path."""
 
     return _resolve_mirror_root(settings.workflow.skills_local_mirror_root)
+
+
+def resolve_skill_markdown_path(skill_name: str) -> Path | None:
+    """Resolve a skill's markdown file across configured local and legacy roots."""
+
+    normalized = validate_skill_name(skill_name)
+    source_uri = _resolve_local_source(normalized)
+    if source_uri is None:
+        return None
+
+    parsed = urlparse(source_uri)
+    if parsed.scheme != "file":
+        return None
+
+    skill_dir = Path(url2pathname(parsed.path))
+    skill_file = skill_dir / "SKILL.md"
+    if not skill_file.is_file():
+        return None
+    return skill_file
 
 
 def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:

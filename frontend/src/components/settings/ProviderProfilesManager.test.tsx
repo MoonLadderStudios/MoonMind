@@ -343,11 +343,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     fireEvent.click(runtimeDefaultCheckbox);
     const submitButton = screen.getByRole('button', { name: 'Update provider profile' });
-    const form = submitButton.closest('form');
-    if (!form) {
-      throw new Error('Expected provider profile update form');
-    }
-    fireEvent.submit(form);
+    fireEvent.click(submitButton);
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -371,5 +367,33 @@ describe('ProviderProfilesManager form controls', () => {
       expect(rows[1]?.textContent).not.toContain('Runtime default');
       expect(rows[2]?.textContent).toContain('Runtime default');
     });
+  });
+
+  it('reports form validation failures through the save mutation', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch');
+    const { onNotice } = renderProviderProfilesManager();
+
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'codex-default' },
+    });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+      target: { value: 'codex_cli' },
+    });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), {
+      target: { value: 'openai' },
+    });
+    fireEvent.change(screen.getByLabelText('Secret refs (JSON object of string refs)'), {
+      target: { value: '[]' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create provider profile' }));
+
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: 'Secret refs must be a JSON object.',
+      });
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

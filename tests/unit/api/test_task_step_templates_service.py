@@ -420,8 +420,8 @@ async def test_import_seed_templates_skips_existing(tmp_path):
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
-        "slug": "speckit-orchestrate",
-        "title": "Speckit Orchestrate",
+        "slug": "moonspec-orchestrate",
+        "title": "MoonSpec Orchestrate",
         "description": "Seeded preset",
         "scope": "global",
         "version": "1.0.0",
@@ -429,7 +429,7 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
             {
                 "title": "Specify",
                 "instructions": "Use {{ inputs.feature_request }}",
-                "skill": {"id": "speckit-specify", "args": {}},
+                "skill": {"id": "moonspec-specify", "args": {}},
             }
         ],
         "inputs": [
@@ -452,20 +452,20 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
             assert result.updated == 0
 
             template = await service._get_template_for_scope(
-                slug="speckit-orchestrate",
+                slug="moonspec-orchestrate",
                 scope=TaskTemplateScopeType.GLOBAL,
                 scope_ref=None,
             )
-            assert template.title == "Speckit Orchestrate"
+            assert template.title == "MoonSpec Orchestrate"
             assert template.latest_version is not None
-            assert template.latest_version.steps[0]["skill"]["id"] == "speckit-specify"
+            assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
 
 
 async def test_sync_seed_templates_updates_existing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
-        "slug": "speckit-orchestrate",
-        "title": "Speckit Orchestrate",
+        "slug": "moonspec-orchestrate",
+        "title": "MoonSpec Orchestrate",
         "description": "Updated seeded preset",
         "scope": "global",
         "version": "1.0.0",
@@ -473,12 +473,12 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
             {
                 "title": "Specify",
                 "instructions": "Translate {{ inputs.feature_request }} into spec artifacts.",
-                "skill": {"id": "speckit-specify", "args": {}},
+                "skill": {"id": "moonspec-specify", "args": {}},
             },
             {
                 "title": "Plan",
                 "instructions": "Plan the implementation.",
-                "skill": {"id": "speckit-plan", "args": {}},
+                "skill": {"id": "moonspec-plan", "args": {}},
             },
         ],
         "inputs": [
@@ -489,7 +489,7 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
                 "required": True,
             }
         ],
-        "annotations": {"sourceSkill": "speckit-orchestrate"},
+        "annotations": {"sourceSkill": "moonspec-orchestrate"},
     }
     _write_seed_template(seed_dir, seed_data)
 
@@ -497,7 +497,7 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
         async with session_maker() as session:
             service = TaskTemplateCatalogService(session)
             await service.create_template(
-                slug="speckit-orchestrate",
+                slug="moonspec-orchestrate",
                 title="Legacy Preset",
                 description="Old preset",
                 scope="global",
@@ -505,7 +505,7 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
                 tags=["legacy"],
                 inputs_schema=[],
                 steps=[{"instructions": "legacy step"}],
-                annotations={"sourceSkill": "agentkit-orchestrate"},
+                annotations={"sourceSkill": "legacy-orchestrate"},
                 required_capabilities=[],
                 created_by=None,
                 release_status=TaskTemplateReleaseStatus.ACTIVE,
@@ -517,12 +517,12 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
             assert result.updated == 1
 
             template = await service._get_template_for_scope(
-                slug="speckit-orchestrate",
+                slug="moonspec-orchestrate",
                 scope=TaskTemplateScopeType.GLOBAL,
                 scope_ref=None,
             )
             assert template.description == "Updated seeded preset"
             assert template.latest_version is not None
             assert len(template.latest_version.steps) == 2
-            assert template.latest_version.steps[0]["skill"]["id"] == "speckit-specify"
-            assert template.latest_version.annotations["sourceSkill"] == "speckit-orchestrate"
+            assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
+            assert template.latest_version.annotations["sourceSkill"] == "moonspec-orchestrate"

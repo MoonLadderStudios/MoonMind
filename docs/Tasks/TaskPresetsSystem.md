@@ -169,14 +169,14 @@ Each entry in `inputs_schema` declares a parameterizable field:
 Each entry in `steps` is a Jinja2 template that expands into a Plan node:
 
 ```yaml
-- title: Invoke speckit-specify
+- title: Invoke moonspec-specify
   instructions: |-
-    Run speckit-specify with the canonical feature request:
+    Run moonspec-specify with the canonical feature request:
     {{ inputs.feature_request }}
 
     Selected mode: {{ inputs.orchestration_mode }}.
   skill:
-    id: speckit-specify
+    id: moonspec-specify
     args: {}
     requiredCapabilities: [codex, git]
   annotations:
@@ -192,15 +192,15 @@ Each entry in `steps` is a Jinja2 template that expands into a Plan node:
 Global presets can be seeded from YAML files in `api_service/data/task_step_templates/`:
 
 ```yaml
-slug: speckit-orchestrate
+slug: moonspec-orchestrate
 title: Workflow Orchestrate
 description: Run the full workflow pipeline...
 scope: global
 version: 1.0.0
-tags: [speckit, orchestration]
+tags: [moonspec, orchestration]
 requiredCapabilities: [git]
 annotations:
-  sourceSkill: speckit-orchestrate
+  sourceSkill: moonspec-orchestrate
 inputs:
   - name: feature_request
     label: Feature Request
@@ -323,7 +323,7 @@ The `skill.id` field in step blueprints maps to registered `ToolDefinition` entr
 | Blueprint `skill.id` | Resolution |
 |----------------------|------------|
 | `auto` | Inferred from step context (e.g. instructions analysis). Falls back to a default general-purpose skill. |
-| `speckit-specify` | Exact match to `ToolDefinition.name` in registry. Uses latest version in snapshot. |
+| `moonspec-specify` | Exact match to `ToolDefinition.name` in registry. Uses latest version in snapshot. |
 | `repo.apply_patch@2.1.0` | Pinned to specific version. |
 
 Resolution failures (skill not found, version mismatch) produce expansion errors, not runtime failures.
@@ -375,7 +375,7 @@ POST /api/task-step-templates/{slug}:expand
   "plan": {
     "plan_version": "1.0",
     "metadata": {
-      "title": "speckit-orchestrate v1.0.0",
+      "title": "moonspec-orchestrate v1.0.0",
       "created_at": "2026-03-13T12:00:00Z",
       "registry_snapshot": {
         "digest": "reg:sha256:abc123...",
@@ -388,8 +388,8 @@ POST /api/task-step-templates/{slug}:expand
     },
     "nodes": [
       {
-        "id": "tpl:speckit-orchestrate:1.0.0:01:a1b2c3d4",
-        "tool": { "type": "skill", "name": "speckit-specify", "version": "1.2.0" },
+        "id": "tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4",
+        "tool": { "type": "skill", "name": "moonspec-specify", "version": "1.2.0" },
         "inputs": { "feature_request": "Add caching to the API layer" }
       }
     ],
@@ -397,10 +397,10 @@ POST /api/task-step-templates/{slug}:expand
   },
   "planArtifactRef": "art:sha256:789abc...",
   "appliedPreset": {
-    "slug": "speckit-orchestrate",
+    "slug": "moonspec-orchestrate",
     "version": "1.0.0",
     "inputs": { "feature_request": "Add caching...", "orchestration_mode": "runtime" },
-    "nodeIds": ["tpl:speckit-orchestrate:1.0.0:01:a1b2c3d4"],
+    "nodeIds": ["tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4"],
     "appliedAt": "2026-03-13T12:00:00Z"
   },
   "capabilities": ["git", "codex"],

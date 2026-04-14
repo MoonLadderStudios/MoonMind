@@ -4,7 +4,7 @@
 
 **Status:** Draft (migration-oriented, but core runtime shape is now live)  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-04-04  
+**Last updated:** 2026-04-14  
 **Audience:** backend, infra, dashboard, workflow authors
 
 ---
@@ -43,8 +43,13 @@ Detailed true-agent execution lifecycle rules live in `docs/Temporal/ManagedAndE
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/Temporal/ArtifactPresentationContract.md`
 - `docs/Temporal/ErrorTaxonomy.md`
 - `docs/MoonMindArchitecture.md`
+- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/ManagedAgents/LiveLogs.md`
+- `docs/ManagedAgents/DockerOutOfDocker.md`
+- `docs/Tools/JiraIntegration.md`
 - `docs/Tasks/AgentSkillSystem.md`
 
 ---
@@ -55,20 +60,21 @@ Detailed true-agent execution lifecycle rules live in `docs/Temporal/ManagedAndE
 
 MoonMind currently operates with:
 
-- a FastAPI control plane
-- Postgres-backed app state
-- runtime-specific workers for Codex, Gemini, and Claude
-- a task-oriented product surface
-- Temporal foundation services in Docker Compose
-- Temporal-backed workflow orchestration for core execution paths
-- some migration-oriented compatibility layers and older substrate history
+- a FastAPI control plane and task-oriented Mission Control product surface
+- Postgres-backed app state plus MinIO-backed artifacts and Qdrant-backed retrieval/memory services
+- Temporal foundation services and multiple worker fleets in Docker Compose
+- Temporal-backed orchestration for core execution paths, including `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`, and `MoonMind.OAuthSession`
+- a **Codex-first** task-scoped managed-session plane, with `MoonMind.AgentSession` and session activities carrying live Codex session contracts today
+- a dedicated `agent_runtime` fleet that owns managed runtime supervision and is also the current Docker-capable boundary for managed-session launch and control-plane-launched specialized workload containers
+- artifact-first, session-aware observability for managed runs, with task/session continuity projected from artifacts and bounded workflow metadata rather than container-local state
+- compatibility layers and older substrate history that are still present while Temporal-backed flows continue to absorb more of the runtime surface
 
-This document should not flatten that reality into “fully migrated” or “not migrated.” The honest state is mixed, with the core Temporal architecture already live for major orchestration paths.
+This document should not flatten that reality into “fully migrated” or “not migrated.” The honest state is mixed: Temporal is already the durable orchestration direction, while some compatibility and migration surfaces remain live.
 
 ## 3.2 Target state
 
 **Architecture precept:**  
-*MoonMind execution is Temporal-native. MoonMind adds domain contracts above Temporal—Tool, Plan, Artifact, Agent Skill / Skill Set, Agent Adapter, Provider Profile—but does not introduce a parallel orchestration substrate.*
+*MoonMind execution is Temporal-native. MoonMind adds domain contracts above Temporal—Tool, Plan, Artifact, Agent Skill / Skill Set, Agent Adapter, Provider Profile, Session Policy, Runner Profile—but does not introduce a parallel orchestration substrate.*
 
 In the target state:
 
@@ -76,6 +82,11 @@ In the target state:
 - Temporal **Activities** perform all side effects
 - Temporal **Visibility** is the list/query/count source for Temporal-managed work
 - Temporal **Schedules** are the authoritative recurring-start mechanism
+- managed runtimes run as **task-scoped session containers** launched from runtime-specific images through MoonMind adapters
+- specialized non-agent Docker work stays in a **sibling workload plane**, launched through MoonMind’s control plane as tools or curated workload activities rather than being conflated with session identity
+- artifacts remain **execution-centric**, and task/session/workload views are read models over execution-linked evidence
+- managed-run observability is **artifact-first and session-aware**; live follow is optional and never the durable source of truth
+- secret-bearing downstream mutations execute at **trusted MoonMind-side tool boundaries**, not by handing raw credentials to managed runtime shells
 - MoonMind keeps only domain concepts Temporal does not provide directly:
   - **Tool**
   - **Plan**
@@ -83,6 +94,8 @@ In the target state:
   - **Agent Skill / Skill Set**
   - **Agent Adapter**
   - **Provider Profile**
+  - **Session Policy**
+  - **Runner Profile**
 
 ## 3.3 Non-goals
 
@@ -90,6 +103,8 @@ In the target state:
 - rebuilding product vocabulary entirely around raw Temporal terms
 - exposing Temporal task queues as user-visible queue ordering semantics
 - reintroducing a second MoonMind-specific orchestration layer on top of Temporal
+- collapsing managed session containers, specialized workload containers, and true agent runs into one blurred execution category
+- treating terminal embedding as the primary observability model for managed runs
 
 ---
 
@@ -103,8 +118,18 @@ The following are already locked and should be treated as canonical here:
 - **Default artifact backend:** MinIO / S3-compatible storage
 - **Task queue posture:** routing only, not product semantics
 - **Default queue set:** start small; add subqueues only when isolation or scaling demands it
+- **Agent orchestration scope:** one MoonMind orchestration layer spans managed and external agents
+- **Managed runtime model:** task-scoped session containers launched from independently versioned runtime images
+- **Current concrete managed-session implementation:** Codex-first; Claude Code and Gemini CLI remain managed-runtime targets and future session-plane adopters, not current peer `MoonMind.AgentSession` implementations
 - **Managed runtime separation:** dedicated `agent_runtime` fleet is canonical
+- **Current Docker-capable boundary:** `docker-proxy` plus the `agent_runtime` fleet are the current local launch path for managed sessions and specialized workload containers
+- **Docker workload identity rule:** specialized workload containers are a sibling workload plane, not session identity and not `MoonMind.AgentRun` unless the launched workload is itself a true agent runtime
 - **Root agent execution wrapper:** `MoonMind.AgentRun` is canonical for true agent runs
+- **Root managed-session wrapper:** `MoonMind.AgentSession` is canonical for task-scoped managed sessions
+- **Durable truth rule:** artifacts plus bounded workflow metadata are the operator/audit truth; supervision stores and container-local state are recovery aids or caches only
+- **Observability rule:** managed-run Live Logs are a MoonMind-owned, artifact-first, session-aware projection; `xterm.js` is reserved for OAuth and other interactive terminal auth flows
+- **Secret boundary rule:** secret-bearing integrations such as Jira execute through trusted MoonMind-side tool handlers that resolve SecretRefs just in time; raw secrets do not belong in managed runtime shells, workflow payloads, logs, or artifacts
+- **Runtime compatibility rule:** runtime compatibility is adapter-defined, not base-image-defined
 - **Canonical runtime contract rule:** agent-facing runtime activities return canonical contracts directly; workflow code should not depend on provider-shaped payloads
 
 This document should not reopen those choices.
@@ -159,6 +184,16 @@ MoonMind explicitly uses:
 
 This document must not blur those concepts.
 
+## 5.5 Managed session vs workload terminology
+
+MoonMind explicitly distinguishes:
+
+- **managed session container** for a task-scoped managed runtime session owned by `MoonMind.AgentSession`
+- **workload container** for a specialized non-agent Docker workload launched through the control plane
+- **true agent run** for an execution owned by `MoonMind.AgentRun`
+
+A workload container does not become a managed session merely because Docker is involved, and a managed session does not become the owner of every sibling container launched on behalf of the task.
+
 ---
 
 ## 6. Architecture overview
@@ -167,42 +202,57 @@ This document must not blur those concepts.
 
 MoonMind currently contains:
 
-- API service
-- Postgres
-- Qdrant
-- runtime workers
+- API service and Mission Control surfaces
+- Postgres, MinIO, and Qdrant
 - Temporal services in Compose
-- Temporal worker fleets
+- workflow, artifacts, llm, sandbox, integrations, and agent_runtime worker fleets
+- `docker-proxy` plus shared workspace/auth volumes for the current Docker-capable launch boundary
+- task-scoped managed session containers for managed runtimes, with Codex as the live session-plane implementation
+- external agent integrations and specialized Docker workload execution under MoonMind control
 - compatibility/product surfaces that still present task-oriented views
 
-## 6.2 Target Temporal shape
+## 6.2 Temporal-native target shape
 
 For Temporal-managed flows, the architecture becomes:
 
-1. **MoonMind API**
+1. **MoonMind API / Control Plane**
    - authenticates callers
    - starts workflows
    - sends updates, signals, and cancel requests
    - issues artifact upload/download grants
-   - accepts task/step runtime and skill selectors
-   - exposes task-oriented compatibility surfaces where needed
+   - accepts task/step runtime, provider-profile, runner-profile, and skill selectors
+   - exposes task-oriented compatibility, observability, and session-continuity surfaces where needed
 
 2. **Temporal service**
    - stores workflow state and history
    - provides visibility for list/query/count
-   - owns timers, retries, schedules, child workflow orchestration
+   - owns timers, retries, schedules, and child workflow orchestration
 
-3. **Artifact system**
+3. **Agent Orchestration Layer**
+   - owns `MoonMind.Run`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`, and `MoonMind.OAuthSession`
+   - translates operator intent into workflow-safe control semantics
+   - coordinates provider-profile policy, approvals, recovery, and canonical contract normalization across managed and external agents
+
+4. **Managed Session Plane**
+   - runs task-scoped managed runtime session containers from runtime-specific images
+   - reuses continuity across steps within a task when policy allows
+   - exposes session identity through bounded metadata such as `session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id`
+   - keeps continuity/performance state as cache rather than durable truth
+
+5. **Docker Workload Plane**
+   - launches specialized non-agent workload containers through MoonMind-owned tools or curated activities
+   - uses runner profiles, explicit mounts, network/device policy, and controlled Docker access
+   - returns normal tool results plus artifacts rather than session identity
+
+6. **Artifact + Observability system**
    - stores large inputs/outputs outside workflow history
    - links artifacts to workflow executions
-   - enforces retention, previews, and access control
+   - publishes stdout/stderr/diagnostics, session continuity artifacts, workload outputs, previews, and operator-facing read models
+   - supports MoonMind-owned live follow as a secondary convenience surface
 
-4. **Temporal workers**
-   - workflow workers run deterministic orchestration code
-   - activity workers execute side effects under capability and secret boundaries
-
-5. **Compatibility adapters**
+7. **Compatibility adapters and read models**
    - bridge task-oriented UI/API contracts onto Temporal-backed workflows where needed
+   - project task/session/workload views from workflow state, bounded metadata, and artifacts without becoming a second durable orchestration substrate
 
 ## 6.3 Domain concept boundaries
 
@@ -216,6 +266,11 @@ To prevent ambiguity across the architecture:
 - **ResolvedSkillSet** = immutable artifact-backed run/step context
 - **Agent Adapter** = provider/runtime translation layer
 - **Provider Profile** = managed-runtime credential/concurrency/policy binding
+- **Session Policy** = reuse/reset/isolate/recreate hint for managed session behavior
+- **Managed Session** = task-scoped continuity envelope owned by `MoonMind.AgentSession`
+- **Session Continuity** = artifact-backed summary/checkpoint/control/reset evidence for a managed session
+- **Runner Profile** = curated policy definition for an allowed workload-container shape
+- **Workload Container** = specialized non-agent container launched through the control plane against the task workspace
 
 ---
 
@@ -235,37 +290,49 @@ The current Compose shape includes:
 - `temporal-worker-sandbox`
 - `temporal-worker-agent-runtime`
 - `temporal-worker-integrations`
+- `docker-proxy`
 - `postgres`
 - `minio`
+- `qdrant`
 
 The important architectural rule is not the exact container table but the separation of concerns:
 
 - Temporal server owns durable orchestration substrate
-- worker fleets map to capability/security boundaries
+- worker fleets map to capability and security boundaries
 - artifact storage is separate from workflow history
-- managed runtime execution has its own dedicated fleet
+- `docker-proxy` is the controlled Docker daemon boundary
+- the `agent_runtime` fleet is the current Docker-capable launch boundary for managed sessions and specialized workload containers
+- runtime images and workload containers stay separate from generic MoonMind worker images
 
 ### 7.1 Worker fleet summary
 
 | Fleet | Queue | Primary role |
 | --- | --- | --- |
-| `workflow` | `mm.workflow` | deterministic orchestration code |
-| `artifacts` | `mm.activity.artifacts` | artifact lifecycle and support activities |
-| `llm` | `mm.activity.llm` | planning, validation, review, other LLM activity work |
-| `sandbox` | `mm.activity.sandbox` | repo operations, shell/test execution |
-| `agent_runtime` | `mm.activity.agent_runtime` | managed runtime launch/status/fetch/cancel/publish |
-| `integrations` | `mm.activity.integrations` | external providers, repo publish/merge, provider-specific helpers |
+| `workflow` | `mm.workflow` | deterministic orchestration code plus narrow helper activities |
+| `artifacts` | `mm.activity.artifacts` | artifact lifecycle plus provider-profile and OAuth support work |
+| `llm` | `mm.activity.llm` | planning, validation, review, other generic LLM activity work |
+| `sandbox` | `mm.activity.sandbox` | repo checkout, patching, shell/test commands, and other non-Docker process execution |
+| `agent_runtime` | `mm.activity.agent_runtime` | managed session launch/supervision/status/control/result, session observability publication, and the current Docker-backed specialized workload launch path |
+| `integrations` | `mm.activity.integrations` | external providers, repo publish/merge, callbacks/webhooks, and other trusted non-runtime integration helpers |
 
-### 7.2 Managed runtime separation
+### 7.2 Managed runtime separation and current Docker placement
 
-The `agent_runtime` fleet is not aspirational anymore. It is part of the canonical architecture.
+The `agent_runtime` fleet is not aspirational anymore.
 
-That fleet exists because managed runtimes need different privileges and operational behavior than generic sandbox or integration work, including:
+It is part of the canonical architecture. In the current local Compose shape, that fleet is also attached to `docker-proxy` and the shared workspace/auth volumes. That makes it the current launch boundary for:
 
-- auth volume mounts
-- managed process/runtime supervision
-- provider-profile slot/cooldown coordination support
-- distinct result/status/cancel lifecycle behavior
+- managed session containers
+- current Docker-backed specialized workload containers
+
+This does **not** mean every Docker-backed workload becomes a managed session. Identity remains separate.
+
+### 7.3 Session container vs workload container
+
+A managed session container owns `session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id`.
+
+A workload container may carry optional association metadata such as `session_id`, `session_epoch`, or `source_turn_id`, but it remains a step-scoped workload execution whose primary outputs are tool results and artifacts.
+
+That distinction must stay explicit in workflow code, APIs, and UI surfaces.
 
 ---
 
@@ -277,6 +344,7 @@ Important direction:
 
 - new durable orchestration belongs in Temporal
 - compatibility layers may continue temporarily
+- task, session, workload, and observability surfaces should be projections over workflow state, bounded metadata, and artifacts rather than alternative durable substrates
 - legacy substrate retirement should be driven by parity and operational confidence, not by design intent alone
 
 Phase-style rollout notes remain appropriate for the tracking documents, but this document should reflect the fact that the core Temporal architecture is already the active direction and not just a paper target.
@@ -291,9 +359,14 @@ Phase-style rollout notes remain appropriate for the tracking documents, but thi
 | Plan | Plan artifact plus workflow orchestration logic | Plan remains a MoonMind domain concept |
 | Step | Plan node executed as activity call or child workflow | Isolation boundary decides which |
 | True agent step | `MoonMind.AgentRun` child workflow | Canonical true-agent lifecycle wrapper |
+| Managed session | `MoonMind.AgentSession` child workflow plus bounded session snapshot metadata | Task-scoped continuity envelope |
+| Session continuity | Execution-linked artifacts such as summary/checkpoint/control/reset refs | Not container-local truth |
+| Workload container | Tool/workload activity invocation plus runner profile and artifacts | Sibling plane, not session identity |
 | repo/deployment/local agent skills | `ResolvedSkillSet` artifact-backed execution context | Resolved before runtime use |
 | provider profile | workflow-coordinated runtime credential/concurrency contract | Important for managed runtimes |
+| runner profile | workload launch policy consumed by activities | Important for Docker-backed specialized workloads |
 | approval policy | signal/update + workflow policy evaluation | Policy remains a MoonMind concern |
+| live logs timeline | projection over observability events and artifacts | Not execution truth |
 | runtime selection | activity routing + adapter/provider selection | Not a root workflow taxonomy |
 | degraded-mode state snapshot | artifact-backed and reconciliation-friendly | Not execution truth |
 
@@ -308,11 +381,12 @@ A strict boundary exists between adapters and workflows:
 
 Adapters:
 
-- normalize provider/runtime state into canonical runtime contracts
-- handle launch/start/status/fetch/cancel translation
-- expose capability descriptors
-- materialize resolved skill snapshots for target runtimes
+- normalize provider/runtime state into canonical runtime or session contracts
+- handle launch/start/status/fetch/cancel/control translation
+- expose capability descriptors and compatibility facts
+- materialize resolved skill snapshots and runtime delivery bundles
 - preserve runtime-independent resolution semantics
+- translate provider-native observability or continuity signals into MoonMind-owned artifacts and events
 
 ### Workflows
 
@@ -321,11 +395,22 @@ Workflows:
 - own phase progression
 - own waiting and polling strategy
 - own orchestration-level retries and cooldown loops
-- own HITL transitions
+- own HITL transitions and control-intent routing
 - own durable lifecycle state
-- carry refs to resolved skill snapshots and artifacts
+- carry refs to resolved skill snapshots, observability artifacts, and session/workload evidence
+- distinguish true agent runs, managed sessions, and sibling workload invocations
 
-The architecture should not let workflow code become a provider payload repair layer.
+The architecture should not let workflow code become a provider payload repair layer or a container-lifecycle sidecar.
+
+## 9.2 Truth surfaces and caches
+
+MoonMind intentionally keeps three truth surfaces distinct:
+
+- **operator/audit truth** = artifacts plus bounded workflow metadata
+- **operational recovery index** = supervision records such as the current ManagedSessionStore, used for recovery/reconciliation but not operator truth
+- **disposable cache** = container-local runtime state, thread stores, scrollback, scratch, and other local session/workload state
+
+Live streaming, session containers, and workload containers may improve continuity and performance, but none of them replace artifact-backed execution truth.
 
 ---
 
@@ -352,15 +437,19 @@ Current core catalog includes:
 - external integrations
 - managed runtime execution
 - provider-profile-aware child agent runs
+- task-scoped managed sessions
+- control-plane-launched specialized workload containers through tool/workload activities
 - long-lived waiting and callback/poll handling
 
-`MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution.
+`MoonMind.AgentRun` is the durable lifecycle wrapper for one true agent execution step. For managed runtimes it may attach to or request a `MoonMind.AgentSession`; for external agents it owns delegated execution lifecycle directly.
 
-`MoonMind.AgentSession` is the durable task-scoped managed-session wrapper, currently backed by Codex session contracts. It is separate from `MoonMind.AgentRun` so a session can span multiple step-scoped agent runs without making container-local state the source of truth.
+`MoonMind.AgentSession` is the durable task-scoped managed-session wrapper. It owns one managed runtime session envelope for a task/runtime/profile combination, including launch, reuse, clear/reset, epoch changes, bounded session snapshot state, and final teardown. The current concrete implementation is Codex-first: one task-scoped Docker session container per task, one active Codex thread per session epoch, and no cross-task session reuse.
 
-`MoonMind.ManagedSessionReconcile` is a bounded support workflow that invokes managed-session reconciliation activities; it is not a product-facing task workflow.
+`MoonMind.ManagedSessionReconcile` is a bounded support workflow that invokes reconciliation activities against supervision records and container state; it is not a product-facing task workflow.
 
-`MoonMind.ProviderProfileManager` is the durable coordinator for provider-profile slots and cooldowns.
+`MoonMind.ProviderProfileManager` is the durable coordinator for provider-profile slots, leases, and cooldowns.
+
+`MoonMind.OAuthSession` owns interactive auth/browser flows. It is also the sanctioned place where PTY/xterm-style interaction remains appropriate.
 
 ## 10.2 What not to do
 
@@ -371,25 +460,32 @@ Do not create separate root workflow families just for:
 - provider brand
 - task queue brand
 - managed vs external root taxonomy
+- specialized workload containers that are better modeled as tool/workload invocations
+- session clear/reset events that are better modeled as lifecycle transitions within `MoonMind.AgentSession`
 
 Those are routing and execution concerns, not root orchestration categories.
 
-## 10.3 Agent execution model
+## 10.3 Execution classes
 
-MoonMind sanctions two broad agent execution modes:
+MoonMind sanctions three execution classes:
 
 1. **Workflow-native agentic loop**  
    The reasoning loop lives in workflow code and each model/tool interaction is an activity.
 
 2. **Delegated true agent runtime**  
-   The agent runs outside the workflow and `MoonMind.AgentRun` owns the durable lifecycle.
+   The agent runs outside the workflow and `MoonMind.AgentRun` owns the durable lifecycle. Managed and external agents share the same high-level orchestration model.
+
+3. **Specialized non-agent workload execution**  
+   A bounded Docker-backed or otherwise specialized workload runs as a tool/workload activity and returns a normal tool result plus artifacts. It is not a `MoonMind.AgentRun` unless the launched workload is itself a true agent runtime.
 
 For delegated true agent runs, canonical rules are:
 
 - `MoonMind.Run` dispatches one agent step to one `MoonMind.AgentRun`
-- managed and external agents share the same high-level lifecycle
+- managed runtimes may attach to an existing `MoonMind.AgentSession` or request a new one according to session policy
+- the current task-scoped managed-session plane is Codex-first, while Claude Code and Gemini CLI remain future adopters of the same pattern where adapters support it
+- `clear_session` creates a new continuity epoch and new runtime thread inside the same managed session rather than creating a new root workflow family
 - agent-facing runtime activities return canonical contracts directly
-- large execution data stays in artifacts
+- large execution data, observability outputs, and continuity evidence stay in artifacts and bounded metadata
 
 ---
 
@@ -403,9 +499,10 @@ All side effects belong in **Activities**:
 - filesystem and repo operations
 - shell/sandbox execution
 - artifact I/O
-- GitHub and other integrations
+- GitHub, Jira, and other integrations
 - callback verification and external polling
-- managed runtime supervision/status/result work
+- managed runtime launch, supervision, status, control, result, reconciliation, and observability publication
+- control-plane launch and cleanup of specialized workload containers
 - provider-profile support operations
 - OAuth/session support operations
 - future agent skill resolution/materialization work
@@ -425,6 +522,8 @@ Start with a small queue topology:
 
 Provider-specific or heavier subqueues remain deferred unless isolation or scaling requires them.
 
+Specialized Docker workloads currently use the existing Docker-capable `agent_runtime` boundary in local Compose. A separate workload fleet is a future isolation option, not a prerequisite for the architectural split between session identity and workload identity.
+
 ## 11.3 Routing model
 
 Routing is by capability and security boundary, not by legacy nouns.
@@ -432,16 +531,31 @@ Routing is by capability and security boundary, not by legacy nouns.
 Typical routing examples:
 
 - planning/validation/review → `llm`
-- shell and repo commands → `sandbox`
-- external provider APIs → `integrations`
-- artifact lifecycle and support work → `artifacts`
-- managed runtime launch/status/fetch/cancel/publish → `agent_runtime`
+- repo checkout, patching, shell commands, and non-Docker process execution → `sandbox`
+- artifact lifecycle, provider-profile support, and OAuth session support → `artifacts`
+- external provider APIs, repo publish/merge, and other trusted non-runtime integrations → `integrations`
+- managed runtime launch/status/fetch/cancel/session control, session observability publication, and current Docker-backed specialized workload launch → `agent_runtime`
+
+The default executable-tool path remains registry-driven. The tool definition or live catalog chooses whether a capability executes through `mm.skill.execute`, a curated activity family, or a true agent-runtime contract.
 
 ### Workflow helper exception
 
 The workflow fleet may host a narrow helper activity exception, such as adapter metadata resolution, when needed to preserve deterministic orchestration without growing unnecessary routing indirection.
 
 That exception should remain small and intentional.
+
+## 11.4 Trusted tool boundary
+
+Secret-bearing downstream mutations should occur at a trusted MoonMind-side activity or tool-handler boundary.
+
+Examples include Jira-style SaaS mutations where the agent needs the capability to create or transition issues but should not receive the raw credential.
+
+Rules:
+
+- the managed runtime receives a tool capability, not the raw secret
+- SecretRefs are resolved just in time inside trusted worker/backend code
+- raw credentials must not be copied into workflow payloads, artifacts, logs, diagnostics, or general-purpose agent shells
+- strongly typed tool actions are preferred over generic “arbitrary HTTP” mutation surfaces
 
 ---
 
@@ -456,6 +570,8 @@ Use:
 - `ArtifactRef` values for large inputs/outputs
 - compact JSON for workflow parameters and summaries
 - canonical runtime contracts for agent execution boundaries
+- bounded session snapshot metadata for operator orientation
+- compact workload metadata for runner/profile/status context
 
 Do **not** put these into workflow history:
 
@@ -471,6 +587,8 @@ Do **not** put these into workflow history:
 - prompt indexes
 - raw provider snapshots
 - long managed runtime logs
+- workload stdout/stderr blobs
+- raw secret material or serialized SecretRef resolutions
 
 ## 12.2 Artifact system baseline
 
@@ -479,14 +597,32 @@ The default artifact path for Temporal-managed work is:
 - MinIO / S3-compatible storage for bytes
 - Postgres metadata/index for artifact records and execution linkage
 
-This is also the correct path for:
+Artifacts remain **execution-centric** and are the authoritative durable evidence for:
 
 - resolved skill snapshots
 - managed runtime diagnostics
 - provider result snapshots
+- stdout/stderr/merged log artifacts
+- session continuity artifacts such as `session.summary`, `session.checkpoint`, `session.control_event`, and `session.reset_boundary`
 - terminal execution summaries when they are too large for workflow payloads
+- specialized workload outputs, logs, reports, packages, and diagnostics
 
-## 12.3 Manifest processing best practice
+Task, step, session, and workload views are projections over that execution-linked evidence rather than a second durable artifact identity model.
+
+## 12.3 Managed-run observability outputs
+
+Every managed run should publish durable observability outputs, including:
+
+- `stdout_artifact_ref`
+- `stderr_artifact_ref`
+- `diagnostics_ref`
+- optional `merged_log_artifact_ref`
+- bounded session snapshot metadata when a managed session plane is active
+- latest continuity refs for session summary, checkpoint, control event, and reset boundary when available
+
+Live follow, shared spools, and SSE-like delivery are optional convenience surfaces. They are never the durable source of truth.
+
+## 12.4 Manifest processing best practice
 
 Manifest-heavy flows should exchange refs, not blobs:
 
@@ -504,11 +640,15 @@ That keeps workflow state small and retry behavior safer.
 
 ## 13.1 Current product reality
 
-MoonMind’s product surface is still task-oriented. Near-term experiences may unify:
+MoonMind’s product surface is still task-oriented.
+
+Near-term experiences may unify:
 
 - task-style product rows
 - Temporal-backed workflow executions
-- compatibility detail surfaces
+- step-level run evidence surfaces
+- Execution Artifacts and Session Continuity projections
+- managed-run observability panels backed by MoonMind APIs and artifacts
 
 ## 13.2 Target Temporal model
 
@@ -528,31 +668,57 @@ Memo should carry compact presentation metadata such as:
 - summary
 - selected safe refs or compact metadata
 
-Search attributes should remain bounded. Detail surfaces should use memo, queries, and artifacts rather than overloading visibility.
+Search attributes should remain bounded. Detail surfaces should use memo, queries, artifacts, and observability APIs rather than overloading visibility.
 
 Operator-facing step progress follows the same split:
 
 - the plan artifact owns planned structure
 - workflow query/state owns the live step ledger
 - artifacts and `/api/task-runs/*` own rich evidence
+- session continuity surfaces own artifact-backed continuity drill-down
 - logs and heartbeats must not be the primary transport for step truth
 
-## 13.3 Query vs visibility split
+## 13.3 Query, observability, and visibility split
 
 Maintain a strict separation:
 
 - **Visibility + projections** → lists, counts, filtering, history, dashboards
 - **Queries** → live execution detail, current progress, step ledger, awaiting reason, active step, intervention point
+- **Observability APIs** → stdout/stderr/diagnostics, Live Logs timeline, bounded session snapshot, and continuity refs for a concrete run or step
 
-## 13.4 Read models are never execution truth
+Live Logs is a projection over durable observability events and artifacts. It is not execution truth.
+
+## 13.4 Managed-run observability surfaces
+
+The task detail experience should present managed-run observability as MoonMind-owned read surfaces such as:
+
+- Live Logs
+- Stdout
+- Stderr
+- Diagnostics
+- Artifacts
+- optional Session Continuity drill-down
+
+Rules:
+
+- managed-run logs use a MoonMind-native viewer, not an embedded terminal
+- `xterm.js` remains appropriate for OAuth and other interactive terminal auth flows only
+- the active session snapshot (`session_id`, `session_epoch`, `container_id`, `thread_id`, `active_turn_id`) is orientation metadata, not durable truth
+- epoch/reset boundaries should be explicit UI-visible milestones rather than hidden in raw text
+- live streaming is optional and secondary; ended runs should remain fully readable from artifacts and durable observability history
+
+## 13.5 Read models are never execution truth
 
 Execution truth remains:
 
 - workflow state and history
 - child workflow state
 - artifacts
+- bounded workflow-owned session snapshot metadata
 
-Read models and projections exist for UI optimization only. Workflows must not depend on them to decide what to do next.
+Read models, live streams, and projections exist for UI optimization and operator clarity only.
+
+Workflows must not depend on them to decide what to do next.
 
 ---
 
@@ -566,6 +732,7 @@ That includes:
 
 - `/tasks/*` style list/detail flows
 - submission APIs that start Temporal-backed workflows under the hood
+- `/api/task-runs/*` observability, artifact, and continuity-detail surfaces for concrete step/run evidence
 
 ## 14.2 Temporal-backed operations
 
@@ -573,9 +740,11 @@ When a task is backed by Temporal, public actions map to Temporal-native control
 
 - create/start → start workflow execution
 - edit → update
-- approval or external event → signal or update depending on semantics
+- approval, clear/reset, operator message, or other external control → signal or update depending on semantics
 - cancel → workflow cancellation
 - rerun → explicit new execution or continue-as-new depending on the intended behavior
+
+Read-only detail surfaces for logs, diagnostics, continuity, and artifacts remain projections over workflow state, bounded metadata, and artifact-backed observability rather than separate execution substrates.
 
 ## 14.3 Internal vs external API
 
@@ -597,6 +766,7 @@ Use Updates when the caller needs request/response semantics and acceptance deci
 - input changes
 - title updates
 - rerun requests
+- synchronous session-control requests such as clear/reset when the caller needs immediate acceptance semantics
 
 ## 15.2 Signals
 
@@ -605,12 +775,15 @@ Use Signals for asynchronous events such as:
 - approval arrival
 - GitHub/Jules/provider callbacks
 - pause/resume requests
+- operator messages or external control intents that do not require immediate request/response semantics
 - external completion notifications
 - provider-profile slot assignment/release coordination
 
 ## 15.3 Approval policy
 
-Approval remains a MoonMind policy concern, not a Temporal-native concept. Temporal supplies transport and durability; MoonMind workflows enforce policy semantics.
+Approval remains a MoonMind policy concern, not a Temporal-native concept.
+
+Temporal supplies transport and durability; MoonMind workflows enforce policy semantics.
 
 ---
 
@@ -639,16 +812,26 @@ The old scheduler substrate is no longer the authoritative design direction for 
 - retries must not silently drift to “latest” skill versions
 - true agent-runtime activities must return canonical runtime contracts directly
 - provider rate limits and slot contention may require orchestration-aware retries, not just ordinary activity-level retries
+- managed-session reuse and `clear_session` must publish explicit continuity artifacts and epoch boundaries; operators must not infer resets from missing local state
+- durable artifact publication and bounded session/workload metadata must succeed even if live follow or stream publication fails
+- live observability transport must cross the producer/API process boundary; process-local publishers are optimization only
+- operational supervision stores (for example current ManagedSessionStore-style records) may aid recovery and reconciliation but are not operator/audit truth
+- specialized workload containers must be labeled, timeout-bounded, and cleanly cancellable or sweepable so orphaned containers do not become hidden durable state
 
 ## 17.2 Security and isolation
 
 - Temporal is self-hosted and private-network oriented
 - worker fleets are segmented by capability and secret boundary
-- sandbox execution is isolated separately from LLM and integrations work
-- managed runtime execution has its own stronger boundary
+- sandbox execution is isolated separately from LLM, integrations, and managed runtime work
+- managed runtime execution has its own stronger boundary and uses runtime-specific images rather than embedding runtimes into generic workers
+- Docker access is mediated through a controlled boundary such as `docker-proxy`; managed session containers do not receive unrestricted raw Docker authority by default
+- specialized workload containers use curated runner profiles with explicit image, mount, env, network, resource, and device policy
+- workload containers do not automatically inherit managed-runtime auth volumes or broad worker/session environments
 - artifact access is mediated through MoonMind authorization and short-lived grants
 - repo and local agent-skill sources are potentially untrusted inputs
-- materialized skill snapshots and runtime outputs must avoid secret leakage through logs or dumps
+- raw credentials and SecretRefs must not appear in workflow payloads, profile rows, artifacts, diagnostics, or general logs
+- trusted SaaS mutations such as Jira issue operations should execute in MoonMind-owned handlers that resolve secrets just in time and return sanitized results to the agent
+- materialized skill snapshots, runtime outputs, and observability surfaces must avoid secret leakage through logs, dumps, or copied workspace files
 
 ---
 
@@ -659,7 +842,7 @@ Do not remove compatibility layers or older substrate dependencies merely becaus
 Retirement for any flow should require:
 
 1. Temporal implementation is production-ready
-2. observability, retries, artifacts, and approvals have parity
+2. observability, retries, artifacts, approvals, and session-continuity/read surfaces have parity
 3. UI/API compatibility is preserved or intentionally retired
 4. degraded-mode and rollback behavior are verified
 5. migration of in-flight/historical behavior is intentionally handled
@@ -669,27 +852,33 @@ Retirement for any flow should require:
 ## 19. Open decisions to lock next
 
 1. Which remaining non-Temporal-facing flows migrate next
-2. Whether task list/detail remains a unified multi-source surface through the whole transition
-3. Which approval paths should use Updates vs Signals
-4. When child workflows are preferred over inline orchestration for larger fan-out cases
-5. When, if ever, provider-specific LLM task queues become operationally necessary
-6. When, if ever, a separate heavy-duty skill-resolution fleet is justified beyond existing capability fleets
+2. When a second managed-session runtime becomes real and a neutral `ManagedSession*` contract should be extracted above Codex-specific session contracts
+3. Whether task list/detail remains a unified multi-source surface through the whole transition
+4. Whether specialized Docker workloads eventually justify a dedicated workload fleet separate from the current `agent_runtime` Docker-capable boundary
+5. Which approval and control actions should use Updates vs Signals, especially for operator messages, clear/reset, and other session controls
+6. What long-term durable store should back structured observability history in addition to current live transport/spool choices
+7. When, if ever, provider-specific LLM task queues or a separate heavy-duty skill-resolution fleet become operationally necessary
 
 ---
 
 ## 20. Summary
 
-MoonMind is not pretending migration is either unfinished everywhere or complete everywhere. The correct architecture stance is:
+MoonMind is not pretending migration is either unfinished everywhere or complete everywhere.
+
+The correct architecture stance is:
 
 - Temporal is the durable orchestration substrate
 - `MoonMind.Run` is the general root execution workflow
 - `MoonMind.AgentRun` is the durable lifecycle wrapper for true agent runs
-- `MoonMind.AgentSession` is the task-scoped managed-session wrapper, with Codex as the current concrete session implementation
+- `MoonMind.AgentSession` is the task-scoped managed-session wrapper, with Codex as the current concrete implementation and one active runtime thread per session epoch
 - `MoonMind.ManagedSessionReconcile` is the support workflow for managed-session reconciliation
 - `MoonMind.ProviderProfileManager` is the durable coordinator for managed-runtime provider-profile slots and cooldowns
-- activity fleets are split by capability and secret boundary
-- the dedicated `agent_runtime` fleet is canonical
-- artifacts keep large data out of workflow history
+- managed runtimes run in task-scoped session containers launched from runtime-specific images; compatibility is defined by adapters and canonical control/observability/artifact contracts
+- specialized Docker workloads are a sibling workload plane launched through MoonMind control-plane tools, not disguised managed sessions
+- the dedicated `agent_runtime` fleet is canonical and is the current Docker-capable boundary for managed sessions and specialized workloads in local Compose
+- artifacts and bounded workflow metadata are the durable operator/audit truth; containers, live streams, and supervision stores are caches or recovery aids
+- managed-run observability is session-aware, artifact-first, and MoonMind-owned; terminal embedding is reserved for OAuth and other interactive auth flows
+- secret-bearing integrations such as Jira belong at trusted MoonMind-side tool boundaries that resolve SecretRefs just in time rather than inside managed runtime shells
 - task-oriented product surfaces may remain during migration
 - workflow code should not depend on provider-shaped runtime payloads; canonical runtime contracts belong at the adapter/activity boundary
 
