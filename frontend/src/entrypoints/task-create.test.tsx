@@ -1399,6 +1399,23 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("reconstructs primary skill from object-shaped task skill selectors", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:skill-selectors",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Resolve the selected PR.",
+          skills: {
+            include: [{ name: "pr-resolver" }],
+          },
+        },
+      },
+    });
+
+    expect(draft.primarySkill).toBe("pr-resolver");
+  });
+
   it("includes step-level instructions when reconstructing a draft", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:step-instructions",
@@ -1926,7 +1943,9 @@ describe("Task Create Entrypoint", () => {
           skill: {
             id: "speckit-implement",
           },
-          skills: ["speckit-implement"],
+          skills: {
+            include: [{ name: "speckit-implement" }],
+          },
           runtime: {
             mode: "gemini_cli",
             model: "gemini-2.5-pro",
@@ -2406,6 +2425,54 @@ describe("Task Create Entrypoint", () => {
     expect(request.payload.task.publish).toMatchObject({
       mode: "none",
     });
+  });
+
+  it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "pr-resolver" },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Resolve the current branch PR." },
+      },
+    );
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), {
+      target: { value: "deferred_minutes" },
+    });
+    fireEvent.change(screen.getByLabelText("Minutes from now"), {
+      target: { value: "5" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.skills).toEqual({
+      include: [{ name: "pr-resolver" }],
+    });
+    expect(request.payload.schedule.mode).toBe("once");
+    expect(
+      new Date(request.payload.schedule.scheduledFor).getTime(),
+    ).toBeGreaterThan(Date.now());
   });
 
   it("renders the restored legacy create-task controls", async () => {
@@ -2899,7 +2966,9 @@ describe("Task Create Entrypoint", () => {
     // Address: Copilot r3034495957 — assert skills and derived title in preset-submit.
     // The first template step has an explicit skill (speckit-clarify), so effectiveSkillId
     // stays as that explicit skill rather than the template slug.
-    expect(request.payload.task.skills).toEqual(['speckit-clarify']);
+    expect(request.payload.task.skills).toEqual({
+      include: [{ name: "speckit-clarify" }],
+    });
     expect(request.payload.task.title).toBe('Task Create');
     expect(request.payload.task.tool.name).toBe('speckit-clarify');
     expect(request.payload.task.skill.id).toBe('speckit-clarify');

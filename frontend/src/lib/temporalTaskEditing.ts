@@ -204,6 +204,21 @@ function nullableStringValue(...values: unknown[]): string | null {
   return stringValue(...values) || null;
 }
 
+function skillSelectorNames(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => stringValue(item)).filter(Boolean);
+  }
+
+  const selectors = objectValue(value);
+  const include = selectors.include;
+  if (!Array.isArray(include)) {
+    return [];
+  }
+  return include
+    .map((entry) => stringValue(objectValue(entry).name))
+    .filter(Boolean);
+}
+
 function normalizeAppliedTemplates(
   value: unknown,
 ): TemporalSubmissionDraft['appliedTemplates'] {
@@ -249,10 +264,11 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactSkill = objectValue(artifactTask.skill);
 
   const artifactRepository = stringValue(artifactParams.repository);
-  const taskSkills = Array.isArray(task.skills) ? task.skills : execution.taskSkills;
-  const artifactTaskSkills = Array.isArray(artifactTask.skills)
-    ? artifactTask.skills
+  const taskSkills = skillSelectorNames(task.skills);
+  const executionTaskSkills = Array.isArray(execution.taskSkills)
+    ? execution.taskSkills
     : [];
+  const artifactTaskSkills = skillSelectorNames(artifactTask.skills);
 
   const draft: TemporalSubmissionDraft = {
     runtime: nullableStringValue(
@@ -320,6 +336,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       skill.id,
       skill.name,
       taskSkills?.[0],
+      executionTaskSkills[0],
       artifactTool.name,
       artifactSkill.id,
       artifactSkill.name,

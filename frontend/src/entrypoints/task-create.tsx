@@ -3395,8 +3395,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return primarySkillId;
     })();
 
-    // Only include skills array when we have an explicit skill or a template slug
-    const shouldIncludeSkills = hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0;
+    // Only include task-level agent skill selectors when we have an explicit skill or a template slug.
+    const taskSkillSelectors =
+      hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0
+        ? { include: [{ name: effectiveSkillId }] }
+        : undefined;
 
     // Address: Gemini r3034477068 — keep tool/skill objects in sync with effectiveSkillId
     const resolvedTool = effectiveSkillId !== primarySkillId
@@ -3410,7 +3413,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       instructions: objectiveInstructions,
       tool: resolvedTool,
       skill: resolvedSkill,
-      ...(shouldIncludeSkills ? { skills: [effectiveSkillId] } : {}),
+      ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
       ...(explicitTitle ? { title: explicitTitle } : {}),
       proposeTasks,
