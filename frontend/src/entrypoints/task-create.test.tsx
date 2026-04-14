@@ -4111,6 +4111,45 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Jira: ENG-202");
   });
 
+  it("reopens Jira from an imported field with the prior issue selected", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Replace target text" }),
+    ).toBeTruthy();
+    expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe(
+      "ENG",
+    );
+    expect((screen.getByLabelText("Board") as HTMLSelectElement).value).toBe(
+      "42",
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Doing 1" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
   it("clears Jira provenance chips when imported text is manually edited", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
