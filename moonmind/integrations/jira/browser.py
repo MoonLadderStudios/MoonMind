@@ -250,7 +250,13 @@ class JiraBrowserService:
                         type(payload).__name__,
                     )
                     continue
-                projects.append(self._normalize_project(payload, fallback_key=project_key))
+                projects.append(
+                    self._normalize_project(
+                        payload,
+                        fallback_key=project_key,
+                        policy_project_key=project_key,
+                    )
+                )
             return JiraListResponse[JiraProject](items=projects)
 
         payload = await self._request_json(
@@ -608,8 +614,11 @@ class JiraBrowserService:
         payload: Mapping[str, Any],
         *,
         fallback_key: str = "",
+        policy_project_key: str = "",
     ) -> JiraProject:
-        project_key = str(payload.get("key") or fallback_key).strip().upper()
+        project_key = str(
+            policy_project_key or payload.get("key") or fallback_key
+        ).strip().upper()
         name = str(payload.get("name") or project_key).strip()
         return JiraProject(
             projectKey=project_key,

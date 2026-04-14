@@ -203,6 +203,25 @@ async def test_list_projects_fetches_only_allowed_projects() -> None:
     assert [call["path"] for call in service.calls] == ["/project/ENG", "/project/OPS"]
 
 
+async def test_list_projects_preserves_allowed_project_key_for_followup_requests() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        responses=[
+            {"id": "10000", "key": "ENGINEERING", "name": "Engineering"},
+            {"values": [{"id": 42, "name": "Delivery", "type": "kanban"}]},
+        ],
+    )
+
+    projects = await service.list_projects()
+    boards = await service.list_boards(projects.items[0].project_key)
+
+    assert [item.project_key for item in projects.items] == ["ENG"]
+    assert boards.project_key == "ENG"
+    assert service.calls[0]["path"] == "/project/ENG"
+    assert service.calls[1]["path"] == "agile:/board"
+    assert service.calls[1]["params"]["projectKeyOrId"] == "ENG"
+
+
 async def test_list_projects_skips_failed_allowed_project_fetches() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG,OPS"),
