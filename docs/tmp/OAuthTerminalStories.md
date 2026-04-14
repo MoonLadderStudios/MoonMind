@@ -57,8 +57,8 @@ storage with task execution state.
 Scope:
 - Define and enforce the Codex OAuth Provider Profile shape for
   `credential_source = oauth_volume` and `runtime_materialization_mode = oauth_home`.
-- Preserve `volume_ref`, `volume_mount_path`, `home_path_overrides`, and slot
-  policy fields during profile registration/update.
+- Preserve `volume_ref`, `volume_mount_path`, and slot policy fields during
+  profile registration/update.
 - Keep raw credential file contents out of API responses, workflow payloads,
   logs, and artifacts.
 

@@ -81,13 +81,12 @@ credential_source: oauth_volume
 runtime_materialization_mode: oauth_home
 volume_ref: codex_auth_volume
 volume_mount_path: /home/app/.codex
-home_path_overrides:
-  CODEX_HOME: /home/app/.codex
 ```
 
-That shape describes the credential enrollment and verification home. The
-managed-session launcher still maps it through the managed-session volume rules
-below instead of blindly making the auth volume the session `CODEX_HOME`.
+That shape describes the credential enrollment and verification home only. It
+does not set `CODEX_HOME` for managed sessions. The managed-session launcher
+maps the durable auth volume through the managed-session volume rules below and
+keeps the live session `CODEX_HOME` under the task workspace.
 
 ### 3.2 Shared task workspace volume
 
