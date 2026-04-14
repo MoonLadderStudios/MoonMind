@@ -143,6 +143,41 @@ def test_resolve_run_skill_selection_falls_back_to_legacy_root(skills_mirror):
     assert resolved.skills[0].source_uri == (legacy / "legacy").resolve().as_uri()
 
 
+def test_resolve_run_skill_selection_resolves_jira_issue_updater_repo_skill(
+    monkeypatch,
+):
+    repo_root = Path(__file__).resolve().parents[3]
+    active_skill = repo_root / ".agents" / "skills" / "jira-issue-updater"
+    retired_skill = repo_root / ".agents" / "skills" / ("jira-" + "task-update")
+
+    assert (active_skill / "SKILL.md").is_file()
+    assert not retired_skill.exists()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.repo_root",
+        str(repo_root),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
+        ".agents/skills/local",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
+        ".agents/skills",
+        raising=False,
+    )
+
+    resolved = resolve_run_skill_selection(
+        run_id="run-jira-updater",
+        context={"skill_selection": ["jira-issue-updater:local"]},
+    )
+
+    assert resolved.skills[0].skill_name == "jira-issue-updater"
+    assert resolved.skills[0].source_uri == active_skill.resolve().as_uri()
+
+
 def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
     empty_root = tmp_path / "empty"
     empty_root.mkdir(parents=True)
@@ -362,7 +397,4 @@ def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     monkeypatch.setattr(resolver_module, "__file__", "/x.py", raising=False)
 
     assert resolver_module._project_root() == Path("/")
-
-
-
 
