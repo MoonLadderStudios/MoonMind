@@ -2213,14 +2213,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       "columns",
       jiraIntegration?.endpoints.columns,
       selectedJiraBoardId,
+      selectedJiraProjectKey,
     ],
     enabled: Boolean(
       jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
     ),
     queryFn: async (): Promise<JiraColumn[]> => {
-      const endpoint = interpolatePath(
-        jiraIntegration?.endpoints.columns || "",
-        { boardId: selectedJiraBoardId },
+      const endpoint = withQueryParams(
+        interpolatePath(jiraIntegration?.endpoints.columns || "", {
+          boardId: selectedJiraBoardId,
+        }),
+        { projectKey: selectedJiraProjectKey },
       );
       const response = await fetch(endpoint, {
         headers: { Accept: "application/json" },
@@ -2242,14 +2245,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       "issues",
       jiraIntegration?.endpoints.issues,
       selectedJiraBoardId,
+      selectedJiraProjectKey,
     ],
     enabled: Boolean(
       jiraIntegration?.enabled && jiraBrowserOpen && selectedJiraBoardId,
     ),
     queryFn: async (): Promise<Record<string, JiraIssueSummary[]>> => {
-      const endpoint = interpolatePath(
-        jiraIntegration?.endpoints.issues || "",
-        { boardId: selectedJiraBoardId },
+      const endpoint = withQueryParams(
+        interpolatePath(jiraIntegration?.endpoints.issues || "", {
+          boardId: selectedJiraBoardId,
+        }),
+        { projectKey: selectedJiraProjectKey },
       );
       const response = await fetch(endpoint, {
         headers: { Accept: "application/json" },
@@ -2273,6 +2279,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       "issue",
       jiraIntegration?.endpoints.issue,
       selectedJiraIssueKey,
+      selectedJiraBoardId,
+      selectedJiraProjectKey,
     ],
     enabled: Boolean(
       jiraIntegration?.enabled &&
@@ -2280,9 +2288,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         selectedJiraIssueKey,
     ),
     queryFn: async (): Promise<JiraIssueDetail> => {
-      const endpoint = interpolatePath(
-        jiraIntegration?.endpoints.issue || "",
-        { issueKey: selectedJiraIssueKey },
+      const endpoint = withQueryParams(
+        interpolatePath(jiraIntegration?.endpoints.issue || "", {
+          issueKey: selectedJiraIssueKey,
+        }),
+        {
+          boardId: selectedJiraBoardId,
+          projectKey: selectedJiraProjectKey,
+        },
       );
       const response = await fetch(endpoint, {
         headers: { Accept: "application/json" },

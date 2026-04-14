@@ -66,7 +66,26 @@ def _build_settings(
     **overrides: object,
 ) -> AtlassianSettings:
     return AtlassianSettings(
-        jira=jira or JiraSettings(jira_tool_enabled=True),
+        atlassian_api_key=None,
+        atlassian_api_key_secret_ref=None,
+        atlassian_auth_mode=None,
+        atlassian_auth_mode_secret_ref=None,
+        atlassian_cloud_id=None,
+        atlassian_cloud_id_secret_ref=None,
+        atlassian_email=None,
+        atlassian_email_secret_ref=None,
+        atlassian_service_account_email=None,
+        atlassian_service_account_email_secret_ref=None,
+        atlassian_site_url=None,
+        atlassian_site_url_secret_ref=None,
+        atlassian_username=None,
+        atlassian_url=None,
+        jira=jira
+        or JiraSettings(
+            jira_tool_enabled=True,
+            jira_allowed_projects=None,
+            jira_allowed_actions=None,
+        ),
         **overrides,
     )
 
@@ -150,6 +169,7 @@ async def test_transition_issue_requires_explicit_lookup_and_rejects_stale_trans
             jira=JiraSettings(
                 jira_tool_enabled=True,
                 jira_require_explicit_transition_lookup=True,
+                jira_allowed_projects=None,
             )
         ),
         responses=[{"transitions": [{"id": "11", "name": "Done"}]}],
@@ -176,6 +196,7 @@ async def test_transition_issue_allows_preflight_without_get_transitions_allowli
                 jira_tool_enabled=True,
                 jira_allowed_actions="transition_issue",
                 jira_require_explicit_transition_lookup=True,
+                jira_allowed_projects=None,
             )
         ),
         responses=[
@@ -259,6 +280,7 @@ async def test_action_allowlist_denies_disallowed_mutation_before_request() -> N
             jira=JiraSettings(
                 jira_tool_enabled=True,
                 jira_allowed_actions="get_issue,search_issues",
+                jira_allowed_projects=None,
             )
         )
     )
